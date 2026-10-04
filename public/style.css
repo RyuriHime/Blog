@@ -299,6 +299,10 @@ h4 {
   height: 15px;
 }
 
+/* 注意：这个块里有两条声明其实是不生效的 ——
+   本文件下面那条通用表单样式 input[type="search"] { padding: 10px 12px; border-radius: 10px; }
+   和 .search input 的优先级完全相同（都是 0,1,1），却写在后面，所以是它说了算。
+   真正生效的左内边距由下面 .search input[type="search"] 那条单独钉死，别删。 */
 .search input {
   width: 100%;
   /* 左内边距 38px：图标占 13~28px，文字从 38px 才开始，中间留 10px 空隙 */
@@ -316,6 +320,14 @@ h4 {
 .search input:focus {
   border-color: var(--accent);
   box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+/* 只把左内边距钉死，优先级 0,2,1 > 通用表单样式的 0,1,1。
+   不加这条，下面那条 input[type="search"] { padding: 10px 12px; } 会把左边距
+   盖成 12px，放大镜（占 13~28px）就正好压在「搜索帖子…」占位文字上。
+   故意只写 padding，不动 border-radius，免得搜索框外形跟着一起变。 */
+.search input[type="search"] {
+  padding: 9px 14px 9px 38px;
 }
 
 .topnav {
