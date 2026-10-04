@@ -1,0 +1,274 @@
+/* 80-checkin-profile.css —— v1.2 新增：签到、个人主页分类与置顶、账号设置。
+ *
+ * 本文件由 docs/tools/split-css.mjs 从原先的单体 public/style.css 切出来。
+ * 改样式请直接改这里；**不要**去改 public/style.css（它现在只是一个 @import 清单）。
+ */
+
+/* ================= v1.2 新增：签到 / 主页分类与置顶 / 账号设置 ================= */
+
+/* ---------------- 侧栏签到卡片 ---------------- */
+.checkin-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+}
+
+.checkin-done {
+  color: var(--success);
+  font-size: 13.5px;
+  font-weight: 600;
+}
+
+.checkin-done.big {
+  font-size: 16px;
+}
+
+.checkin-dots {
+  display: flex;
+  gap: 4px;
+}
+
+.checkin-dot {
+  flex: 1;
+  text-align: center;
+  padding: 4px 0;
+  border-radius: 7px;
+  border: 1px solid var(--border-soft);
+  background: var(--bg-soft);
+  color: var(--muted);
+  font-size: 11.5px;
+}
+
+.checkin-dot.is-on {
+  background: rgba(67, 211, 158, 0.16);
+  border-color: rgba(67, 211, 158, 0.45);
+  color: #b8f0d8;
+}
+
+.checkin-dot.is-today {
+  border-color: var(--accent);
+  color: #cfe0ff;
+}
+
+.checkin-dot.is-future {
+  opacity: 0.45;
+}
+
+/* ---------------- 签到页 ---------------- */
+.checkin-hero {
+  display: flex;
+  gap: 20px;
+  align-items: flex-start;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  background: linear-gradient(135deg, var(--hero-a), var(--hero-b) 55%, transparent);
+}
+
+.checkin-hero-main {
+  flex: 1;
+  min-width: 240px;
+}
+
+.checkin-status {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin: 14px 0 0;
+}
+
+.checkin-pending {
+  margin-top: 12px;
+  padding: 9px 13px;
+  border-radius: 10px;
+  background: rgba(255, 212, 121, 0.14);
+  border: 1px solid rgba(255, 212, 121, 0.4);
+  color: #ffe6b3;
+  font-size: 13.5px;
+}
+
+.checkin-stats {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(80px, 1fr));
+  gap: 10px;
+  min-width: 210px;
+}
+
+.checkin-stats .stat {
+  background: rgba(11, 15, 22, 0.45);
+  border: 1px solid var(--border-soft);
+  border-radius: 10px;
+  padding: 10px 6px;
+  text-align: center;
+}
+
+.week-grid {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.week-cell {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  padding: 10px 4px;
+  border-radius: 10px;
+  border: 1px solid var(--border-soft);
+  background: var(--bg-soft);
+}
+
+.week-cell.is-on {
+  background: rgba(67, 211, 158, 0.12);
+  border-color: rgba(67, 211, 158, 0.4);
+}
+
+.week-cell.is-today {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-soft);
+}
+
+.week-cell.is-future {
+  opacity: 0.5;
+}
+
+.week-label {
+  font-size: 12.5px;
+  color: var(--text-dim);
+}
+
+.week-day {
+  font-size: 11.5px;
+  color: var(--muted);
+}
+
+.week-mark {
+  font-size: 14px;
+}
+
+.cal-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(52px, 1fr));
+  gap: 6px;
+}
+
+.cal-cell {
+  text-align: center;
+  padding: 7px 0;
+  border-radius: 8px;
+  border: 1px solid var(--border-soft);
+  background: var(--bg-soft);
+  color: var(--muted);
+  font-size: 11.5px;
+}
+
+.cal-cell.is-on {
+  background: rgba(67, 211, 158, 0.16);
+  border-color: rgba(67, 211, 158, 0.4);
+  color: #b8f0d8;
+}
+
+.cal-cell.is-today {
+  border-color: var(--accent);
+  color: #cfe0ff;
+}
+
+.cal-cell.is-future {
+  opacity: 0.35;
+}
+
+.bonus-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 9px 0;
+  border-bottom: 1px solid var(--border-soft);
+  font-size: 13.8px;
+  color: var(--text-dim);
+}
+
+.bonus-row:last-child {
+  border-bottom: 0;
+}
+
+.bonus-amount {
+  color: #ffd479;
+  font-weight: 600;
+}
+
+/* ---------------- 个人主页分类 chips ---------------- */
+.chips-head {
+  align-items: flex-start;
+  flex-wrap: wrap;
+  padding: 16px 18px;
+  margin: 0;
+  border-bottom: 1px solid var(--border-soft);
+}
+
+.chips {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  flex: 1;
+  min-width: 200px;
+}
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 5px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--panel);
+  color: var(--text-dim);
+  font-size: 13px;
+}
+
+.chip.is-active {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+  color: #cfe0ff;
+}
+
+.chip-label {
+  color: inherit;
+}
+
+.chip-label:hover {
+  text-decoration: none;
+  color: var(--text);
+}
+
+.chip-count {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.chip-x {
+  border: 0;
+  background: none;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 12px;
+  padding: 0 2px;
+  border-radius: 4px;
+}
+
+.chip-x:hover {
+  color: var(--danger);
+  background: rgba(255, 107, 107, 0.14);
+}
+
+.tag-category {
+  color: #c8b8ff;
+  border-color: rgba(124, 91, 255, 0.4);
+  background: rgba(124, 91, 255, 0.12);
+}
+
+
+/* @hand-written */

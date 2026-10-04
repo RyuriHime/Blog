@@ -1,0 +1,110 @@
+/* 76-theme-switch.css —— v1.4 新增：主题按钮与弹层、设置页里的主题选择卡片。
+ *
+ * 本文件由 docs/tools/split-css.mjs 从原先的单体 public/style.css 切出来。
+ * 改样式请直接改这里；**不要**去改 public/style.css（它现在只是一个 @import 清单）。
+ */
+
+/* ================= v1.4 新增：背景主题切换 ================= */
+
+/* 主题按钮 + 弹层 */
+.theme-area {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.theme-btn {
+  cursor: pointer;
+  font-family: inherit;
+}
+
+.theme-menu {
+  min-width: 190px;
+}
+
+.theme-item {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+}
+
+.theme-swatch {
+  flex: 0 0 auto;
+  width: 26px;
+  height: 18px;
+  border-radius: 6px;
+  border: 1px solid rgba(148, 163, 184, 0.45);
+  background: linear-gradient(135deg, var(--swatch-bg) 0 55%, var(--swatch-panel) 55% 100%);
+  position: relative;
+  overflow: hidden;
+}
+
+.theme-swatch::after {
+  content: '';
+  position: absolute;
+  right: 3px;
+  bottom: 3px;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--swatch-accent);
+}
+
+.theme-swatch.is-auto {
+  background: linear-gradient(135deg, #0b0f16 0 50%, #f5f7fb 50% 100%);
+}
+
+.menu-check {
+  margin-left: auto;
+  color: var(--accent);
+  font-weight: 700;
+}
+
+/* 设置页里的主题选择卡片 */
+.theme-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(148px, 1fr));
+  gap: 10px;
+}
+
+.theme-option {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 11px 13px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--bg-soft);
+  color: var(--text-dim);
+  font: inherit;
+  font-size: 13.8px;
+  cursor: pointer;
+  text-align: left;
+  transition: border-color 0.15s, transform 0.1s;
+}
+
+.theme-option:hover {
+  border-color: var(--accent);
+  color: var(--text);
+}
+
+.theme-option.is-active {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--text);
+  box-shadow: 0 0 0 2px var(--accent-soft);
+}
+
+.theme-option .theme-name {
+  flex: 1;
+}
+
+.theme-option .theme-hint {
+  display: block;
+  font-size: 11.5px;
+  color: var(--muted);
+}
+
+
+/* @hand-written */

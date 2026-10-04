@@ -8,6 +8,7 @@
 import { HttpError, ensure, field, ok, rateLimit, readJsonBody, sendJson } from './http.js';
 import { assertPostVisible, isOwner, isStaff, requireOwner, requireStaff, requireUser } from './guards.js';
 import { DB_FILE, ROOT, SESSION_TTL_MS } from './paths.js';
+import { routes } from './router.js';
 
 /**
  * 造一个模块上下文。
@@ -29,7 +30,11 @@ export function createContext({ db, store, route, schemas, hooks }) {
   return {
     db,
     store,
-    routes: { add: route },
+    routes: {
+      add: route,
+      /** 已经登记的全部路由（含 method 与 pattern 原串），给契约自检用。 */
+      list: () => routes.slice(),
+    },
     schema: schemas,
     hooks,
     /** 模块登记自己之后，会出现在这个数组里。 */

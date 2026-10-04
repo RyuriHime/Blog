@@ -1,0 +1,291 @@
+/* 40-post.css —— 头像、分页、帖子详情、Markdown 渲染、回复区。
+ *
+ * 本文件由 docs/tools/split-css.mjs 从原先的单体 public/style.css 切出来。
+ * 改样式请直接改这里；**不要**去改 public/style.css（它现在只是一个 @import 清单）。
+ */
+
+/* ---------------- 头像 ---------------- */
+
+.avatar {
+  --size: 40px;
+  width: var(--size);
+  height: var(--size);
+  flex: 0 0 auto;
+  border-radius: 12px;
+  display: grid;
+  place-items: center;
+  font-weight: 700;
+  font-size: calc(var(--size) * 0.42);
+  color: #fff;
+  background: linear-gradient(135deg, hsl(var(--hue) 65% 52%), hsl(calc(var(--hue) + 40) 65% 42%));
+  user-select: none;
+  overflow: hidden;
+}
+
+/* emoji 头像：字号大一些，底色仍是按色相生成的渐变 */
+.avatar-emoji {
+  font-size: calc(var(--size) * 0.56);
+  line-height: 1;
+}
+
+/* 上传的图片头像：裁成方形铺满 */
+.avatar-img {
+  padding: 0;
+  background: var(--panel-2);
+}
+
+.avatar-img img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.avatar-sm {
+  --size: 28px;
+  border-radius: 9px;
+}
+
+.avatar-lg {
+  --size: 52px;
+  border-radius: 15px;
+}
+
+/* ---------------- 分页 ---------------- */
+
+.pagination {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  padding: 14px 0 2px;
+}
+
+.page-link {
+  min-width: 36px;
+  padding: 6px 10px;
+  text-align: center;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--panel);
+  color: var(--text-dim);
+  font-size: 13.5px;
+}
+
+.page-link:hover {
+  border-color: var(--accent);
+  color: var(--text);
+  text-decoration: none;
+}
+
+.page-link.is-active {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+  color: #cfe0ff;
+}
+
+.page-link.is-disabled {
+  opacity: 0.4;
+  pointer-events: none;
+}
+
+/* ---------------- 帖子详情 ---------------- */
+
+.post-detail-head {
+  display: flex;
+  gap: 14px;
+  align-items: flex-start;
+}
+
+.post-detail-title {
+  font-size: 23px;
+  font-weight: 700;
+  margin-bottom: 8px;
+  word-break: break-word;
+}
+
+.post-detail-meta {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  align-items: center;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.action-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-top: 16px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border-soft);
+}
+
+.action-bar .spacer {
+  flex: 1;
+}
+
+/* ---------------- Markdown 渲染 ---------------- */
+
+.md {
+  font-size: 15.2px;
+  color: #dbe4f0;
+  word-wrap: break-word;
+}
+
+.md > *:first-child {
+  margin-top: 0;
+}
+
+.md > *:last-child {
+  margin-bottom: 0;
+}
+
+.md h1,
+.md h2,
+.md h3,
+.md h4 {
+  margin: 22px 0 10px;
+  color: var(--text);
+}
+
+.md h1 {
+  font-size: 20px;
+}
+
+.md h2 {
+  font-size: 18px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--border-soft);
+}
+
+.md h3 {
+  font-size: 16px;
+}
+
+.md p {
+  margin: 12px 0;
+}
+
+.md ul,
+.md ol {
+  margin: 12px 0;
+  padding-left: 24px;
+}
+
+.md li {
+  margin: 4px 0;
+}
+
+.md code {
+  font-family: var(--mono);
+  font-size: 13.2px;
+  background: var(--code-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 1.5px 6px;
+  color: var(--code-fg);
+}
+
+.md .md-code {
+  background: var(--code-block-bg);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 13px 15px;
+  overflow-x: auto;
+  margin: 14px 0;
+}
+
+.md .md-code code {
+  background: none;
+  border: 0;
+  padding: 0;
+  color: var(--code-block-fg);
+  line-height: 1.6;
+  white-space: pre;
+}
+
+.md blockquote {
+  margin: 14px 0;
+  padding: 8px 16px;
+  border-left: 3px solid var(--accent);
+  background: rgba(91, 140, 255, 0.07);
+  border-radius: 0 8px 8px 0;
+  color: var(--text-dim);
+}
+
+.md img {
+  max-width: 100%;
+  border-radius: 10px;
+}
+
+.md hr {
+  border: 0;
+  border-top: 1px solid var(--border);
+  margin: 20px 0;
+}
+
+.md del {
+  color: var(--muted);
+}
+
+/* ---------------- 回复 ---------------- */
+
+.reply {
+  display: flex;
+  gap: 13px;
+  padding: 16px 18px;
+  border-bottom: 1px solid var(--border-soft);
+}
+
+.reply:last-child {
+  border-bottom: 0;
+}
+
+.reply-body {
+  min-width: 0;
+  flex: 1;
+}
+
+.reply-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 6px;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.reply-author {
+  font-weight: 600;
+  color: var(--text-dim);
+}
+
+.reply-actions {
+  margin-left: auto;
+  display: flex;
+  gap: 6px;
+}
+
+.link-btn {
+  background: none;
+  border: 0;
+  padding: 2px 6px;
+  color: var(--muted);
+  font: inherit;
+  font-size: 12.5px;
+  cursor: pointer;
+  border-radius: 6px;
+}
+
+.link-btn:hover {
+  color: var(--danger);
+  background: rgba(255, 107, 107, 0.1);
+}
+
+
+/* @hand-written */

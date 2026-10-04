@@ -6,10 +6,12 @@
  * 模板里的类名样式表里有没有、按钮 id 和 getElementById 对不对得上」这些都能静态查出来，
  * 而这类错误恰恰是最容易手滑写错、又最晚才被发现的。
  *
- * ⚠️ 骨架改造后的变化：v2 预铺骨架把 `src/server.js` 拆成了 `src/core/*` + `src/modules/*`，
- *    原来在 `src/server.js` 里 grep `route('GET','/api/knowledge/graph')` 的断言会**静默失效**。
- *    现在改成**递归扫描整个 src/ 目录**并拼成一份「全后端源码」，断言照旧但不再依赖具体文件路径。
- *    另外加了 MIN_PASS 哨兵：通过项数不得少于骨架改造时的实测值。
+ * ⚠️ 骨架改造后的变化（第二次调整）：前端也拆了。
+ *    `public/app.js` 从 4254 行的单体拆成 `public/core/*` + `public/views/*`，
+ *    样式拆成 `public/css/*`（`public/style.css` 只剩一串 @import）。
+ *    所以这里也改成**递归扫描整个 public/ 目录**：`.js` 拼成一份「全前端源码」、
+ *    `.css` 拼成一份「全样式源码」，断言照旧但不再依赖 `app.js` 这个具体文件。
+ *    同样的理由，MIN_PASS 哨兵保留：通过项数不得少于骨架改造时的实测值。
  *
  * 用法：node scripts/check-graph-ui.mjs
  */
@@ -19,8 +21,7 @@ import { dirname, join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
-const APP = join(ROOT, 'public', 'app.js');
-const CSS = join(ROOT, 'public', 'style.css');
+const PUBLIC = join(ROOT, 'public');
 const SRC = join(ROOT, 'src');
 
 /** 骨架改造时的通过项数下限。只许涨，不许跌。 */
@@ -30,24 +31,40 @@ const MIN_PASS = Number(process.env.MIN_PASS || 24);
 // 一个都找不到就跳过这几项检查（见文件末尾），不算失败。
 const DEPLOY_CANDIDATES = [join(ROOT, 'deploy.sh'), join(ROOT, '..', 'deploy.sh')];
 
-/** 递归收集 src/ 下的所有 .js 文件，拼成一份「全后端源码」用于静态断言。 */
-async function collectSource(dir, files = []) {
+/** 递归收集目录下指定后缀的文件。 */
+async function collectSource(dir, suffix, files = []) {
   for (const entry of await readdir(dir)) {
     const full = join(dir, entry);
     const info = await stat(full);
-    if (info.isDirectory()) await collectSource(full, files);
-    else if (entry.endsWith('.js')) files.push(full);
+    if (info.isDirectory()) await collectSource(full, suffix, files);
+    else if (entry.endsWith(suffix)) files.push(full);
   }
   return files;
 }
 
-const [app, css, srcFiles] = await Promise.all([
-  readFile(APP, 'utf8'),
-  readFile(CSS, 'utf8'),
-  collectSource(SRC),
+const [jsFiles, cssFiles, srcFiles] = await Promise.all([
+  collectSource(PUBLIC, '.js'),
+  collectSource(PUBLIC, '.css'),
+  collectSource(SRC, '.js'),
 ]);
-const srcTexts = await Promise.all(srcFiles.map((file) => readFile(file, 'utf8')));
+const [jsTexts, cssTexts, srcTexts] = await Promise.all([
+  Promise.all(jsFiles.map((file) => readFile(file, 'utf8'))),
+  Promise.all(cssFiles.map((file) => readFile(file, 'utf8'))),
+  Promise.all(srcFiles.map((file) => readFile(file, 'utf8'))),
+]);
+const app = jsTexts.join('\n');
+const css = cssTexts.join('\n');
 const server = srcTexts.join('\n');
+
+const rel = (file) => relative(ROOT, file).split('\\').join('/');
+
+/**
+ * 知识网络图现在**单独一个文件**（`public/views/graph.js`），切段落直接认这个文件最准。
+ * 原先靠 `app.indexOf('知识网络图（knowledge-pack）')` 找段落起点，前端一拆文件就返回 0
+ * —— 这也是「测试静默失效」的典型：block 为空时后面所有断言都会失败而不是被跳过，
+ * 所以必须保留一条「block 非空」的硬断言当哨兵。
+ */
+const graphFile = await readFile(join(PUBLIC, 'views', 'graph.js'), 'utf8');
 
 let pass = 0;
 let fail = 0;
@@ -63,16 +80,16 @@ function check(label, ok, detail = '') {
 }
 
 /** 只取「知识网络图」那一段，避免把别的视图的类名/ id 算进来。 */
-const start = app.indexOf('知识网络图（knowledge-pack）');
-const end = app.indexOf('/* 启动', start);
-const block = start >= 0 && end > start ? app.slice(start, end) : '';
+const block = graphFile;
 
 console.log('\n▶ 前端：知识网络图接线');
 
-check('app.js 里能找到知识网络图代码块', block.length > 0);
+check('前端能找到知识网络图代码块', block.length > 0, `块长 ${block.length}`);
 check('定义了 async function viewGraph()', /async function viewGraph\(\)/.test(block));
 check('定义了 function renderGraphPage(', /function renderGraphPage\(/.test(app));
-check('路由已接上 #/graph', /if \(first === 'graph'\) return await viewGraph\(\);/.test(app));
+// 路由分发现在在 `public/core/router.js` 里，而且调用带命名空间前缀（`Graph.viewGraph()`）。
+// 正则写成「`viewGraph()` 结尾」即可兼容两种写法，不必锁死前缀。
+check('路由已接上 #/graph', /if \(first === 'graph'\) return await [\w.]*viewGraph\(\);/.test(app));
 check('侧栏有「知识网络图」入口', /class="side-link" href="#\/graph"/.test(app));
 check(
   '侧栏入口和路由用的同一个地址',
@@ -106,7 +123,7 @@ check('右侧详情面板 id 是 kg-panel', ids.has('kg-panel'));
 check('新页面没有引入 data-action（避免和契约检查打架）', !/data-action=/.test(block));
 
 console.log('\n▶ 后端：只读接口');
-console.log(`  （扫描 ${srcFiles.length} 个 src/*.js 文件拼成后端源码：${srcFiles.map((f) => relative(ROOT, f).split('\\').join('/')).filter((f) => f.includes('knowledge') || f.includes('routes-b')).join(', ')}）`);
+console.log(`  （前端扫描 ${jsFiles.length} 个 .js、${cssFiles.length} 个 .css；后端扫描 ${srcFiles.length} 个 .js 拼成源码；命中后端文件：${srcFiles.map(rel).filter((f) => f.includes('graph-paths') || f.includes('routes-b')).join(', ')}）`);
 
 check("注册了 GET /api/knowledge/graph", /'\/api\/knowledge\/graph'/.test(server));
 check("注册了 GET /api/knowledge/viewer", /'\/api\/knowledge\/viewer'/.test(server));

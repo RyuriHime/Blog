@@ -1,0 +1,159 @@
+/* 75-social.css —— v1.1 新增：通知铃铛、侧栏账户卡、评价与投币按钮。
+ *
+ * 本文件由 docs/tools/split-css.mjs 从原先的单体 public/style.css 切出来。
+ * 改样式请直接改这里；**不要**去改 public/style.css（它现在只是一个 @import 清单）。
+ */
+
+/* ================= v1.1 新增：通知 / 评价 / 投币 / 关注 ================= */
+
+/* ---------------- 顶栏消息铃铛 ---------------- */
+.bell {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  padding: 6px 9px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--bg-soft);
+  font-size: 17px;
+  line-height: 1;
+}
+
+.bell:hover {
+  border-color: var(--accent);
+  text-decoration: none;
+}
+
+.bell-badge {
+  position: absolute;
+  top: -6px;
+  right: -6px;
+  min-width: 17px;
+  height: 17px;
+  padding: 0 4px;
+  border-radius: 9px;
+  background: linear-gradient(135deg, #ff6b6b, #ff9060);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 700;
+  display: grid;
+  place-items: center;
+}
+
+.menu-badge {
+  margin-left: auto;
+  background: rgba(255, 107, 107, 0.18);
+  color: #ffb4b4;
+  border-radius: 999px;
+  font-size: 11.5px;
+  padding: 0 7px;
+}
+
+/* ---------------- 侧栏账户卡片 ---------------- */
+.coin-balance {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.coin-value {
+  font-size: 19px;
+  font-weight: 700;
+  color: #ffd479;
+}
+
+.side-links {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-top: 10px;
+}
+
+.side-link {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px;
+  border-radius: 8px;
+  color: var(--text-dim);
+  font-size: 13.5px;
+}
+
+.side-link:hover {
+  background: var(--panel-2);
+  color: var(--text);
+  text-decoration: none;
+}
+
+/* ---------------- 标签 / 列表元信息 ---------------- */
+.tag-follow {
+  color: var(--success);
+  border-color: rgba(67, 211, 158, 0.35);
+  background: rgba(67, 211, 158, 0.1);
+}
+
+.meta-item {
+  white-space: nowrap;
+}
+
+.meta-item.is-dim {
+  opacity: 0.65;
+}
+
+.tabs-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  align-items: flex-end;
+}
+
+.tabs-sm .tab {
+  padding: 4px 10px;
+  font-size: 13px;
+}
+
+/* ---------------- 评价 / 投币按钮 ---------------- */
+.reaction {
+  min-width: 74px;
+}
+
+.reaction.is-on-danger {
+  background: rgba(255, 107, 107, 0.14);
+  border-color: var(--danger);
+  color: #ffc9c9;
+}
+
+.reaction.is-on-coin {
+  background: rgba(255, 212, 121, 0.14);
+  border-color: #ffd479;
+  color: #ffe6b3;
+}
+
+/* 不可用但可点击：点了会弹出原因，避免出现「点了没反应」的死按钮 */
+.reaction.is-locked,
+.btn[aria-disabled='true'] {
+  opacity: 0.62;
+  cursor: not-allowed;
+  border-style: dashed;
+}
+
+.reaction.is-locked:hover,
+.btn[aria-disabled='true']:hover {
+  border-color: var(--border);
+  color: var(--text-dim);
+}
+
+.coin-budget {
+  color: var(--muted);
+  font-size: 12.5px;
+  white-space: nowrap;
+}
+
+.coin-locked-hint {
+  color: var(--warn);
+  font-size: 12.5px;
+}
+
+
+/* @hand-written */

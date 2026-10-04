@@ -206,7 +206,7 @@ HOST=0.0.0.0 node src/server.js       # 允许局域网内其它设备访问
 | 跟随系统 | 按操作系统的深/浅色偏好自动选择，系统切换时页面实时跟随 |
 
 > 「黄色」有两种常见理解，所以一次给了两个：想要**暖黄深色**用「暖阳」，想要**亮黄/米黄浅色**用「奶黄」。
-> 不喜欢哪个直接从 `public/app.js` 的 `THEMES` 和 `public/style.css` 对应块里删掉即可。
+> 不喜欢哪个从 `public/core/theme.js` 的 `THEMES` 和 `public/css/00-themes.css` 的对应块里删掉即可。
 
 实现要点：
 
@@ -306,25 +306,44 @@ HOST=0.0.0.0 node src/server.js       # 允许局域网内其它设备访问
 forum/
 ├── start.cmd                    # Windows 一键启动（纯 ASCII + CRLF，见文末维护提示）
 ├── package.json                 # 只有 scripts / engines，没有 dependencies
+├── docs/
+│   ├── skeleton.md              # ★ 预铺骨架说明：目录布局 / 冻结契约 / 五路并行 / 怎么加功能
+│   └── superpowers/specs/       # 改造设计文档（spec）
 ├── src/
-│   ├── server.js                # HTTP 服务：路由、会话、鉴权、REST API、静态资源
+│   ├── server.js                # 薄入口（≤120 行）：装配 store / ctx / 模块 / 静态服务
 │   ├── store.js                 # 数据访问层（全部 SQL 集中在这里）
-│   ├── db.js                    # 建表 / 迁移 / 示例数据播种
-│   ├── dates.js                 # 自然周与日期工具（签到统计用）
-│   ├── markdown.js              # 服务端 Markdown 渲染（先转义再渲染，天然防 XSS）
-│   └── password.js              # scrypt 哈希与恒定时间比对
+│   ├── db.js                    # 门面：登记建表脚本 + 转出 openDatabase 与全部规则常量
+│   ├── core/                    # 框架层：路由表 / 上下文 / 守卫 / 响应形状 / 建表登记
+│   │   ├── router.js            #   route(method, pattern, handler) 注册表
+│   │   ├── context.js           #   ctx：模块能拿到的全部东西（唯一通信面）
+│   │   ├── tables.sql.js        #   18 张核心表的建表 SQL（与旧 SCHEMA 逐字节相同）
+│   │   ├── open-db.js           #   openDatabase()：建表 → 迁移 → 播种
+│   │   └── …                    #   http / guards / shape / static / sessions / paths
+│   └── modules/                 # 功能层：每个模块一个文件夹，互不 import
+│       ├── index.js             #   ★ 全仓库唯一列举模块的名册（MODULES）
+│       ├── core/                #   现有论坛本体（auth / posts / replies / 社交 / 管理）
+│       ├── feed/  doc/  ai/  team/  ui/   # 五路并行的空壳（见 docs/skeleton.md）
 ├── public/
 │   ├── index.html               # 页面外壳（顶栏 / 侧栏 / 挂载点）
-│   ├── style.css                # 深色主题、响应式布局、Markdown 排版
-│   └── app.js                   # 前端 SPA：hash 路由 + 视图渲染 + 交互
+│   ├── app.js                   # 薄入口（≤120 行）：只做 bootstrap
+│   ├── style.css                # 只剩 20 行 @import，按前缀顺序拼回原级联顺序
+│   ├── core/                    # 前端核心层：state / dom / api / router / theme / events …
+│   ├── views/                   # 页面：feed / user / post / compose / ai / admin / notes / graph …
+│   └── css/                     # 20 个样式分片（00-themes … 97-notes）
 ├── scripts/
 │   ├── smoke.mjs                # 后端端到端冒烟测试（242 项）
-│   ├── check-ui-contract.mjs    # 前端契约检查：CSS 类名 + API 字段 + 主题/头像/角色/私信结构（175 项）
+│   ├── check-golden.mjs         # ★ 行为金标准：96 条请求的状态码 + 响应结构指纹
+│   ├── check-skeleton.mjs       # ★ 骨架自检：模块解耦证明 + 薄入口行数
+│   ├── check-ui-contract.mjs    # 前端契约检查：CSS 类名 + API 字段 + 主题/头像/角色/私信结构
 │   ├── check-encoding.mjs       # 源码编码体检（BOM / 乱码 / 批处理换行与 ASCII）
+│   ├── check-graph-ui.mjs / check-notes-ui.mjs / notes-smoke.mjs / smoke-ai.mjs
 │   ├── fix-cmd.mjs              # 把 .cmd 规范化为 CRLF + 去 BOM
 │   └── reset-db.mjs             # 清库并重新播种
 └── data/forum.db                # SQLite 数据文件（首次运行自动生成）
 ```
+
+> 想动手改代码，先读 **[`docs/skeleton.md`](docs/skeleton.md)** —— 那里写清了冻结契约（模块怎么被装载、
+> 哪些表归谁、接口前缀怎么分、五个人怎么并行开工），以及「加一个新模块要动哪几行」。
 
 > **维护提示（踩过的坑）**：`start.cmd` 必须保持 **CRLF 换行 + 纯 ASCII + 无 BOM**。
 > cmd.exe 是按本地代码页逐行解析批处理的，如果脚本里写了 UTF-8 中文、或用了 LF 换行，
@@ -478,13 +497,34 @@ blocks(blocker_id, blocked_id, created_at)   -- 黑名单，主键 (blocker_id, 
 ## 8. 测试
 
 ```bash
+node scripts/check-golden.mjs      # ★ 行为金标准：96 条请求的状态码 + 响应结构，一条都不能变
+node scripts/check-skeleton.mjs    # ★ 骨架自检：模块能不能独立拆掉、薄入口有没有变胖
+node scripts/check-frontend.mjs    # ★ 前端渲染冒烟：18 个页面全部渲染一遍
 node scripts/smoke.mjs             # 后端端到端：242 项（临时独立库+端口，跑完自动清理）
-node scripts/check-ui-contract.mjs # 前端契约：CSS 类名 + API 字段 + 主题/头像/角色/私信结构，175 项
+node scripts/smoke-ai.mjs          # AI 接口端到端：61 项
+node scripts/check-ui-contract.mjs # 前端契约：CSS 类名 + API 字段 + 主题/头像/角色/私信结构
 node scripts/check-encoding.mjs    # 源码编码体检：BOM / 乱码 / 关键中文内容
+node scripts/check-graph-ui.mjs    # 知识网络图 UI
+node scripts/check-notes-ui.mjs    # 笔记 UI
+node scripts/notes-smoke.mjs       # 笔记接口
+node scripts/capture-fixtures.mjs  # 重采前端冒烟用的假数据（改了接口形状才需要跑）
 node scripts/reset-db.mjs          # 清空数据库并重新播种
 ```
 
-当前状态：**417 项全部通过**（242 + 175）。
+一次跑完（`npm test` 就是这一串）：
+
+```
+check-encoding 152 文件 / 53 断言 · check-skeleton 47 项 · check-golden 96 项 0 差异
+check-frontend 18 个页面 · smoke 242 · smoke-ai 61 · check-ui-contract 185
+check-graph-ui 24 · check-notes-ui 33 · notes-smoke 44
+```
+
+**`check-golden.mjs` 是这套测试里最该先跑的一个**：它把 96 条固定请求的「状态码 + 响应 JSON 的键结构」
+与 `scripts/golden.json` 逐条比对，**只管结构不管取值**（不会因为你发了一篇新帖就红）。
+重构、搬家、改前端时先跑它 —— 绿了才说明「用户能感知到的行为一个字都没变」。
+真的有意改了行为，用 `--write` 重采指纹，并在提交信息里说明为什么。
+（`--dump` 只打印不比对；指纹文件不存在时它会**直接报错退出**，因为「改造完再补采」等于没测。）
+
 
 覆盖范围：静态资源与 SPA 回落、注册登录登出、投币规则与上限与「不可投币的四种原因」、**取消每日补足（把 coin_refresh_at 改成一万小时前再登录，余额仍然是 0，仍然投不了币；文案也指向签到而不是"明天刷新"）**、签到（首次 +1、全勤补发 +3、同日重复签到 409 且不重复加币、日历结构）、主页分类（增删改查、上限、归属校验、按分类/未分类筛选）、主页置顶（上限 3 篇、取消置顶、越权 403）、**转发（成功计数、重复转发只改评语、撤销、不能自转、不能未登录转发、转发者列表、主页转发分类、通知原作者）**、**价值排行榜（权重常量下发、公式数值逐项验证、作者权重=Σ文章价值、降序、时间窗筛选、作者榜字段）**、账号设置（昵称签名校验、改密校验旧密码、改密后其它会话失效 / 当前会话保留 / 新旧密码登录）、重复用户名、会话保持、分页、全文搜索、Markdown 转义、赞踩互斥、收藏、关注与关注流、消息通知的收件人与去重、越权访问后台、封禁等。
 
@@ -508,7 +548,7 @@ node scripts/reset-db.mjs          # 清空数据库并重新播种
 停掉服务，执行 `node scripts/reset-db.mjs`（相当于删掉 `data/forum.db` 重新播种）。
 
 **Q：想调整规则数值？**
-都在 `src/db.js` 顶部：`COIN_SIGNUP_GRANT`（注册赠送币数）、`COIN_PER_POST_LIMIT`（单帖投币上限）、`CHECKIN_DAILY_REWARD`（签到奖励）、`CHECKIN_WEEKLY_BONUS`（全勤奖）、`PROFILE_PIN_LIMIT`（主页置顶数）、`PROFILE_CATEGORY_LIMIT`（分类数上限）、`VALUE_WEIGHTS`（价值公式里赞/币/藏/踩的权重、踩的软化系数、半饱和点）。
+都在 `src/db.js` 顶部（实体在 `src/core/open-db-support.js`）：`COIN_SIGNUP_GRANT`（注册赠送币数）、`COIN_PER_POST_LIMIT`（单帖投币上限）、`CHECKIN_DAILY_REWARD`（签到奖励）、`CHECKIN_WEEKLY_BONUS`（全勤奖）、`PROFILE_PIN_LIMIT`（主页置顶数）、`PROFILE_CATEGORY_LIMIT`（分类数上限）、`VALUE_WEIGHTS`（价值公式里赞/币/藏/踩的权重、踩的软化系数、半饱和点）。
 
 **Q：排行榜的分数怎么和我想的不一样？**
 价值分是**质量口径**（赞/币/藏/踩加权 + 饱和映射），不是热度。若想看热度，用首页的「🔥 最热」排序（`赞×4 + 币×5 + 回复×3 − 踩×2 + 浏览×0.1`）。价值分的完整推导和举例见上面「价值排行榜」一节。
@@ -520,4 +560,11 @@ node scripts/reset-db.mjs          # 清空数据库并重新播种
 把它挂在 Nginx/Caddy 后面即可（记得配 HTTPS 并把 Cookie 换成 `Secure`），单进程足够支撑小型社区；`data/forum.db` 记得做定时备份。上线的第一件事是**改掉 admin 的演示密码**（登录后到 `#/settings` 修改）。
 
 **Q：想扩展功能？**
-图片上传、私信、帖子标签、多级回复都是自然的下一步；数据层集中在 `src/store.js`，接口在 `src/server.js` 的 `route()` 注册，前端在 `public/app.js` 增加一个视图函数即可。新增通知类型只需调用 `store.createNotification()`，并在 `public/app.js` 的 `NOTIF_META` 里补一条文案。
+先读 [`docs/skeleton.md`](docs/skeleton.md)。现在的分工是：**表结构**由 `src/modules/<模块>/index.js` 的 `owns`
+声明、建表 SQL 用 `ctx.schema.add(...)` 登记；**接口**用 `ctx.routes.add(method, pattern, handler)` 注册，
+响应统一走 `ctx.http.ok()`；**权限**用 `ctx.guards.requireUser/requireStaff/…`；**前端页面**加一个
+`public/views/x.js` 并在 `public/core/router.js` 的 if 链里接一行。
+不要 import 隔壁模块的文件（模块之间只通过 `ctx` 通信，`check-skeleton.mjs` 会抓）。
+新增通知类型只需调用 `store.createNotification()`，并在 `public/core/session.js` 的 `NOTIF_META` 里补一条文案。
+**改完务必跑 `node scripts/check-golden.mjs`** —— 它保证你没顺手改坏现有页面。
+

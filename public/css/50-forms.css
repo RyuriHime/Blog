@@ -1,0 +1,97 @@
+/* 50-forms.css —— 表单控件与输入框。
+ *
+ * 本文件由 docs/tools/split-css.mjs 从原先的单体 public/style.css 切出来。
+ * 改样式请直接改这里；**不要**去改 public/style.css（它现在只是一个 @import 清单）。
+ */
+
+/* ---------------- 表单 ---------------- */
+
+.form {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.field label {
+  font-size: 13.5px;
+  color: var(--text-dim);
+}
+
+.field .hint {
+  font-size: 12.5px;
+  color: var(--muted);
+}
+
+input[type="text"],
+input[type="password"],
+input[type="search"],
+select,
+textarea {
+  width: 100%;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--bg-soft);
+  color: var(--text);
+  font: inherit;
+  outline: none;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+
+textarea {
+  min-height: 190px;
+  resize: vertical;
+  line-height: 1.7;
+}
+
+input:focus,
+select:focus,
+textarea:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+.form-row {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.form-actions {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+
+.form-error {
+  background: rgba(255, 107, 107, 0.12);
+  border: 1px solid rgba(255, 107, 107, 0.35);
+  color: #ffc9c9;
+  border-radius: 10px;
+  padding: 9px 12px;
+  font-size: 13.5px;
+}
+
+.md-toolbar {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.preview-box {
+  border: 1px dashed var(--border);
+  border-radius: 10px;
+  padding: 14px 16px;
+  background: var(--bg-soft);
+  min-height: 120px;
+}
+
+
+/* @hand-written */

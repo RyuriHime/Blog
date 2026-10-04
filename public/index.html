@@ -5,6 +5,8 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>围炉论坛 · 提问 / 分享 / 交流</title>
     <meta name="description" content="一个轻量的中文技术论坛：板块分区、Markdown 发帖、搜索、点赞收藏与管理后台。" />
+    <!-- 样式入口只有一个：/style.css 里是 20 条 @import，按文件名前缀顺序拼回原来的级联顺序。
+         静态分发从磁盘按路径读，所以 public/css/ 下的分片不需要在这里单独列出。 -->
     <link rel="stylesheet" href="/style.css" />
     <link
       rel="icon"
@@ -12,7 +14,7 @@
     />
     <script>
       // 首屏前应用背景主题，避免刷新时闪一下默认配色。
-      // 取值与 public/app.js 的 THEME_STORAGE_KEY 保持一致。
+      // 取值与 public/core/preferences.js 的 THEME_STORAGE_KEY 保持一致。
       (function () {
         try {
           var saved = localStorage.getItem('forum:theme') || 'dark';
@@ -79,6 +81,11 @@
          它必须在 app.js 之前执行（要先把 window.NotesAgent 挂出来），
          两个都是 module，按文档顺序执行，所以放前面就够。 -->
     <script type="module" src="/notes-panel.js"></script>
+    <!-- 前端入口只有一个：/app.js（装配层，必须最后加载）。
+         它 import core/* 与 views/* —— 那些模块**没有顶层副作用**，靠 import 装载即可，
+         不需要也不能在这里逐个列出来（列了会重复求值，而且文件名一改就 404）。
+         新增一块功能（feed / doc / ai / team / ui）时：新建 public/views/<名字>.js，
+         在 app.js 里加一行 import；纯前端改动不必碰这个文件。 -->
     <script type="module" src="/app.js"></script>
   </body>
 </html>

@@ -19,8 +19,13 @@ import { fileURLToPath } from 'node:url';
 const ROOT = resolve(fileURLToPath(new URL('.', import.meta.url)), '..');
 const TARGETS = ['src', 'public', 'scripts', 'forum-ai/src', 'note-agent/src', 'note-studio/src', 'knowledge-pack/src', 'package.json', 'README.md', 'start.cmd'];
 
-/** 骨架改造时实测的受检文件数（含新增的 src/core、src/modules 与四个自包含包）。只许涨，不许跌。 */
-const MIN_CHECKED = Number(process.env.MIN_CHECKED || 108);
+/**
+ * 骨架改造时实测的受检文件数。只许涨，不许跌。
+ * 108 是「后端刚拆完」时的数；153 是前端拆迁 + 前端冒烟脚本进 scripts/ 之后的数；
+ * 现在实测 155（多了 capture-fixtures.mjs 与 frontend-fixtures.json），同步抬到 155。
+ * 这个数字存在的意义：前端文件被搬走却没同步检查脚本时，哨兵必须响。
+ */
+const MIN_CHECKED = Number(process.env.MIN_CHECKED || 155);
 
 /** 新布局里必须存在的关键文件。少一个就说明有人把文件搬走却没同步这份检查。 */
 const REQUIRED_FILES = [
@@ -58,6 +63,24 @@ const REQUIRED_FILES = [
   'public/index.html',
   'public/app.js',
   'public/style.css',
+  // 前端拆迁后的关键文件：核心层 11 个 + 页面 13 个 + 样式分片（挑「入口 / 主题 / 列表」三个，
+  // 其余分片由 MIN_CHECKED 与片段断言兜底）。
+  'public/core/dom.js',
+  'public/core/state.js',
+  'public/core/router.js',
+  'public/core/events.js',
+  'public/views/feed.js',
+  'public/views/graph.js',
+  'public/views/notes.js',
+  'public/css/00-themes.css',
+  'public/css/10-base.css',
+  'public/css/30-feed.css',
+  // 前端冒烟与它的假数据（假数据是从真服务器采回来的，见 scripts/capture-fixtures.mjs）。
+  'scripts/check-frontend.mjs',
+  'scripts/capture-fixtures.mjs',
+  'scripts/frontend-fixtures.json',
+  'scripts/check-golden.mjs',
+  'scripts/check-skeleton.mjs',
 ];
 
 /**
@@ -101,24 +124,28 @@ const EXPECTED = [
   ['forum:theme', ['public/index.html']],
   ['首屏前应用背景主题', ['public/index.html']],
 
-  ['消息通知', ['public/app.js']],
-  ['投币成功，感谢支持作者', ['public/app.js']],
-  ['价值排行榜', ['public/app.js']],
-  ['转发会出现在你的主页', ['public/app.js']],
-  ['跟随系统', ['public/app.js', 'src/core/open-db-support.js']],
-  ['暖阳', ['public/app.js']],
-  ['奶黄', ['public/app.js']],
-  ['正在压缩图片', ['public/app.js']],
-  ['站长可以任命管理员', ['public/app.js']],
-  ['背景主题', ['public/app.js', 'public/style.css']],
+  // ⚠️ 前端也拆了：`public/app.js` 从 4254 行拆成 `public/core/*` + `public/views/*`，
+  //    样式拆成 `public/css/*`（`public/style.css` 只剩 @import）。
+  //    所以候选文件名必须换成**搬过去以后真正含有该文案**的那个文件；
+  //    仍保留 `public/app.js` 当候选是没用的 —— 它现在只是个 44 行的装配文件。
+  ['消息通知', ['public/core/session.js', 'public/views/feed.js', 'public/views/user.js']],
+  ['投币成功，感谢支持作者', ['public/core/events.js']],
+  ['价值排行榜', ['public/core/session.js', 'public/views/user.js']],
+  ['转发会出现在你的主页', ['public/views/post.js']],
+  ['跟随系统', ['public/core/theme.js', 'src/core/open-db-support.js']],
+  ['暖阳', ['public/core/theme.js', 'public/css/00-themes.css']],
+  ['奶黄', ['public/core/theme.js', 'public/css/00-themes.css']],
+  ['正在压缩图片', ['public/core/events.js']],
+  ['站长可以任命管理员', ['public/views/admin.js']],
+  ['背景主题', ['public/core/theme.js', 'public/css/00-themes.css', 'public/css/76-theme-switch.css']],
 
-  ['消息铃铛', ['public/style.css']],
-  ['评价 / 投币按钮', ['public/style.css']],
-  ['转发按钮与转发区', ['public/style.css']],
-  ['暖阳：琥珀黄深色', ['public/style.css']],
-  ['头像设置', ['public/style.css']],
-  ['角色与内容管理', ['public/style.css']],
-  ['私信与黑名单', ['public/style.css']],
+  ['消息铃铛', ['public/css/75-social.css']],
+  ['评价 / 投币按钮', ['public/css/75-social.css']],
+  ['转发按钮与转发区', ['public/css/78-repost-ranking.css']],
+  ['暖阳：琥珀黄深色', ['public/css/00-themes.css']],
+  ['头像设置', ['public/css/77-avatar.css']],
+  ['角色与内容管理', ['public/css/85-roles.css']],
+  ['私信与黑名单', ['public/css/88-messages.css']],
 
   ['端到端冒烟测试', ['scripts/smoke.mjs']],
   ['每日签到', ['scripts/smoke.mjs']],

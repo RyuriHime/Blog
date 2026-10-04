@@ -10,7 +10,12 @@
     "dev": "node --watch src/server.js",
     "reset": "node scripts/reset-db.mjs",
     "smoke": "node scripts/smoke.mjs",
+    "smoke:ai": "node scripts/smoke-ai.mjs",
     "check": "node scripts/check-ui-contract.mjs",
+    "check:golden": "node scripts/check-golden.mjs",
+    "check:skeleton": "node scripts/check-skeleton.mjs",
+    "check:frontend": "node scripts/check-frontend.mjs",
+    "fixtures": "node scripts/capture-fixtures.mjs",
     "check:encoding": "node scripts/check-encoding.mjs",
     "check:graph": "node scripts/check-graph-ui.mjs",
     "check:notes": "node scripts/notes-smoke.mjs",
@@ -18,7 +23,7 @@
     "test:notes": "node note-agent/scripts/run-tests.mjs",
     "graph": "node scripts/build-graph.mjs",
     "fix:cmd": "node scripts/fix-cmd.mjs",
-    "test": "node scripts/check-encoding.mjs && node scripts/smoke.mjs && node scripts/check-ui-contract.mjs && node scripts/check-graph-ui.mjs && node scripts/check-notes-ui.mjs && node scripts/notes-smoke.mjs"
+    "test": "node scripts/check-encoding.mjs && node scripts/check-skeleton.mjs && node scripts/check-golden.mjs && node scripts/check-frontend.mjs && node scripts/smoke.mjs && node scripts/smoke-ai.mjs && node scripts/check-ui-contract.mjs && node scripts/check-graph-ui.mjs && node scripts/check-notes-ui.mjs && node scripts/notes-smoke.mjs"
   },
   "engines": {
     "node": ">=22.5.0"

@@ -1,11 +1,21 @@
 /**
  * 前端契约检查：
- *  1) app.js / index.html 用到的 CSS 类是否都在 style.css 里定义了；
+ *  1) 前端用到的 CSS 类是否都在 CSS 里定义了；
  *  2) 前端读取的 API 字段是否都真实存在（启动临时服务器实测）。
  * 用法：node scripts/check-ui-contract.mjs
+ *
+ * ── 为什么不再写死三个文件路径 ───────────────────────────────────────────
+ * v2 骨架会把 public/app.js（4000+ 行）拆成 public/core/* + public/views/*，
+ * 把 public/style.css 拆成 public/css/*。本检查原本只 readFileSync 三个固定
+ * 路径，文件一搬家「用到的类名」集合就会变小 —— missing 恒为空数组，
+ * 断言永远通过，**测试静默失效却依然报绿**。
+ *
+ * 所以改成两个集合都由「递归扫描 public/ 下的全部 .js/.html/.css」算出，
+ * 并加三条哨兵（文件数下限、断言数下限、被扫描文件必须真的产出类名），
+ * 任何一条不满足就直接失败。
  */
 import { spawn } from 'node:child_process';
-import { mkdirSync, openSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, openSync, readdirSync, readFileSync, rmSync, statSync } from 'node:fs';
 
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -18,6 +28,16 @@ const LOG_FILE = join(ROOT, 'data', 'contract-server.log');
 const PORT = Number(process.env.CONTRACT_PORT || 3412);
 const BASE = `http://127.0.0.1:${PORT}`;
 
+/** 不下降哨兵：接手的模块只允许加，不允许把这些数字改小。 */
+const MIN_CHECKS = Number(process.env.MIN_UI_CHECKS || 185);
+
+/**
+ * 前端源码入口清单。搬家前这三份文件在 public/ 根目录；骨架会把它们拆进
+ * public/core/ 与 public/views/。清单里任何一份（按 basename 匹配）都不许消失，
+ * 否则「类名都有定义」就会因为扫不到模板而假绿。
+ */
+const REQUIRED_SOURCES = ['app.js', 'index.html', 'style.css'];
+
 const problems = [];
 const notes = [];
 const check = (name, condition, detail = '') => {
@@ -25,11 +45,41 @@ const check = (name, condition, detail = '') => {
   else problems.push(`${name}${detail ? ` — ${detail}` : ''}`);
 };
 
+/* ---------- 0. 递归收集前端源码 ---------- */
+
+const SKIP_DIRS = new Set(['.git', 'node_modules']);
+
+function walk(dir, out = []) {
+  if (!existsSync(dir)) return out;
+  for (const name of readdirSync(dir)) {
+    if (SKIP_DIRS.has(name)) continue;
+    const full = join(dir, name);
+    if (statSync(full).isDirectory()) walk(full, out);
+    else out.push(full);
+  }
+  return out;
+}
+
+const publicDir = join(ROOT, 'public');
+const publicFiles = walk(publicDir);
+const jsFiles = publicFiles.filter((file) => file.endsWith('.js'));
+const htmlFiles = publicFiles.filter((file) => file.endsWith('.html'));
+const cssFiles = publicFiles.filter((file) => file.endsWith('.css'));
+
+const readAll = (files) => files.map((file) => readFileSync(file, 'utf8')).join('\n');
+const appJs = readAll(jsFiles); // 前端全部 JS（骨架前是 app.js 一个文件）
+const indexHtml = readAll(htmlFiles);
+const styleCss = readAll(cssFiles);
+
 /* ---------- 1. 前端静态资源自检 ---------- */
 
-const appJs = readFileSync(join(ROOT, 'public', 'app.js'), 'utf8');
-const indexHtml = readFileSync(join(ROOT, 'public', 'index.html'), 'utf8');
-const styleCss = readFileSync(join(ROOT, 'public', 'style.css'), 'utf8');
+const publicBasenames = new Set(publicFiles.map((file) => file.slice(Math.max(file.lastIndexOf('/'), file.lastIndexOf('\\')) + 1)));
+const missingSources = REQUIRED_SOURCES.filter((name) => !publicBasenames.has(name));
+check(
+  `前端源码入口都在（js ${jsFiles.length} / html ${htmlFiles.length} / css ${cssFiles.length}）`,
+  jsFiles.length >= 1 && htmlFiles.length >= 1 && cssFiles.length >= 1 && missingSources.length === 0,
+  `js=${jsFiles.length} html=${htmlFiles.length} css=${cssFiles.length} 缺=${missingSources.join(',') || '无'}`,
+);
 
 const defined = new Set([...styleCss.matchAll(/\.(-?[A-Za-z][\w-]*)/g)].map((match) => match[1]));
 const used = new Set();
@@ -39,11 +89,27 @@ for (const source of [appJs, indexHtml]) {
     for (const name of value.split(/\s+/)) if (name) used.add(name);
   }
 }
+check(
+  '模板里确实扫到了类名（否则「类名都有定义」是假绿）',
+  used.size >= 50,
+  `used=${used.size}`,
+);
 const missing = [...used].filter((name) => !defined.has(name));
 check('所有模板类名都在 style.css 中有定义', missing.length === 0, missing.join(', '));
 
-const selectors = [...appJs.matchAll(/querySelector(?:All)?\('([^']+)'\)/g)].map((match) => match[1]);
-for (const selector of selectors.filter((item) => item.startsWith('#') && !item.includes(' '))) {
+// 前端有两种写法：原生 querySelector('#x') 与内部简写 $('#x')（= app.js 顶部的 $ 助手）。
+// 只认一种会让 idSelectors 直接变 0 —— 那样的「断言 0 条」也是假绿。
+const selectors = [
+  ...[...appJs.matchAll(/querySelector(?:All)?\('([^']+)'\)/g)].map((match) => match[1]),
+  ...[...appJs.matchAll(/\$\('#([A-Za-z][\w-]*)'\)/g)].map((match) => `#${match[1]}`),
+];
+// 排除运行时才创建的元素（它们不在 index.html 里，由 JS 自己 insertAdjacentHTML 出来）。
+const DYNAMIC_IDS = new Set(['user-menu', 'theme-menu', 'username']);
+const idSelectors = selectors.filter(
+  (item) => item.startsWith('#') && !item.includes(' ') && !DYNAMIC_IDS.has(item.slice(1)),
+);
+check('确实扫到了 index.html 里的挂载点查询', idSelectors.length >= 5, `count=${idSelectors.length}`);
+for (const selector of idSelectors) {
   const id = selector.slice(1);
   check(`index.html 中存在 id="${id}"`, indexHtml.includes(`id="${id}"`));
 }
@@ -777,8 +843,16 @@ try {
 }
 
 for (const line of notes) console.log(line);
+
+/* ---------- 3. 不下降哨兵 ---------- */
+// 断言数掉下去 = 有断言没被执行（文件被搬走、正则不再命中、提前 return）。
+// 这是 R-08「重构让静态检查静默失效」的最后一道防线。
+if (notes.length < MIN_CHECKS) {
+  problems.push(`通过项数从 ${MIN_CHECKS} 掉到 ${notes.length}：有断言没被执行（前端文件被搬走却没同步本检查？）`);
+}
+
 console.log(`\n${'─'.repeat(46)}`);
-console.log(`通过 ${notes.length} 项，问题 ${problems.length} 项`);
+console.log(`通过 ${notes.length} 项（下限 ${MIN_CHECKS}），问题 ${problems.length} 项`);
 for (const problem of problems) console.log(`  ❌ ${problem}`);
 if (problems.length) {
   console.log('\n服务器日志尾部（供排查）：');

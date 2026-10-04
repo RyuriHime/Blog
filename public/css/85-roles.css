@@ -1,0 +1,57 @@
+/* 85-roles.css —— v1.6 新增：角色标签与内容管理。
+ *
+ * 本文件由 docs/tools/split-css.mjs 从原先的单体 public/style.css 切出来。
+ * 改样式请直接改这里；**不要**去改 public/style.css（它现在只是一个 @import 清单）。
+ */
+
+/* ================= v1.6 新增：角色与内容管理 ================= */
+
+.tag-owner {
+  color: #ffd479;
+  border-color: rgba(255, 212, 121, 0.45);
+  background: rgba(255, 212, 121, 0.12);
+}
+
+.tag-hidden {
+  color: #ffb4b4;
+  border-color: rgba(255, 107, 107, 0.4);
+  background: rgba(255, 107, 107, 0.12);
+}
+
+.moderation-banner {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  margin-bottom: 16px;
+  padding: 12px 14px;
+  border-radius: var(--radius-sm);
+  border: 1px solid rgba(255, 107, 107, 0.4);
+  background: rgba(255, 107, 107, 0.1);
+  color: #ffd9d9;
+  font-size: 13.8px;
+}
+
+.moderation-banner .moderation-icon {
+  font-size: 20px;
+  line-height: 1.2;
+}
+
+.moderation-banner .hint {
+  color: rgba(255, 217, 217, 0.78);
+  margin-top: 2px;
+}
+
+.moderation-banner .btn {
+  margin-left: auto;
+  flex: 0 0 auto;
+}
+
+.row-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+
+/* @hand-written */

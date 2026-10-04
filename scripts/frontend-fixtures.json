@@ -1,0 +1,2365 @@
+{
+  "/api/site": {
+    "boards": [
+      {
+        "id": 1,
+        "slug": "general",
+        "name": "综合讨论",
+        "description": "天南海北，随便聊聊",
+        "icon": "💬",
+        "postCount": 2,
+        "replyCount": 2
+      },
+      {
+        "id": 2,
+        "slug": "tech",
+        "name": "技术交流",
+        "description": "编程、架构与踩坑经验",
+        "icon": "🧑‍💻",
+        "postCount": 2,
+        "replyCount": 4
+      },
+      {
+        "id": 3,
+        "slug": "qa",
+        "name": "问答求助",
+        "description": "遇到问题？发出来一起解决",
+        "icon": "❓",
+        "postCount": 2,
+        "replyCount": 3
+      },
+      {
+        "id": 4,
+        "slug": "share",
+        "name": "分享创造",
+        "description": "作品、资源与有趣发现",
+        "icon": "🚀",
+        "postCount": 2,
+        "replyCount": 4
+      },
+      {
+        "id": 5,
+        "slug": "meta",
+        "name": "站务公告",
+        "description": "规则、反馈与公告",
+        "icon": "📢",
+        "postCount": 1,
+        "replyCount": 2
+      }
+    ],
+    "stats": {
+      "users": 5,
+      "posts": 9,
+      "replies": 15
+    },
+    "ai": {
+      "configured": false,
+      "model": null,
+      "baseUrl": null,
+      "envKeys": [
+        "AI_BASE_URL",
+        "AI_API_KEY",
+        "AI_MODEL",
+        "AI_TIMEOUT_MS",
+        "AI_MAX_TOKENS"
+      ]
+    },
+    "notes": {
+      "configured": false,
+      "model": "deepseek-chat",
+      "aiSource": "forum-ai",
+      "features": [
+        "organize",
+        "turn",
+        "review",
+        "images",
+        "editor",
+        "source-text"
+      ],
+      "contractVersion": "1",
+      "materialChars": 24000,
+      "limits": {
+        "maxFileBytes": 4194304,
+        "maxSessionBytes": 12582912,
+        "maxFiles": 10,
+        "requirement": 1000,
+        "reviewDraft": 20000
+      },
+      "extensions": [
+        ".md",
+        ".markdown",
+        ".txt",
+        ".docx",
+        ".pptx",
+        ".pdf"
+      ]
+    },
+    "coinRules": {
+      "signupGrant": 10,
+      "perPostLimit": 2
+    },
+    "checkinRules": {
+      "dailyReward": 1,
+      "weeklyBonus": 3,
+      "fullWeekDays": 7
+    },
+    "profileRules": {
+      "pinLimit": 3,
+      "categoryLimit": 8
+    },
+    "valueWeights": {
+      "like": 1,
+      "coin": 5,
+      "bookmark": 3,
+      "dislike": 3,
+      "dislikeSoftCap": 3,
+      "halfSaturation": 50
+    },
+    "messageRules": {
+      "oneWayDailyLimit": 1,
+      "maxLength": 1000
+    },
+    "hotPosts": [
+      {
+        "id": 2,
+        "title": "Node.js 24 内置 SQLite 上手实测：零依赖做全栈",
+        "replyCount": 3,
+        "likeCount": 3,
+        "coinCount": 3
+      },
+      {
+        "id": 1,
+        "title": "【必读】论坛版规与发帖指南",
+        "replyCount": 2,
+        "likeCount": 2,
+        "coinCount": 2
+      },
+      {
+        "id": 3,
+        "title": "求助：前端 SPA 用 hash 路由会不会影响 SEO？",
+        "replyCount": 2,
+        "likeCount": 3,
+        "coinCount": 0
+      },
+      {
+        "id": 6,
+        "title": "大家平时用什么工具记笔记？",
+        "replyCount": 2,
+        "likeCount": 2,
+        "coinCount": 0
+      },
+      {
+        "id": 5,
+        "title": "CSS 变量做主题切换的正确姿势",
+        "replyCount": 1,
+        "likeCount": 2,
+        "coinCount": 0
+      }
+    ]
+  },
+  "/api/auth/me": {
+    "user": {
+      "id": 1,
+      "username": "admin",
+      "displayName": "站长",
+      "role": "owner",
+      "bio": "论坛站长（拥有者），有事找我。",
+      "avatar": "emoji:🧭:212",
+      "banned": false,
+      "coinBalance": 12,
+      "createdAt": 1788543693508
+    },
+    "unread": 13
+  },
+  "/api/posts?page=1&sort=new": {
+    "items": [
+      {
+        "id": 2,
+        "title": "Node.js 24 内置 SQLite 上手实测：零依赖做全栈",
+        "excerpt": "Node 22.5 之后官方提供了 node:sqlite，做小项目终于不用折腾原生编译了。 为什么值得用 零依赖，npm install 都省了 同步 API，写起来像写脚本 支持 WAL，读多写少完全够用 一个小坑 run() 返回的 lastInsertRowid 可能是 BigInt，记得转…",
+        "board": {
+          "id": 2,
+          "slug": "tech",
+          "name": "技术交流",
+          "icon": "🧑‍💻"
+        },
+        "author": {
+          "id": 3,
+          "username": "bob",
+          "displayName": "Bob",
+          "role": "member",
+          "avatar": "emoji:🐳:198"
+        },
+        "category": {
+          "id": 5,
+          "name": "数据库"
+        },
+        "profilePinned": true,
+        "profilePinnedAt": 1791132093695,
+        "views": 207,
+        "replyCount": 3,
+        "likeCount": 3,
+        "dislikeCount": 0,
+        "coinCount": 3,
+        "bookmarkCount": 0,
+        "repostCount": 1,
+        "myCoins": 0,
+        "liked": true,
+        "disliked": false,
+        "bookmarked": false,
+        "reposted": false,
+        "authorFollowed": false,
+        "hidden": false,
+        "hiddenAt": null,
+        "hiddenReason": "",
+        "hiddenBy": null,
+        "baseScore": 18,
+        "valueScore": 26.47,
+        "pinned": true,
+        "locked": false,
+        "createdAt": 1790617293508,
+        "updatedAt": 1790617293508,
+        "lastActiveAt": 1790790093508
+      },
+      {
+        "id": 1,
+        "title": "【必读】论坛版规与发帖指南",
+        "excerpt": "欢迎来到本论坛 👋 发帖前请先看这里 1. 选对板块：技术问题去「问答求助」，作品去「分享创造」。 2. 标题写清楚：求助：node:sqlite 如何做分页 比 救命！！ 有效得多。 3. 支持 Markdown，代码请用围栏代码块： 请勿发布广告、人身攻击或违法内容，违者封禁。 看到好内容记得…",
+        "board": {
+          "id": 5,
+          "slug": "meta",
+          "name": "站务公告",
+          "icon": "📢"
+        },
+        "author": {
+          "id": 1,
+          "username": "admin",
+          "displayName": "站长",
+          "role": "owner",
+          "avatar": "emoji:🧭:212"
+        },
+        "category": {
+          "id": 1,
+          "name": "站务公告"
+        },
+        "profilePinned": true,
+        "profilePinnedAt": 1791132093695,
+        "views": 114,
+        "replyCount": 2,
+        "likeCount": 2,
+        "dislikeCount": 0,
+        "coinCount": 2,
+        "bookmarkCount": 0,
+        "repostCount": 1,
+        "myCoins": 0,
+        "liked": false,
+        "disliked": false,
+        "bookmarked": false,
+        "reposted": false,
+        "authorFollowed": false,
+        "hidden": false,
+        "hiddenAt": null,
+        "hiddenReason": "",
+        "hiddenBy": null,
+        "baseScore": 12,
+        "valueScore": 19.35,
+        "pinned": true,
+        "locked": false,
+        "createdAt": 1790358093508,
+        "updatedAt": 1790358093508,
+        "lastActiveAt": 1790530893508
+      },
+      {
+        "id": 9,
+        "title": "假数据采样帖",
+        "excerpt": "采样 正文一段。 列表项 code",
+        "board": {
+          "id": 1,
+          "slug": "general",
+          "name": "综合讨论",
+          "icon": "💬"
+        },
+        "author": {
+          "id": 1,
+          "username": "admin",
+          "displayName": "站长",
+          "role": "owner",
+          "avatar": "emoji:🧭:212"
+        },
+        "category": null,
+        "profilePinned": false,
+        "profilePinnedAt": null,
+        "views": 0,
+        "replyCount": 0,
+        "likeCount": 0,
+        "dislikeCount": 0,
+        "coinCount": 0,
+        "bookmarkCount": 0,
+        "repostCount": 0,
+        "myCoins": 0,
+        "liked": false,
+        "disliked": false,
+        "bookmarked": false,
+        "reposted": false,
+        "authorFollowed": false,
+        "hidden": false,
+        "hiddenAt": null,
+        "hiddenReason": "",
+        "hiddenBy": null,
+        "baseScore": 0,
+        "valueScore": 0,
+        "pinned": false,
+        "locked": false,
+        "createdAt": 1791135693921,
+        "updatedAt": 1791135693921,
+        "lastActiveAt": 1791135693921
+      },
+      {
+        "id": 8,
+        "title": "论坛 v1.1 上线：消息通知、评价、投币与关注",
+        "excerpt": "本次更新把社区互动补齐了： 🔔 消息通知：有人回复、点赞、踩、投币、关注你，或 @ 提到你，都会推送 👍👎 评价：点赞 / 踩二选一，可以随时改主意 🪙 投币：每天 10 币额度，单个帖子最多投 2 币，币会真的进入作者账户 ⭐ 收藏：在「我的收藏」里集中查看 👥 关注：关注作者后，首页「…",
+        "board": {
+          "id": 4,
+          "slug": "share",
+          "name": "分享创造",
+          "icon": "🚀"
+        },
+        "author": {
+          "id": 1,
+          "username": "admin",
+          "displayName": "站长",
+          "role": "owner",
+          "avatar": "emoji:🧭:212"
+        },
+        "category": {
+          "id": 2,
+          "name": "教程整理"
+        },
+        "profilePinned": false,
+        "profilePinnedAt": null,
+        "views": 69,
+        "replyCount": 3,
+        "likeCount": 1,
+        "dislikeCount": 0,
+        "coinCount": 0,
+        "bookmarkCount": 0,
+        "repostCount": 1,
+        "myCoins": 0,
+        "liked": false,
+        "disliked": false,
+        "bookmarked": false,
+        "reposted": false,
+        "authorFollowed": false,
+        "hidden": false,
+        "hiddenAt": null,
+        "hiddenReason": "",
+        "hiddenBy": null,
+        "baseScore": 1,
+        "valueScore": 1.96,
+        "pinned": false,
+        "locked": false,
+        "createdAt": 1791128493508,
+        "updatedAt": 1791128493508,
+        "lastActiveAt": 1791134193508
+      },
+      {
+        "id": 7,
+        "title": "SQLite 分页查询在大数据量下变慢，怎么优化？",
+        "excerpt": "LIMIT ? OFFSET ? 翻到后面几页明显变慢。 除了游标分页还有别的思路吗？表大概 200 万行。",
+        "board": {
+          "id": 3,
+          "slug": "qa",
+          "name": "问答求助",
+          "icon": "❓"
+        },
+        "author": {
+          "id": 3,
+          "username": "bob",
+          "displayName": "Bob",
+          "role": "member",
+          "avatar": "emoji:🐳:198"
+        },
+        "category": {
+          "id": 6,
+          "name": "Node.js"
+        },
+        "profilePinned": false,
+        "profilePinnedAt": null,
+        "views": 54,
+        "replyCount": 1,
+        "likeCount": 1,
+        "dislikeCount": 1,
+        "coinCount": 0,
+        "bookmarkCount": 0,
+        "repostCount": 0,
+        "myCoins": 0,
+        "liked": false,
+        "disliked": true,
+        "bookmarked": false,
+        "reposted": false,
+        "authorFollowed": false,
+        "hidden": false,
+        "hiddenAt": null,
+        "hiddenReason": "",
+        "hiddenBy": null,
+        "baseScore": -1.25,
+        "valueScore": -2.44,
+        "pinned": false,
+        "locked": false,
+        "createdAt": 1791114093508,
+        "updatedAt": 1791114093508,
+        "lastActiveAt": 1791117693508
+      },
+      {
+        "id": 6,
+        "title": "大家平时用什么工具记笔记？",
+        "excerpt": "试过不少工具，最后又回到纯文本 + Git。 你们呢？聊聊各自的用法和理由 👀",
+        "board": {
+          "id": 1,
+          "slug": "general",
+          "name": "综合讨论",
+          "icon": "💬"
+        },
+        "author": {
+          "id": 4,
+          "username": "carol",
+          "displayName": "Carol",
+          "role": "member",
+          "avatar": "emoji:🌻:45"
+        },
+        "category": {
+          "id": 8,
+          "name": "产品思考"
+        },
+        "profilePinned": false,
+        "profilePinnedAt": null,
+        "views": 30,
+        "replyCount": 2,
+        "likeCount": 2,
+        "dislikeCount": 1,
+        "coinCount": 0,
+        "bookmarkCount": 0,
+        "repostCount": 0,
+        "myCoins": 0,
+        "liked": true,
+        "disliked": false,
+        "bookmarked": false,
+        "reposted": false,
+        "authorFollowed": true,
+        "hidden": false,
+        "hiddenAt": null,
+        "hiddenReason": "",
+        "hiddenBy": null,
+        "baseScore": -0.25,
+        "valueScore": -0.5,
+        "pinned": false,
+        "locked": false,
+        "createdAt": 1791092493508,
+        "updatedAt": 1791092493508,
+        "lastActiveAt": 1791099693508
+      },
+      {
+        "id": 5,
+        "title": "CSS 变量做主题切换的正确姿势",
+        "excerpt": "把颜色统一收进 :root，切换主题只需要改一个属性： 配合 localStorage 记住用户选择，几行代码搞定 🌗",
+        "board": {
+          "id": 2,
+          "slug": "tech",
+          "name": "技术交流",
+          "icon": "🧑‍💻"
+        },
+        "author": {
+          "id": 2,
+          "username": "alice",
+          "displayName": "Alice",
+          "role": "member",
+          "avatar": "emoji:🦊:24"
+        },
+        "category": {
+          "id": 4,
+          "name": "随笔"
+        },
+        "profilePinned": false,
+        "profilePinnedAt": null,
+        "views": 32,
+        "replyCount": 1,
+        "likeCount": 2,
+        "dislikeCount": 0,
+        "coinCount": 0,
+        "bookmarkCount": 0,
+        "repostCount": 0,
+        "myCoins": 0,
+        "liked": false,
+        "disliked": false,
+        "bookmarked": false,
+        "reposted": false,
+        "authorFollowed": false,
+        "hidden": false,
+        "hiddenAt": null,
+        "hiddenReason": "",
+        "hiddenBy": null,
+        "baseScore": 2,
+        "valueScore": 3.85,
+        "pinned": false,
+        "locked": false,
+        "createdAt": 1791063693508,
+        "updatedAt": 1791063693508,
+        "lastActiveAt": 1791070893508
+      },
+      {
+        "id": 4,
+        "title": "分享：我整理的 12 个 Markdown 写作小技巧",
+        "excerpt": "写文档这几年攒下来的习惯，挑几个最实用的： 1. 用 ## 分段，别用粗体当标题 2. 代码块一定标注语言，高亮和复制体验都更好 3. 引用块 > 适合放结论 4. 列表嵌套不要超过两层 文档是写给人看的，不是写给编译器看的。 最喜欢的一条：写完先自己读一遍，读不顺就说明没写清楚。",
+        "board": {
+          "id": 4,
+          "slug": "share",
+          "name": "分享创造",
+          "icon": "🚀"
+        },
+        "author": {
+          "id": 4,
+          "username": "carol",
+          "displayName": "Carol",
+          "role": "member",
+          "avatar": "emoji:🌻:45"
+        },
+        "category": {
+          "id": 7,
+          "name": "写作"
+        },
+        "profilePinned": true,
+        "profilePinnedAt": 1791132093695,
+        "views": 35,
+        "replyCount": 1,
+        "likeCount": 2,
+        "dislikeCount": 1,
+        "coinCount": 0,
+        "bookmarkCount": 0,
+        "repostCount": 1,
+        "myCoins": 0,
+        "liked": false,
+        "disliked": true,
+        "bookmarked": false,
+        "reposted": false,
+        "authorFollowed": true,
+        "hidden": false,
+        "hiddenAt": null,
+        "hiddenReason": "",
+        "hiddenBy": null,
+        "baseScore": -0.25,
+        "valueScore": -0.5,
+        "pinned": false,
+        "locked": false,
+        "createdAt": 1791027693508,
+        "updatedAt": 1791027693508,
+        "lastActiveAt": 1791031293508
+      },
+      {
+        "id": 3,
+        "title": "求助：前端 SPA 用 hash 路由会不会影响 SEO？",
+        "excerpt": "最近用原生 JS 写了个单页应用，路由是 #/post/12 这种形式。 搜索引擎好像抓不到内容，有什么低成本改善方案吗？ 要不要换成 History API？ 还是说加个 sitemap 就够了？ 谢谢各位 🙇",
+        "board": {
+          "id": 3,
+          "slug": "qa",
+          "name": "问答求助",
+          "icon": "❓"
+        },
+        "author": {
+          "id": 2,
+          "username": "alice",
+          "displayName": "Alice",
+          "role": "member",
+          "avatar": "emoji:🦊:24"
+        },
+        "category": {
+          "id": 3,
+          "name": "前端笔记"
+        },
+        "profilePinned": true,
+        "profilePinnedAt": 1791132093695,
+        "views": 311,
+        "replyCount": 2,
+        "likeCount": 3,
+        "dislikeCount": 0,
+        "coinCount": 0,
+        "bookmarkCount": 0,
+        "repostCount": 0,
+        "myCoins": 0,
+        "liked": true,
+        "disliked": false,
+        "bookmarked": false,
+        "reposted": false,
+        "authorFollowed": false,
+        "hidden": false,
+        "hiddenAt": null,
+        "hiddenReason": "",
+        "hiddenBy": null,
+        "baseScore": 3,
+        "valueScore": 5.66,
+        "pinned": false,
+        "locked": false,
+        "createdAt": 1790973693508,
+        "updatedAt": 1790973693508,
+        "lastActiveAt": 1790980893508
+      }
+    ],
+    "page": 1,
+    "perPage": 10,
+    "total": 9,
+    "totalPages": 1,
+    "sort": "latest"
+  },
+  "/api/posts/9": {
+    "post": {
+      "id": 9,
+      "title": "假数据采样帖",
+      "excerpt": "采样 正文一段。 列表项 code",
+      "board": {
+        "id": 1,
+        "slug": "general",
+        "name": "综合讨论",
+        "icon": "💬"
+      },
+      "author": {
+        "id": 1,
+        "username": "admin",
+        "displayName": "站长",
+        "role": "owner",
+        "avatar": "emoji:🧭:212"
+      },
+      "category": null,
+      "profilePinned": false,
+      "profilePinnedAt": null,
+      "views": 0,
+      "replyCount": 0,
+      "likeCount": 0,
+      "dislikeCount": 0,
+      "coinCount": 0,
+      "bookmarkCount": 0,
+      "repostCount": 0,
+      "myCoins": 0,
+      "liked": false,
+      "disliked": false,
+      "bookmarked": false,
+      "reposted": false,
+      "authorFollowed": false,
+      "hidden": false,
+      "hiddenAt": null,
+      "hiddenReason": "",
+      "hiddenBy": null,
+      "baseScore": 0,
+      "valueScore": 0,
+      "pinned": false,
+      "locked": false,
+      "createdAt": 1791135693921,
+      "updatedAt": 1791135693921,
+      "lastActiveAt": 1791135693921,
+      "content": "# 采样\n\n正文一段。\n\n- 列表项\n\n`code`",
+      "contentHtml": "<h1>采样</h1>\n<p>正文一段。</p>\n<ul><li>列表项</li></ul>\n<p><code>code</code></p>",
+      "coin": {
+        "perPostLimit": 2,
+        "signupGrant": 10,
+        "myCoins": 0,
+        "balance": 12,
+        "available": false,
+        "reason": "self",
+        "message": "不能给自己的帖子投币，把币留给别人吧 🙌"
+      }
+    },
+    "replies": [],
+    "reposters": []
+  },
+  "/api/posts?board=general": {
+    "items": [
+      {
+        "id": 9,
+        "title": "假数据采样帖",
+        "excerpt": "采样 正文一段。 列表项 code",
+        "board": {
+          "id": 1,
+          "slug": "general",
+          "name": "综合讨论",
+          "icon": "💬"
+        },
+        "author": {
+          "id": 1,
+          "username": "admin",
+          "displayName": "站长",
+          "role": "owner",
+          "avatar": "emoji:🧭:212"
+        },
+        "category": null,
+        "profilePinned": false,
+        "profilePinnedAt": null,
+        "views": 0,
+        "replyCount": 0,
+        "likeCount": 0,
+        "dislikeCount": 0,
+        "coinCount": 0,
+        "bookmarkCount": 0,
+        "repostCount": 0,
+        "myCoins": 0,
+        "liked": false,
+        "disliked": false,
+        "bookmarked": false,
+        "reposted": false,
+        "authorFollowed": false,
+        "hidden": false,
+        "hiddenAt": null,
+        "hiddenReason": "",
+        "hiddenBy": null,
+        "baseScore": 0,
+        "valueScore": 0,
+        "pinned": false,
+        "locked": false,
+        "createdAt": 1791135693921,
+        "updatedAt": 1791135693921,
+        "lastActiveAt": 1791135693921
+      },
+      {
+        "id": 6,
+        "title": "大家平时用什么工具记笔记？",
+        "excerpt": "试过不少工具，最后又回到纯文本 + Git。 你们呢？聊聊各自的用法和理由 👀",
+        "board": {
+          "id": 1,
+          "slug": "general",
+          "name": "综合讨论",
+          "icon": "💬"
+        },
+        "author": {
+          "id": 4,
+          "username": "carol",
+          "displayName": "Carol",
+          "role": "member",
+          "avatar": "emoji:🌻:45"
+        },
+        "category": {
+          "id": 8,
+          "name": "产品思考"
+        },
+        "profilePinned": false,
+        "profilePinnedAt": null,
+        "views": 30,
+        "replyCount": 2,
+        "likeCount": 2,
+        "dislikeCount": 1,
+        "coinCount": 0,
+        "bookmarkCount": 0,
+        "repostCount": 0,
+        "myCoins": 0,
+        "liked": true,
+        "disliked": false,
+        "bookmarked": false,
+        "reposted": false,
+        "authorFollowed": true,
+        "hidden": false,
+        "hiddenAt": null,
+        "hiddenReason": "",
+        "hiddenBy": null,
+        "baseScore": -0.25,
+        "valueScore": -0.5,
+        "pinned": false,
+        "locked": false,
+        "createdAt": 1791092493508,
+        "updatedAt": 1791092493508,
+        "lastActiveAt": 1791099693508
+      }
+    ],
+    "page": 1,
+    "perPage": 10,
+    "total": 2,
+    "totalPages": 1,
+    "sort": "latest"
+  },
+  "/api/posts?q=采样": {
+    "items": [
+      {
+        "id": 9,
+        "title": "假数据采样帖",
+        "excerpt": "采样 正文一段。 列表项 code",
+        "board": {
+          "id": 1,
+          "slug": "general",
+          "name": "综合讨论",
+          "icon": "💬"
+        },
+        "author": {
+          "id": 1,
+          "username": "admin",
+          "displayName": "站长",
+          "role": "owner",
+          "avatar": "emoji:🧭:212"
+        },
+        "category": null,
+        "profilePinned": false,
+        "profilePinnedAt": null,
+        "views": 0,
+        "replyCount": 0,
+        "likeCount": 0,
+        "dislikeCount": 0,
+        "coinCount": 0,
+        "bookmarkCount": 0,
+        "repostCount": 0,
+        "myCoins": 0,
+        "liked": false,
+        "disliked": false,
+        "bookmarked": false,
+        "reposted": false,
+        "authorFollowed": false,
+        "hidden": false,
+        "hiddenAt": null,
+        "hiddenReason": "",
+        "hiddenBy": null,
+        "baseScore": 0,
+        "valueScore": 0,
+        "pinned": false,
+        "locked": false,
+        "createdAt": 1791135693921,
+        "updatedAt": 1791135693921,
+        "lastActiveAt": 1791135693921
+      }
+    ],
+    "page": 1,
+    "perPage": 10,
+    "total": 1,
+    "totalPages": 1,
+    "sort": "latest"
+  },
+  "/api/posts?bookmarked=1": {
+    "items": [],
+    "page": 1,
+    "perPage": 10,
+    "total": 0,
+    "totalPages": 1,
+    "sort": "latest"
+  },
+  "/api/posts?following=1": {
+    "items": [
+      {
+        "id": 6,
+        "title": "大家平时用什么工具记笔记？",
+        "excerpt": "试过不少工具，最后又回到纯文本 + Git。 你们呢？聊聊各自的用法和理由 👀",
+        "board": {
+          "id": 1,
+          "slug": "general",
+          "name": "综合讨论",
+          "icon": "💬"
+        },
+        "author": {
+          "id": 4,
+          "username": "carol",
+          "displayName": "Carol",
+          "role": "member",
+          "avatar": "emoji:🌻:45"
+        },
+        "category": {
+          "id": 8,
+          "name": "产品思考"
+        },
+        "profilePinned": false,
+        "profilePinnedAt": null,
+        "views": 30,
+        "replyCount": 2,
+        "likeCount": 2,
+        "dislikeCount": 1,
+        "coinCount": 0,
+        "bookmarkCount": 0,
+        "repostCount": 0,
+        "myCoins": 0,
+        "liked": true,
+        "disliked": false,
+        "bookmarked": false,
+        "reposted": false,
+        "authorFollowed": true,
+        "hidden": false,
+        "hiddenAt": null,
+        "hiddenReason": "",
+        "hiddenBy": null,
+        "baseScore": -0.25,
+        "valueScore": -0.5,
+        "pinned": false,
+        "locked": false,
+        "createdAt": 1791092493508,
+        "updatedAt": 1791092493508,
+        "lastActiveAt": 1791099693508
+      },
+      {
+        "id": 4,
+        "title": "分享：我整理的 12 个 Markdown 写作小技巧",
+        "excerpt": "写文档这几年攒下来的习惯，挑几个最实用的： 1. 用 ## 分段，别用粗体当标题 2. 代码块一定标注语言，高亮和复制体验都更好 3. 引用块 > 适合放结论 4. 列表嵌套不要超过两层 文档是写给人看的，不是写给编译器看的。 最喜欢的一条：写完先自己读一遍，读不顺就说明没写清楚。",
+        "board": {
+          "id": 4,
+          "slug": "share",
+          "name": "分享创造",
+          "icon": "🚀"
+        },
+        "author": {
+          "id": 4,
+          "username": "carol",
+          "displayName": "Carol",
+          "role": "member",
+          "avatar": "emoji:🌻:45"
+        },
+        "category": {
+          "id": 7,
+          "name": "写作"
+        },
+        "profilePinned": true,
+        "profilePinnedAt": 1791132093695,
+        "views": 35,
+        "replyCount": 1,
+        "likeCount": 2,
+        "dislikeCount": 1,
+        "coinCount": 0,
+        "bookmarkCount": 0,
+        "repostCount": 1,
+        "myCoins": 0,
+        "liked": false,
+        "disliked": true,
+        "bookmarked": false,
+        "reposted": false,
+        "authorFollowed": true,
+        "hidden": false,
+        "hiddenAt": null,
+        "hiddenReason": "",
+        "hiddenBy": null,
+        "baseScore": -0.25,
+        "valueScore": -0.5,
+        "pinned": false,
+        "locked": false,
+        "createdAt": 1791027693508,
+        "updatedAt": 1791027693508,
+        "lastActiveAt": 1791031293508
+      }
+    ],
+    "page": 1,
+    "perPage": 10,
+    "total": 2,
+    "totalPages": 1,
+    "sort": "latest"
+  },
+  "/api/ranking": {
+    "window": "all",
+    "days": 0,
+    "weights": {
+      "like": 1,
+      "coin": 5,
+      "bookmark": 3,
+      "dislike": 3,
+      "dislikeSoftCap": 3,
+      "halfSaturation": 50
+    },
+    "posts": [
+      {
+        "id": 2,
+        "title": "Node.js 24 内置 SQLite 上手实测：零依赖做全栈",
+        "excerpt": "Node 22.5 之后官方提供了 node:sqlite，做小项目终于不用折腾原生编译了。 为什么值得用 零依赖，npm install 都省了 同步 API，写起来像写脚本 支持 WAL，读多写少完全够用 一个小坑 run() 返回的 …",
+        "board": {
+          "slug": "tech",
+          "name": "技术交流",
+          "icon": "🧑‍💻"
+        },
+        "author": {
+          "id": 3,
+          "username": "bob",
+          "displayName": "Bob",
+          "role": "member",
+          "avatar": "emoji:🐳:198"
+        },
+        "createdAt": 1790617293508,
+        "views": 207,
+        "pinned": true,
+        "replyCount": 3,
+        "likeCount": 3,
+        "dislikeCount": 0,
+        "coinCount": 3,
+        "bookmarkCount": 0,
+        "repostCount": 1,
+        "baseScore": 18,
+        "valueScore": 26.47,
+        "liked": true,
+        "bookmarked": false,
+        "reposted": false,
+        "myCoins": 0
+      },
+      {
+        "id": 1,
+        "title": "【必读】论坛版规与发帖指南",
+        "excerpt": "欢迎来到本论坛 👋 发帖前请先看这里 1. 选对板块：技术问题去「问答求助」，作品去「分享创造」。 2. 标题写清楚：求助：node:sqlite 如何做分页 比 救命！！ 有效得多。 3. 支持 Markdown，代码请用围栏代码块： …",
+        "board": {
+          "slug": "meta",
+          "name": "站务公告",
+          "icon": "📢"
+        },
+        "author": {
+          "id": 1,
+          "username": "admin",
+          "displayName": "站长",
+          "role": "owner",
+          "avatar": "emoji:🧭:212"
+        },
+        "createdAt": 1790358093508,
+        "views": 114,
+        "pinned": true,
+        "replyCount": 2,
+        "likeCount": 2,
+        "dislikeCount": 0,
+        "coinCount": 2,
+        "bookmarkCount": 0,
+        "repostCount": 1,
+        "baseScore": 12,
+        "valueScore": 19.35,
+        "liked": false,
+        "bookmarked": false,
+        "reposted": false,
+        "myCoins": 0
+      },
+      {
+        "id": 3,
+        "title": "求助：前端 SPA 用 hash 路由会不会影响 SEO？",
+        "excerpt": "最近用原生 JS 写了个单页应用，路由是 #/post/12 这种形式。 搜索引擎好像抓不到内容，有什么低成本改善方案吗？ 要不要换成 History API？ 还是说加个 sitemap 就够了？ 谢谢各位 🙇",
+        "board": {
+          "slug": "qa",
+          "name": "问答求助",
+          "icon": "❓"
+        },
+        "author": {
+          "id": 2,
+          "username": "alice",
+          "displayName": "Alice",
+          "role": "member",
+          "avatar": "emoji:🦊:24"
+        },
+        "createdAt": 1790973693508,
+        "views": 311,
+        "pinned": false,
+        "replyCount": 2,
+        "likeCount": 3,
+        "dislikeCount": 0,
+        "coinCount": 0,
+        "bookmarkCount": 0,
+        "repostCount": 0,
+        "baseScore": 3,
+        "valueScore": 5.66,
+        "liked": true,
+        "bookmarked": false,
+        "reposted": false,
+        "myCoins": 0
+      },
+      {
+        "id": 5,
+        "title": "CSS 变量做主题切换的正确姿势",
+        "excerpt": "把颜色统一收进 :root，切换主题只需要改一个属性： 配合 `localSto",
+        "board": {
+          "slug": "tech",
+          "name": "技术交流",
+          "icon": "🧑‍💻"
+        },
+        "author": {
+          "id": 2,
+          "username": "alice",
+          "displayName": "Alice",
+          "role": "member",
+          "avatar": "emoji:🦊:24"
+        },
+        "createdAt": 1791063693508,
+        "views": 32,
+        "pinned": false,
+        "replyCount": 1,
+        "likeCount": 2,
+        "dislikeCount": 0,
+        "coinCount": 0,
+        "bookmarkCount": 0,
+        "repostCount": 0,
+        "baseScore": 2,
+        "valueScore": 3.85,
+        "liked": false,
+        "bookmarked": false,
+        "reposted": false,
+        "myCoins": 0
+      },
+      {
+        "id": 8,
+        "title": "论坛 v1.1 上线：消息通知、评价、投币与关注",
+        "excerpt": "本次更新把社区互动补齐了： 🔔 消息通知：有人回复、点赞、踩、投币、关注你，或 @ 提到你，都会推送 👍👎 评价：点赞 / 踩二选一，可以随时改主意 🪙 投币：每天 10 币额度，单个帖子最多投 2 币，币会真的进入作者账户 ⭐ 收…",
+        "board": {
+          "slug": "share",
+          "name": "分享创造",
+          "icon": "🚀"
+        },
+        "author": {
+          "id": 1,
+          "username": "admin",
+          "displayName": "站长",
+          "role": "owner",
+          "avatar": "emoji:🧭:212"
+        },
+        "createdAt": 1791128493508,
+        "views": 69,
+        "pinned": false,
+        "replyCount": 3,
+        "likeCount": 1,
+        "dislikeCount": 0,
+        "coinCount": 0,
+        "bookmarkCount": 0,
+        "repostCount": 1,
+        "baseScore": 1,
+        "valueScore": 1.96,
+        "liked": false,
+        "bookmarked": false,
+        "reposted": false,
+        "myCoins": 0
+      },
+      {
+        "id": 9,
+        "title": "假数据采样帖",
+        "excerpt": "采样 正文一段。 列表项 code",
+        "board": {
+          "slug": "general",
+          "name": "综合讨论",
+          "icon": "💬"
+        },
+        "author": {
+          "id": 1,
+          "username": "admin",
+          "displayName": "站长",
+          "role": "owner",
+          "avatar": "emoji:🧭:212"
+        },
+        "createdAt": 1791135693921,
+        "views": 0,
+        "pinned": false,
+        "replyCount": 0,
+        "likeCount": 0,
+        "dislikeCount": 0,
+        "coinCount": 0,
+        "bookmarkCount": 0,
+        "repostCount": 0,
+        "baseScore": 0,
+        "valueScore": 0,
+        "liked": false,
+        "bookmarked": false,
+        "reposted": false,
+        "myCoins": 0
+      },
+      {
+        "id": 6,
+        "title": "大家平时用什么工具记笔记？",
+        "excerpt": "试过不少工具，最后又回到纯文本 + Git。 你们呢？聊聊各自的用法和理由 👀",
+        "board": {
+          "slug": "general",
+          "name": "综合讨论",
+          "icon": "💬"
+        },
+        "author": {
+          "id": 4,
+          "username": "carol",
+          "displayName": "Carol",
+          "role": "member",
+          "avatar": "emoji:🌻:45"
+        },
+        "createdAt": 1791092493508,
+        "views": 30,
+        "pinned": false,
+        "replyCount": 2,
+        "likeCount": 2,
+        "dislikeCount": 1,
+        "coinCount": 0,
+        "bookmarkCount": 0,
+        "repostCount": 0,
+        "baseScore": -0.25,
+        "valueScore": -0.5,
+        "liked": true,
+        "bookmarked": false,
+        "reposted": false,
+        "myCoins": 0
+      },
+      {
+        "id": 4,
+        "title": "分享：我整理的 12 个 Markdown 写作小技巧",
+        "excerpt": "写文档这几年攒下来的习惯，挑几个最实用的： 1. 用 ## 分段，别用粗体当标题 2. 代码块一定标注语言，高亮和复制体验都更好 3. 引用块 > 适合放结论 4. 列表嵌套不要超过两层 文档是写给人看的，不是写给编译器看的。 最喜欢的一条…",
+        "board": {
+          "slug": "share",
+          "name": "分享创造",
+          "icon": "🚀"
+        },
+        "author": {
+          "id": 4,
+          "username": "carol",
+          "displayName": "Carol",
+          "role": "member",
+          "avatar": "emoji:🌻:45"
+        },
+        "createdAt": 1791027693508,
+        "views": 35,
+        "pinned": false,
+        "replyCount": 1,
+        "likeCount": 2,
+        "dislikeCount": 1,
+        "coinCount": 0,
+        "bookmarkCount": 0,
+        "repostCount": 1,
+        "baseScore": -0.25,
+        "valueScore": -0.5,
+        "liked": false,
+        "bookmarked": false,
+        "reposted": false,
+        "myCoins": 0
+      },
+      {
+        "id": 7,
+        "title": "SQLite 分页查询在大数据量下变慢，怎么优化？",
+        "excerpt": "LIMIT ? OFFSET ? 翻到后面几页明显变慢。 除了游标分页还有别的思路吗？表大概 200 万行。",
+        "board": {
+          "slug": "qa",
+          "name": "问答求助",
+          "icon": "❓"
+        },
+        "author": {
+          "id": 3,
+          "username": "bob",
+          "displayName": "Bob",
+          "role": "member",
+          "avatar": "emoji:🐳:198"
+        },
+        "createdAt": 1791114093508,
+        "views": 54,
+        "pinned": false,
+        "replyCount": 1,
+        "likeCount": 1,
+        "dislikeCount": 1,
+        "coinCount": 0,
+        "bookmarkCount": 0,
+        "repostCount": 0,
+        "baseScore": -1.25,
+        "valueScore": -2.44,
+        "liked": false,
+        "bookmarked": false,
+        "reposted": false,
+        "myCoins": 0
+      }
+    ],
+    "authors": [
+      {
+        "rank": 1,
+        "user": {
+          "id": 3,
+          "username": "bob",
+          "displayName": "Bob",
+          "role": "member",
+          "bio": "后端开发，Node / Go / 数据库。",
+          "avatar": "emoji:🐳:198"
+        },
+        "postCount": 2,
+        "totalValue": 24.03,
+        "avgValue": 12.02,
+        "bestValue": 26.47,
+        "likesReceived": 4,
+        "dislikesReceived": 1,
+        "coinsReceived": 3,
+        "bookmarksReceived": 0,
+        "repliesReceived": 4
+      },
+      {
+        "rank": 2,
+        "user": {
+          "id": 1,
+          "username": "admin",
+          "displayName": "站长",
+          "role": "owner",
+          "bio": "论坛站长（拥有者），有事找我。",
+          "avatar": "emoji:🧭:212"
+        },
+        "postCount": 3,
+        "totalValue": 21.32,
+        "avgValue": 7.11,
+        "bestValue": 19.35,
+        "likesReceived": 3,
+        "dislikesReceived": 0,
+        "coinsReceived": 2,
+        "bookmarksReceived": 0,
+        "repliesReceived": 5
+      },
+      {
+        "rank": 3,
+        "user": {
+          "id": 2,
+          "username": "alice",
+          "displayName": "Alice",
+          "role": "member",
+          "bio": "前端工程师，喜欢折腾 UI。",
+          "avatar": "emoji:🦊:24"
+        },
+        "postCount": 2,
+        "totalValue": 9.51,
+        "avgValue": 4.75,
+        "bestValue": 5.66,
+        "likesReceived": 5,
+        "dislikesReceived": 0,
+        "coinsReceived": 0,
+        "bookmarksReceived": 0,
+        "repliesReceived": 3
+      },
+      {
+        "rank": 4,
+        "user": {
+          "id": 4,
+          "username": "carol",
+          "displayName": "Carol",
+          "role": "member",
+          "bio": "产品经理，偶尔写点东西。",
+          "avatar": "emoji:🌻:45"
+        },
+        "postCount": 2,
+        "totalValue": -1,
+        "avgValue": -0.5,
+        "bestValue": -0.5,
+        "likesReceived": 4,
+        "dislikesReceived": 2,
+        "coinsReceived": 0,
+        "bookmarksReceived": 0,
+        "repliesReceived": 3
+      }
+    ],
+    "totals": {
+      "posts": 9,
+      "authors": 4
+    }
+  },
+  "/api/users/admin": {
+    "user": {
+      "id": 1,
+      "username": "admin",
+      "displayName": "站长",
+      "role": "owner",
+      "bio": "论坛站长（拥有者），有事找我。",
+      "avatar": "emoji:🧭:212",
+      "banned": false,
+      "createdAt": 1788543693508,
+      "coinBalance": 12,
+      "postCount": 3,
+      "replyCount": 2,
+      "followerCount": 3,
+      "followingCount": 1,
+      "likesReceived": 3,
+      "dislikesReceived": 0,
+      "coinsReceived": 2,
+      "bookmarkCount": 0,
+      "isMe": true,
+      "isFollowing": false,
+      "followsMe": false,
+      "mutualFollow": false,
+      "blockedByMe": false
+    },
+    "value": {
+      "totalValue": 21.32,
+      "avgValue": 7.11,
+      "bestValue": 19.35,
+      "postCount": 3,
+      "rank": 2,
+      "weights": {
+        "like": 1,
+        "coin": 5,
+        "bookmark": 3,
+        "dislike": 3,
+        "dislikeSoftCap": 3,
+        "halfSaturation": 50
+      }
+    },
+    "repostCount": 0,
+    "categories": [
+      {
+        "id": 1,
+        "name": "站务公告",
+        "sortOrder": 0,
+        "postCount": 1
+      },
+      {
+        "id": 2,
+        "name": "教程整理",
+        "sortOrder": 1,
+        "postCount": 1
+      }
+    ],
+    "uncategorizedCount": 1,
+    "pinnedCount": 1,
+    "pinLimit": 3,
+    "categoryLimit": 8,
+    "filter": "all",
+    "followers": [
+      {
+        "id": 4,
+        "username": "carol",
+        "displayName": "Carol",
+        "role": "member",
+        "bio": "产品经理，偶尔写点东西。",
+        "avatar": "emoji:🌻:45",
+        "followedAt": 1791049293508,
+        "blockedAt": null,
+        "postCount": 2,
+        "followerCount": null,
+        "viewerFollows": true
+      },
+      {
+        "id": 3,
+        "username": "bob",
+        "displayName": "Bob",
+        "role": "member",
+        "bio": "后端开发，Node / Go / 数据库。",
+        "avatar": "emoji:🐳:198",
+        "followedAt": 1790876493508,
+        "blockedAt": null,
+        "postCount": 2,
+        "followerCount": null,
+        "viewerFollows": false
+      },
+      {
+        "id": 2,
+        "username": "alice",
+        "displayName": "Alice",
+        "role": "member",
+        "bio": "前端工程师，喜欢折腾 UI。",
+        "avatar": "emoji:🦊:24",
+        "followedAt": 1790790093508,
+        "blockedAt": null,
+        "postCount": 2,
+        "followerCount": null,
+        "viewerFollows": false
+      }
+    ],
+    "following": [
+      {
+        "id": 4,
+        "username": "carol",
+        "displayName": "Carol",
+        "role": "member",
+        "bio": "产品经理，偶尔写点东西。",
+        "avatar": "emoji:🌻:45",
+        "followedAt": 1791049293508,
+        "blockedAt": null,
+        "postCount": 2,
+        "followerCount": 2
+      }
+    ],
+    "posts": [
+      {
+        "id": 1,
+        "title": "【必读】论坛版规与发帖指南",
+        "excerpt": "欢迎来到本论坛 👋 发帖前请先看这里 1. 选对板块：技术问题去「问答求助」，作品去「分享创造」。 2. 标题写清楚：求助：node:sqlite 如何做分页 比 救命！！ 有效得多。 3. 支持 Markdown，代码请用围栏代码块： 请勿发布广告、人身攻击或违法内容，违者封禁。 看到好内容记得…",
+        "board": {
+          "id": 5,
+          "slug": "meta",
+          "name": "站务公告",
+          "icon": "📢"
+        },
+        "author": {
+          "id": 1,
+          "username": "admin",
+          "displayName": "站长",
+          "role": "owner",
+          "avatar": "emoji:🧭:212"
+        },
+        "category": {
+          "id": 1,
+          "name": "站务公告"
+        },
+        "profilePinned": true,
+        "profilePinnedAt": 1791132093695,
+        "views": 114,
+        "replyCount": 2,
+        "likeCount": 2,
+        "dislikeCount": 0,
+        "coinCount": 2,
+        "bookmarkCount": 0,
+        "repostCount": 1,
+        "myCoins": 0,
+        "liked": false,
+        "disliked": false,
+        "bookmarked": false,
+        "reposted": false,
+        "authorFollowed": false,
+        "hidden": false,
+        "hiddenAt": null,
+        "hiddenReason": "",
+        "hiddenBy": null,
+        "baseScore": 12,
+        "valueScore": 19.35,
+        "pinned": true,
+        "locked": false,
+        "createdAt": 1790358093508,
+        "updatedAt": 1790358093508,
+        "lastActiveAt": 1790530893508
+      },
+      {
+        "id": 9,
+        "title": "假数据采样帖",
+        "excerpt": "采样 正文一段。 列表项 code",
+        "board": {
+          "id": 1,
+          "slug": "general",
+          "name": "综合讨论",
+          "icon": "💬"
+        },
+        "author": {
+          "id": 1,
+          "username": "admin",
+          "displayName": "站长",
+          "role": "owner",
+          "avatar": "emoji:🧭:212"
+        },
+        "category": null,
+        "profilePinned": false,
+        "profilePinnedAt": null,
+        "views": 0,
+        "replyCount": 0,
+        "likeCount": 0,
+        "dislikeCount": 0,
+        "coinCount": 0,
+        "bookmarkCount": 0,
+        "repostCount": 0,
+        "myCoins": 0,
+        "liked": false,
+        "disliked": false,
+        "bookmarked": false,
+        "reposted": false,
+        "authorFollowed": false,
+        "hidden": false,
+        "hiddenAt": null,
+        "hiddenReason": "",
+        "hiddenBy": null,
+        "baseScore": 0,
+        "valueScore": 0,
+        "pinned": false,
+        "locked": false,
+        "createdAt": 1791135693921,
+        "updatedAt": 1791135693921,
+        "lastActiveAt": 1791135693921
+      },
+      {
+        "id": 8,
+        "title": "论坛 v1.1 上线：消息通知、评价、投币与关注",
+        "excerpt": "本次更新把社区互动补齐了： 🔔 消息通知：有人回复、点赞、踩、投币、关注你，或 @ 提到你，都会推送 👍👎 评价：点赞 / 踩二选一，可以随时改主意 🪙 投币：每天 10 币额度，单个帖子最多投 2 币，币会真的进入作者账户 ⭐ 收藏：在「我的收藏」里集中查看 👥 关注：关注作者后，首页「…",
+        "board": {
+          "id": 4,
+          "slug": "share",
+          "name": "分享创造",
+          "icon": "🚀"
+        },
+        "author": {
+          "id": 1,
+          "username": "admin",
+          "displayName": "站长",
+          "role": "owner",
+          "avatar": "emoji:🧭:212"
+        },
+        "category": {
+          "id": 2,
+          "name": "教程整理"
+        },
+        "profilePinned": false,
+        "profilePinnedAt": null,
+        "views": 69,
+        "replyCount": 3,
+        "likeCount": 1,
+        "dislikeCount": 0,
+        "coinCount": 0,
+        "bookmarkCount": 0,
+        "repostCount": 1,
+        "myCoins": 0,
+        "liked": false,
+        "disliked": false,
+        "bookmarked": false,
+        "reposted": false,
+        "authorFollowed": false,
+        "hidden": false,
+        "hiddenAt": null,
+        "hiddenReason": "",
+        "hiddenBy": null,
+        "baseScore": 1,
+        "valueScore": 1.96,
+        "pinned": false,
+        "locked": false,
+        "createdAt": 1791128493508,
+        "updatedAt": 1791128493508,
+        "lastActiveAt": 1791134193508
+      }
+    ]
+  },
+  "/api/me/categories": {
+    "items": [
+      {
+        "id": 1,
+        "name": "站务公告",
+        "sortOrder": 0,
+        "postCount": 1
+      },
+      {
+        "id": 2,
+        "name": "教程整理",
+        "sortOrder": 1,
+        "postCount": 1
+      }
+    ],
+    "limit": 8,
+    "uncategorizedCount": 1
+  },
+  "/api/me/following": {
+    "items": [
+      {
+        "id": 4,
+        "username": "carol",
+        "displayName": "Carol",
+        "role": "member",
+        "bio": "产品经理，偶尔写点东西。",
+        "avatar": "emoji:🌻:45",
+        "followedAt": 1791049293508,
+        "blockedAt": null,
+        "postCount": 2,
+        "followerCount": 2
+      }
+    ],
+    "counts": {
+      "followerCount": 3,
+      "followingCount": 1
+    },
+    "coinBalance": 12
+  },
+  "/api/me/blocks": {
+    "items": [],
+    "total": 0
+  },
+  "/api/notifications": {
+    "items": [
+      {
+        "id": 44,
+        "type": "system",
+        "excerpt": "欢迎来到围炉论坛！先看看《论坛版规与发帖指南》，然后去发你的第一个帖子吧 🎉",
+        "read": false,
+        "createdAt": 1791135693694,
+        "post": null,
+        "actor": null
+      },
+      {
+        "id": 13,
+        "type": "post_reply",
+        "excerpt": "投币额度挺合理，@站长 这个 @ 提醒能收到吗？",
+        "read": false,
+        "createdAt": 1791134193508,
+        "post": {
+          "id": 8,
+          "title": "论坛 v1.1 上线：消息通知、评价、投币与关注",
+          "deleted": false
+        },
+        "actor": {
+          "id": 3,
+          "username": "bob",
+          "displayName": "Bob",
+          "role": "member",
+          "avatar": "emoji:🐳:198"
+        }
+      },
+      {
+        "id": 12,
+        "type": "post_reply",
+        "excerpt": "希望以后能加上消息通知 🔔",
+        "read": false,
+        "createdAt": 1791133293508,
+        "post": {
+          "id": 8,
+          "title": "论坛 v1.1 上线：消息通知、评价、投币与关注",
+          "deleted": false
+        },
+        "actor": {
+          "id": 4,
+          "username": "carol",
+          "displayName": "Carol",
+          "role": "member",
+          "avatar": "emoji:🌻:45"
+        }
+      },
+      {
+        "id": 11,
+        "type": "post_reply",
+        "excerpt": "速度很快，UI 也清爽 👍",
+        "read": false,
+        "createdAt": 1791132093508,
+        "post": {
+          "id": 8,
+          "title": "论坛 v1.1 上线：消息通知、评价、投币与关注",
+          "deleted": false
+        },
+        "actor": {
+          "id": 2,
+          "username": "alice",
+          "displayName": "Alice",
+          "role": "member",
+          "avatar": "emoji:🦊:24"
+        }
+      },
+      {
+        "id": 32,
+        "type": "post_like",
+        "excerpt": "",
+        "read": false,
+        "createdAt": 1791128553508,
+        "post": {
+          "id": 8,
+          "title": "论坛 v1.1 上线：消息通知、评价、投币与关注",
+          "deleted": false
+        },
+        "actor": {
+          "id": 2,
+          "username": "alice",
+          "displayName": "Alice",
+          "role": "member",
+          "avatar": "emoji:🦊:24"
+        }
+      },
+      {
+        "id": 35,
+        "type": "post_coin",
+        "excerpt": "投了 2 币",
+        "read": false,
+        "createdAt": 1791124893508,
+        "post": {
+          "id": 1,
+          "title": "【必读】论坛版规与发帖指南",
+          "deleted": false
+        },
+        "actor": {
+          "id": 3,
+          "username": "bob",
+          "displayName": "Bob",
+          "role": "member",
+          "avatar": "emoji:🐳:198"
+        }
+      },
+      {
+        "id": 43,
+        "type": "follow",
+        "excerpt": "",
+        "read": false,
+        "createdAt": 1791049293508,
+        "post": null,
+        "actor": {
+          "id": 4,
+          "username": "carol",
+          "displayName": "Carol",
+          "role": "member",
+          "avatar": "emoji:🌻:45"
+        }
+      },
+      {
+        "id": 38,
+        "type": "follow",
+        "excerpt": "",
+        "read": false,
+        "createdAt": 1790876493508,
+        "post": null,
+        "actor": {
+          "id": 3,
+          "username": "bob",
+          "displayName": "Bob",
+          "role": "member",
+          "avatar": "emoji:🐳:198"
+        }
+      },
+      {
+        "id": 37,
+        "type": "follow",
+        "excerpt": "",
+        "read": false,
+        "createdAt": 1790790093508,
+        "post": null,
+        "actor": {
+          "id": 2,
+          "username": "alice",
+          "displayName": "Alice",
+          "role": "member",
+          "avatar": "emoji:🦊:24"
+        }
+      },
+      {
+        "id": 2,
+        "type": "post_reply",
+        "excerpt": "补充一点：提问时贴出报错堆栈真的能省下很多来回。",
+        "read": false,
+        "createdAt": 1790530893508,
+        "post": {
+          "id": 1,
+          "title": "【必读】论坛版规与发帖指南",
+          "deleted": false
+        },
+        "actor": {
+          "id": 4,
+          "username": "carol",
+          "displayName": "Carol",
+          "role": "member",
+          "avatar": "emoji:🌻:45"
+        }
+      },
+      {
+        "id": 1,
+        "type": "post_reply",
+        "excerpt": "收到，已认真阅读 ✅",
+        "read": false,
+        "createdAt": 1790444493508,
+        "post": {
+          "id": 1,
+          "title": "【必读】论坛版规与发帖指南",
+          "deleted": false
+        },
+        "actor": {
+          "id": 3,
+          "username": "bob",
+          "displayName": "Bob",
+          "role": "member",
+          "avatar": "emoji:🐳:198"
+        }
+      },
+      {
+        "id": 15,
+        "type": "post_like",
+        "excerpt": "",
+        "read": false,
+        "createdAt": 1790358153508,
+        "post": {
+          "id": 1,
+          "title": "【必读】论坛版规与发帖指南",
+          "deleted": false
+        },
+        "actor": {
+          "id": 4,
+          "username": "carol",
+          "displayName": "Carol",
+          "role": "member",
+          "avatar": "emoji:🌻:45"
+        }
+      },
+      {
+        "id": 14,
+        "type": "post_like",
+        "excerpt": "",
+        "read": false,
+        "createdAt": 1790358153508,
+        "post": {
+          "id": 1,
+          "title": "【必读】论坛版规与发帖指南",
+          "deleted": false
+        },
+        "actor": {
+          "id": 3,
+          "username": "bob",
+          "displayName": "Bob",
+          "role": "member",
+          "avatar": "emoji:🐳:198"
+        }
+      }
+    ],
+    "page": 1,
+    "perPage": 20,
+    "total": 13,
+    "totalPages": 1,
+    "unreadCount": 13,
+    "filter": "all"
+  },
+  "/api/notifications/summary": {
+    "unread": 13
+  },
+  "/api/checkin": {
+    "today": "2026-10-05",
+    "checkedInToday": false,
+    "streak": 7,
+    "total": 7,
+    "weekStart": "2026-10-05",
+    "week": [
+      {
+        "day": "2026-10-05",
+        "attended": false,
+        "isToday": true,
+        "future": false
+      },
+      {
+        "day": "2026-10-06",
+        "attended": false,
+        "isToday": false,
+        "future": true
+      },
+      {
+        "day": "2026-10-07",
+        "attended": false,
+        "isToday": false,
+        "future": true
+      },
+      {
+        "day": "2026-10-08",
+        "attended": false,
+        "isToday": false,
+        "future": true
+      },
+      {
+        "day": "2026-10-09",
+        "attended": false,
+        "isToday": false,
+        "future": true
+      },
+      {
+        "day": "2026-10-10",
+        "attended": false,
+        "isToday": false,
+        "future": true
+      },
+      {
+        "day": "2026-10-11",
+        "attended": false,
+        "isToday": false,
+        "future": true
+      }
+    ],
+    "weekAttended": 0,
+    "dailyReward": 1,
+    "weeklyBonus": 3,
+    "fullWeekDays": 7,
+    "pendingBonusWeeks": [
+      "2026-09-28"
+    ],
+    "pendingBonus": 3,
+    "bonusHistory": [],
+    "calendar": [
+      {
+        "day": "2026-09-01",
+        "attended": false,
+        "isToday": false,
+        "future": false
+      },
+      {
+        "day": "2026-09-02",
+        "attended": false,
+        "isToday": false,
+        "future": false
+      },
+      {
+        "day": "2026-09-03",
+        "attended": false,
+        "isToday": false,
+        "future": false
+      },
+      {
+        "day": "2026-09-04",
+        "attended": false,
+        "isToday": false,
+        "future": false
+      },
+      {
+        "day": "2026-09-05",
+        "attended": false,
+        "isToday": false,
+        "future": false
+      },
+      {
+        "day": "2026-09-06",
+        "attended": false,
+        "isToday": false,
+        "future": false
+      },
+      {
+        "day": "2026-09-07",
+        "attended": false,
+        "isToday": false,
+        "future": false
+      },
+      {
+        "day": "2026-09-08",
+        "attended": false,
+        "isToday": false,
+        "future": false
+      },
+      {
+        "day": "2026-09-09",
+        "attended": false,
+        "isToday": false,
+        "future": false
+      },
+      {
+        "day": "2026-09-10",
+        "attended": false,
+        "isToday": false,
+        "future": false
+      },
+      {
+        "day": "2026-09-11",
+        "attended": false,
+        "isToday": false,
+        "future": false
+      },
+      {
+        "day": "2026-09-12",
+        "attended": false,
+        "isToday": false,
+        "future": false
+      },
+      {
+        "day": "2026-09-13",
+        "attended": false,
+        "isToday": false,
+        "future": false
+      },
+      {
+        "day": "2026-09-14",
+        "attended": false,
+        "isToday": false,
+        "future": false
+      },
+      {
+        "day": "2026-09-15",
+        "attended": false,
+        "isToday": false,
+        "future": false
+      },
+      {
+        "day": "2026-09-16",
+        "attended": false,
+        "isToday": false,
+        "future": false
+      },
+      {
+        "day": "2026-09-17",
+        "attended": false,
+        "isToday": false,
+        "future": false
+      },
+      {
+        "day": "2026-09-18",
+        "attended": false,
+        "isToday": false,
+        "future": false
+      },
+      {
+        "day": "2026-09-19",
+        "attended": false,
+        "isToday": false,
+        "future": false
+      },
+      {
+        "day": "2026-09-20",
+        "attended": false,
+        "isToday": false,
+        "future": false
+      },
+      {
+        "day": "2026-09-21",
+        "attended": false,
+        "isToday": false,
+        "future": false
+      },
+      {
+        "day": "2026-09-22",
+        "attended": false,
+        "isToday": false,
+        "future": false
+      },
+      {
+        "day": "2026-09-23",
+        "attended": false,
+        "isToday": false,
+        "future": false
+      },
+      {
+        "day": "2026-09-24",
+        "attended": false,
+        "isToday": false,
+        "future": false
+      },
+      {
+        "day": "2026-09-25",
+        "attended": false,
+        "isToday": false,
+        "future": false
+      },
+      {
+        "day": "2026-09-26",
+        "attended": false,
+        "isToday": false,
+        "future": false
+      },
+      {
+        "day": "2026-09-27",
+        "attended": false,
+        "isToday": false,
+        "future": false
+      },
+      {
+        "day": "2026-09-28",
+        "attended": true,
+        "isToday": false,
+        "future": false
+      },
+      {
+        "day": "2026-09-29",
+        "attended": true,
+        "isToday": false,
+        "future": false
+      },
+      {
+        "day": "2026-09-30",
+        "attended": true,
+        "isToday": false,
+        "future": false
+      },
+      {
+        "day": "2026-10-01",
+        "attended": true,
+        "isToday": false,
+        "future": false
+      },
+      {
+        "day": "2026-10-02",
+        "attended": true,
+        "isToday": false,
+        "future": false
+      },
+      {
+        "day": "2026-10-03",
+        "attended": true,
+        "isToday": false,
+        "future": false
+      },
+      {
+        "day": "2026-10-04",
+        "attended": true,
+        "isToday": false,
+        "future": false
+      },
+      {
+        "day": "2026-10-05",
+        "attended": false,
+        "isToday": true,
+        "future": false
+      }
+    ],
+    "coinBalance": 12
+  },
+  "/api/messages": {
+    "items": [],
+    "unread": 0,
+    "rules": {
+      "oneWayDailyLimit": 1,
+      "maxLength": 1000
+    }
+  },
+  "/api/messages/fixturepal": {
+    "peer": {
+      "id": 5,
+      "username": "fixturepal",
+      "displayName": "采样对象",
+      "role": "member",
+      "bio": "",
+      "avatar": "",
+      "followedAt": null,
+      "blockedAt": null,
+      "postCount": null,
+      "followerCount": null
+    },
+    "messages": [],
+    "total": 0,
+    "unreadBefore": 0,
+    "availability": {
+      "mutual": false,
+      "followed": false,
+      "blockedByMe": false,
+      "blockedMe": false,
+      "sentToday": 0,
+      "dailyLimit": 1,
+      "resetsAt": 1791216000000,
+      "remainingToday": 1,
+      "canSend": false,
+      "reason": "no_relation",
+      "message": "先关注对方（或等对方关注你）才能私信"
+    },
+    "rules": {
+      "oneWayDailyLimit": 1,
+      "maxLength": 1000
+    }
+  },
+  "/api/admin/overview": {
+    "viewer": {
+      "id": 1,
+      "role": "owner",
+      "isOwner": true
+    },
+    "stats": {
+      "users": 5,
+      "posts": 9,
+      "replies": 15,
+      "banned": 0,
+      "postsToday": 5,
+      "repliesToday": 7,
+      "reactions": 19,
+      "coins": 5,
+      "follows": 8,
+      "bookmarks": 0,
+      "hiddenPosts": 0,
+      "staff": 1
+    },
+    "users": [
+      {
+        "id": 1,
+        "username": "admin",
+        "displayName": "站长",
+        "role": "owner",
+        "bio": "论坛站长（拥有者），有事找我。",
+        "avatar": "emoji:🧭:212",
+        "banned": false,
+        "coinBalance": 12,
+        "createdAt": 1788543693508,
+        "postCount": 3,
+        "replyCount": 2,
+        "followerCount": 3
+      },
+      {
+        "id": 2,
+        "username": "alice",
+        "displayName": "Alice",
+        "role": "member",
+        "bio": "前端工程师，喜欢折腾 UI。",
+        "avatar": "emoji:🦊:24",
+        "banned": false,
+        "coinBalance": 8,
+        "createdAt": 1788630093508,
+        "postCount": 2,
+        "replyCount": 5,
+        "followerCount": 2
+      },
+      {
+        "id": 3,
+        "username": "bob",
+        "displayName": "Bob",
+        "role": "member",
+        "bio": "后端开发，Node / Go / 数据库。",
+        "avatar": "emoji:🐳:198",
+        "banned": false,
+        "coinBalance": 11,
+        "createdAt": 1788716493508,
+        "postCount": 2,
+        "replyCount": 6,
+        "followerCount": 1
+      },
+      {
+        "id": 4,
+        "username": "carol",
+        "displayName": "Carol",
+        "role": "member",
+        "bio": "产品经理，偶尔写点东西。",
+        "avatar": "emoji:🌻:45",
+        "banned": false,
+        "coinBalance": 9,
+        "createdAt": 1788802893508,
+        "postCount": 2,
+        "replyCount": 2,
+        "followerCount": 2
+      },
+      {
+        "id": 5,
+        "username": "fixturepal",
+        "displayName": "采样对象",
+        "role": "member",
+        "bio": "",
+        "avatar": "",
+        "banned": false,
+        "coinBalance": 10,
+        "createdAt": 1791135693873,
+        "postCount": 0,
+        "replyCount": 0,
+        "followerCount": 0
+      }
+    ],
+    "recentPosts": [
+      {
+        "id": 9,
+        "title": "假数据采样帖",
+        "createdAt": 1791135693921,
+        "views": 0,
+        "author": "站长",
+        "board": "综合讨论",
+        "hidden": false
+      },
+      {
+        "id": 8,
+        "title": "论坛 v1.1 上线：消息通知、评价、投币与关注",
+        "createdAt": 1791128493508,
+        "views": 69,
+        "author": "站长",
+        "board": "分享创造",
+        "hidden": false
+      },
+      {
+        "id": 7,
+        "title": "SQLite 分页查询在大数据量下变慢，怎么优化？",
+        "createdAt": 1791114093508,
+        "views": 54,
+        "author": "Bob",
+        "board": "问答求助",
+        "hidden": false
+      },
+      {
+        "id": 6,
+        "title": "大家平时用什么工具记笔记？",
+        "createdAt": 1791092493508,
+        "views": 30,
+        "author": "Carol",
+        "board": "综合讨论",
+        "hidden": false
+      },
+      {
+        "id": 5,
+        "title": "CSS 变量做主题切换的正确姿势",
+        "createdAt": 1791063693508,
+        "views": 32,
+        "author": "Alice",
+        "board": "技术交流",
+        "hidden": false
+      },
+      {
+        "id": 4,
+        "title": "分享：我整理的 12 个 Markdown 写作小技巧",
+        "createdAt": 1791027693508,
+        "views": 35,
+        "author": "Carol",
+        "board": "分享创造",
+        "hidden": false
+      },
+      {
+        "id": 3,
+        "title": "求助：前端 SPA 用 hash 路由会不会影响 SEO？",
+        "createdAt": 1790973693508,
+        "views": 311,
+        "author": "Alice",
+        "board": "问答求助",
+        "hidden": false
+      },
+      {
+        "id": 2,
+        "title": "Node.js 24 内置 SQLite 上手实测：零依赖做全栈",
+        "createdAt": 1790617293508,
+        "views": 207,
+        "author": "Bob",
+        "board": "技术交流",
+        "hidden": false
+      },
+      {
+        "id": 1,
+        "title": "【必读】论坛版规与发帖指南",
+        "createdAt": 1790358093508,
+        "views": 114,
+        "author": "站长",
+        "board": "站务公告",
+        "hidden": false
+      }
+    ],
+    "hiddenPosts": [],
+    "moderationLogs": []
+  },
+  "__postId": 9,
+  "__username": "admin",
+  "__peer": "fixturepal"
+}

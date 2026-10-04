@@ -1,0 +1,66 @@
+/* 60-admin.css —— 管理后台。
+ *
+ * 本文件由 docs/tools/split-css.mjs 从原先的单体 public/style.css 切出来。
+ * 改样式请直接改这里；**不要**去改 public/style.css（它现在只是一个 @import 清单）。
+ */
+
+/* ---------------- 后台 ---------------- */
+
+.admin-stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  gap: 10px;
+}
+
+.admin-stat {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 13px 14px;
+}
+
+.admin-stat .value {
+  font-size: 21px;
+  font-weight: 700;
+}
+
+.admin-stat .label {
+  color: var(--muted);
+  font-size: 12.5px;
+}
+
+.table-wrap {
+  overflow-x: auto;
+}
+
+table.data {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13.8px;
+}
+
+table.data th,
+table.data td {
+  text-align: left;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border-soft);
+  white-space: nowrap;
+}
+
+table.data th {
+  color: var(--muted);
+  font-weight: 600;
+  font-size: 12.8px;
+}
+
+table.data tr:last-child td {
+  border-bottom: 0;
+}
+
+table.data td.wrap {
+  white-space: normal;
+  min-width: 220px;
+}
+
+
+/* @hand-written */
