@@ -38,7 +38,14 @@
         </a>
 
         <form class="search" id="search-form" role="search">
-          <span class="search-icon">🔍</span>
+          <!-- 放大镜用内联 SVG，不用 🔍 emoji：emoji 的字形大小由系统字体决定，
+               有的电脑上会画得比字号大，压到右边的占位文字上。 -->
+          <span class="search-icon" aria-hidden="true">
+            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round">
+              <circle cx="6.8" cy="6.8" r="4.3" />
+              <path d="M10 10l3.4 3.4" />
+            </svg>
+          </span>
           <input
             id="search-input"
             type="search"
