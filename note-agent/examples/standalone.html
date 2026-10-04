@@ -1,0 +1,130 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AI 笔记整理 Agent · 独立接入样例</title>
+<style>
+  /*
+    主题变量直接抄的就是论坛站点那一套（public/style.css 的 :root）。
+    面板的颜色/圆角/阴影全部走这些变量，所以这里给什么值，演示页里的抽屉
+    就和论坛里长得一模一样；缺一个变量面板就退回自己那组朴素兜底色。
+  */
+  :root {
+    color-scheme: dark;
+    --bg: #0b0f16;
+    --bg-soft: #111725;
+    --panel: #141b29;
+    --panel-2: #182132;
+    --border: #243044;
+    --border-soft: #1d2637;
+    --text: #e8eef7;
+    --text-dim: #a6b3c6;
+    --muted: #77869c;
+    --accent: #5b8cff;
+    --accent-2: #7c5bff;
+    --accent-soft: rgba(91, 140, 255, 0.14);
+    --success: #43d39e;
+    --warn: #ffb454;
+    --danger: #ff6b6b;
+    --radius: 14px;
+    --radius-sm: 9px;
+    --shadow: 0 10px 30px rgba(0, 0, 0, 0.35);
+    --mono: "Cascadia Code", "JetBrains Mono", Consolas, "Courier New", monospace;
+    --font: "Segoe UI", system-ui, -apple-system, "Microsoft YaHei", "PingFang SC", sans-serif;
+  }
+  * { box-sizing: border-box; }
+  /* 15px / 1.65 与论坛 body 一致：面板里大量文本是从宿主 body 继承的排版，
+     演示页若用 14px/1.6，抽屉里每一块都会矮 1px —— 看起来"差不多"，但不一致。 */
+  body { margin: 0; padding: 24px; background: var(--bg); color: var(--text);
+         font-family: var(--font); font-size: 15px; line-height: 1.65; }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  .sub { color: var(--muted); font-size: 13px; margin-bottom: 20px; }
+  .layout { display: block; }
+  .card { background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); padding: 16px; max-width: 760px; }
+  .card h2 { font-size: 14px; margin: 0 0 12px; color: var(--muted); font-weight: 600; }
+  label { display: block; font-size: 12px; color: var(--muted); margin: 10px 0 4px; }
+  input[type="text"], textarea { width: 100%; background: var(--bg); color: var(--text);
+    border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 10px 12px;
+    font-family: inherit; font-size: 14px; }
+  textarea { min-height: 420px; resize: vertical; font-family: var(--mono); }
+  a { color: var(--accent); }
+  .tip { font-size: 12px; color: var(--muted); margin-top: 12px; }
+
+  /*
+    面板内部用的是宿主的按钮类（`btn btn-sm notes-btn`），所以演示页也得给一份，
+    否则它会退回浏览器原生按钮的高度（矮 8px，整条底栏跟着短 10px）。
+    这两条是从论坛 public/style.css 里原样抄的。
+  */
+  .btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    padding: 9px 15px;
+    border-radius: 10px;
+    border: 1px solid var(--border);
+    background: var(--panel-2);
+    color: var(--text);
+    font: inherit;
+    font-size: 14px;
+    cursor: pointer;
+    transition: background 0.15s, border-color 0.15s, transform 0.1s, color 0.15s;
+    white-space: nowrap;
+  }
+  .btn-sm { padding: 6px 11px; font-size: 13px; border-radius: 8px; }
+  .btn:hover { border-color: var(--accent); }
+  .btn:disabled { opacity: 0.55; cursor: not-allowed; }
+</style>
+</head>
+<body>
+  <h1>AI 笔记整理 Agent · 独立接入样例</h1>
+  <div class="sub">
+    这一页没有任何论坛代码：只有一个自带的假编辑器（<code>#title</code> + <code>#content</code>）
+    和 <code>note-agent</code> 自己的面板脚本。它证明"换编辑器只需要写一个适配器"。<br>
+    面板是一个<strong>固定在右侧的抽屉</strong>（420px），所以左边这块编辑区照常能看能改；
+    窄屏（≤1080px）时它会自动收起，只留右边一条竖标签。
+  </div>
+
+  <div class="layout">
+    <section class="card">
+      <h2>编辑区（这是"宿主"，随便换成别的编辑器）</h2>
+      <form id="demo-form">
+        <label for="title">标题</label>
+        <input type="text" id="title" name="title" maxlength="80" value="导数与积分笔记">
+        <label for="content">正文（Markdown）</label>
+        <textarea id="content" name="content">## 我的草稿
+
+导数是变化率。积分是累加。
+
+这里写得比较乱，等 AI 整理一遍。
+</textarea>
+      </form>
+      <div class="tip">
+        接入只用了三行：<code>createTextareaAdapter(表单)</code> +
+        <code>attach({ mount, editor })</code>。见页尾脚本。
+      </div>
+    </section>
+
+    <!-- 面板所有 DOM 都建在这个容器里（它会以固定抽屉的形式出现在右侧）。
+         class="notes-mount" 是面板样式的锚点：面板规则都收在 .notes-mount 下面，
+         这样宿主任何泛化选择器（比如 input[type="text"], textarea { … }）都改不动它。
+         漏写也不会坏 —— attach() 会自己补上，摘的时候再还回去。 -->
+    <div id="notes-mount" class="notes-mount"></div>
+  </div>
+
+  <script type="module">
+    import { attach, createTextareaAdapter } from '/notes-panel.js';
+
+    const editor = createTextareaAdapter(document.querySelector('#demo-form'));
+    const panel = attach({
+      mount: document.querySelector('#notes-mount'),
+      editor,
+      apiBase: '/api/notes',
+    });
+
+    // 方便在控制台里看状态：window.__demo.getState()
+    window.__demo = panel;
+  </script>
+</body>
+</html>

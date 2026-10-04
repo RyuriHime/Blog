@@ -1,0 +1,11 @@
+{
+  "mode": "offline-fake",
+  "model": "acceptance-fake-vision",
+  "markdown": "# 电磁感应实验记录\n\n线圈匝数 $N = 200$，关系式：\n\n$$\n\\varepsilon = -N\\frac{\\mathrm{d}\\Phi}{\\mathrm{d}t}\n$$",
+  "latex": "\\varepsilon = -N\\frac{\\mathrm{d}\\Phi}{\\mathrm{d}t}",
+  "usage": {
+    "prompt": 512,
+    "completion": 128
+  },
+  "at": "2026-10-02T05:04:14.370Z"
+}

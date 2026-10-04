@@ -1,0 +1,6 @@
+# 临时文件
+*.log
+.DS_Store
+
+# 演示产物保留在仓库里（examples/demo-output.json 是给人看数据结构的样本）
+# 想重新生成：node examples/demo.mjs

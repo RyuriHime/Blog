@@ -1,0 +1,595 @@
+/* ------------------------------------------------------------------ */
+/* AI 笔记整理面板样式（note-agent/client/notes-panel.css）             */
+/* ------------------------------------------------------------------ */
+/* 这份文件是面板样式的**唯一来源**：由 note-agent 的挂载层在           */
+/* /notes-panel.css 发出去，面板自己往 head 里认领。宿主不需要把这几百   */
+/* 行粘进自己的样式表 —— 交付包里最容易漏的就是这一步。                 */
+/*                                                                      */
+/* 颜色一律走宿主主题变量，取不到时退回下面这组 --notes-* 兜底值：       */
+/* 放到一个完全没有主题变量的站点上也只是"朴素"，不会变成白底黑字的裸块。*/
+/*                                                                      */
+/* 规则一律收在 .notes-mount 下（宿主只管给一个空容器，别的一概不假设），  */
+/* 否则宿主一条 input[type="text"] 规则就能把面板的输入框改样。           */
+/*                                                                      */
+/* 改完样式跑 node note-agent/scripts/sync-panel-css.mjs 整理兜底块；    */
+/* tests/test-panel-css.mjs 会核对类名齐不齐、有没有直接引用宿主变量。   */
+
+:root {
+  --notes-fallback-bg: #0f1117;
+  --notes-fallback-bg-soft: #111725;
+  --notes-fallback-panel: #151823;
+  --notes-fallback-panel-2: #1b1f2c;
+  --notes-fallback-border: #262b3a;
+  --notes-fallback-border-soft: #1f2432;
+  --notes-fallback-text: #e6e9f2;
+  --notes-fallback-text-dim: #a9b0c4;
+  --notes-fallback-muted: #7d849b;
+  --notes-fallback-accent: #6d8bff;
+  --notes-fallback-accent-2: #8f6dff;
+  --notes-fallback-accent-soft: rgba(109, 139, 255, 0.14);
+  --notes-fallback-success: #4ec9a0;
+  --notes-fallback-warn: #e0b060;
+  --notes-fallback-danger: #ef6b6b;
+  --notes-fallback-radius: 12px;
+  --notes-fallback-radius-sm: 8px;
+  --notes-fallback-shadow: 0 18px 40px rgba(0, 0, 0, 0.45);
+  --notes-fallback-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  --notes-bg: var(--bg, var(--notes-fallback-bg));
+  --notes-bg-soft: var(--bg-soft, var(--notes-fallback-bg-soft));
+  --notes-panel: var(--panel, var(--notes-fallback-panel));
+  --notes-panel-2: var(--panel-2, var(--notes-fallback-panel-2));
+  --notes-border: var(--border, var(--notes-fallback-border));
+  --notes-border-soft: var(--border-soft, var(--notes-fallback-border-soft));
+  --notes-text: var(--text, var(--notes-fallback-text));
+  --notes-text-dim: var(--text-dim, var(--notes-fallback-text-dim));
+  --notes-muted: var(--muted, var(--notes-fallback-muted));
+  --notes-accent: var(--accent, var(--notes-fallback-accent));
+  --notes-accent-2: var(--accent-2, var(--notes-fallback-accent-2));
+  --notes-accent-soft: var(--accent-soft, var(--notes-fallback-accent-soft));
+  --notes-success: var(--success, var(--notes-fallback-success));
+  --notes-warn: var(--warn, var(--notes-fallback-warn));
+  --notes-danger: var(--danger, var(--notes-fallback-danger));
+  --notes-radius: var(--radius, var(--notes-fallback-radius));
+  --notes-radius-sm: var(--radius-sm, var(--notes-fallback-radius-sm));
+  --notes-shadow: var(--shadow, var(--notes-fallback-shadow));
+  --notes-mono: var(--mono, var(--notes-fallback-mono));
+}
+
+.notes-mount > .notes-panel{ display: block; }
+
+/* ── 抽屉外壳（m04046 第 1 条：折叠式放在右侧，左边照样看编辑区） ── */
+
+.notes-mount > .notes-panel.notes-drawer{
+  position: fixed;
+  top: 0;
+  right: 0;
+  z-index: 70;
+  width: 420px;
+  /* 手机上宽度不能超过视口：100dvw 万一不被认识，100% 兜住（fixed 元素的百分比
+     相对视口算，正好等于可用宽度）。两者同时给，谁认识谁生效。 */
+  width: min(420px, 100dvw);
+  max-width: 100%;
+  height: 100vh;
+  height: 100dvh;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 14px 16px 16px;
+  overflow: hidden;
+  border: 1px solid var(--notes-border);
+  border-right: 0;
+  border-radius: var(--notes-radius) 0 0 var(--notes-radius);
+  background:
+    linear-gradient(180deg, var(--notes-accent-soft), transparent 140px),
+    var(--notes-panel);
+  box-shadow: var(--notes-shadow);
+  transform: translateX(100%);
+  transition: transform 0.22s ease;
+}
+
+/* 收起 = 整块滑出屏幕右边。用负外边距把布局位置也撤掉，
+   否则这块固定在右边的抽屉会把宿主的横向滚动条撑出来。 */
+.notes-mount > .notes-panel.notes-drawer:not(.is-open){
+  transform: translateX(calc(100% + 120px));
+  margin-right: -420px;
+}
+
+.notes-mount > .notes-panel.notes-drawer.is-open{ transform: translateX(0); }
+
+/* 收起时留在右边的那条竖标签。
+   被滑走的抽屉整体做了位移，`overflow:hidden` 会把绝对定位的子元素一起裁掉，
+   所以标签必须住在抽屉**外面**（面板把它插成根节点的兄弟）。
+   抽屉收起时根节点滑到 `translateX(100%+120px)`，标签便被留在屏幕右边缘。 */
+.notes-mount > .notes-drawer-tab{
+  position: fixed;
+  top: 96px;
+  right: 0;
+  display: none;
+  align-items: center;
+  gap: 6px;
+  padding: 12px 8px;
+  border: 1px solid var(--notes-border);
+  border-right: 0;
+  border-radius: var(--notes-radius-sm) 0 0 var(--notes-radius-sm);
+  background: var(--notes-panel);
+  color: var(--notes-text-dim);
+  font-size: 12px;
+  letter-spacing: 1px;
+  writing-mode: vertical-rl;
+  cursor: pointer;
+  box-shadow: var(--notes-shadow);
+  z-index: 71;
+}
+
+/* 竖标签是抽屉的兄弟节点，所以用兄弟选择器（抽屉收起时它才出现） */
+.notes-mount > .notes-panel.notes-drawer:not(.is-open) ~ .notes-drawer-tab{ display: inline-flex; }
+
+/* 抽屉打开时给正文让位：桌面端把 .layout 收窄，窄屏改成覆盖式（见文末媒体查询） */
+@media (min-width: 1081px) {
+  body.notes-drawer-open > .topbar,
+body.notes-drawer-open .layout{ max-width: min(1180px, calc(100% - 432px)); }
+}
+
+.notes-mount .notes-drawer-toggle{
+  flex: none;
+  width: 26px;
+  height: 26px;
+  border: 1px solid var(--notes-border);
+  border-radius: 8px;
+  background: var(--notes-bg-soft);
+  color: var(--notes-text-dim);
+  font-size: 15px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.notes-mount .notes-drawer-toggle:hover{ color: var(--notes-text); border-color: var(--notes-accent); }
+
+/* 中间那一段是唯一可以滚动的区域：顶部状态与底部输入永远在手边 */
+.notes-mount .notes-drawer-body{
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding-right: 2px;
+}
+
+.notes-mount .notes-drawer-foot{
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-top: 10px;
+  border-top: 1px solid var(--notes-border-soft);
+}
+
+/* ── 顶栏：标题 + 正在跟随编辑区的状态 ───────────────────────────── */
+
+.notes-mount .notes-head{
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 12px;
+}
+
+.notes-mount .notes-title{ font-size: 14.5px; font-weight: 600; letter-spacing: 0.2px; margin-right: auto; }
+
+/* 两个状态胶囊：编辑区（实时）+ 草稿（模型手上那份）。两者可能不一致 */
+.notes-mount .notes-status-box{
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.notes-mount .notes-status{
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 10px;
+  border: 1px solid var(--notes-border-soft);
+  border-radius: 999px;
+  background: var(--notes-bg-soft);
+  color: var(--notes-muted);
+  font-size: 11.5px;
+  white-space: nowrap;
+}
+
+/* 小圆点：面板确实在看着编辑区 */
+.notes-mount .notes-status::before{
+  content: '';
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--notes-success);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--notes-success) 22%, transparent);
+}
+
+/* 草稿那颗用另一种颜色，避免被读成"编辑区已经这么长了" */
+.notes-mount .notes-status + .notes-status::before{
+  background: var(--notes-accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--notes-accent) 22%, transparent);
+}
+
+.notes-mount .notes-outline{
+  padding: 8px 12px;
+  border-left: 2px solid var(--notes-border-soft);
+  color: var(--notes-text-dim);
+  font-size: 12.5px;
+  line-height: 1.7;
+  word-break: break-word;
+}
+
+/* ── 工具栏 ──────────────────────────────────────────────────────── */
+
+.notes-mount .notes-actions{ display: flex; flex-wrap: wrap; gap: 8px; }
+
+.notes-mount .notes-btn{ line-height: 1.2; transition: opacity 0.15s ease,
+transform 0.1s ease; }
+.notes-mount .notes-btn:not(:disabled):active{ transform: translateY(1px); }
+.notes-mount .notes-btn:disabled{ opacity: 0.5; cursor: not-allowed; }
+
+/* 每个按钮一个语义类名：面板自己的 <button> 可被宿主 CSS / 端到端脚本按动作定位，
+   也方便将来换编辑器时只调某个动作的样式。 */
+.notes-mount .notes-organize{
+  border-color: transparent;
+  background: linear-gradient(135deg, var(--notes-accent), var(--notes-accent-2));
+  color: #fff;
+  font-weight: 600;
+}
+
+.notes-mount .notes-organize:disabled{ background: var(--notes-panel-2); color: var(--notes-muted); }
+.notes-mount .notes-apply{ border-color: var(--notes-accent); color: var(--notes-accent); font-weight: 600; }
+.notes-mount .notes-review-btn{ border-color: var(--notes-border); color: var(--notes-text-dim); }
+.notes-mount .notes-review-btn:hover:not(:disabled){ border-color: var(--notes-accent-2); color: var(--notes-accent-2); }
+.notes-mount .notes-apply-review{ border-color: var(--notes-success); color: var(--notes-success); font-weight: 600; }
+
+.notes-mount .notes-turn-row{ display: flex; flex-wrap: wrap; gap: 8px; }
+
+.notes-mount .notes-turn-input{
+  /* flex-basis 必须是 auto：窄屏（≤480px）时 `.notes-turn-row` 折成竖排，
+     这时 flex-basis 量的是**高度** —— 写 240px 输入框当场变成 240px 高，
+     把抽屉底栏顶到 459px，对话记录与审查卡全被挤出屏幕（真机翻过这辆车）。 */
+  flex: 1 1 auto;
+  max-height: 120px;
+  min-width: 0;
+  padding: 9px 12px;
+  border: 1px solid var(--notes-border);
+  border-radius: var(--notes-radius-sm);
+  background: var(--notes-bg-soft);
+  color: var(--notes-text);
+  font: inherit;
+  font-size: 13px;
+}
+
+.notes-mount .notes-turn-input::placeholder{ color: var(--notes-muted); }
+.notes-mount .notes-turn-input:focus{ outline: none; border-color: var(--notes-accent); box-shadow: 0 0 0 3px var(--notes-accent-soft); }
+
+/* ── 补充材料（默认折叠：它是可选的，不是入口） ─────────────────── */
+
+.notes-mount .notes-materials{
+  border: 1px dashed var(--notes-border);
+  border-radius: var(--notes-radius-sm);
+  padding: 8px 12px;
+  background: transparent;
+}
+
+.notes-mount .notes-materials[open]{ background: var(--notes-bg-soft); }
+.notes-mount .notes-materials-summary{ cursor: pointer; color: var(--notes-text-dim); font-size: 12.5px; font-weight: 600; }
+.notes-mount .notes-materials-summary::marker{ color: var(--notes-muted); }
+.notes-mount .notes-materials[open] .notes-materials-summary{ margin-bottom: 6px; }
+.notes-mount .notes-hint{ margin: 6px 0 8px; color: var(--notes-muted); font-size: 12px; line-height: 1.6; }
+.notes-mount .notes-muted{ margin: 0; color: var(--notes-muted); font-size: 12.5px; line-height: 1.6; }
+.notes-mount .notes-file-row{ display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.notes-mount .notes-file{ max-width: 100%; color: var(--notes-text-dim); font-size: 12.5px; }
+.notes-mount .notes-sources{ display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+
+.notes-mount .notes-source{
+  padding: 2px 9px;
+  border: 1px solid var(--notes-border-soft);
+  border-radius: 999px;
+  background: var(--notes-panel-2);
+  color: var(--notes-text-dim);
+  font-size: 11.5px;
+}
+
+/* ── 结果区 ──────────────────────────────────────────────────────── */
+
+/*
+ * 抽屉正文是一条 flex 列。默认 flex-shrink:1 会让"内容一多就一起被压扁"——
+ * 真机 bug（用户报的「结果跑出来后会把预览窗口覆盖掉」）就是这条：
+ * 跑完一轮后对话/审查卡长出来，预览被挤成 2px 高（它自己带 overflow:hidden，
+ * 于是连里面的渲染结果都被裁掉，看上去像被"盖住"了）。
+ * 所以正文里每一块都不许收缩：要放不下就让抽屉整体滚动，绝不压扁任何一块。
+ */
+.notes-mount .notes-drawer-body > *{ flex: none; }
+
+.notes-mount .notes-diff,
+.notes-mount .notes-review{ display: flex; flex-direction: column; gap: 10px; }
+
+.notes-mount .notes-section-title{
+  margin: 0;
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--notes-border-soft);
+  color: var(--notes-text-dim);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.4px;
+  text-transform: uppercase;
+}
+
+.notes-mount .notes-diff-list,
+.notes-mount .notes-findings{ display: flex; flex-direction: column; gap: 8px; margin: 0; padding: 0; list-style: none; }
+
+.notes-mount .notes-diff-item{
+  display: grid;
+  grid-template-columns: auto 1fr;
+  align-items: start;
+  gap: 6px 10px;
+  padding: 9px 12px;
+  border: 1px solid var(--notes-border-soft);
+  border-left: 3px solid var(--notes-border);
+  border-radius: var(--notes-radius-sm);
+  background: var(--notes-panel-2);
+}
+
+.notes-mount .notes-diff-text{ color: var(--notes-text-dim); font-size: 12.5px; line-height: 1.6; word-break: break-word; }
+.notes-mount .notes-diff-before{ color: var(--notes-muted); text-decoration: line-through; text-decoration-color: var(--notes-border); }
+.notes-mount .notes-diff-arrow{ color: var(--notes-accent); }
+.notes-mount .notes-diff-after{ color: var(--notes-text); }
+
+.notes-mount .notes-finding{
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 12px;
+  border: 1px solid var(--notes-border-soft);
+  border-left: 3px solid var(--notes-border);
+  border-radius: var(--notes-radius-sm);
+  background: var(--notes-panel-2);
+}
+
+.notes-mount .notes-finding-head{ display: flex; align-items: center; gap: 8px; }
+.notes-mount .notes-finding-kind{ color: var(--notes-muted); font-size: 11.5px; letter-spacing: 0.3px; text-transform: uppercase; }
+
+.notes-mount .notes-finding-quote{
+  padding-left: 10px;
+  border-left: 2px solid var(--notes-border-soft);
+  color: var(--notes-text);
+  font-size: 12.5px;
+  font-style: italic;
+  line-height: 1.7;
+  word-break: break-word;
+}
+
+.notes-mount .notes-finding-issue{ color: var(--notes-text); font-size: 13px; line-height: 1.7; word-break: break-word; }
+.notes-mount .notes-finding-suggestion{ color: var(--notes-text-dim); font-size: 12.5px; line-height: 1.7; word-break: break-word; }
+
+.notes-mount .notes-tag{
+  padding: 1px 8px;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  background: var(--notes-accent-soft);
+  color: var(--notes-accent);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.notes-mount .notes-skipped,
+.notes-mount .notes-needs{ display: flex; flex-direction: column; gap: 6px; }
+
+.notes-mount .notes-usage{ color: var(--notes-muted); font-size: 11.5px; text-align: right; }
+
+.notes-mount .notes-notice{
+  padding: 9px 12px;
+  border: 1px solid var(--notes-border-soft);
+  border-radius: var(--notes-radius-sm);
+  background: var(--notes-panel-2);
+  color: var(--notes-text-dim);
+  font-size: 12.5px;
+  line-height: 1.6;
+}
+
+/* ── 语义配色（只用变量，浅色主题下也对） ───────────────────────── */
+
+.notes-mount .notes-diff-item.is-add{ border-left-color: var(--notes-success); }
+.notes-mount .notes-diff-item.is-del{ border-left-color: var(--notes-danger); }
+.notes-mount .notes-diff-item.is-mod{ border-left-color: var(--notes-warn); }
+.notes-mount .notes-diff-item.is-move{ border-left-color: var(--notes-accent-2); }
+
+.notes-mount .notes-finding.is-high{ border-left-color: var(--notes-danger); }
+.notes-mount .notes-finding.is-medium{ border-left-color: var(--notes-warn); }
+.notes-mount .notes-finding.is-low{ border-left-color: var(--notes-border); }
+
+.notes-mount .notes-tag.is-add{ color: var(--notes-success); }
+.notes-mount .notes-tag.is-del{ color: var(--notes-danger); }
+.notes-mount .notes-tag.is-mod{ color: var(--notes-warn); }
+.notes-mount .notes-tag.is-move{ color: var(--notes-accent-2); }
+.notes-mount .notes-tag.is-high{ color: var(--notes-danger); }
+.notes-mount .notes-tag.is-medium{ color: var(--notes-warn); }
+.notes-mount .notes-tag.is-low{ color: var(--notes-muted); }
+
+.notes-mount .notes-notice.is-info{ border-color: var(--notes-border); }
+.notes-mount .notes-notice.is-ok{ border-color: var(--notes-success); color: var(--notes-success); }
+.notes-mount .notes-notice.is-warn{ border-color: var(--notes-warn); color: var(--notes-warn); }
+.notes-mount .notes-notice.is-error{ border-color: var(--notes-danger); color: var(--notes-danger); }
+
+.notes-mount .notes-materials:focus-within,
+.notes-mount > .notes-panel:focus-within{ border-color: var(--notes-border); }
+
+/* ── 效果预览（m04046 第 2 条：改完就在面板里看得见） ─────────────── */
+
+/*
+ * 预览钉在抽屉顶部。
+ *
+ * 注意 sticky 要加在 `.notes-preview` 这一层，不能加在里面的 `.notes-preview-head` 上：
+ * `.notes-preview` 自己带 overflow:hidden（为了圆角裁切），一旦它是 sticky 元素的祖先，
+ * 里面那层的 sticky 就只能在本块内部生效 —— 块本身滚出视野时标题行照样跟着走。
+ */
+.notes-mount .notes-preview{
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  border: 1px solid var(--notes-border);
+  border-radius: var(--notes-radius-sm);
+  background: var(--notes-bg-soft);
+  overflow: hidden;
+  flex: 0 0 auto;
+}
+
+/* 面板给 .notes-drawer-body 加了 12px 的 gap，钉住时补一条底色免得透出下面的内容 */
+.notes-mount .notes-preview::after{
+  content: '';
+  position: absolute;
+  inset: auto 0 -12px 0;
+  height: 12px;
+  background: var(--notes-panel);
+}
+
+.notes-mount .notes-preview-head{
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--notes-border-soft);
+  background: var(--notes-panel);
+}
+
+.notes-mount .notes-preview-head .notes-section-title{ margin-right: auto; }
+
+.notes-mount .notes-mini{
+  padding: 3px 9px;
+  border: 1px solid var(--notes-border);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--notes-muted);
+  font-size: 11.5px;
+  cursor: pointer;
+}
+
+.notes-mount .notes-mini:hover{ color: var(--notes-text); border-color: var(--notes-accent); }
+
+.notes-mount .notes-preview-html.is-active,
+.notes-mount .notes-preview-raw.is-active{
+  border-color: var(--notes-accent);
+  background: var(--notes-accent-soft);
+  color: var(--notes-text);
+}
+
+.notes-mount .notes-preview-refresh{ padding: 3px 8px; }
+
+.notes-mount .notes-preview-body{
+  max-height: 220px;
+  overflow-y: auto;
+  padding: 10px 12px;
+  color: var(--notes-text);
+  font-size: 13px;
+  line-height: 1.75;
+  word-break: break-word;
+  white-space: normal;
+}
+
+/* 原文视图要保留换行与缩进 */
+.notes-mount .notes-preview-body.is-raw{ white-space: pre-wrap; font-family: var(--notes-mono); }
+
+/* 标题行高写死：宿主对 h1 单独定过 line-height（论坛是 1.35，浏览器默认 1.65），
+   不写死的话同一个面板在论坛和别处渲染出来的预览高度会差一行。 */
+.notes-mount .notes-preview-body :is(h1, h2, h3, h4){ margin: 10px 0 6px; font-size: 15px; line-height: 1.35; }
+.notes-mount .notes-preview-body p{ margin: 6px 0; }
+.notes-mount .notes-preview-body :is(ul, ol){ margin: 6px 0 6px 18px; }
+.notes-mount .notes-preview-body img{ max-width: 100%; border-radius: var(--notes-radius-sm); }
+.notes-mount .notes-preview-body table{ width: 100%; border-collapse: collapse; font-size: 12.5px; }
+.notes-mount .notes-preview-body :is(th, td){ border: 1px solid var(--notes-border); padding: 4px 6px; }
+.notes-mount .notes-preview-body pre{ overflow-x: auto; padding: 8px; border-radius: var(--notes-radius-sm); background: var(--notes-panel-2); }
+
+/* ── 对话记录（m04046 第 3 条：像聊天框，且能回滚） ───────────────── */
+
+.notes-mount .notes-chat-box{ display: flex; flex-direction: column; gap: 8px; }
+
+.notes-mount .notes-chat-head{ display: flex; align-items: center; gap: 8px; }
+.notes-mount .notes-chat-head .notes-section-title{ margin-right: auto; }
+
+/* 「回到最新」只在回滚过之后出现，藏在标题右侧，不跟正文抢注意力 */
+.notes-mount .notes-back-latest{ flex: none; }
+
+.notes-mount .notes-chat{
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 260px;
+  overflow-y: auto;
+  padding: 2px;
+}
+
+.notes-mount .notes-msg{
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  align-items: flex-start;
+  padding: 8px 10px;
+  border: 1px solid var(--notes-border-soft);
+  border-radius: var(--notes-radius-sm);
+  background: var(--notes-panel-2);
+  font-size: 12.5px;
+  line-height: 1.65;
+}
+
+.notes-mount .notes-msg.is-user{ background: var(--notes-accent-soft); }
+
+/* 回滚之后，比游标新的那些轮次灰掉但**不删**：历史可审计 */
+.notes-mount .notes-msg.is-rolled{ opacity: 0.45; }
+
+.notes-mount .notes-msg-who{ color: var(--notes-muted); font-size: 11px; letter-spacing: 0.4px; }
+.notes-mount .notes-msg-text{ color: var(--notes-text); word-break: break-word; }
+.notes-mount .notes-msg-meta{ color: var(--notes-muted); font-size: 11px; }
+.notes-mount .notes-rollback{ align-self: flex-start; }
+.notes-mount .notes-tag.is-rolled{ color: var(--notes-muted); }
+
+@media (max-width: 760px) {
+.notes-mount > .notes-panel.notes-drawer{ width: 100vw; border-radius: 0; border-right: 1px solid var(--notes-border); padding: 12px; }
+.notes-mount .notes-head{ flex-direction: column; align-items: flex-start; }
+.notes-mount .notes-actions{ flex-direction: column; align-items: stretch; }
+.notes-mount .notes-actions .notes-btn{ width: 100%; }
+.notes-mount .notes-turn-row{ flex-direction: column; }
+.notes-mount .notes-turn-row .notes-btn{ width: 100%; }}
+
+/* 手机（≤480px）：平板那组（760px）只把布局对折，这里单独管"拇指够不够得着"。
+   真机量过 390×844 与 320×720：面板本身不溢出、不报错，但收起入口只有 26×26、
+   预览小按钮 43×23、输入框 40 高 —— 手指点不中。 */
+@media (max-width: 480px) {
+.notes-mount > .notes-panel.notes-drawer{
+  width: 100dvw;
+  max-width: 100%;
+  height: 100dvh;
+  /* 不认识 dvh 的浏览器前面那条 height: 100vh 兜着；bottom: 0 让它贴住底边 */
+  bottom: 0;
+  border-radius: 0;
+  /* 刘海屏/圆角屏：env() 不支持的浏览器直接退成 0，不会把内边距吃掉 */
+  padding: calc(14px + env(safe-area-inset-top, 0px)) calc(16px + env(safe-area-inset-right, 0px)) calc(16px + env(safe-area-inset-bottom, 0px)) calc(16px + env(safe-area-inset-left, 0px));
+}
+/* 抽屉里的滚动不往宿主页面传（否则手指在面板里滑，底下的页面跟着动） */
+.notes-mount .notes-drawer-body{ overscroll-behavior: contain; }
+/* 触控目标：44px 是拇指能稳当点中的下限。写成"至少 44 高"而不是改具体高度，
+   行内按钮（效果/原文/刷新/回滚）也能一起受益，视觉上不会变得很胖。
+   宽度同样要钉：真机量到收起按钮 26×44、预览刷新 29×44 —— 高 44 看着达标，但
+   "只有图标没有文字"的按钮宽度没人撑，26 宽拇指照样点不中。这两个数字都是 390×844
+   真机上量的，不是估的。 */
+.notes-mount .notes-btn,
+.notes-mount .notes-mini,
+.notes-mount .notes-drawer-toggle,
+.notes-mount > .notes-drawer-tab{ min-height: 44px; }
+.notes-mount .notes-drawer-toggle,
+.notes-mount .notes-mini{ min-width: 44px; }
+.notes-mount .notes-materials summary{ min-height: 44px; display: flex; align-items: center; }
+.notes-mount .notes-turn-input{ min-height: 44px; }
+/* 去掉 300ms 点按延迟、也不让双击去缩放：手机上讲"像原生一样跟手" */
+.notes-mount .notes-actions .notes-btn,
+.notes-mount .notes-mini,
+.notes-mount .notes-drawer-toggle,
+.notes-mount > .notes-drawer-tab,
+.notes-mount .notes-materials summary,
+.notes-mount .notes-turn-input,
+.notes-mount .notes-chat-msg-actions .notes-mini{ touch-action: manipulation; }}

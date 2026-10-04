@@ -1,0 +1,16 @@
+{
+  "name": "note-studio",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "学术笔记编辑器：Markdown + LaTeX 所见即所得，图片转 Markdown/LaTeX，导出 .md 与基础数据 .json",
+  "main": "src/index.mjs",
+  "scripts": {
+    "start": "node src/server.mjs",
+    "test": "node --test tests/",
+    "demo": "node examples/demo.mjs"
+  },
+  "engines": {
+    "node": ">=22.5.0"
+  }
+}

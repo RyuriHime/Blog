@@ -1,0 +1,282 @@
+{
+  "generatedAt": "2026-10-02T05:04:26.856Z",
+  "live": false,
+  "verdict": "PASS（含跳过）",
+  "passed": 17,
+  "skipped": 1,
+  "failed": 0,
+  "unit": {
+    "pass": 81,
+    "fail": 0,
+    "skipped": false
+  },
+  "render": {
+    "skipped": false,
+    "math": 2,
+    "checks": [
+      {
+        "name": "KaTeX 渲染出公式（≥2）",
+        "ok": true
+      },
+      {
+        "name": "DOM 里有 .katex 节点",
+        "ok": true
+      },
+      {
+        "name": "页面上不再残留 $ 源码",
+        "ok": true
+      },
+      {
+        "name": "MathML annotation 保存了原始 TeX",
+        "ok": true
+      },
+      {
+        "name": "标题渲染成 h1",
+        "ok": true
+      },
+      {
+        "name": "代码块保留且内部不渲染公式",
+        "ok": true
+      },
+      {
+        "name": "表格渲染",
+        "ok": true
+      },
+      {
+        "name": "统计：行内公式=1",
+        "ok": true
+      },
+      {
+        "name": "统计：块级公式=1",
+        "ok": true
+      },
+      {
+        "name": "统计：任务 2 项 / 完成 1 项",
+        "ok": true
+      },
+      {
+        "name": "文件名消毒（self check → self-check）",
+        "ok": true
+      },
+      {
+        "name": "往返：标题保留",
+        "ok": true
+      },
+      {
+        "name": "往返：行内公式还原为 $E = mc^2$",
+        "ok": true
+      },
+      {
+        "name": "往返：块级公式还原（反斜杠没被转义）",
+        "ok": true
+      },
+      {
+        "name": "往返：代码块保留",
+        "ok": true
+      },
+      {
+        "name": "往返：任务清单保留",
+        "ok": true
+      },
+      {
+        "name": "往返：表格保留",
+        "ok": true
+      },
+      {
+        "name": "块级公式「独占一段」渲染为块级且不嵌在 <p> 里",
+        "ok": true
+      },
+      {
+        "name": "块级公式「紧跟段落（中间没有空行）」渲染为块级且不嵌在 <p> 里",
+        "ok": true
+      },
+      {
+        "name": "块级公式「写在一行里」渲染为块级且不嵌在 <p> 里",
+        "ok": true
+      },
+      {
+        "name": "块级公式「紧跟在段落后面、块内含空行」渲染为块级且不嵌在 <p> 里",
+        "ok": true
+      },
+      {
+        "name": "块级公式「文档开头就是」渲染为块级且不嵌在 <p> 里",
+        "ok": true
+      },
+      {
+        "name": "块级公式「连续两个」渲染为块级且不嵌在 <p> 里",
+        "ok": true
+      },
+      {
+        "name": "公式计数「$a$」= 行内 1 / 块级 0",
+        "ok": true
+      },
+      {
+        "name": "公式计数「$a$ 与 $b$」= 行内 2 / 块级 0",
+        "ok": true
+      },
+      {
+        "name": "公式计数「$a$ 与 $$b$$」= 行内 1 / 块级 1",
+        "ok": true
+      },
+      {
+        "name": "公式计数「未闭合的 $5 元」= 行内 0 / 块级 0",
+        "ok": true
+      },
+      {
+        "name": "公式计数「转义的 $a\\$b$」= 行内 1 / 块级 0",
+        "ok": true
+      },
+      {
+        "name": "不使用正则 lookbehind（旧 Safari / Firefox 也能解析）",
+        "ok": true
+      }
+    ]
+  },
+  "checks": [
+    {
+      "id": "AC-1",
+      "criterion": "编辑器完全离线自足：不引用任何外网资源，渲染库全部内置",
+      "how": "扫描 public/index.html 的外链 + 检查 vendor/ 内容",
+      "ok": true,
+      "evidence": "外链 0 个；vendor 内置 71 个文件",
+      "detailCount": 2
+    },
+    {
+      "id": "AC-2",
+      "criterion": "Markdown 渲染正确（标题/表格/任务/代码块）",
+      "how": "jsdom 执行 render.js",
+      "ok": true,
+      "evidence": "4/4 项",
+      "detailCount": 4
+    },
+    {
+      "id": "AC-3",
+      "criterion": "LaTeX 渲染成 .katex 结构，页面不残留 $ 源码",
+      "how": "jsdom 执行 render.js + KaTeX auto-render",
+      "ok": true,
+      "evidence": "渲染出 2 个公式 · 6/6 项",
+      "detailCount": 6
+    },
+    {
+      "id": "AC-4",
+      "criterion": "可视化模式往返：公式 TeX 原样还原（反斜杠不被转义）",
+      "how": "jsdom 执行 render.js 的 createSerializer + turndown",
+      "ok": true,
+      "evidence": "6/6 项",
+      "detailCount": 6
+    },
+    {
+      "id": "AC-5",
+      "criterion": "保存为一个 .md 文件和一个 .json 文件，内容与提交一致",
+      "how": "store.save() 真实落盘 + 读回比对",
+      "ok": true,
+      "evidence": "产出 sample-note.json + sample-note.md；字节 1561；读回一致",
+      "detailCount": 0
+    },
+    {
+      "id": "AC-6",
+      "criterion": ".json 记录基础数据，且与正文一致（sha256 重算比对）",
+      "how": "重算 sha256 + 逐项核对统计/结构/公式/任务/表格/代码块/图片/链接/标题",
+      "ok": true,
+      "evidence": "sha256 一致；字符 1036 · 行 57 · 公式 10+2 · 任务 2/3 · 表格 1 · 标题 7",
+      "detailCount": 11
+    },
+    {
+      "id": "AC-13",
+      "criterion": "安全：文件名路径穿越被切断；未登录读写被拒；静态穿越被拒",
+      "how": "store 写 ../../evil + 路由 currentUser=null + static 穿越",
+      "ok": true,
+      "evidence": "../../evil → 落成 evil（未写出目录）；不存在返回 null",
+      "detailCount": 0
+    },
+    {
+      "id": "AC-11",
+      "criterion": "独立可搬运：一条命令起服务，包内无 npm 依赖",
+      "how": "startNoteServer() + 读 package.json",
+      "ok": true,
+      "evidence": "服务自检 200，版本 1.0.0；src/ 7 个模块",
+      "detailCount": 0
+    },
+    {
+      "id": "AC-10",
+      "criterion": "未配置 AI 时优雅降级（503 ai_not_configured），编辑与导出不受影响",
+      "how": "POST /api/notes/convert（未注入 AI）+ POST /api/notes 正常保存",
+      "ok": true,
+      "evidence": "/convert → 503 ai_not_configured；同时保存成功并产出 http-check.json + http-check.md",
+      "detailCount": 0
+    },
+    {
+      "id": "AC-7",
+      "criterion": "图片 → Markdown / LaTeX（离线契约级）：多模态消息形状正确、关掉 json_object、结果解析出两段",
+      "how": "注入假 chat 捕获报文 + convertImage 解析",
+      "ok": true,
+      "evidence": "报文含 image_url(130 KB) + text；json=false；解析出 markdown 89 字 + latex 50 字",
+      "detailCount": 0
+    },
+    {
+      "id": "AC-8",
+      "criterion": "图片 → Markdown/LaTeX（真实视觉模型）",
+      "how": "node acceptance/run.mjs --live",
+      "ok": true,
+      "evidence": "本次未运行（默认离线；加 --live 且配好 AI_API_KEY / AI_MODEL 即可）",
+      "skipped": true,
+      "detailCount": 0
+    },
+    {
+      "id": "AC-9",
+      "criterion": "复用既有 AI 接口、不自建：模块内不发 HTTP、不碰密钥；上游错误码原样透传",
+      "how": "源码扫描 src/ai-bridge.mjs + 注入 ai_timeout 错误跑一遍 convertImage",
+      "ok": true,
+      "evidence": "无自建 HTTP 调用；无鉴权头；错误码 ai_timeout → HTTP 504",
+      "detailCount": 5
+    },
+    {
+      "id": "AC-12",
+      "criterion": "接回论坛是最小改动：1 个胶水文件 + 3 处补丁，不改 forum-ai / 不改论坛 SPA / 不建表",
+      "how": "检查胶水文件与两个论坛 server.js 的补丁锚点",
+      "ok": true,
+      "evidence": "胶水 106 行；已打补丁的论坛：src/server.js、.inspect/forum-ai-full/forum/src/server.js",
+      "detailCount": 0
+    },
+    {
+      "id": "AC-14",
+      "criterion": "零依赖测试全部通过（node:test，无第三方依赖）",
+      "how": "node:test run() 在进程内跑 tests/*.test.mjs",
+      "ok": true,
+      "evidence": "通过 81 项，失败 0 项",
+      "detailCount": 0
+    },
+    {
+      "id": "AC-16",
+      "criterion": "可操作样例：能点、能改、能转写、能导出（不只是只读报告）",
+      "how": "jsdom 打开 public/playground.html，真实点击「载入样例照片 → 转写 → 插入 → 切模式 → 导出 → 清空」",
+      "ok": true,
+      "evidence": "47/47 项操作检查",
+      "detailCount": 47
+    },
+    {
+      "id": "AC-17",
+      "criterion": "正式编辑器：手动编辑、图片转写归入编辑工具栏、实时预览可关可开",
+      "how": "jsdom 打开 public/index.html，真实点击「工具栏 / 预览开关 / 模式切换 / 导出」",
+      "ok": true,
+      "evidence": "40/40 项编辑器检查",
+      "detailCount": 40
+    },
+    {
+      "id": "AC-15",
+      "criterion": "接回论坛后功能可用（AI 版布局）",
+      "how": "runForumIntegrationChecks：真实 HTTP + 真实登录态 + 真实落盘",
+      "ok": true,
+      "evidence": "24/24 项",
+      "detailCount": 24
+    },
+    {
+      "id": "AC-15b",
+      "criterion": "接回论坛后功能可用（根目录布局，无 forum-ai 也要能降级）",
+      "how": "runForumIntegrationChecks：真实 HTTP + 真实登录态 + 真实落盘",
+      "ok": true,
+      "evidence": "24/24 项",
+      "detailCount": 24
+    }
+  ]
+}

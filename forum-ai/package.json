@@ -1,0 +1,25 @@
+{
+  "name": "forum-ai",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "可复用的 AI 内容理解层：文档分类整理、推荐阅读与前置知识、基于单篇/全库的问答（OpenAI 兼容，零依赖）",
+  "main": "src/index.mjs",
+  "exports": {
+    ".": "./src/index.mjs",
+    "./ai": "./src/ai.mjs",
+    "./prompts": "./src/prompts.mjs",
+    "./parse": "./src/parse.mjs",
+    "./material": "./src/material.mjs",
+    "./store-sqlite": "./src/store-sqlite.mjs",
+    "./routes": "./src/routes.mjs",
+    "./mount": "./src/mount.mjs"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "test": "node selftest.mjs && node selftest-mount.mjs",
+    "demo": "node examples/demo.mjs"
+  }
+}

@@ -1,0 +1,629 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>note-studio 验收报告</title>
+<link rel="stylesheet" href="../../public/vendor/katex/katex.min.css">
+<style>
+  :root { --ok:#1a7f37; --bad:#b42318; --skip:#8a6d1f; --line:#d8dee7; --muted:#5b6675; --bg:#f7f8fa; }
+  * { box-sizing:border-box; }
+  body { margin:0; padding:32px 20px 80px; background:var(--bg); color:#141a22;
+         font:15px/1.65 "PingFang SC","Microsoft YaHei",system-ui,-apple-system,"Segoe UI",sans-serif; }
+  main { max-width:1080px; margin:0 auto; }
+  h1 { margin:0 0 4px; font-size:26px; }
+  h2 { margin:36px 0 12px; font-size:19px; padding-bottom:6px; border-bottom:2px solid var(--line); }
+  h3 { margin:22px 0 8px; font-size:16px; }
+  .sub { color:var(--muted); margin:0 0 18px; }
+  .verdict { display:flex; align-items:center; gap:18px; padding:16px 20px; border-radius:12px; background:#fff; border:1px solid var(--line); box-shadow:0 1px 2px rgba(16,24,40,.06); }
+  .verdict .big { font-size:30px; font-weight:700; }
+  .verdict.pass .big { color:var(--ok); }
+  .verdict.fail .big { color:var(--bad); }
+  .cards { display:flex; gap:12px; flex-wrap:wrap; margin:16px 0 0; }
+  .card { flex:1 1 150px; padding:12px 14px; background:#fff; border:1px solid var(--line); border-radius:10px; }
+  .card b { display:block; font-size:22px; }
+  table { width:100%; border-collapse:collapse; background:#fff; border:1px solid var(--line); border-radius:10px; overflow:hidden; }
+  th,td { padding:10px 12px; border-bottom:1px solid var(--line); vertical-align:top; text-align:left; }
+  th { background:#eef1f6; font-size:13px; color:var(--muted); }
+  td.id { font-family:ui-monospace,Consolas,monospace; font-weight:600; white-space:nowrap; }
+  td.evidence { color:#26303d; font-size:13.5px; max-width:330px; }
+  .how { color:var(--muted); font-size:12.5px; margin-top:3px; }
+  .badge { font-weight:700; white-space:nowrap; text-align:center; }
+  .badge.ok,.badge.skip,.badge.bad { display:inline-block; padding:2px 10px; border-radius:999px; font-size:12.5px; }
+  .badge.ok { background:#e6f4ea; color:var(--ok); }
+  .badge.bad { background:#fde8e6; color:var(--bad); }
+  .badge.skip { background:#fdf3d7; color:var(--skip); }
+  tr.bad td { background:#fff7f6; }
+  details { margin-top:6px; }
+  details summary { cursor:pointer; color:var(--muted); font-size:12.5px; }
+  details ul { margin:6px 0 0 18px; padding:0; font-size:13px; }
+  details li.ok { color:var(--ok); }
+  details li.bad { color:var(--bad); }
+  .grid { display:grid; grid-template-columns:1fr 1fr; gap:16px; }
+  @media (max-width:860px) { .grid { grid-template-columns:1fr; } }
+  .box { background:#fff; border:1px solid var(--line); border-radius:10px; padding:14px 16px; }
+  pre { margin:0; padding:12px; background:#0f1419; color:#e6edf3; border-radius:8px; overflow:auto; font-size:12.5px; line-height:1.55; max-height:340px; }
+  .preview { background:#fff; border:1px solid var(--line); border-radius:10px; padding:16px 20px; }
+  .photo { max-width:100%; border:1px solid var(--line); border-radius:8px; }
+  .note { color:var(--muted); font-size:13px; }
+  .cmd { display:block; padding:10px 12px; background:#0f1419; color:#e6edf3; border-radius:8px; font-family:ui-monospace,Consolas,monospace; font-size:13px; }
+  ul.checklist { columns:2; }
+  @media (max-width:860px) { ul.checklist { columns:1; } }
+  .katex-display { margin:.6em 0; }
+  footer { margin-top:40px; color:var(--muted); font-size:12.5px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>note-studio 验收报告</h1>
+  <p class="sub">生成时间 2026-10-02T05:04:26.855Z · 模式 离线确定性 · 报告由 <code>node acceptance/run.mjs</code> 生成</p>
+
+  <div class="verdict pass">
+    <div class="big">PASS（含跳过）</div>
+    <div>
+      通过 <b>17</b> 项 · 跳过 <b>1</b> 项<br>
+      <span class="note">每一条都可在本机复现：命令与验证方式写在表格里。</span>
+    </div>
+  </div>
+
+  <p class="sub" style="margin:14px 0 0">
+    ▶ <b>想直接上手操作？</b>
+    打开 <a href="../../public/playground.html"><b>public/playground.html</b></a> ——
+    可操作样例：编辑（源码 / 分栏 / 可视化）、实时渲染、载入样例照片转写、导出真实的 <code>.md</code> 与 <code>.json</code>。
+    直接双击也能用（离线模式）；用本地服务打开 <code>/notes/playground.html</code> 时，图片转写会走**真实的既有 AI 接口**。
+  </p>
+
+  <div class="cards">
+    <div class="card"><b>81</b>零依赖测试通过</div>
+    <div class="card"><b>29/29</b>渲染与往返检查</div>
+    <div class="card"><b>24/24</b>论坛集成（AI 版）</div>
+    <div class="card"><b>24/24</b>论坛集成（根目录版）</div>
+  </div>
+
+  <h2>一、验收标准与证据</h2>
+  <table>
+    <thead><tr><th>编号</th><th>验收标准</th><th>证据</th><th>结果</th></tr></thead>
+    <tbody><tr class="ok">
+      <td class="id">AC-1</td>
+      <td>编辑器完全离线自足：不引用任何外网资源，渲染库全部内置<div class="how">验证：扫描 public/index.html 的外链 + 检查 vendor/ 内容</div><details><summary>明细（2 项）</summary><ul><li class="ok">✔ index.html 中没有任何 http(s) 资源引用</li><li class="ok">✔ vendor/ 内置 71 个文件（KaTeX 含字体 / marked / turndown）</li></ul></details></td>
+      <td class="evidence">外链 0 个；vendor 内置 71 个文件</td>
+      <td class="badge ok">通过</td>
+    </tr>
+<tr class="ok">
+      <td class="id">AC-2</td>
+      <td>Markdown 渲染正确（标题/表格/任务/代码块）<div class="how">验证：jsdom 执行 render.js</div><details><summary>明细（4 项）</summary><ul><li class="ok">✔ 标题渲染成 h1</li><li class="ok">✔ 代码块保留且内部不渲染公式</li><li class="ok">✔ 表格渲染</li><li class="ok">✔ 往返：代码块保留</li></ul></details></td>
+      <td class="evidence">4/4 项</td>
+      <td class="badge ok">通过</td>
+    </tr>
+<tr class="ok">
+      <td class="id">AC-3</td>
+      <td>LaTeX 渲染成 .katex 结构，页面不残留 $ 源码<div class="how">验证：jsdom 执行 render.js + KaTeX auto-render</div><details><summary>明细（6 项）</summary><ul><li class="ok">✔ KaTeX 渲染出公式（≥2）</li><li class="ok">✔ DOM 里有 .katex 节点</li><li class="ok">✔ 页面上不再残留 $ 源码</li><li class="ok">✔ MathML annotation 保存了原始 TeX</li><li class="ok">✔ 统计：行内公式=1</li><li class="ok">✔ 统计：块级公式=1</li></ul></details></td>
+      <td class="evidence">渲染出 2 个公式 · 6/6 项</td>
+      <td class="badge ok">通过</td>
+    </tr>
+<tr class="ok">
+      <td class="id">AC-4</td>
+      <td>可视化模式往返：公式 TeX 原样还原（反斜杠不被转义）<div class="how">验证：jsdom 执行 render.js 的 createSerializer + turndown</div><details><summary>明细（6 项）</summary><ul><li class="ok">✔ 往返：标题保留</li><li class="ok">✔ 往返：行内公式还原为 $E = mc^2$</li><li class="ok">✔ 往返：块级公式还原（反斜杠没被转义）</li><li class="ok">✔ 往返：代码块保留</li><li class="ok">✔ 往返：任务清单保留</li><li class="ok">✔ 往返：表格保留</li></ul></details></td>
+      <td class="evidence">6/6 项</td>
+      <td class="badge ok">通过</td>
+    </tr>
+<tr class="ok">
+      <td class="id">AC-5</td>
+      <td>保存为一个 .md 文件和一个 .json 文件，内容与提交一致<div class="how">验证：store.save() 真实落盘 + 读回比对</div></td>
+      <td class="evidence">产出 sample-note.json + sample-note.md；字节 1561；读回一致</td>
+      <td class="badge ok">通过</td>
+    </tr>
+<tr class="ok">
+      <td class="id">AC-6</td>
+      <td>.json 记录基础数据，且与正文一致（sha256 重算比对）<div class="how">验证：重算 sha256 + 逐项核对统计/结构/公式/任务/表格/代码块/图片/链接/标题</div><details><summary>明细（11 项）</summary><ul><li class="ok">✔ 字符数与正文一致（1036）</li><li class="ok">✔ 行数与正文一致（57）</li><li class="ok">✔ 行内公式已统计（10）</li><li class="ok">✔ 块级公式已统计（2）</li><li class="ok">✔ 任务清单 3 项 / 完成 2 项（2/3）</li><li class="ok">✔ 表格 1 个（1）</li><li class="ok">✔ 代码块 1 个（python）（1）</li><li class="ok">✔ 图片 1 张（标题/alt 都在）（1）</li><li class="ok">✔ 链接 1 条（图片未算成链接）（1）</li><li class="ok">✔ 标题 7 个（含层级）（7）</li><li class="ok">✔ sha256 与正文一致（a2c0e58c0d09）</li></ul></details></td>
+      <td class="evidence">sha256 一致；字符 1036 · 行 57 · 公式 10+2 · 任务 2/3 · 表格 1 · 标题 7</td>
+      <td class="badge ok">通过</td>
+    </tr>
+<tr class="ok">
+      <td class="id">AC-13</td>
+      <td>安全：文件名路径穿越被切断；未登录读写被拒；静态穿越被拒<div class="how">验证：store 写 ../../evil + 路由 currentUser=null + static 穿越</div></td>
+      <td class="evidence">../../evil → 落成 evil（未写出目录）；不存在返回 null</td>
+      <td class="badge ok">通过</td>
+    </tr>
+<tr class="ok">
+      <td class="id">AC-11</td>
+      <td>独立可搬运：一条命令起服务，包内无 npm 依赖<div class="how">验证：startNoteServer() + 读 package.json</div></td>
+      <td class="evidence">服务自检 200，版本 1.0.0；src/ 7 个模块</td>
+      <td class="badge ok">通过</td>
+    </tr>
+<tr class="ok">
+      <td class="id">AC-10</td>
+      <td>未配置 AI 时优雅降级（503 ai_not_configured），编辑与导出不受影响<div class="how">验证：POST /api/notes/convert（未注入 AI）+ POST /api/notes 正常保存</div></td>
+      <td class="evidence">/convert → 503 ai_not_configured；同时保存成功并产出 http-check.json + http-check.md</td>
+      <td class="badge ok">通过</td>
+    </tr>
+<tr class="ok">
+      <td class="id">AC-7</td>
+      <td>图片 → Markdown / LaTeX（离线契约级）：多模态消息形状正确、关掉 json_object、结果解析出两段<div class="how">验证：注入假 chat 捕获报文 + convertImage 解析</div></td>
+      <td class="evidence">报文含 image_url(130 KB) + text；json=false；解析出 markdown 89 字 + latex 50 字</td>
+      <td class="badge ok">通过</td>
+    </tr>
+<tr class="skip">
+      <td class="id">AC-8</td>
+      <td>图片 → Markdown/LaTeX（真实视觉模型）<div class="how">验证：node acceptance/run.mjs --live</div></td>
+      <td class="evidence">本次未运行（默认离线；加 --live 且配好 AI_API_KEY / AI_MODEL 即可）</td>
+      <td class="badge skip">跳过</td>
+    </tr>
+<tr class="ok">
+      <td class="id">AC-9</td>
+      <td>复用既有 AI 接口、不自建：模块内不发 HTTP、不碰密钥；上游错误码原样透传<div class="how">验证：源码扫描 src/ai-bridge.mjs + 注入 ai_timeout 错误跑一遍 convertImage</div><details><summary>明细（5 项）</summary><ul><li class="ok">✔ 模块内没有自己发 HTTP（无 fetch / http.request）（无）</li><li class="ok">✔ 模块内没有自己拼鉴权头（无）</li><li class="ok">✔ 只调用注入进来的 chat(messages, options)（是）</li><li class="ok">✔ 上游错误对象原样抛出（不是包装成新错误）（同一个错误对象）</li><li class="ok">✔ 错误码 ai_timeout 映射成 HTTP 504（504）</li></ul></details></td>
+      <td class="evidence">无自建 HTTP 调用；无鉴权头；错误码 ai_timeout → HTTP 504</td>
+      <td class="badge ok">通过</td>
+    </tr>
+<tr class="ok">
+      <td class="id">AC-12</td>
+      <td>接回论坛是最小改动：1 个胶水文件 + 3 处补丁，不改 forum-ai / 不改论坛 SPA / 不建表<div class="how">验证：检查胶水文件与两个论坛 server.js 的补丁锚点</div></td>
+      <td class="evidence">胶水 106 行；已打补丁的论坛：src/server.js、.inspect/forum-ai-full/forum/src/server.js</td>
+      <td class="badge ok">通过</td>
+    </tr>
+<tr class="ok">
+      <td class="id">AC-14</td>
+      <td>零依赖测试全部通过（node:test，无第三方依赖）<div class="how">验证：node:test run() 在进程内跑 tests/*.test.mjs</div></td>
+      <td class="evidence">通过 81 项，失败 0 项</td>
+      <td class="badge ok">通过</td>
+    </tr>
+<tr class="ok">
+      <td class="id">AC-16</td>
+      <td>可操作样例：能点、能改、能转写、能导出（不只是只读报告）<div class="how">验证：jsdom 打开 public/playground.html，真实点击「载入样例照片 → 转写 → 插入 → 切模式 → 导出 → 清空」</div><details><summary>明细（47 项）</summary><ul><li class="ok">✔ 打开即载入样例笔记</li><li class="ok">✔ 打开即渲染出 KaTeX 公式</li><li class="ok">✔ 预览里有表格与任务清单</li><li class="ok">✔ 徽标标明运行形态（服务端 / 离线）</li><li class="ok">✔ 文件数据面板有统计</li><li class="ok">✔ JSON 预览可读</li><li class="ok">✔ 手动编辑：打字后预览立刻更新</li><li class="ok">✔ 手动编辑：打字后的公式被渲染</li><li class="ok">✔ 手动编辑：统计面板有字符数</li><li class="ok">✔ 手动编辑：统计随之增加</li><li class="ok">✔ 手动编辑：JSON 面板跟着变</li><li class="ok">✔ 工具栏：插入 H2</li><li class="ok">✔ 工具栏：插入块级公式（反斜杠没被吃掉）</li><li class="ok">✔ 工具栏：插入后预览渲染出公式</li><li class="ok">✔ 工具栏：加粗包裹选区/占位</li><li class="ok">✔ 图片转写入口在左侧编辑工具栏里</li><li class="ok">✔ 图片转写面板属于编辑区（没有另起一栏）</li><li class="ok">✔ 右侧不再有「图片转写」独立页签</li><li class="ok">✔ 图片转写面板默认收起</li><li class="ok">✔ 点工具栏按钮可展开图片转写</li><li class="ok">✔ 图片转写可收起</li><li class="ok">✔ 预览开关在左侧工具栏</li><li class="ok">✔ 右侧栏开关在左侧工具栏</li><li class="ok">✔ 「只留编辑」在左侧工具栏</li><li class="ok">✔ 宽屏下预览/右侧栏是右侧网格列（竖排），不是下方横条</li><li class="ok">✔ 实时预览默认打开</li><li class="ok">✔ 收起预览后 display:none（一点空间都不占）</li><li class="ok">✔ 收起后按钮不再高亮</li><li class="ok">✔ 再点工具栏「预览」即可打开</li><li class="ok">✔ 重新打开后预览内容仍在（没被清空）</li><li class="ok">✔ 预览面板自带的「收起 ✕」也能用</li><li class="ok">✔ 右侧栏默认打开</li><li class="ok">✔ 点「文件数据」收起右侧栏，且不占空间</li><li class="ok">✔ 再点「文件数据」打开右侧栏</li><li class="ok">✔ 「只留编辑」后两栏都是 display:none（零占位）</li><li class="ok">✔ 再点一次恢复三栏</li><li class="ok">✔ 「载入样例笔记」可恢复</li><li class="ok">✔ 载入样例照片后转写按钮可用</li><li class="ok">✔ 照片以内嵌 data URL 显示（离线也能用）</li><li class="ok">✔ 转写结果非空且含 LaTeX</li><li class="ok">✔ 转写后出现「插入 / 替换」按钮</li><li class="ok">✔ 明确标注了真实接口 / 模拟应答</li><li class="ok">✔ 插入到光标处：正文变长</li><li class="ok">✔ 可视化模式可切换且其中公式已渲染</li><li class="ok">✔ 切回后正文仍在</li><li class="ok">✔ 点「导出 .md」不抛异常</li><li class="ok">✔ 「清空」可用</li></ul></details></td>
+      <td class="evidence">47/47 项操作检查</td>
+      <td class="badge ok">通过</td>
+    </tr>
+<tr class="ok">
+      <td class="id">AC-17</td>
+      <td>正式编辑器：手动编辑、图片转写归入编辑工具栏、实时预览可关可开<div class="how">验证：jsdom 打开 public/index.html，真实点击「工具栏 / 预览开关 / 模式切换 / 导出」</div><details><summary>明细（40 项）</summary><ul><li class="ok">✔ 打开即渲染出示例内容（含公式）</li><li class="ok">✔ 侧栏不再有「图片转写」页签</li><li class="ok">✔ 侧栏剩下 3 个页签</li><li class="ok">✔ 图片转写入口在编辑工具栏里</li><li class="ok">✔ 图片转写面板属于编辑区（没有另起一栏）</li><li class="ok">✔ 图片转写面板默认收起</li><li class="ok">✔ 点工具栏按钮可展开图片转写</li><li class="ok">✔ 图片转写可收起</li><li class="ok">✔ 预览开关在左侧工具栏</li><li class="ok">✔ AI 助手开关在左侧工具栏</li><li class="ok">✔ 文件数据开关在左侧工具栏</li><li class="ok">✔ 「只留编辑」在左侧工具栏</li><li class="ok">✔ 宽屏下预览与侧栏是右侧网格列（竖排），不是下方横条</li><li class="ok">✔ 实时预览默认打开</li><li class="ok">✔ 收起预览后 display:none（一点空间都不占）</li><li class="ok">✔ 收起后按钮不再高亮</li><li class="ok">✔ 再点工具栏「预览」即可打开</li><li class="ok">✔ 重新打开后预览内容还在</li><li class="ok">✔ 预览面板自带的「收起 ✕」也能用</li><li class="ok">✔ 侧栏默认打开</li><li class="ok">✔ 点「AI 助手」收起侧栏，且不占空间</li><li class="ok">✔ 再点「AI 助手」打开侧栏并停在 AI 页签</li><li class="ok">✔ 点「文件数据」切换到对应页签并保持打开</li><li class="ok">✔ 再点「文件数据」收起侧栏</li><li class="ok">✔ 「只留编辑」后两栏都是 display:none（零占位）</li><li class="ok">✔ 只留编辑时编辑区仍在</li><li class="ok">✔ 再点一次恢复三栏</li><li class="ok">✔ 窄屏（≤1000px）把预览/侧栏改为贴右侧抽屉</li><li class="ok">✔ 手动编辑：预览立刻更新</li><li class="ok">✔ 手动编辑：公式被渲染</li><li class="ok">✔ 手动编辑：统计区跟着更新</li><li class="ok">✔ 块级公式（含 \int 上下限）渲染成块级</li><li class="ok">✔ 块级公式没有被嵌进 &lt;p&gt;</li><li class="ok">✔ 块级公式没有被 CSS 裁切（overflow-y 不是 hidden）</li><li class="ok">✔ 可视化模式：编辑区即预览，渲染出公式</li><li class="ok">✔ 可视化模式：预览保持你的开关状态</li><li class="ok">✔ 切回分栏：预览仍在并已重绘</li><li class="ok">✔ 离线时给出「离线草稿模式」提示</li><li class="ok">✔ 离线时点「AI 整理」不崩，给出错误提示</li><li class="ok">✔ 点「下载 .md」不抛异常，且失败时给出可读提示</li></ul></details></td>
+      <td class="evidence">40/40 项编辑器检查</td>
+      <td class="badge ok">通过</td>
+    </tr>
+<tr class="ok">
+      <td class="id">AC-15</td>
+      <td>接回论坛后功能可用（AI 版布局）<div class="how">验证：runForumIntegrationChecks：真实 HTTP + 真实登录态 + 真实落盘</div><details><summary>明细（24 项）</summary><ul><li class="ok">✔ 论坛启动成功</li><li class="ok">✔ 首页出现「📓 笔记」入口（只加了一行导航）</li><li class="ok">✔ 编辑器页面 200</li><li class="ok">✔ 编辑器页面确实是 note-studio</li><li class="ok">✔ 编辑器 JS 可访问</li><li class="ok">✔ 渲染层 render.js 可访问</li><li class="ok">✔ KaTeX 资源可访问（离线内置）</li><li class="ok">✔ 编辑器静态路径穿越被挡</li><li class="ok">✔ 未登录也能读 /api/notes/status</li><li class="ok">✔ status 报告 AI 已接线（缺 key 时仍为未配置）</li><li class="ok">✔ 未登录读列表 → 401</li><li class="ok">✔ 未登录保存 → 401</li><li class="ok">✔ 沿用论坛登录态：管理员登录成功</li><li class="ok">✔ 登录后可保存</li><li class="ok">✔ 返回 .md + .json 两个文件名</li><li class="ok">✔ 磁盘上确实是一对文件</li><li class="ok">✔ json 记录了基础数据（schema / sha256 / 公式计数）</li><li class="ok">✔ md 内容与提交的一致</li><li class="ok">✔ 列表里能查到</li><li class="ok">✔ 读回正文（中文文件名解码正确）</li><li class="ok">✔ 没配 AI_KEY 时图片转写 → 503 ai_not_configured（不是 500）</li><li class="ok">✔ 删除成功</li><li class="ok">✔ 删完目录为空</li><li class="ok">✔ 论坛既有页面未受影响（首页仍返回 200）</li></ul></details></td>
+      <td class="evidence">24/24 项</td>
+      <td class="badge ok">通过</td>
+    </tr>
+<tr class="ok">
+      <td class="id">AC-15b</td>
+      <td>接回论坛后功能可用（根目录布局，无 forum-ai 也要能降级）<div class="how">验证：runForumIntegrationChecks：真实 HTTP + 真实登录态 + 真实落盘</div><details><summary>明细（24 项）</summary><ul><li class="ok">✔ 论坛启动成功</li><li class="ok">✔ 首页出现「📓 笔记」入口（只加了一行导航）</li><li class="ok">✔ 编辑器页面 200</li><li class="ok">✔ 编辑器页面确实是 note-studio</li><li class="ok">✔ 编辑器 JS 可访问</li><li class="ok">✔ 渲染层 render.js 可访问</li><li class="ok">✔ KaTeX 资源可访问（离线内置）</li><li class="ok">✔ 编辑器静态路径穿越被挡</li><li class="ok">✔ 未登录也能读 /api/notes/status</li><li class="ok">✔ status 报告 AI 未配置（本布局没有 forum-ai）</li><li class="ok">✔ 未登录读列表 → 401</li><li class="ok">✔ 未登录保存 → 401</li><li class="ok">✔ 沿用论坛登录态：管理员登录成功</li><li class="ok">✔ 登录后可保存</li><li class="ok">✔ 返回 .md + .json 两个文件名</li><li class="ok">✔ 磁盘上确实是一对文件</li><li class="ok">✔ json 记录了基础数据（schema / sha256 / 公式计数）</li><li class="ok">✔ md 内容与提交的一致</li><li class="ok">✔ 列表里能查到</li><li class="ok">✔ 读回正文（中文文件名解码正确）</li><li class="ok">✔ 没配 AI_KEY 时图片转写 → 503 ai_not_configured（不是 500）</li><li class="ok">✔ 删除成功</li><li class="ok">✔ 删完目录为空</li><li class="ok">✔ 论坛既有页面未受影响（首页仍返回 200）</li></ul></details></td>
+      <td class="evidence">24/24 项</td>
+      <td class="badge ok">通过</td>
+    </tr></tbody>
+  </table>
+
+  <h2>二、样例审查：输入</h2>
+  <div class="grid">
+    <div class="box">
+      <h3>待转写的图片（固定样例）</h3>
+      <img class="photo" src="../sample/sample-note-photo.png" alt="实验笔记照片样例">
+      <p class="note">130 KB · 900×620 · 由 <code>acceptance/tools/make-sample-image.py</code> 生成，可换成你自己的照片。</p>
+    </div>
+    <div class="box">
+      <h3>笔记正文（输入）</h3>
+      <pre># 电磁感应实验记录
+
+&gt; 物理实验课 · 2026-10-02 · 法拉第电磁感应定律的验证
+
+## 实验目的
+
+验证感应电动势与磁通量变化率的关系：
+
+$$
+\varepsilon = -N \frac{\mathrm{d}\Phi}{\mathrm{d}t}
+$$
+
+其中行内符号 $N$ 为线圈匝数，$\Phi$ 为穿过线圈的磁通量。
+
+## 装置与参数
+
+| 器材 | 规格 | 备注 |
+| --- | --- | --- |
+| 线圈 | $N = 200$ 匝 | 截面积 $S = 4.0\ \mathrm{cm^2}$ |
+| 磁铁 | 钕铁硼 | 表面磁感应强度约 $0.35\ \mathrm{T}$ |
+| 采集卡 | 采样率 $10\ \mathrm{kHz}$ | 峰值保持模式 |
+
+## 数据记录
+
+1. 插入磁铁：$t = 0.20\ \mathrm{s}$，峰值电压 $1.84\ \mathrm{V}$
+2. 抽出磁铁：$t = 0.18\ \mathrm{s}$，峰值电压 $1.92\ \mathrm{V}$
+
+由峰值电压反推平均变化率：
+
+$$
+\left|\frac{\Delta\Phi}{\Delta t}\right| = \frac{U}{N} = \frac{1.84}{200} = 9.2 \times 10^{-3}\ \mathrm{Wb/s}
+$$
+
+## 结论
+
+- [x] 感应电动势与磁通量变化率成正比
+- [x] 方向由楞次定律决定（插入与抽出时极性相反）
+- [ ] 补充不确定度分析（仪器精度 ±0.5%，重复测量 5 次）
+
+## 数据处理脚本
+
+```python
+import numpy as np
+
+voltage = np.loadtxt("coil.csv", delimiter=",")
+peak = voltage.max()
+flux_rate = peak / 200          # N = 200
+print(f"峰值 {peak:.3f} V，平均变化率 {flux_rate:.3e} Wb/s")
+```
+
+## 参考
+
+- 教材：《大学物理实验》第 4 章
+- 数据与图：[实验原始记录](https://example.com/lab/emf-induction)
+
+![实验装置示意图](images/setup.png "线圈与采集卡接线")
+</pre>
+    </div>
+  </div>
+
+  <h2>三、样例审查：渲染结果</h2>
+  <p class="note">下面这块是**用编辑器自己的渲染管线**（public/render.js + 内置 KaTeX）在你这台机器上现算的，不是截图。</p>
+  <div class="preview markdown-body" id="preview">渲染中…</div>
+
+  <h2>四、样例审查：图片转写结果（离线假 AI（契约级验证））</h2>
+  <div class="grid">
+    <div class="box">
+      <h3>转写出的 Markdown</h3>
+      <pre># 电磁感应实验记录
+
+线圈匝数 $N = 200$，关系式：
+
+$$
+\varepsilon = -N\frac{\mathrm{d}\Phi}{\mathrm{d}t}
+$$</pre>
+    </div>
+    <div class="box">
+      <h3>转写出的 LaTeX</h3>
+      <pre>\varepsilon = -N\frac{\mathrm{d}\Phi}{\mathrm{d}t}</pre>
+      <p class="note">模型：acceptance-fake-vision · 用量 prompt 512 / completion 128</p>
+      <p class="note">⚠️ 离线模式下这是<strong>固定应答</strong>：验证的是报文形状、解析与落盘，不是识别质量。要验识别质量请配好 AI_API_KEY 与视觉模型后跑 <code>--live</code>。</p>
+    </div>
+  </div>
+
+  <h2>五、样例审查：交付物</h2>
+  <div class="grid">
+    <div class="box">
+      <h3>sample-note.md</h3>
+      <pre># 电磁感应实验记录
+
+&gt; 物理实验课 · 2026-10-02 · 法拉第电磁感应定律的验证
+
+## 实验目的
+
+验证感应电动势与磁通量变化率的关系：
+
+$$
+\varepsilon = -N \frac{\mathrm{d}\Phi}{\mathrm{d}t}
+$$
+
+其中行内符号 $N$ 为线圈匝数，$\Phi$ 为穿过线圈的磁通量。
+
+## 装置与参数
+
+| 器材 | 规格 | 备注 |
+| --- | --- | --- |
+| 线圈 | $N = 200$ 匝 | 截面积 $S = 4.0\ \mathrm{cm^2}$ |
+| 磁铁 | 钕铁硼 | 表面磁感应强度约 $0.35\ \mathrm{T}$ |
+| 采集卡 | 采样率 $10\ \mathrm{kHz}$ | 峰值保持模式 |
+
+## 数据记录
+
+1. 插入磁铁：$t = 0.20\ \mathrm{s}$，峰值电压 $1.84\ \mathrm{V}$
+2. 抽出磁铁：$t = 0.18\ \mathrm{s}$，峰值电压 $1.92\ \mathrm{V}$
+
+由峰值电压反推平均变化率：
+
+$$
+\left|\frac{\Delta\Phi}{\Delta t}\right| = \frac{U}{N} = \frac{1.84}{200} = 9.2 \times 10^{-3}\ \mathrm{Wb/s}
+$$
+
+## 结论
+
+- [x] 感应电动势与磁通量变化率成正比
+- [x] 方向由楞次定律决定（插入与抽出时极性相反）
+- [ ] 补充不确定度分析（仪器精度 ±0.5%，重复测量 5 次）
+
+## 数据处理脚本
+
+```python
+import numpy as np
+
+voltage = np.loadtxt("coil.csv", delimiter=",")
+peak = voltage.max()
+flux_rate = peak / 200          # N = 200
+print(f"峰值 {peak:.3f} V，平均变化率 {flux_rate:.3e} Wb/s")
+```
+
+## 参考
+
+- 教材：《大学物理实验》第 4 章
+- 数据与图：[实验原始记录](https://example.com/lab/emf-induction)
+
+![实验装置示意图](images/setup.png "线圈与采集卡接线")
+</pre>
+    </div>
+    <div class="box">
+      <h3>sample-note.json（记录基础数据）</h3>
+      <pre>{
+  "schema": "note-studio/document@1",
+  "generator": {
+    "name": "note-studio",
+    "version": "1.0.0"
+  },
+  "file": {
+    "name": "sample-note.md",
+    "baseName": "sample-note",
+    "extension": ".md",
+    "mimeType": "text/markdown; charset=utf-8",
+    "encoding": "utf-8",
+    "bytes": 1561,
+    "lines": 57,
+    "sha256": "a2c0e58c0d09452554df9f7bad2c973e7822e0df898777755d18296e80f7371d"
+  },
+  "title": "电磁感应实验记录",
+  "stats": {
+    "characters": 1036,
+    "charactersNoSpaces": 855,
+    "words": 340,
+    "cjkCharacters": 243,
+    "latinWords": 97,
+    "lines": 57,
+    "nonEmptyLines": 37,
+    "paragraphs": 20,
+    "readingMinutes": 2
+  },
+  "structure": {
+    "maxDepth": 2,
+    "headings": [
+      {
+        "level": 1,
+        "text": "电磁感应实验记录",
+        "line": 1,
+        "slug": "电磁感应实验记录"
+      },
+      {
+        "level": 2,
+        "text": "实验目的",
+        "line": 5,
+        "slug": "实验目的"
+      },
+      {
+        "level": 2,
+        "text": "装置与参数",
+        "line": 15,
+        "slug": "装置与参数"
+      },
+      {
+        "level": 2,
+        "text": "数据记录",
+        "line": 23,
+        "slug": "数据记录"
+      },
+      {
+        "level": 2,
+        "text": "结论",
+        "line": 34,
+        "slug": "结论"
+      },
+      {
+        "level": 2,
+        "text": "数据处理脚本",
+        "line": 40,
+        "slug": "数据处理脚本"
+      },
+      {
+        "level": 2,
+        "text": "参考",
+        "line": 51,
+        "slug": "参考"
+      }
+    ],
+    "outline": [
+      {
+        "level": 1,
+        "text": "电磁感应实验记录",
+        "line": 1,
+        "slug": "电磁感应实验记录",
+        "children": [
+          {
+            "level": 2,
+            "text": "实验目的",
+            "line": 5,
+            "slug": "实验目的",
+            "children": []
+          },
+          {
+            "level": 2,
+            "text": "装置与参数",
+            "line": 15,
+            "slug": "装置与参数",
+            "children": []
+          },
+          {
+            "level": 2,
+            "text": "数据记录",
+            "line": 23,
+            "slug": "数据记录",
+            "children": []
+          },
+          {
+            "level": 2,
+            "text": "结论",
+            "line": 34,
+            "slug": "结论",
+            "children": []
+          },
+          {
+            "level": 2,
+            "text": "数据处理脚本",
+            "line": 40,
+            "slug": "数据处理脚本",
+            "children": []
+          },
+          {
+            "level": 2,
+            "text": "参考",
+            "line": 51,
+            "slug": "参考",
+            "children": []
+          }
+        ]
+      }
+    ]
+  },
+  "math": {
+    "inline": 10,
+    "display": 2,
+    "total": 12,
+    "expressions": [
+      {
+        "type": "display",
+        "tex": "\\varepsilon = -N \\frac{\\mathrm{d}\\Phi}{\\mathrm{d}t}",
+        "line": 9
+      },
+      {
+        "type": "inline",
+        "tex": "N",
+        "line": 13
+      },
+      {
+        "type": "inline",
+        "tex": "\\Phi",
+        "line": 13
+      },
+      {
+        "type": "inline",
+        "tex": "N = 200",
+        "line": 19
+      },
+      {
+        "type": "inline",
+        "tex": "S = 4.0\\ \\mathrm{cm^2}",
+        "line": 19
+      },
+      {
+        "type": "inline",
+        "tex": "0.35\\ \\mathrm{T}",
+        "line": 20
+      },
+      {
+        "type": "inline",
+        "tex": "10\\ \\mathrm{kHz}",
+        "line": 21
+      },
+      {
+        "type": "inline",
+        "tex": "t = 0.20\\ \\mathrm{s}",
+        "line": 25
+      },
+      {
+        "type": "inline",
+        "tex": "1.84\\ \\mathrm{V}",
+        "line": 25
+      },
+      {
+        "type": "inline",
+        "tex": "t = 0.18\\ \\mathrm{s}",
+        "line": 26
+      },
+      {
+        "type": "inline",
+        "tex": "1.92\\ \\mathrm{V}",
+        "line": 26
+      },
+      {
+        "type": "display",
+        "tex": "\\left|\\frac{\\Delta\\Phi}{\\Delta t}\\right| = \\frac{U}{N} = \\frac{1.84}{200} = 9.2 \\times 10^{-3}\\ \\mathrm{Wb/s}",
+        "line": 30
+      }
+    ]
+  },
+  "media": {
+    "images": [
+      {
+        "alt": "实验装置示意图",
+        "url": "images/setup.png",
+        "title": "线圈与采集卡接线"
+      }
+    ],
+    "links": [
+      {
+        "text": "实验原始记录",
+        "url": "https://example.com/lab/emf-induction"
+      }
+    ]
+  },
+  "code": {
+    "fences": 1,
+    "blocks": [
+      {
+        "language": "python",
+        "lines": 6,
+        "characters": 183
+      }
+    ]
+  },
+  "tables": 1,
+  "tasks": {
+    "total": 3,
+    "checked": 2,
+    "unchecked": 1
+  },
+  "timestamps": {
+    "createdAt": "2026-10-02T05:04:14.304Z",
+    "updatedAt": "2026-10-02T05:04:14.304Z",
+    "savedAt": "2026-10-02T05:04:14.304Z"
+  },
+  "ai": {
+    "conversions": []
+  }
+}</pre>
+    </div>
+  </div>
+
+  <h2>六、怎么自己复现</h2>
+  <span class="cmd">cd note-studio &amp;&amp; node acceptance/run.mjs</span>
+  <p class="note">上面这条会重新跑出本报告与样例产物。另有：</p>
+  <span class="cmd">node tests/run.mjs                                   # 零依赖测试（81 项）</span>
+  <span class="cmd">NODE_PATH=&lt;装有 jsdom&gt;/node_modules node tests/browser/verify-render.mjs</span>
+  <span class="cmd">node tests/browser/verify-integration.mjs            # 论坛集成（AI 版）</span>
+  <span class="cmd">node tests/browser/verify-root-forum.mjs             # 论坛集成（根目录版）</span>
+  <span class="cmd">node examples/demo.mjs                               # 端到端样例（自带假 AI）</span>
+
+  <h2>七、请你人工确认</h2>
+  <ul class="checklist">
+    <li>公式渲染效果是否符合预期（第三节）</li>
+    <li>三种编辑模式是否够用（源码 / 分栏 / 可视化）</li>
+    <li>图片转写的字段与格式是否合你的用法</li>
+    <li>sample-note.json 的字段是否需要增删</li>
+    <li>接入方式（1 个胶水文件 + 3 处补丁）是否可接受</li>
+    <li>是否需要我按你的真实照片跑一次 --live</li>
+  </ul>
+
+  <footer>note-studio v1.0.0 · 报告文件与样例产物在 acceptance/output/ 下</footer>
+</main>
+
+<script src="../../public/vendor/marked/marked.min.js"></script>
+<script src="../../public/vendor/katex/katex.min.js"></script>
+<script src="../../public/vendor/katex/contrib/auto-render.min.js"></script>
+<script src="../../public/render.js"></script>
+<script>
+  (function () {
+    var source = "# 电磁感应实验记录\n\n> 物理实验课 · 2026-10-02 · 法拉第电磁感应定律的验证\n\n## 实验目的\n\n验证感应电动势与磁通量变化率的关系：\n\n$$\n\\varepsilon = -N \\frac{\\mathrm{d}\\Phi}{\\mathrm{d}t}\n$$\n\n其中行内符号 $N$ 为线圈匝数，$\\Phi$ 为穿过线圈的磁通量。\n\n## 装置与参数\n\n| 器材 | 规格 | 备注 |\n| --- | --- | --- |\n| 线圈 | $N = 200$ 匝 | 截面积 $S = 4.0\\ \\mathrm{cm^2}$ |\n| 磁铁 | 钕铁硼 | 表面磁感应强度约 $0.35\\ \\mathrm{T}$ |\n| 采集卡 | 采样率 $10\\ \\mathrm{kHz}$ | 峰值保持模式 |\n\n## 数据记录\n\n1. 插入磁铁：$t = 0.20\\ \\mathrm{s}$，峰值电压 $1.84\\ \\mathrm{V}$\n2. 抽出磁铁：$t = 0.18\\ \\mathrm{s}$，峰值电压 $1.92\\ \\mathrm{V}$\n\n由峰值电压反推平均变化率：\n\n$$\n\\left|\\frac{\\Delta\\Phi}{\\Delta t}\\right| = \\frac{U}{N} = \\frac{1.84}{200} = 9.2 \\times 10^{-3}\\ \\mathrm{Wb/s}\n$$\n\n## 结论\n\n- [x] 感应电动势与磁通量变化率成正比\n- [x] 方向由楞次定律决定（插入与抽出时极性相反）\n- [ ] 补充不确定度分析（仪器精度 ±0.5%，重复测量 5 次）\n\n## 数据处理脚本\n\n```python\nimport numpy as np\n\nvoltage = np.loadtxt(\"coil.csv\", delimiter=\",\")\npeak = voltage.max()\nflux_rate = peak / 200          # N = 200\nprint(f\"峰值 {peak:.3f} V，平均变化率 {flux_rate:.3e} Wb/s\")\n```\n\n## 参考\n\n- 教材：《大学物理实验》第 4 章\n- 数据与图：[实验原始记录](https://example.com/lab/emf-induction)\n\n![实验装置示意图](images/setup.png \"线圈与采集卡接线\")\n";
+    var host = document.getElementById('preview');
+    try {
+      var result = window.NoteRender.renderInto(host, source);
+      host.insertAdjacentHTML('afterbegin', '<p class="note">渲染管线：public/render.js + KaTeX，本次渲染出 ' + result.math + ' 个公式。</p>');
+    } catch (error) {
+      host.textContent = '渲染失败：' + (error && error.message);
+    }
+  })();
+</script>
+</body>
+</html>

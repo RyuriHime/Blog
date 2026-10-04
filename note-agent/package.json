@@ -1,0 +1,16 @@
+{
+  "name": "note-agent",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "AI 笔记整理 Agent + AI 学术编辑 Agent（零依赖、可嵌入任意编辑器的独立包）",
+  "main": "src/index.mjs",
+  "scripts": {
+    "test": "node scripts/run-tests.mjs",
+    "fixtures": "node scripts/make-fixtures.mjs",
+    "demo": "node examples/server.mjs"
+  },
+  "engines": {
+    "node": ">=22.5.0"
+  }
+}

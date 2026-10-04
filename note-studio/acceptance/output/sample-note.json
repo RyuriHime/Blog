@@ -1,0 +1,234 @@
+{
+  "schema": "note-studio/document@1",
+  "generator": {
+    "name": "note-studio",
+    "version": "1.0.0"
+  },
+  "file": {
+    "name": "sample-note.md",
+    "baseName": "sample-note",
+    "extension": ".md",
+    "mimeType": "text/markdown; charset=utf-8",
+    "encoding": "utf-8",
+    "bytes": 1561,
+    "lines": 57,
+    "sha256": "a2c0e58c0d09452554df9f7bad2c973e7822e0df898777755d18296e80f7371d"
+  },
+  "title": "电磁感应实验记录",
+  "stats": {
+    "characters": 1036,
+    "charactersNoSpaces": 855,
+    "words": 340,
+    "cjkCharacters": 243,
+    "latinWords": 97,
+    "lines": 57,
+    "nonEmptyLines": 37,
+    "paragraphs": 20,
+    "readingMinutes": 2
+  },
+  "structure": {
+    "maxDepth": 2,
+    "headings": [
+      {
+        "level": 1,
+        "text": "电磁感应实验记录",
+        "line": 1,
+        "slug": "电磁感应实验记录"
+      },
+      {
+        "level": 2,
+        "text": "实验目的",
+        "line": 5,
+        "slug": "实验目的"
+      },
+      {
+        "level": 2,
+        "text": "装置与参数",
+        "line": 15,
+        "slug": "装置与参数"
+      },
+      {
+        "level": 2,
+        "text": "数据记录",
+        "line": 23,
+        "slug": "数据记录"
+      },
+      {
+        "level": 2,
+        "text": "结论",
+        "line": 34,
+        "slug": "结论"
+      },
+      {
+        "level": 2,
+        "text": "数据处理脚本",
+        "line": 40,
+        "slug": "数据处理脚本"
+      },
+      {
+        "level": 2,
+        "text": "参考",
+        "line": 51,
+        "slug": "参考"
+      }
+    ],
+    "outline": [
+      {
+        "level": 1,
+        "text": "电磁感应实验记录",
+        "line": 1,
+        "slug": "电磁感应实验记录",
+        "children": [
+          {
+            "level": 2,
+            "text": "实验目的",
+            "line": 5,
+            "slug": "实验目的",
+            "children": []
+          },
+          {
+            "level": 2,
+            "text": "装置与参数",
+            "line": 15,
+            "slug": "装置与参数",
+            "children": []
+          },
+          {
+            "level": 2,
+            "text": "数据记录",
+            "line": 23,
+            "slug": "数据记录",
+            "children": []
+          },
+          {
+            "level": 2,
+            "text": "结论",
+            "line": 34,
+            "slug": "结论",
+            "children": []
+          },
+          {
+            "level": 2,
+            "text": "数据处理脚本",
+            "line": 40,
+            "slug": "数据处理脚本",
+            "children": []
+          },
+          {
+            "level": 2,
+            "text": "参考",
+            "line": 51,
+            "slug": "参考",
+            "children": []
+          }
+        ]
+      }
+    ]
+  },
+  "math": {
+    "inline": 10,
+    "display": 2,
+    "total": 12,
+    "expressions": [
+      {
+        "type": "display",
+        "tex": "\\varepsilon = -N \\frac{\\mathrm{d}\\Phi}{\\mathrm{d}t}",
+        "line": 9
+      },
+      {
+        "type": "inline",
+        "tex": "N",
+        "line": 13
+      },
+      {
+        "type": "inline",
+        "tex": "\\Phi",
+        "line": 13
+      },
+      {
+        "type": "inline",
+        "tex": "N = 200",
+        "line": 19
+      },
+      {
+        "type": "inline",
+        "tex": "S = 4.0\\ \\mathrm{cm^2}",
+        "line": 19
+      },
+      {
+        "type": "inline",
+        "tex": "0.35\\ \\mathrm{T}",
+        "line": 20
+      },
+      {
+        "type": "inline",
+        "tex": "10\\ \\mathrm{kHz}",
+        "line": 21
+      },
+      {
+        "type": "inline",
+        "tex": "t = 0.20\\ \\mathrm{s}",
+        "line": 25
+      },
+      {
+        "type": "inline",
+        "tex": "1.84\\ \\mathrm{V}",
+        "line": 25
+      },
+      {
+        "type": "inline",
+        "tex": "t = 0.18\\ \\mathrm{s}",
+        "line": 26
+      },
+      {
+        "type": "inline",
+        "tex": "1.92\\ \\mathrm{V}",
+        "line": 26
+      },
+      {
+        "type": "display",
+        "tex": "\\left|\\frac{\\Delta\\Phi}{\\Delta t}\\right| = \\frac{U}{N} = \\frac{1.84}{200} = 9.2 \\times 10^{-3}\\ \\mathrm{Wb/s}",
+        "line": 30
+      }
+    ]
+  },
+  "media": {
+    "images": [
+      {
+        "alt": "实验装置示意图",
+        "url": "images/setup.png",
+        "title": "线圈与采集卡接线"
+      }
+    ],
+    "links": [
+      {
+        "text": "实验原始记录",
+        "url": "https://example.com/lab/emf-induction"
+      }
+    ]
+  },
+  "code": {
+    "fences": 1,
+    "blocks": [
+      {
+        "language": "python",
+        "lines": 6,
+        "characters": 183
+      }
+    ]
+  },
+  "tables": 1,
+  "tasks": {
+    "total": 3,
+    "checked": 2,
+    "unchecked": 1
+  },
+  "timestamps": {
+    "createdAt": "2026-10-02T05:04:14.304Z",
+    "updatedAt": "2026-10-02T05:04:14.304Z",
+    "savedAt": "2026-10-02T05:04:14.304Z"
+  },
+  "ai": {
+    "conversions": []
+  }
+}

@@ -1,0 +1,637 @@
+{
+  "generatedAt": "2026-10-01T09:40:30.467Z",
+  "note": "本文件由 examples/demo.mjs 用「假的 OpenAI 兼容服务」生成，用于展示真实数据结构；换成真实模型后字段完全一致。",
+  "environment": {
+    "AI_API_KEY": "(demo)",
+    "AI_BASE_URL": "http://127.0.0.1:3681/v1",
+    "AI_MODEL": "demo-mock"
+  },
+  "corpus": {
+    "count": 5,
+    "documents": [
+      {
+        "id": "1",
+        "title": "论坛版规与发帖指南",
+        "board": "站务公告"
+      },
+      {
+        "id": "2",
+        "title": "Node.js 24 内置 SQLite 上手实测：零依赖做全栈",
+        "board": "技术交流"
+      },
+      {
+        "id": "3",
+        "title": "求助：前端 SPA 用 hash 路由会不会影响 SEO？",
+        "board": "问答求助"
+      },
+      {
+        "id": "4",
+        "title": "分享：我整理的 12 个 Markdown 写作小技巧",
+        "board": "分享创造"
+      },
+      {
+        "id": "5",
+        "title": "SQLite 分页查询在大数据量下变慢，怎么优化？",
+        "board": "问答求助"
+      }
+    ]
+  },
+  "capabilities": {
+    "reviewDocument": {
+      "review": {
+        "category": "数据库",
+        "difficulty": "进阶",
+        "summary": "实测 Node.js 内置 SQLite，用零依赖方式完成建表与查询，说明什么场景下不必引入第三方驱动。",
+        "tags": [
+          "Node.js",
+          "SQLite",
+          "零依赖",
+          "全栈"
+        ],
+        "prereq": [
+          {
+            "name": "JavaScript 基础",
+            "why": "读懂示例代码",
+            "level": "入门"
+          },
+          {
+            "name": "SQL 基本语法",
+            "why": "看懂建表与查询",
+            "level": "入门"
+          }
+        ],
+        "recommend": [
+          {
+            "documentId": 1,
+            "external": false,
+            "title": "SQLite 分页优化",
+            "reason": "同主题的性能侧",
+            "relation": "延伸"
+          },
+          {
+            "documentId": null,
+            "external": true,
+            "title": "（编造的编号）",
+            "reason": "验证幻觉过滤",
+            "relation": "对比"
+          }
+        ]
+      },
+      "model": "demo-mock",
+      "usage": {
+        "prompt": 1102,
+        "completion": 200
+      },
+      "truncated": false
+    },
+    "reviewCorpus": {
+      "report": {
+        "summary": "这批文档围绕三条线展开：零依赖的 Node 全栈实践、SQLite 的查询与分页优化、以及前端路由与写作规范这类工程细节。",
+        "topics": [
+          {
+            "name": "Node 零依赖全栈",
+            "summary": "用内置模块替代第三方框架与驱动",
+            "difficulty": "进阶",
+            "documentIds": [
+              2,
+              5
+            ],
+            "prereq": [
+              "JavaScript 基础",
+              "SQL 基本语法"
+            ],
+            "order": 1
+          },
+          {
+            "name": "前端工程与 SEO",
+            "summary": "SPA 路由选型与可被检索的取舍",
+            "difficulty": "进阶",
+            "documentIds": [
+              3
+            ],
+            "prereq": [
+              "HTTP 基础"
+            ],
+            "order": 2
+          },
+          {
+            "name": "内容与协作规范",
+            "summary": "写作技巧与社区约定",
+            "difficulty": "入门",
+            "documentIds": [
+              1,
+              4
+            ],
+            "prereq": [],
+            "order": 3
+          }
+        ],
+        "readingPath": [
+          {
+            "documentId": 1,
+            "title": "先读版规",
+            "reason": "了解社区约定",
+            "level": "入门"
+          },
+          {
+            "documentId": 4,
+            "title": "写清楚再说",
+            "reason": "表达是协作前提",
+            "level": "入门"
+          },
+          {
+            "documentId": 2,
+            "title": "Node 内置 SQLite",
+            "reason": "主线起点",
+            "level": "进阶"
+          },
+          {
+            "documentId": 5,
+            "title": "分页优化",
+            "reason": "承接上一步深入",
+            "level": "深入"
+          }
+        ],
+        "dropped": {
+          "topics": 1,
+          "readingPath": 1
+        }
+      },
+      "model": "demo-mock",
+      "usage": {
+        "prompt": 1420,
+        "completion": 200
+      },
+      "truncated": false
+    },
+    "askDocument": {
+      "answer": {
+        "text": "材料里 [#2] 说明 node:sqlite 可以省掉第三方驱动，[#5] 则讨论了深分页变慢的问题，建议先补 SQL 索引基础再看分页优化。",
+        "citations": [
+          {
+            "documentId": 2,
+            "title": "Node.js 24 内置 SQLite 上手实测",
+            "quote": "省掉第三方依赖"
+          }
+        ],
+        "notes": [
+          "先把 SQL 索引补上，再读分页那篇收益最大。"
+        ],
+        "confidence": "high",
+        "droppedCitations": 1
+      },
+      "model": "demo-mock",
+      "usage": {
+        "prompt": 997,
+        "completion": 200
+      },
+      "truncated": false,
+      "included": 1
+    },
+    "askCorpus": {
+      "answer": {
+        "text": "材料里 [#2] 说明 node:sqlite 可以省掉第三方驱动，[#5] 则讨论了深分页变慢的问题，建议先补 SQL 索引基础再看分页优化。",
+        "citations": [
+          {
+            "documentId": 1,
+            "title": "Node.js 24 内置 SQLite 上手实测",
+            "quote": "省掉第三方依赖"
+          }
+        ],
+        "notes": [
+          "先把 SQL 索引补上，再读分页那篇收益最大。"
+        ],
+        "confidence": "high",
+        "droppedCitations": 1
+      },
+      "model": "demo-mock",
+      "usage": {
+        "prompt": 1441,
+        "completion": 200
+      },
+      "truncated": false,
+      "included": 5
+    }
+  },
+  "ranking": [
+    {
+      "documentId": "2",
+      "score": 16.714
+    },
+    {
+      "documentId": "5",
+      "score": 13.471
+    },
+    {
+      "documentId": "3",
+      "score": 1.443
+    },
+    {
+      "documentId": "1",
+      "score": 1.243
+    },
+    {
+      "documentId": "4",
+      "score": 1.057
+    }
+  ],
+  "storage": {
+    "corpus": {
+      "documents": 5,
+      "replies": 5,
+      "chars": 184,
+      "updatedAt": 1790761230336
+    },
+    "reviewStats": {
+      "analyzed": 5,
+      "failed": 0,
+      "documents": 5
+    },
+    "pending": 0,
+    "corpusHash": "5:1790761230336:5:184",
+    "report": {
+      "id": 1,
+      "status": "done",
+      "summary": "这批文档围绕三条线展开：零依赖的 Node 全栈实践、SQLite 的查询与分页优化、以及前端路由与写作规范这类工程细节。",
+      "topics": [
+        {
+          "name": "Node 零依赖全栈",
+          "summary": "用内置模块替代第三方框架与驱动",
+          "difficulty": "进阶",
+          "documentIds": [
+            2,
+            5
+          ],
+          "prereq": [
+            "JavaScript 基础",
+            "SQL 基本语法"
+          ],
+          "order": 1
+        },
+        {
+          "name": "前端工程与 SEO",
+          "summary": "SPA 路由选型与可被检索的取舍",
+          "difficulty": "进阶",
+          "documentIds": [
+            3
+          ],
+          "prereq": [
+            "HTTP 基础"
+          ],
+          "order": 2
+        },
+        {
+          "name": "内容与协作规范",
+          "summary": "写作技巧与社区约定",
+          "difficulty": "入门",
+          "documentIds": [
+            1,
+            4
+          ],
+          "prereq": [],
+          "order": 3
+        }
+      ],
+      "readingPath": [
+        {
+          "documentId": 1,
+          "title": "先读版规",
+          "reason": "了解社区约定",
+          "level": "入门"
+        },
+        {
+          "documentId": 4,
+          "title": "写清楚再说",
+          "reason": "表达是协作前提",
+          "level": "入门"
+        },
+        {
+          "documentId": 2,
+          "title": "Node 内置 SQLite",
+          "reason": "主线起点",
+          "level": "进阶"
+        },
+        {
+          "documentId": 5,
+          "title": "分页优化",
+          "reason": "承接上一步深入",
+          "level": "深入"
+        }
+      ],
+      "documentCount": 5,
+      "model": "demo-mock",
+      "corpusHash": "5:1790761230336:5:184",
+      "tokens": {
+        "prompt": 1425,
+        "completion": 200
+      },
+      "error": "",
+      "createdAt": 1790847630457
+    }
+  },
+  "http": {
+    "lastBatch": {
+      "processed": 3,
+      "failed": 0,
+      "remaining": 2,
+      "results": [
+        {
+          "documentId": "1",
+          "title": "论坛版规与发帖指南",
+          "status": "done",
+          "category": "数据库"
+        },
+        {
+          "documentId": "2",
+          "title": "Node.js 24 内置 SQLite 上手实测：零依赖做全栈",
+          "status": "done",
+          "category": "数据库"
+        },
+        {
+          "documentId": "3",
+          "title": "求助：前端 SPA 用 hash 路由会不会影响 SEO？",
+          "status": "done",
+          "category": "数据库"
+        }
+      ],
+      "stats": {
+        "analyzed": 3,
+        "failed": 0,
+        "documents": 5,
+        "pending": 2
+      }
+    },
+    "corpusView": {
+      "stale": false,
+      "stats": {
+        "analyzed": 5,
+        "failed": 0,
+        "documents": 5,
+        "pending": 0,
+        "corpus": {
+          "documents": 5,
+          "replies": 5,
+          "chars": 184,
+          "updatedAt": 1790761230336
+        }
+      },
+      "topics": [
+        {
+          "name": "Node 零依赖全栈",
+          "summary": "用内置模块替代第三方框架与驱动",
+          "difficulty": "进阶",
+          "documentIds": [
+            2,
+            5
+          ],
+          "prereq": [
+            "JavaScript 基础",
+            "SQL 基本语法"
+          ],
+          "order": 1,
+          "documents": [
+            {
+              "id": "2",
+              "title": "Node.js 24 内置 SQLite 上手实测：零依赖做全栈",
+              "board": "技术交流",
+              "author": "Bob",
+              "replyCount": 2,
+              "category": "数据库",
+              "difficulty": "进阶",
+              "summary": "实测 Node.js 内置 SQLite，用零依赖方式完成建表与查询，说明什么场景下不必引入第三方驱动。",
+              "tags": [
+                "Node.js",
+                "SQLite",
+                "零依赖",
+                "全栈"
+              ]
+            },
+            {
+              "id": "5",
+              "title": "SQLite 分页查询在大数据量下变慢，怎么优化？",
+              "board": "问答求助",
+              "author": "Bob",
+              "replyCount": 1,
+              "category": "数据库",
+              "difficulty": "进阶",
+              "summary": "实测 Node.js 内置 SQLite，用零依赖方式完成建表与查询，说明什么场景下不必引入第三方驱动。",
+              "tags": [
+                "Node.js",
+                "SQLite",
+                "零依赖",
+                "全栈"
+              ]
+            }
+          ]
+        },
+        {
+          "name": "前端工程与 SEO",
+          "summary": "SPA 路由选型与可被检索的取舍",
+          "difficulty": "进阶",
+          "documentIds": [
+            3
+          ],
+          "prereq": [
+            "HTTP 基础"
+          ],
+          "order": 2,
+          "documents": [
+            {
+              "id": "3",
+              "title": "求助：前端 SPA 用 hash 路由会不会影响 SEO？",
+              "board": "问答求助",
+              "author": "Carol",
+              "replyCount": 1,
+              "category": "数据库",
+              "difficulty": "进阶",
+              "summary": "实测 Node.js 内置 SQLite，用零依赖方式完成建表与查询，说明什么场景下不必引入第三方驱动。",
+              "tags": [
+                "Node.js",
+                "SQLite",
+                "零依赖",
+                "全栈"
+              ]
+            }
+          ]
+        },
+        {
+          "name": "内容与协作规范",
+          "summary": "写作技巧与社区约定",
+          "difficulty": "入门",
+          "documentIds": [
+            1,
+            4
+          ],
+          "prereq": [],
+          "order": 3,
+          "documents": [
+            {
+              "id": "1",
+              "title": "论坛版规与发帖指南",
+              "board": "站务公告",
+              "author": "站长",
+              "replyCount": 1,
+              "category": "数据库",
+              "difficulty": "进阶",
+              "summary": "实测 Node.js 内置 SQLite，用零依赖方式完成建表与查询，说明什么场景下不必引入第三方驱动。",
+              "tags": [
+                "Node.js",
+                "SQLite",
+                "零依赖",
+                "全栈"
+              ]
+            },
+            {
+              "id": "4",
+              "title": "分享：我整理的 12 个 Markdown 写作小技巧",
+              "board": "分享创造",
+              "author": "alice",
+              "replyCount": 0,
+              "category": "数据库",
+              "difficulty": "进阶",
+              "summary": "实测 Node.js 内置 SQLite，用零依赖方式完成建表与查询，说明什么场景下不必引入第三方驱动。",
+              "tags": [
+                "Node.js",
+                "SQLite",
+                "零依赖",
+                "全栈"
+              ]
+            }
+          ]
+        }
+      ],
+      "readingPath": [
+        {
+          "documentId": 1,
+          "title": "先读版规",
+          "reason": "了解社区约定",
+          "level": "入门",
+          "document": {
+            "id": "1",
+            "title": "论坛版规与发帖指南",
+            "board": "站务公告",
+            "author": "站长",
+            "replyCount": 1,
+            "category": "数据库",
+            "difficulty": "进阶",
+            "summary": "实测 Node.js 内置 SQLite，用零依赖方式完成建表与查询，说明什么场景下不必引入第三方驱动。",
+            "tags": [
+              "Node.js",
+              "SQLite",
+              "零依赖",
+              "全栈"
+            ]
+          }
+        },
+        {
+          "documentId": 4,
+          "title": "写清楚再说",
+          "reason": "表达是协作前提",
+          "level": "入门",
+          "document": {
+            "id": "4",
+            "title": "分享：我整理的 12 个 Markdown 写作小技巧",
+            "board": "分享创造",
+            "author": "alice",
+            "replyCount": 0,
+            "category": "数据库",
+            "difficulty": "进阶",
+            "summary": "实测 Node.js 内置 SQLite，用零依赖方式完成建表与查询，说明什么场景下不必引入第三方驱动。",
+            "tags": [
+              "Node.js",
+              "SQLite",
+              "零依赖",
+              "全栈"
+            ]
+          }
+        },
+        {
+          "documentId": 2,
+          "title": "Node 内置 SQLite",
+          "reason": "主线起点",
+          "level": "进阶",
+          "document": {
+            "id": "2",
+            "title": "Node.js 24 内置 SQLite 上手实测：零依赖做全栈",
+            "board": "技术交流",
+            "author": "Bob",
+            "replyCount": 2,
+            "category": "数据库",
+            "difficulty": "进阶",
+            "summary": "实测 Node.js 内置 SQLite，用零依赖方式完成建表与查询，说明什么场景下不必引入第三方驱动。",
+            "tags": [
+              "Node.js",
+              "SQLite",
+              "零依赖",
+              "全栈"
+            ]
+          }
+        },
+        {
+          "documentId": 5,
+          "title": "分页优化",
+          "reason": "承接上一步深入",
+          "level": "深入",
+          "document": {
+            "id": "5",
+            "title": "SQLite 分页查询在大数据量下变慢，怎么优化？",
+            "board": "问答求助",
+            "author": "Bob",
+            "replyCount": 1,
+            "category": "数据库",
+            "difficulty": "进阶",
+            "summary": "实测 Node.js 内置 SQLite，用零依赖方式完成建表与查询，说明什么场景下不必引入第三方驱动。",
+            "tags": [
+              "Node.js",
+              "SQLite",
+              "零依赖",
+              "全栈"
+            ]
+          }
+        }
+      ]
+    },
+    "ask": {
+      "scope": "corpus",
+      "documentId": null,
+      "question": "分页怎么优化？",
+      "answer": "材料里 [#2] 说明 node:sqlite 可以省掉第三方驱动，[#5] 则讨论了深分页变慢的问题，建议先补 SQL 索引基础再看分页优化。",
+      "citations": [
+        {
+          "documentId": 2,
+          "title": "Node.js 24 内置 SQLite 上手实测",
+          "quote": "省掉第三方依赖"
+        }
+      ],
+      "notes": [
+        "先把 SQL 索引补上，再读分页那篇收益最大。"
+      ],
+      "confidence": "high",
+      "droppedCitations": 1,
+      "model": "demo-mock",
+      "included": 5,
+      "truncated": false,
+      "tokens": {
+        "prompt": 1443,
+        "completion": 200
+      }
+    },
+    "notConfigured": {
+      "status": 503,
+      "body": {
+        "ok": false,
+        "error": {
+          "code": "ai_not_configured",
+          "message": "AI 未配置：请在启动服务前设置环境变量 AI_API_KEY（可选 AI_BASE_URL / AI_MODEL），例如 AI_API_KEY=sk-xxx node server.js"
+        }
+      }
+    }
+  },
+  "requests": {
+    "count": 11,
+    "models": [
+      "demo-mock"
+    ],
+    "hasJsonResponseFormat": true
+  }
+}

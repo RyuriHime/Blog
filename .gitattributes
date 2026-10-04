@@ -1,0 +1,34 @@
+# 换行统一成 LF（仓库里和检出后都是 LF）。
+# Node / JS / CSS / HTML / Markdown 在 Windows 上也都吃 LF，不需要 CRLF。
+* text=auto eol=lf
+
+# Windows 批处理必须 CRLF，否则部分 cmd.exe 会解析错行。
+*.cmd text eol=crlf
+*.bat text eol=crlf
+
+# 二进制：禁止任何换行或编码转换。
+*.png  binary
+*.jpg  binary
+*.jpeg binary
+*.gif  binary
+*.ico  binary
+*.webp binary
+*.bmp  binary
+*.woff binary
+*.woff2 binary
+*.ttf  binary
+*.eot  binary
+*.otf  binary
+*.pdf  binary
+*.docx binary
+*.pptx binary
+*.xlsx binary
+*.zip  binary
+*.gz   binary
+*.tgz  binary
+
+# 让 GitHub 的语言统计不把第三方库算成我们的代码。
+note-studio/public/vendor/**     linguist-vendored
+note-studio/acceptance/output/** linguist-generated
+forum-ai/examples/demo-output.json linguist-generated
+note-studio/examples/output/**   linguist-generated

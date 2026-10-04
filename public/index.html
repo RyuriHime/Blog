@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>围炉论坛 · 提问 / 分享 / 交流</title>
+    <meta name="description" content="一个轻量的中文技术论坛：板块分区、Markdown 发帖、搜索、点赞收藏与管理后台。" />
+    <link rel="stylesheet" href="/style.css" />
+    <link
+      rel="icon"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%F0%9F%97%A3%EF%B8%8F%3C/text%3E%3C/svg%3E"
+    />
+    <script>
+      // 首屏前应用背景主题，避免刷新时闪一下默认配色。
+      // 取值与 public/app.js 的 THEME_STORAGE_KEY 保持一致。
+      (function () {
+        try {
+          var saved = localStorage.getItem('forum:theme') || 'dark';
+          var resolved =
+            saved === 'auto'
+              ? window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches
+                ? 'light'
+                : 'dark'
+              : saved;
+          document.documentElement.dataset.theme = resolved;
+        } catch (error) {
+          document.documentElement.dataset.theme = 'dark';
+        }
+      })();
+    </script>
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="topbar-inner">
+        <a class="brand" href="#/">
+          <span class="brand-mark">🗣️</span>
+          <span class="brand-text">围炉论坛</span>
+        </a>
+
+        <form class="search" id="search-form" role="search">
+          <span class="search-icon">🔍</span>
+          <input
+            id="search-input"
+            type="search"
+            name="q"
+            placeholder="搜索帖子标题或内容…"
+            autocomplete="off"
+          />
+        </form>
+
+        <nav class="topnav">
+          <div id="theme-area" class="theme-area"></div>
+          <a class="btn btn-primary btn-sm" href="#/new">✏️ 发帖</a>
+          <div id="user-area" class="user-area"></div>
+        </nav>
+      </div>
+    </header>
+
+    <div class="layout">
+      <main id="app" class="main"></main>
+      <aside id="sidebar" class="sidebar"></aside>
+    </div>
+
+    <footer class="footer">
+      <span>围炉论坛 · 零依赖全栈示例</span>
+      <span class="dot">·</span>
+      <span>Node.js + node:sqlite + 原生前端</span>
+    </footer>
+
+    <div id="toasts" class="toasts" aria-live="polite"></div>
+    <!-- AI 笔记工作台（note-agent）：面板脚本 + 样式都由后端挂载层发出。
+         它必须在 app.js 之前执行（要先把 window.NotesAgent 挂出来），
+         两个都是 module，按文档顺序执行，所以放前面就够。 -->
+    <script type="module" src="/notes-panel.js"></script>
+    <script type="module" src="/app.js"></script>
+  </body>
+</html>

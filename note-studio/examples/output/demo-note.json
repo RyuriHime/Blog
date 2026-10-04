@@ -1,0 +1,135 @@
+{
+  "schema": "note-studio/document@1",
+  "generator": {
+    "name": "note-studio",
+    "version": "1.0.0"
+  },
+  "file": {
+    "name": "demo-note.md",
+    "baseName": "demo-note",
+    "extension": ".md",
+    "mimeType": "text/markdown; charset=utf-8",
+    "encoding": "utf-8",
+    "bytes": 296,
+    "lines": 10,
+    "sha256": "ea445dce22853132f4c639615f4bd3e821375d19302e346e39186574899f75e2"
+  },
+  "title": "电磁感应实验记录（整理版）",
+  "stats": {
+    "characters": 142,
+    "charactersNoSpaces": 123,
+    "words": 78,
+    "cjkCharacters": 70,
+    "latinWords": 8,
+    "lines": 10,
+    "nonEmptyLines": 7,
+    "paragraphs": 4,
+    "readingMinutes": 1
+  },
+  "structure": {
+    "maxDepth": 2,
+    "headings": [
+      {
+        "level": 1,
+        "text": "电磁感应实验记录（整理版）",
+        "line": 1,
+        "slug": "电磁感应实验记录整理版"
+      },
+      {
+        "level": 2,
+        "text": "实验目的",
+        "line": 3,
+        "slug": "实验目的"
+      },
+      {
+        "level": 2,
+        "text": "装置与参数",
+        "line": 6,
+        "slug": "装置与参数"
+      },
+      {
+        "level": 2,
+        "text": "结论",
+        "line": 9,
+        "slug": "结论"
+      }
+    ],
+    "outline": [
+      {
+        "level": 1,
+        "text": "电磁感应实验记录（整理版）",
+        "line": 1,
+        "slug": "电磁感应实验记录整理版",
+        "children": [
+          {
+            "level": 2,
+            "text": "实验目的",
+            "line": 3,
+            "slug": "实验目的",
+            "children": []
+          },
+          {
+            "level": 2,
+            "text": "装置与参数",
+            "line": 6,
+            "slug": "装置与参数",
+            "children": []
+          },
+          {
+            "level": 2,
+            "text": "结论",
+            "line": 9,
+            "slug": "结论",
+            "children": []
+          }
+        ]
+      }
+    ]
+  },
+  "math": {
+    "inline": 2,
+    "display": 0,
+    "total": 2,
+    "expressions": [
+      {
+        "type": "inline",
+        "tex": "\\varepsilon = -N\\frac{d\\Phi}{dt}",
+        "line": 4
+      },
+      {
+        "type": "inline",
+        "tex": "N = 200",
+        "line": 7
+      }
+    ]
+  },
+  "media": {
+    "images": [],
+    "links": []
+  },
+  "code": {
+    "fences": 0,
+    "blocks": []
+  },
+  "tables": 0,
+  "tasks": {
+    "total": 0,
+    "checked": 0,
+    "unchecked": 0
+  },
+  "timestamps": {
+    "createdAt": "2026-10-02T04:05:16.413Z",
+    "updatedAt": "2026-10-02T04:05:16.413Z",
+    "savedAt": "2026-10-02T04:05:16.413Z"
+  },
+  "ai": {
+    "conversions": [
+      {
+        "kind": "both",
+        "model": "demo-vision",
+        "at": "2026-10-02T04:05:16.408Z",
+        "source": "实验台照片.png"
+      }
+    ]
+  }
+}

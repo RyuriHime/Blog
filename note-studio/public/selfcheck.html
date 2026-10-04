@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>note-studio · 渲染自检</title>
+<link rel="stylesheet" href="vendor/katex/katex.min.css">
+<style>body{font:14px/1.6 system-ui,sans-serif;margin:20px}#out{font-family:monospace;padding:8px;border:1px solid #ccc;border-radius:6px}</style>
+</head>
+<body>
+<h1>note-studio 渲染自检</h1>
+<p>这个页面只验证一件事：<b>公式在真实浏览器里到底有没有被渲染成 KaTeX 结构</b>（而不是留下 $ 源码）。</p>
+<div id="out" data-status="pending">pending</div>
+<div id="host"></div>
+
+<script src="vendor/marked/marked.min.js"></script>
+<script src="vendor/katex/katex.min.js"></script>
+<script src="vendor/katex/contrib/auto-render.min.js"></script>
+<script src="render.js"></script>
+<script>
+(function () {
+  'use strict';
+  var sample = [
+    '# 渲染自检标题',
+    '',
+    '行内公式 $E = mc^2$ 与块级公式：',
+    '',
+    '$$',
+    '\\int_0^1 x\\,dx = \\frac{1}{2}',
+    '$$',
+    '',
+    '```js',
+    'const price = 100; // 这里的 $ 不是公式，$HOME 也不是',
+    '```',
+    '',
+    '- [x] 已完成的任务',
+    '- [ ] 未完成的任务',
+    '',
+    '| A | B |',
+    '| --- | --- |',
+    '| 1 | 2 |',
+    '',
+  ].join('\n');
+
+  var out = document.getElementById('out');
+  var host = document.getElementById('host');
+  var checks = {};
+  var math = 0;
+
+  try {
+    math = window.NoteRender.renderInto(host, sample).math;
+    var meta = window.NoteRender.previewMeta(sample, 'self check');
+
+    checks.mathRendered = math >= 2;
+    checks.katexNodes = host.querySelectorAll('.katex').length >= 2;
+    checks.noRawDollarInText = !/\$E = mc\^2\$/.test(host.textContent);
+    checks.heading = !!host.querySelector('h1');
+    checks.codeBlockKept = host.querySelectorAll('pre code').length === 1;
+    checks.codeNotParsedAsMath = host.querySelectorAll('pre .katex').length === 0;
+    checks.table = !!host.querySelector('table');
+    checks.metaInlineMath = meta.math.inline === 1;
+    checks.metaDisplayMath = meta.math.display === 1;
+    checks.metaTasks = meta.tasks.total === 2 && meta.tasks.checked === 1;
+    checks.metaSlug = meta.file.baseName === 'self-check';
+  } catch (error) {
+    checks.threw = false;
+    out.dataset.error = String(error && error.message);
+  }
+
+  var failed = Object.keys(checks).filter(function (key) { return !checks[key]; });
+  out.dataset.status = failed.length ? 'fail' : 'pass';
+  out.textContent = failed.length
+    ? 'SELFCHECK FAIL -> ' + failed.join(', ')
+    : 'SELFCHECK PASS math=' + math + ' checks=' + Object.keys(checks).length;
+  out.dataset.math = String(math);
+})();
+</script>
+</body>
+</html>

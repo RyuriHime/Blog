@@ -1,0 +1,213 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>note-studio · 学术笔记编辑器</title>
+<link rel="stylesheet" href="vendor/katex/katex.min.css">
+<link rel="stylesheet" href="studio.css">
+<!-- 我们自己的补充样式（工作台抽屉让位等）。与作者的 studio.css 分开放，
+     以后换 note-studio 新版时直接把 vendor/ 和 studio.* 覆盖掉即可，互不冲突。 -->
+<link rel="stylesheet" href="notes-host.css">
+</head>
+<body>
+
+<header class="bar">
+  <div class="brand"><span class="mark">📓</span><span>note-studio</span></div>
+
+  <label class="filename">
+    <span>文件名</span>
+    <input id="fileName" type="text" value="我的笔记" spellcheck="false" autocomplete="off">
+    <span class="ext">.md</span>
+  </label>
+
+  <div class="modes" role="tablist" aria-label="编辑模式">
+    <button type="button" class="mode" data-mode="source">源码</button>
+    <button type="button" class="mode active" data-mode="split">分栏</button>
+    <button type="button" class="mode" data-mode="wysiwyg">可视化</button>
+  </div>
+
+  <div class="actions">
+    <button type="button" id="btnNew" class="btn">新建</button>
+    <button type="button" id="btnSave" class="btn primary">保存到服务器</button>
+    <button type="button" id="btnDownloadMd" class="btn">下载 .md</button>
+    <button type="button" id="btnDownloadJson" class="btn">下载 .json</button>
+    <button type="button" id="btnDownloadBoth" class="btn">导出两个</button>
+  </div>
+</header>
+
+<div class="alert" id="alert" hidden></div>
+
+<main class="workspace">
+
+  <section class="pane editor-pane">
+    <div class="pane-head">
+      <span class="pane-title" id="editorTitle">编辑 · 源码</span>
+      <div class="toolbar" id="toolbar">
+        <button type="button" class="tool" data-cmd="bold" title="加粗"><b>B</b></button>
+        <button type="button" class="tool" data-cmd="italic" title="斜体"><i>I</i></button>
+        <button type="button" class="tool" data-cmd="strikeThrough" title="删除线"><s>S</s></button>
+        <button type="button" class="tool" data-cmd="code" title="行内代码">&lt;/&gt;</button>
+        <span class="sep"></span>
+        <button type="button" class="tool" data-block="h1">H1</button>
+        <button type="button" class="tool" data-block="h2">H2</button>
+        <button type="button" class="tool" data-block="h3">H3</button>
+        <button type="button" class="tool" data-block="ul" title="无序列表">•</button>
+        <button type="button" class="tool" data-block="ol" title="有序列表">1.</button>
+        <button type="button" class="tool" data-block="quote" title="引用">❝</button>
+        <button type="button" class="tool" data-block="code" title="代码块">{ }</button>
+        <button type="button" class="tool" data-block="table" title="表格">▦</button>
+        <span class="sep"></span>
+        <button type="button" class="tool" data-insert="link" title="链接">🔗</button>
+        <button type="button" class="tool" data-insert="inline-math" title="行内公式">$x$</button>
+        <button type="button" class="tool" data-insert="block-math" title="块级公式">$$</button>
+        <span class="sep"></span>
+        <button type="button" class="tool" id="btnConvertToggle" title="把图片转成 Markdown / LaTeX">🖼 图片转写</button>
+        <span class="sep"></span>
+        <!-- 面板开关统一放在左侧功能栏：收起后不占任何空间，点这里再打开 -->
+        <button type="button" class="tool" id="btnPreview" title="显示 / 隐藏实时预览（打开后在右侧竖排）">👁 预览</button>
+        <!-- 作者自带的「🤖 AI 助手」入口已下线：整理 / 审阅改由右侧的 AI 笔记工作台
+             抽屉（note-agent）负责。按作者要求两者不共存，见 notes-host.css 顶部说明。 -->
+        <button type="button" class="tool" id="btnData" title="显示 / 隐藏文件数据（打开后在右侧竖排）">🗂 文件数据</button>
+        <button type="button" class="tool" id="btnFocus" title="收起预览与侧栏，只留编辑栏">⛶ 只留编辑</button>
+      </div>
+    </div>
+
+    <!-- 图片转写：编辑工具栏里的一个可折叠面板，不再单独占一栏 -->
+    <div class="convert-panel" id="convertPanel" hidden>
+      <div class="convert-head">
+        <b>图片转写</b>
+        <span class="hint">走既有 <code>forum-ai</code> 接口，需要把 <code>AI_MODEL</code> 指向视觉模型</span>
+        <span class="spacer"></span>
+        <button type="button" id="btnCloseConvert" class="btn tiny">收起 ✕</button>
+      </div>
+
+      <div id="dropZone" class="drop-zone" tabindex="0">
+        <div class="drop-icon">🖼</div>
+        <div>点击选择图片，或拖进来 / Ctrl+V 粘贴</div>
+        <div class="hint" id="imageInfo">支持 PNG / JPG / WebP / GIF / BMP</div>
+      </div>
+      <input type="file" id="imageInput" accept="image/*" hidden>
+
+      <label class="field">
+        <span>转换目标</span>
+        <select id="convertKind">
+          <option value="both">Markdown + LaTeX（推荐）</option>
+          <option value="markdown">只要 Markdown</option>
+          <option value="latex">只要 LaTeX</option>
+        </select>
+      </label>
+
+      <label class="field">
+        <span>补充要求（可选）</span>
+        <input type="text" id="convertHint" placeholder="例如：只保留公式，忽略页眉">
+      </label>
+
+      <button type="button" id="btnConvert" class="btn primary block" disabled>开始转换</button>
+      <div class="progress" id="progress" hidden><div class="progress-fill" id="progressFill"></div><span id="progressText"></span></div>
+
+      <div class="result-head">
+        <div class="subtabs">
+          <button type="button" class="subtab active" data-result="markdown">Markdown</button>
+          <button type="button" class="subtab" data-result="latex">LaTeX</button>
+        </div>
+        <button type="button" id="btnCopyResult" class="btn tiny">复制</button>
+      </div>
+      <textarea id="resultBox" class="result-box" spellcheck="false" rows="6" placeholder="识别结果会出现在这里"></textarea>
+      <div class="row">
+        <button type="button" id="btnInsertResult" class="btn small primary">插入到光标处</button>
+        <button type="button" id="btnReplaceAll" class="btn small">替换全文</button>
+      </div>
+
+      <div class="sub-title">本次会话的转换记录</div>
+      <ul class="log" id="convertLog"><li class="empty">还没有转换记录</li></ul>
+    </div>
+
+    <div class="pane-body" id="editorBody">
+      <textarea id="source" spellcheck="false" placeholder="在这里写 Markdown 与 LaTeX……&#10;&#10;行内公式：$E = mc^2$&#10;&#10;块级公式：&#10;$$&#10;\int_0^\infty e^{-x^2}\,dx = \frac{\sqrt{\pi}}{2}&#10;$$"></textarea>
+      <div id="wysiwyg" class="wysiwyg markdown-body" contenteditable="true" spellcheck="false" hidden></div>
+    </div>
+  </section>
+
+  <section class="pane preview-pane" id="previewPane">
+    <div class="pane-inner">
+      <div class="pane-head">
+        <span class="pane-title">预览</span>
+        <span class="hint" id="renderStatus"></span>
+        <span class="spacer"></span>
+        <button type="button" id="btnHidePreview" class="btn tiny" title="收起实时预览">收起 ✕</button>
+      </div>
+      <div class="pane-body">
+        <article id="preview" class="markdown-body"></article>
+      </div>
+    </div>
+  </section>
+
+  <aside class="sidebar" id="sidebar">
+    <div class="sidebar-inner">
+    <div class="tabs" role="tablist">
+      <!-- 「AI 助手」页签已下线（默认页签改成「文件数据」）：整理 / 审阅走右侧工作台抽屉 -->
+      <button type="button" class="tab active" data-tab="info">文件数据</button>
+      <button type="button" class="tab" data-tab="notes">我的笔记</button>
+    </div>
+
+    <!-- ================= 文件数据 ================= -->
+    <div class="tab-body active" data-body="info">
+      <p class="hint">这里是**预览统计**；保存到服务器后，磁盘上的 <code>&lt;名字&gt;.json</code> 是权威版本。</p>
+      <table class="stats" id="statsTable"></table>
+      <div class="sub-title">大纲</div>
+      <ol class="outline" id="outline"><li class="empty">暂无标题</li></ol>
+      <div class="sub-title">服务端返回的 JSON</div>
+      <div class="row">
+        <button type="button" id="btnCopyJson" class="btn tiny">复制</button>
+      </div>
+      <pre class="json" id="jsonView">（保存一次后显示）</pre>
+    </div>
+
+    <!-- ================= 我的笔记 ================= -->
+    <div class="tab-body" data-body="notes">
+      <div class="row">
+        <button type="button" id="btnRefreshNotes" class="btn small">刷新列表</button>
+        <button type="button" id="btnDeleteNote" class="btn small danger">删除当前</button>
+      </div>
+      <ul class="notes" id="notesList"><li class="empty">列表为空</li></ul>
+    </div>
+    </div>
+  </aside>
+</main>
+
+<footer class="status">
+  <span id="statusText">就绪</span>
+  <span class="spacer"></span>
+  <span id="statusStats"></span>
+  <span id="statusMode" class="badge"></span>
+</footer>
+
+<script src="vendor/marked/marked.min.js"></script>
+<script src="vendor/katex/katex.min.js"></script>
+<script src="vendor/katex/contrib/auto-render.min.js"></script>
+<script src="vendor/turndown/turndown.js"></script>
+<script src="vendor/turndown/turndown-plugin-gfm.js"></script>
+<script src="render.js"></script>
+<script src="studio.js"></script>
+
+<!-- AI 笔记工作台（note-agent，后端挂在 /api/note-agent）。
+     抽屉是 position: fixed，不占文档流，所以这个挂载点放在最底下即可。 -->
+<div id="notesPanelMount" class="notes-mount"></div>
+<script type="module">
+  import { attach } from '/notes-panel.js';
+  import { noteStudioAdapter } from './studio-adapter.js';
+
+  // 面板脚本按需加载；万一 note-agent 没部署成功，这里静默失败，编辑器照常能用。
+  const mount = document.getElementById('notesPanelMount');
+  if (mount && window.NoteStudio) {
+    attach({
+      mount,
+      editor: noteStudioAdapter(window.NoteStudio),
+      apiBase: '/api/note-agent',  // 必须与 src/server.js 里的 basePath 一致
+      hostBase: '/api',            // 面板的「效果预览」走论坛已有的 /api/markdown/preview
+    });
+  }
+</script>
+</body>
+</html>
