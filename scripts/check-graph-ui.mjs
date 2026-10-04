@@ -6,29 +6,48 @@
  * 模板里的类名样式表里有没有、按钮 id 和 getElementById 对不对得上」这些都能静态查出来，
  * 而这类错误恰恰是最容易手滑写错、又最晚才被发现的。
  *
+ * ⚠️ 骨架改造后的变化：v2 预铺骨架把 `src/server.js` 拆成了 `src/core/*` + `src/modules/*`，
+ *    原来在 `src/server.js` 里 grep `route('GET','/api/knowledge/graph')` 的断言会**静默失效**。
+ *    现在改成**递归扫描整个 src/ 目录**并拼成一份「全后端源码」，断言照旧但不再依赖具体文件路径。
+ *    另外加了 MIN_PASS 哨兵：通过项数不得少于骨架改造时的实测值。
+ *
  * 用法：node scripts/check-graph-ui.mjs
  */
 
-import { readFile } from 'node:fs/promises';
-import { dirname, join } from 'node:path';
+import { readFile, readdir, stat } from 'node:fs/promises';
+import { dirname, join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const APP = join(ROOT, 'public', 'app.js');
 const CSS = join(ROOT, 'public', 'style.css');
-const SERVER = join(ROOT, 'src', 'server.js');
+const SRC = join(ROOT, 'src');
+
+/** 骨架改造时的通过项数下限。只许涨，不许跌。 */
+const MIN_PASS = Number(process.env.MIN_PASS || 24);
+
 // deploy.sh 不一定和代码包放在一起（它只在本机发布目录里）；常见的几处都找一下，
 // 一个都找不到就跳过这几项检查（见文件末尾），不算失败。
-const DEPLOY_CANDIDATES = [
-  join(ROOT, 'deploy.sh'),
-  join(ROOT, '..', 'deploy.sh'),
-];
+const DEPLOY_CANDIDATES = [join(ROOT, 'deploy.sh'), join(ROOT, '..', 'deploy.sh')];
 
-const [app, css, server] = await Promise.all([
+/** 递归收集 src/ 下的所有 .js 文件，拼成一份「全后端源码」用于静态断言。 */
+async function collectSource(dir, files = []) {
+  for (const entry of await readdir(dir)) {
+    const full = join(dir, entry);
+    const info = await stat(full);
+    if (info.isDirectory()) await collectSource(full, files);
+    else if (entry.endsWith('.js')) files.push(full);
+  }
+  return files;
+}
+
+const [app, css, srcFiles] = await Promise.all([
   readFile(APP, 'utf8'),
   readFile(CSS, 'utf8'),
-  readFile(SERVER, 'utf8'),
+  collectSource(SRC),
 ]);
+const srcTexts = await Promise.all(srcFiles.map((file) => readFile(file, 'utf8')));
+const server = srcTexts.join('\n');
 
 let pass = 0;
 let fail = 0;
@@ -78,11 +97,7 @@ check('style.css 有窄屏适配', /@media[\s\S]{0,200}\.kg-wrap/.test(css));
 const ids = new Set([...block.matchAll(/getElementById\('([^']+)'\)/g)].map((m) => m[1]));
 const declared = new Set([...block.matchAll(/id="([^"]+)"/g)].map((m) => m[1]));
 const dangling = [...ids].filter((id) => !declared.has(id));
-check(
-  'getElementById 的 id 都在模板里出现过',
-  dangling.length === 0,
-  dangling.join(', '),
-);
+check('getElementById 的 id 都在模板里出现过', dangling.length === 0, dangling.join(', '));
 check('画布 id 是 kg-canvas', ids.has('kg-canvas'));
 check('右侧详情面板 id 是 kg-panel', ids.has('kg-panel'));
 
@@ -91,6 +106,7 @@ check('右侧详情面板 id 是 kg-panel', ids.has('kg-panel'));
 check('新页面没有引入 data-action（避免和契约检查打架）', !/data-action=/.test(block));
 
 console.log('\n▶ 后端：只读接口');
+console.log(`  （扫描 ${srcFiles.length} 个 src/*.js 文件拼成后端源码：${srcFiles.map((f) => relative(ROOT, f).split('\\').join('/')).filter((f) => f.includes('knowledge') || f.includes('routes-b')).join(', ')}）`);
 
 check("注册了 GET /api/knowledge/graph", /'\/api\/knowledge\/graph'/.test(server));
 check("注册了 GET /api/knowledge/viewer", /'\/api\/knowledge\/viewer'/.test(server));
@@ -122,6 +138,12 @@ if (deploy) {
   check('缺 knowledge-pack 时部署直接失败（不会部署到一半）', /imports knowledge-pack\/src\/cli\.mjs but the archive has no knowledge-pack/.test(deploy));
 } else {
   console.log('  ⚠️  跳过：找不到 deploy.sh（它不在代码包里，只在本机发布目录）');
+}
+
+/* 不下降哨兵：通过项数不得少于骨架改造时的实测值。 */
+if (pass < MIN_PASS) {
+  fail += 1;
+  console.log(`  ❌ 通过项数从 ${MIN_PASS} 掉到 ${pass}：有断言没被执行（文件被搬走却没同步本检查？）`);
 }
 
 console.log('\n──────────────────────────────────────────────');

@@ -1,30 +1,136 @@
 /**
  * 编码体检：确认所有源码都是干净的 UTF-8（没有 BOM、乱码替换字符或 CP936 误读留下的私用区字符）。
+ *
  * 用法：node scripts/check-encoding.mjs
+ *
+ * ⚠️ 骨架改造后的重要变化：这份检查原来按**文件路径**写死「这个文件必须含哪些中文」，
+ *    而 v2 骨架把 `src/server.js` / `src/db.js` / `public/app.js` 拆成了几十个文件，
+ *    路径一换，那些断言就**静默失效**（找不到路径 → 断言根本不跑 → 测试还是绿的）。
+ *    现在改成「片段 → 允许出现的文件清单」：片段只要在清单里任一文件里找到即算通过，
+ *    找不到就报错。再配三条「不下降」哨兵：
+ *      1. MIN_CHECKED：受检文件数不得少于骨架改造时的实测值；
+ *      2. REQUIRED_FILES：新布局里的关键文件必须存在；
+ *      3. 每条片段断言必须真的执行过（missing 与未执行分开计数）。
  */
-import { readFileSync, readdirSync, statSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const ROOT = resolve(fileURLToPath(new URL('.', import.meta.url)), '..');
-const TARGETS = ['src', 'public', 'scripts', 'package.json', 'README.md', 'start.cmd'];
+const TARGETS = ['src', 'public', 'scripts', 'forum-ai/src', 'note-agent/src', 'note-studio/src', 'knowledge-pack/src', 'package.json', 'README.md', 'start.cmd'];
 
-/** 每个文件必须包含的中文片段，用来确认没有被转码破坏。 */
-const EXPECTED = {
-  'src/server.js': ['围炉论坛已启动', '不能给自己的帖子投币', '只支持「赞」或「踩」', '每日签到', '排行榜', '头像：预设 emoji 或上传图片', '需要管理团队身份', '黑名单'],
-  'src/store.js': ['数据访问层', '已取消「每天补足」机制', '签到：+1 币', '文章价值榜', '隐藏 / 取消隐藏', '互相关注'],
-  'src/dates.js': ['日期工具', '自然周'],
-  'src/db.js': ['综合讨论', '投币：单帖每人最多 2 币', '个人主页的文章分类', '转发（同一用户对同一篇只留一条', '预设 emoji 头像', '站长：建站者', '私信规则'],
-  'src/markdown.js': ['极简 Markdown 渲染器'],
-  'src/password.js': ['恒定时间比对'],
-  'public/index.html': ['围炉论坛', '搜索帖子标题或内容', 'forum:theme', '首屏前应用背景主题'],
-  'public/app.js': ['消息通知', '投币成功，感谢支持作者', '价值排行榜', '转发会出现在你的主页', '跟随系统', '暖阳', '奶黄', '正在压缩图片', '站长可以任命管理员', '私信'],
-  'public/style.css': ['消息铃铛', '评价 / 投币按钮', '转发按钮与转发区', '背景主题', '暖阳：琥珀黄深色', '头像设置', '角色与内容管理', '私信与黑名单'],
-  'scripts/smoke.mjs': ['端到端冒烟测试', '每日签到', '价值排行榜', '设置预设 emoji 头像成功', '角色与管理员分配', '单方面关注每天只能发一条'],
-};
+/** 骨架改造时实测的受检文件数（含新增的 src/core、src/modules 与四个自包含包）。只许涨，不许跌。 */
+const MIN_CHECKED = Number(process.env.MIN_CHECKED || 108);
+
+/** 新布局里必须存在的关键文件。少一个就说明有人把文件搬走却没同步这份检查。 */
+const REQUIRED_FILES = [
+  'src/server.js',
+  'src/db.js',
+  'src/store.js',
+  'src/markdown.js',
+  'src/password.js',
+  'src/dates.js',
+  'src/notes.js',
+  'src/core/index.js',
+  'src/core/paths.js',
+  'src/core/router.js',
+  'src/core/guards.js',
+  'src/core/shape.js',
+  'src/core/sessions.js',
+  'src/core/static.js',
+  'src/core/handler.js',
+  'src/core/context.js',
+  'src/core/open-db.js',
+  'src/core/open-db-support.js',
+  'src/core/tables.sql.js',
+  'src/core/mount-status.js',
+  'src/modules/index.js',
+  'src/modules/core/index.js',
+  'src/modules/core/routes-a.js',
+  'src/modules/core/routes-b.js',
+  'src/modules/core/routes-c.js',
+  'src/modules/core/routes-d.js',
+  'src/modules/feed/index.js',
+  'src/modules/doc/index.js',
+  'src/modules/ai/index.js',
+  'src/modules/team/index.js',
+  'src/modules/ui/index.js',
+  'public/index.html',
+  'public/app.js',
+  'public/style.css',
+];
+
+/**
+ * 每个中文片段必须出现在**清单里的某个文件**中。
+ * 允许给多个候选文件：骨架搬家后同一段文案可能落在不同的文件里。
+ */
+const EXPECTED = [
+  ['围炉论坛已启动', ['src/server.js']],
+  ['不能给自己的帖子投币', ['src/core/shape.js']],
+  ['只支持「赞」或「踩」', ['src/modules/core/routes-b.js']],
+  ['每日签到', ['src/core/open-db-support.js']],
+  ['排行榜', ['src/store.js']],
+  ['头像：预设 emoji 或上传图片', ['src/core/sessions.js']],
+  ['需要管理团队身份', ['src/core/guards.js']],
+  ['黑名单', ['src/store.js']],
+
+  ['数据访问层', ['src/store.js']],
+  ['已取消「每天补足」机制', ['src/store.js']],
+  ['签到：+1 币', ['src/store.js']],
+  ['文章价值榜', ['src/store.js']],
+  ['隐藏 / 取消隐藏', ['src/store.js']],
+  ['互相关注', ['src/store.js']],
+  ['私信', ['src/store.js']],
+
+  ['日期工具', ['src/dates.js']],
+  ['自然周', ['src/dates.js']],
+  ['极简 Markdown 渲染器', ['src/markdown.js']],
+  ['恒定时间比对', ['src/password.js']],
+
+  // 建表 SQL 搬进了 src/core/tables.sql.js，播种与回填文案搬进了 src/core/open-db-support.js
+  ['投币：单帖每人最多 2 币', ['src/core/tables.sql.js']],
+  ['个人主页的文章分类', ['src/core/tables.sql.js']],
+  ['转发（同一用户对同一篇只留一条', ['src/core/tables.sql.js']],
+  ['综合讨论', ['src/core/open-db-support.js']],
+  ['预设 emoji 头像', ['src/core/open-db-support.js']],
+  ['私信规则', ['src/core/open-db-support.js']],
+  ['站长：建站者', ['src/db.js', 'src/core/open-db-support.js']],
+
+  ['围炉论坛', ['public/index.html']],
+  ['搜索帖子标题或内容', ['public/index.html']],
+  ['forum:theme', ['public/index.html']],
+  ['首屏前应用背景主题', ['public/index.html']],
+
+  ['消息通知', ['public/app.js']],
+  ['投币成功，感谢支持作者', ['public/app.js']],
+  ['价值排行榜', ['public/app.js']],
+  ['转发会出现在你的主页', ['public/app.js']],
+  ['跟随系统', ['public/app.js', 'src/core/open-db-support.js']],
+  ['暖阳', ['public/app.js']],
+  ['奶黄', ['public/app.js']],
+  ['正在压缩图片', ['public/app.js']],
+  ['站长可以任命管理员', ['public/app.js']],
+  ['背景主题', ['public/app.js', 'public/style.css']],
+
+  ['消息铃铛', ['public/style.css']],
+  ['评价 / 投币按钮', ['public/style.css']],
+  ['转发按钮与转发区', ['public/style.css']],
+  ['暖阳：琥珀黄深色', ['public/style.css']],
+  ['头像设置', ['public/style.css']],
+  ['角色与内容管理', ['public/style.css']],
+  ['私信与黑名单', ['public/style.css']],
+
+  ['端到端冒烟测试', ['scripts/smoke.mjs']],
+  ['每日签到', ['scripts/smoke.mjs']],
+  ['价值排行榜', ['scripts/smoke.mjs']],
+  ['设置预设 emoji 头像成功', ['scripts/smoke.mjs']],
+  ['角色与管理员分配', ['scripts/smoke.mjs']],
+  ['单方面关注每天只能发一条', ['scripts/smoke.mjs']],
+];
 
 function walk(target, files = []) {
   const full = join(ROOT, target);
+  if (!existsSync(full)) return files;
   const info = statSync(full);
   if (info.isFile()) {
     files.push(full);
@@ -38,25 +144,32 @@ function walk(target, files = []) {
 }
 
 const problems = [];
+
+/* --- 0. 关键文件必须存在 -------------------------------------------------- */
+for (const rel of REQUIRED_FILES) {
+  if (!existsSync(join(ROOT, rel))) problems.push(`缺少关键文件 ${rel}（骨架布局被改动？）`);
+}
+
+/* --- 1. 逐文件体检 -------------------------------------------------------- */
+const checkedFiles = [];
 let checked = 0;
+const texts = new Map();
 
 for (const target of TARGETS) {
   for (const file of walk(target)) {
     const rel = relative(ROOT, file).split('\\').join('/');
     const buffer = readFileSync(file);
     checked += 1;
+    checkedFiles.push(rel);
 
     if (buffer[0] === 0xef && buffer[1] === 0xbb && buffer[2] === 0xbf) {
       problems.push(`${rel}: 文件带 UTF-8 BOM`);
     }
     const text = buffer.toString('utf8');
+    texts.set(rel, text);
     if (text.includes('\uFFFD')) problems.push(`${rel}: 含替换字符 U+FFFD（解码失败）`);
     if (/[\uE000-\uF8FF]/.test(text)) problems.push(`${rel}: 含私用区字符（疑似 CP936 误读留下的乱码）`);
     if (/[ÃÂ][\u0080-\u00BF]/.test(text)) problems.push(`${rel}: 疑似 Latin-1 乱码`);
-
-    for (const snippet of EXPECTED[rel] ?? []) {
-      if (!text.includes(snippet)) problems.push(`${rel}: 缺少预期内容「${snippet}」`);
-    }
 
     // 批处理文件有额外要求：cmd.exe 按 OEM 代码页逐行解析，
     // 所以必须是 CRLF 换行 + 纯 ASCII，否则会被拆成乱码命令（曾经踩过这个坑）。
@@ -72,7 +185,25 @@ for (const target of TARGETS) {
   }
 }
 
-console.log(`已检查 ${checked} 个文件`);
+/* --- 2. 中文片段的跨文件检索 --------------------------------------------- */
+let snippetChecks = 0;
+for (const [snippet, candidates] of EXPECTED) {
+  snippetChecks += 1;
+  const hit = candidates.some((rel) => (texts.get(rel) ?? '').includes(snippet));
+  if (!hit) {
+    problems.push(`所有候选文件里都找不到预期中文片段「${snippet}」（候选：${candidates.join(' / ')}）`);
+  }
+}
+
+/* --- 3. 不下降哨兵 -------------------------------------------------------- */
+if (checked < MIN_CHECKED) {
+  problems.push(`受检文件数从 ${MIN_CHECKED} 掉到 ${checked}：有目录没被扫描到（TARGETS 或 walk 被改坏了？）`);
+}
+if (snippetChecks !== EXPECTED.length) {
+  problems.push(`片段断言只执行了 ${snippetChecks} / ${EXPECTED.length} 条`);
+}
+
+console.log(`已检查 ${checked} 个文件（下限 ${MIN_CHECKED}），中文片段断言 ${snippetChecks} 条`);
 if (problems.length === 0) {
   console.log('✅ 所有文件编码正常，中文内容完整');
   process.exit(0);

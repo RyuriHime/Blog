@@ -9,7 +9,8 @@ export { serveAvatar, serveStatic, MIME } from './static.js';
 export { readJsonFile } from './json-file.js';
 export { bindStore, hasStore, store } from './store.js';
 export { schemas, tablesWithoutOwner, ownedButNotRegistered } from './schema.js';
-export { openDatabase } from './database.js';
+export { openDatabase } from './open-db.js';
+export { forumAiStatus, mountStatusReady, noteAgentStatus, registerMountStatus } from './mount-status.js';
 export { createContext } from './context.js';
 export { buildServer } from './handler.js';
 export {
