@@ -224,7 +224,7 @@ scope = 'public' | 'followers' | 'team' | 'private'
 | `smoke.mjs` | 后端端到端（起真服务打接口） | 242 项 |
 | `smoke-ai.mjs` | AI 接口端到端 | 61 项 |
 | `check-ui-contract.mjs` | 前端类名 / API 字段 / 主题 / 头像 / 角色 / 私信结构 | 185 项 |
-| `check-encoding.mjs` | 编码体检（BOM / 乱码 / 关键中文片段） | 152 文件 / 53 断言 |
+| `check-encoding.mjs` | 编码体检（BOM / 乱码 / 关键中文片段） | 155 文件 / 53 断言 |
 | `check-graph-ui.mjs` / `check-notes-ui.mjs` | 知识图 / 笔记的前端结构 | 24 / 33 项 |
 | `notes-smoke.mjs` / `forum-ai/selftest.mjs` / `note-studio/tests/run.mjs` | 子系统 | 44 / 92 / — |
 | `note-agent/scripts/run-tests.mjs` | note-agent | CI 上跑（本机受限沙箱下 spawn 管道会 EPERM） |
@@ -244,7 +244,7 @@ scope = 'public' | 'followers' | 'team' | 'private'
 - **`deploy.sh` 只替换 `src/ public/ scripts/` 三个目录**。新增的顶层目录不会被部署。
   所以新模块必须放在 `src/modules/` 里面（在 `src/` 下），不要新开顶层目录。
 - `public/` 不需要改部署脚本：静态分发是**从磁盘按路径读**的，新子目录自动可访问。
-- **任何时候都不要碰服务器上的 `/opt/dsh-forum/data`。**
+- **任何时候都不要碰服务器上的数据目录。** 部署只换 `src/ public/ scripts/`，数据库从来不参与。
 - **推 `v2-skeleton` 或你自己的功能分支，不要推 `main`**：服务器上的定时任务会拉 `main`
   并按 CI 结果部署，推 `main` 就等于上线。
 - `src/server.js` 启动时会自己检查模块文件在不在（缺文件就明确报错退出），
