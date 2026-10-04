@@ -67,8 +67,18 @@ let site = null;
 for (let i = 0; i < 60 && !site; i += 1) { try { const r = await fetch(`http://127.0.0.1:${PORT}/api/site`); if (r.ok) site = (await r.json()).data; } catch { await new Promise((r) => setTimeout(r, 200)); } }
 check('宿主站点仍能起来（既有行为未破）', Boolean(site) && site.ok !== false);
 check('/api/site 里出现 notes 状态', Boolean(site?.notes) && site.notes.contractVersion === '1');
-const notesStatus = await fetch(`http://127.0.0.1:${PORT}/api/notes/status`);
-check('宿主上 /api/notes/status 可用（未登录也放行）', notesStatus.status === 200 && (await notesStatus.json()).data.contractVersion === '1');
+// note-agent 挂在哪个前缀下由接入方决定：本站的 /api/notes 已经被 note-studio 占了，
+// 所以这里把它挂在 /api/note-agent（见 ADAPT-NOTE-STUDIO.md）。两个前缀都试一遍，
+// 哪个能返回契约版本就算通过 —— 这样换成别的宿主也仍然成立。
+let notesStatus = null;
+for (const prefix of ['/api/note-agent', '/api/notes']) {
+  const r = await fetch(`http://127.0.0.1:${PORT}${prefix}/status`);
+  if (r.status !== 200) continue;
+  if ((await r.json())?.data?.contractVersion !== '1') continue;
+  notesStatus = r;
+  break;
+}
+check('宿主上 note-agent 的 /status 可用（未登录也放行）', Boolean(notesStatus));
 const panel = await fetch(`http://127.0.0.1:${PORT}/notes-panel.js`);
 check('宿主上 /notes-panel.js 可用', panel.status === 200);
 const panelCss = await fetch(`http://127.0.0.1:${PORT}/notes-panel.css`);

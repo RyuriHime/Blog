@@ -1,0 +1,83 @@
+name: 代码检查
+
+# 这个 workflow 只跑测试，**不负责部署**。
+# 部署是服务器上自己轮询拉代码做的（/opt/deploy/autopull.sh + dsh-forum-autopull.timer），
+# 因为这台服务器访问 GitHub 的 git 协议端点是不通的，只能下 tarball。
+#
+# ⚠️ 服务器上的 autopull 会**等这个 workflow 跑绿了才部署**（CI_GATE=1）。
+# 也就是说：这里红了 = 这次提交不会上线，线上仍然跑着上一个好版本。
+# 这是故意的 —— 免得一推坏代码网站就挂。急着上线可以先把 CI 修绿；
+# 真要先上线再补测试，就去服务器上把 /etc/dsh-forum-autopull.env 里的 CI_GATE 改成 0。
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# 公开仓库跑 Actions 不花钱，但还是按最小权限来。
+permissions:
+  contents: read
+
+# 同一个人连着推好几次时，取消掉排队里的旧任务，只跑最新的。
+concurrency:
+  group: checks-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  checks:
+    name: 检查（Node ${{ matrix.node }}）
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # 22 是 package.json 里写的最低要求（engines.node >= 22.5.0），也是线上在跑的版本；
+        # 24 是当前的 LTS，用它提前发现"以后升级会不会坏"。
+        node: ['22', '24']
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+
+      - name: 报一下跑在什么版本上
+        run: node -v && npm -v
+
+      # ---------------------------------------------------------------
+      # 论坛本体
+      # ---------------------------------------------------------------
+      - name: 编码检查（中文有没有乱码 / U+FFFD）
+        run: node scripts/check-encoding.mjs
+
+      - name: 冒烟测试（起真服务，打一遍接口）
+        run: node scripts/smoke.mjs
+
+      - name: UI 契约检查（前端用到的元素和类名还在不在）
+        run: node scripts/check-ui-contract.mjs
+
+      - name: 知识网络图 UI 检查
+        run: node scripts/check-graph-ui.mjs
+
+      # ---------------------------------------------------------------
+      # note-studio（笔记）
+      # ---------------------------------------------------------------
+      - name: 笔记 UI 检查
+        run: node scripts/check-notes-ui.mjs
+
+      - name: 笔记接口冒烟
+        run: node scripts/notes-smoke.mjs
+
+      - name: note-studio 测试
+        run: node note-studio/tests/run.mjs
+
+      # ---------------------------------------------------------------
+      # 子包
+      # ---------------------------------------------------------------
+      # 这个自测自己起一个假的 OpenAI 兼容服务，**不需要真实密钥**，可以放心在公开仓库里跑。
+      - name: forum-ai 自检（用假 AI，不碰真密钥）
+        run: node forum-ai/selftest.mjs
+
+      - name: note-agent 测试
+        run: node note-agent/scripts/run-tests.mjs
