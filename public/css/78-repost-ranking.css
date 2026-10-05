@@ -11,11 +11,11 @@
 .btn.is-on-repost {
   background: rgba(67, 211, 158, 0.14);
   border-color: rgba(67, 211, 158, 0.5);
-  color: #b8f0d8;
+  color: var(--success-fg);
 }
 
 .tag-repost {
-  color: #8ff0c4;
+  color: var(--success-fg);
   border-color: rgba(67, 211, 158, 0.4);
   background: rgba(67, 211, 158, 0.12);
 }
@@ -25,7 +25,7 @@
   border-radius: 999px;
   border: 1px solid rgba(255, 212, 121, 0.45);
   background: rgba(255, 212, 121, 0.12);
-  color: #ffd479;
+  color: var(--warn-fg);
   font-size: 12.5px;
   white-space: nowrap;
 }
@@ -137,7 +137,7 @@
 }
 
 .value-cell {
-  color: #ffd479;
+  color: var(--warn-fg);
   font-weight: 700;
 }
 
@@ -150,7 +150,7 @@
 
 .rank-value {
   margin-left: auto;
-  color: #ffd479;
+  color: var(--warn-fg);
   font-size: 12.5px;
   padding-left: 8px;
 }

@@ -18,6 +18,15 @@
   --accent: #5b8cff;
   --accent-2: #7c5bff;
   --accent-soft: rgba(91, 140, 255, 0.14);
+  /* 「强调底色上的文字」专用。写死一个浅蓝会在亮色主题里直接消失，
+     所以每个浅底主题都自己给一个能看清的值。 */
+  --accent-fg: #cfe0ff;
+  /* 同样的问题也出在其它几种「浅色小标签」上：写死的浅薄荷 / 浅金 / 浅红
+     压在 12% 透明度的同色浅底上，暗色主题好看，亮色主题看不见。 */
+  --success-fg: #b8f0d8;
+  --warn-fg: #ffd479;
+  --danger-fg: #ffb4b4;
+  --violet-fg: #c8b8ff;
   --danger: #ff6b6b;
   --success: #43d39e;
   --warn: #ffb454;
@@ -75,6 +84,12 @@ html[data-theme='light'] {
   --accent: #2f66f0;
   --accent-2: #7a4bff;
   --accent-soft: rgba(47, 102, 240, 0.12);
+  --accent-fg: #1d4ed8;
+  /* 浅底主题要把这几个「标签文字色」压深，否则和背景糊在一起。 */
+  --success-fg: #0b6b47;
+  --warn-fg: #8a5200;
+  --danger-fg: #a81b12;
+  --violet-fg: #5b2ecc;
   --danger: #d92d20;
   --success: #0f8a5f;
   --warn: #b26a00;
@@ -185,6 +200,11 @@ html[data-theme='sand'] {
   --accent: #c98a00;
   --accent-2: #e0672b;
   --accent-soft: rgba(201, 138, 0, 0.14);
+  --accent-fg: #7a4b00;
+  --success-fg: #0b6b47;
+  --warn-fg: #7a4b00;
+  --danger-fg: #a81b12;
+  --violet-fg: #5b2ecc;
   --danger: #c0392b;
   --success: #1a7f52;
   --warn: #a86a00;

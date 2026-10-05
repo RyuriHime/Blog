@@ -44,12 +44,12 @@
 .checkin-dot.is-on {
   background: rgba(67, 211, 158, 0.16);
   border-color: rgba(67, 211, 158, 0.45);
-  color: #b8f0d8;
+  color: var(--success-fg);
 }
 
 .checkin-dot.is-today {
   border-color: var(--accent);
-  color: #cfe0ff;
+  color: var(--accent-fg);
 }
 
 .checkin-dot.is-future {
@@ -85,7 +85,7 @@
   border-radius: 10px;
   background: rgba(255, 212, 121, 0.14);
   border: 1px solid rgba(255, 212, 121, 0.4);
-  color: #ffe6b3;
+  color: var(--warn-fg);
   font-size: 13.5px;
 }
 
@@ -168,12 +168,12 @@
 .cal-cell.is-on {
   background: rgba(67, 211, 158, 0.16);
   border-color: rgba(67, 211, 158, 0.4);
-  color: #b8f0d8;
+  color: var(--success-fg);
 }
 
 .cal-cell.is-today {
   border-color: var(--accent);
-  color: #cfe0ff;
+  color: var(--accent-fg);
 }
 
 .cal-cell.is-future {
@@ -196,7 +196,7 @@
 }
 
 .bonus-amount {
-  color: #ffd479;
+  color: var(--warn-fg);
   font-weight: 600;
 }
 
@@ -232,7 +232,7 @@
 .chip.is-active {
   background: var(--accent-soft);
   border-color: var(--accent);
-  color: #cfe0ff;
+  color: var(--accent-fg);
 }
 
 .chip-label {
@@ -265,7 +265,7 @@
 }
 
 .tag-category {
-  color: #c8b8ff;
+  color: var(--violet-fg);
   border-color: rgba(124, 91, 255, 0.4);
   background: rgba(124, 91, 255, 0.12);
 }

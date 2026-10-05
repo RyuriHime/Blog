@@ -7,13 +7,13 @@
 /* ================= v1.6 新增：角色与内容管理 ================= */
 
 .tag-owner {
-  color: #ffd479;
+  color: var(--warn-fg);
   border-color: rgba(255, 212, 121, 0.45);
   background: rgba(255, 212, 121, 0.12);
 }
 
 .tag-hidden {
-  color: #ffb4b4;
+  color: var(--danger-fg);
   border-color: rgba(255, 107, 107, 0.4);
   background: rgba(255, 107, 107, 0.12);
 }
@@ -27,7 +27,7 @@
   border-radius: var(--radius-sm);
   border: 1px solid rgba(255, 107, 107, 0.4);
   background: rgba(255, 107, 107, 0.1);
-  color: #ffd9d9;
+  color: var(--danger-fg);
   font-size: 13.8px;
 }
 
@@ -37,7 +37,7 @@
 }
 
 .moderation-banner .hint {
-  color: rgba(255, 217, 217, 0.78);
+  color: var(--danger-fg);
   margin-top: 2px;
 }
 

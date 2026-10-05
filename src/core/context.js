@@ -9,6 +9,7 @@ import { HttpError, ensure, field, ok, rateLimit, readJsonBody, sendJson } from 
 import { assertPostVisible, isOwner, isStaff, requireOwner, requireStaff, requireUser } from './guards.js';
 import { DB_FILE, ROOT, SESSION_TTL_MS } from './paths.js';
 import { routes } from './router.js';
+import * as shape from './shape.js';
 
 /**
  * 造一个模块上下文。
@@ -56,6 +57,14 @@ export function createContext({ db, store, route, schemas, hooks }) {
       requireStaff,
       requireUser,
     },
+    /**
+     * 响应形状函数（src/core/shape.js 的全部导出）。
+     *
+     * 为什么整包给出去而不是挑几个：模块**不该**自己拼 users / posts 的对外形状 ——
+     * 拼法一旦有第二份实现，改一处漏一处，前端就会时好时坏。
+     * 「引用帖子卡片」这种要读别人的表的场景，请用这里的 shapePostListRow / shapeAuthor。
+     */
+    shape,
     options: {
       dbFile: DB_FILE,
       root: ROOT,

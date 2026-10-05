@@ -20,6 +20,7 @@ import * as Notif from '../views/notifications.js';
 import * as Post from '../views/post.js';
 import * as Session from './session.js';
 import * as Settings from '../views/settings.js';
+import * as Timeline from '../views/timeline.js';
 import * as User from '../views/user.js';
 
 function parseHash() {
@@ -56,19 +57,31 @@ async function route() {
 
   window.scrollTo({ top: 0 });
   Events.closeMenus(); // 换页时收起用户菜单 / 主题菜单
+  // 换页时也把动态的「全屏编辑」解开 —— 否则用户在展开状态下点了别的链接，
+  // body 上那条 overflow:hidden 会跟着过去，整个新页面滚不动（查起来极其费解）。
+  document.body.classList.remove('feed-fullscreen');
   Compose.destroyComposeNotesPanel(); // 换页时销毁写作页的 AI 工作台（见其定义处的说明）
-  if (first !== 'board') Session.renderSidebar(null);
+  Session.renderSidebar();
   if (first !== 'search') ui.searchInput.value = query.get('q') || '';
 
   try {
-    if (!first) return await Feed.viewHome(query);
-    if (first === 'board' && second) return await Feed.viewBoard(second, query);
+    // v2：首页是**动态**时间线，不再是「板块 + 帖子列表」。
+    if (!first) return await Timeline.viewTimeline(query);
+    // 论坛形态下线（FR-FEED-12）：板块页没有替代页面，但**也不能变成死链**，
+    // 统一回首页。`replace` 而不是赋值，免得用户按返回又弹回来。
+    if (first === 'board') {
+      toast('板块已经下线了，这里是新的动态首页', 'info');
+      location.replace('#/');
+      return await Timeline.viewTimeline(query);
+    }
+    // 搜索框搜的是动态（论坛没了，搜索的主要对象也就跟着变了）
+    if (first === 'search') return await Timeline.viewTimeline(query);
+    // 「关注流」并进动态流的一个筛选，不再单独占一个页面
+    if (first === 'following') return await Timeline.viewTimeline(new URLSearchParams({ filter: 'following' }));
     if (first === 'post' && second) return await Post.viewPost(Number(second));
     if (first === 'new') return await Compose.viewCompose(null);
     if (first === 'edit' && second) return await Compose.viewCompose(Number(second));
-    if (first === 'search') return await Feed.viewSearch(query);
     if (first === 'bookmarks') return await Feed.viewBookmarks(query);
-    if (first === 'following') return await Feed.viewFollowing();
     if (first === 'checkin') return await Checkin.viewCheckin();
     if (first === 'ai') return await Ai.viewAI();
     if (first === 'graph') return await Graph.viewGraph();

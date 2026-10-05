@@ -82,7 +82,7 @@
 .page-link.is-active {
   background: var(--accent-soft);
   border-color: var(--accent);
-  color: #cfe0ff;
+  color: var(--accent-fg);
 }
 
 .page-link.is-disabled {
@@ -132,7 +132,7 @@
 
 .md {
   font-size: 15.2px;
-  color: #dbe4f0;
+  color: var(--text);
   word-wrap: break-word;
 }
 

@@ -514,8 +514,8 @@ node scripts/reset-db.mjs          # 清空数据库并重新播种
 一次跑完（`npm test` 就是这一串）：
 
 ```
-check-encoding 152 文件 / 53 断言 · check-skeleton 47 项 · check-golden 96 项 0 差异
-check-frontend 18 个页面 · smoke 242 · smoke-ai 61 · check-ui-contract 185
+check-encoding 162 文件 / 61 断言 · check-skeleton 47 项 · check-golden 96 项 0 差异
+check-frontend 21 个页面 · feed-smoke 95 · smoke 242 · smoke-ai 61 · check-ui-contract 200
 check-graph-ui 24 · check-notes-ui 33 · notes-smoke 44
 ```
 

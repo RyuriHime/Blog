@@ -8,7 +8,7 @@
  * 这个脚本做三件事：
  *   1) 造一个够用的假 DOM（元素、classList、dataset、innerHTML、addEventListener…）；
  *   2) 把 fetch 全部拦下来，按路径返回**真实接口响应**（见下）；
- *   3) import 入口 app.js（它会自动 bootstrap()），然后依次渲染 18 个页面，
+ *   3) import 入口 app.js（它会自动 bootstrap()），然后依次渲染每个页面（见文件末尾的 CASES），
  *      任何一个抛异常就报出来。
  *
  * 【重要】假数据不再是手写的，而是从真服务器采回来的：
@@ -29,8 +29,28 @@ const FIXTURE_FILE = join(ROOT, 'scripts', 'frontend-fixtures.json');
 
 /* ---------- 1. 假 DOM ---------- */
 const listeners = new Map(); // "type:selector" -> handler 数
+
+/**
+ * 选择器 → 元素 的登记表。
+ *
+ * 为什么需要它：原来 `querySelector` 每次都 `return makeElement()`（**每次都是新对象**），
+ * 于是「先把值写进输入框、重画之后再读出来」这类断言永远不可能成立 ——
+ * 读回来的是另一个空对象。可它偏偏是最容易出 bug 的一类：
+ * `renderShell()` 会把整个编辑框重新 innerHTML 一遍，用户正在写的字能不能留住全看这条路径。
+ * 同选择器返回同一对象之后，这一整类交互才测得到。
+ */
+const elementRegistry = new Map();
+function registered(selector) {
+  if (!elementRegistry.has(selector)) elementRegistry.set(selector, makeElement());
+  return elementRegistry.get(selector);
+}
+
+/** 表单类选择器：给元素塞 innerHTML = 真实 DOM 里把它们换成新元素（值自然清零）。 */
+const FORM_SELECTORS = ['[data-feed-input]', '[data-feed-ref-input]', '[data-feed-scope]'];
+
 function makeElement(tag = 'div') {
   const el = {
+    _handlers: [],
     tagName: tag.toUpperCase(),
     className: '',
     id: '',
@@ -46,23 +66,32 @@ function makeElement(tag = 'div') {
     _html: '',
     files: [],
     classList: {
-      add() {}, remove() {}, toggle() {}, contains: () => false,
+      _set: new Set(),
+      add(name) { this._set.add(name); },
+      remove(name) { this._set.delete(name); },
+      toggle(name, force) { if (force === undefined) { this._set.has(name) ? this._set.delete(name) : this._set.add(name); } else if (force) this._set.add(name); else this._set.delete(name); },
+      contains(name) { return this._set.has(name); },
     },
     get innerHTML() { return this._html; },
-    set innerHTML(value) { this._html = String(value); },
+    set innerHTML(value) {
+      this._html = String(value);
+      triggerRender(this, this._html);
+    },
     get outerHTML() { return this._html; },
     set outerHTML(value) { this._html = String(value); },
-    append() {}, appendChild() {}, remove() {}, removeChild() {},
+    append() {}, appendChild() {}, remove() { this._removed = true; }, removeChild() {},
     insertAdjacentHTML() {},
-    addEventListener(type) {
+    addEventListener(type, handler) {
+      this._handlers.push({ type, handler });
       const key = `${type}`;
       listeners.set(key, (listeners.get(key) ?? 0) + 1);
     },
     removeEventListener() {},
-    querySelector: () => makeElement(),
+    querySelector: (selector) => registered(selector),
     querySelectorAll: () => [],
     closest: () => null,
     contains: () => false,
+    matches: (selector) => { this._lastMatch = selector; return false; },
     focus() {}, blur() {}, click() {}, scrollTo() {},
     getBoundingClientRect: () => ({ width: 800, height: 600, top: 0, left: 0, right: 800, bottom: 600 }),
     getContext: () => ({
@@ -84,8 +113,42 @@ function makeElement(tag = 'div') {
   return el;
 }
 
+/**
+ * 「重画外壳」= 表单值清零。
+ *
+ * 真实 DOM 里 `app.innerHTML = '<textarea …></textarea>'` 会把旧的 textarea 换成新的空框，
+ * 用户正在写的字就没了。**这个 bug 类只有让「重画清空 value」才测得出来。**
+ * 假 DOM 不解析 HTML，所以用一个近似：重画的标记里出现过哪个表单选择器，就把谁的值清零。
+ *
+ * 只在**外壳容器**（`#app`）上触发：`syncPreview()` 那种给一个小方块塞 innerHTML 的动作
+ * 不会碰到别处的输入框，反过来做会造出真实浏览器里不存在的失败。
+ */
+let SHELL = null;
+let renderCount = 0;
+function triggerRender(element, html) {
+  if (element !== SHELL) return;
+  renderCount += 1;
+  for (const selector of FORM_SELECTORS) {
+    if (!html.includes(selector.slice(1, -1))) continue;
+    const node = elementRegistry.get(selector);
+    if (node) node.value = '';
+  }
+}
+
+/** 派发一个事件给某个元素上的监听器（假 DOM 不会自己冒泡，所以直接调）。 */
+function dispatch(element, type, target, extra = {}) {
+  for (const item of element._handlers ?? []) {
+    if (item.type !== type) continue;
+    item.handler({ type, target, preventDefault() {}, stopPropagation() {}, ...extra });
+  }
+}
+
+/** 等一拍：有些处理函数是 `fn().catch(...)` 形式派发的，没有 await。 */
+const settle = () => new Promise((resolve) => setTimeout(resolve, 30));
+
 const documentElement = makeElement('html');
 const app = makeElement('main');
+SHELL = app;
 const root = {
   documentElement,
   body: makeElement('body'),
@@ -93,7 +156,7 @@ const root = {
   createTextNode: (text) => ({ textContent: text }),
   querySelector: (selector) => {
     if (selector === '#app') return app;
-    return makeElement();
+    return registered(selector);
   },
   querySelectorAll: () => [],
   getElementById: (id) => (id === 'app' ? app : makeElement()),
@@ -228,11 +291,17 @@ const feedMod = () => import(pathToFileURL(join(ROOT, 'public', 'views', 'feed.j
 const view = (file) => import(pathToFileURL(join(ROOT, 'public', 'views', file)).href);
 
 const CASES = [
-  ['首页', 'feed.js', 'viewHome', [new Map()]],
-  ['版块', 'feed.js', 'viewBoard', ['general', new Map()]],
-  ['搜索', 'feed.js', 'viewSearch', [new Map()]],
+  // v2 首页 = 动态时间线
+  ['动态首页', 'timeline.js', 'viewTimeline', [new Map()]],
+  ['动态·我关注的', 'timeline.js', 'viewTimeline', [new URLSearchParams({ filter: 'following' })]],
+  ['动态·搜索', 'timeline.js', 'viewTimeline', [new URLSearchParams({ q: '采样' })]],
+  // v1 的帖子列表页：`#/` 已经不再走它们了，但函数还在、还能渲染，
+  // 所以继续测 —— 哪天要下线这批代码，删函数的同时把这四行一起删。
+  ['帖子列表（旧首页）', 'feed.js', 'viewHome', [new Map()]],
+  ['版块（已下线）', 'feed.js', 'viewBoard', ['general', new Map()]],
+  ['帖子搜索（旧）', 'feed.js', 'viewSearch', [new Map()]],
   ['收藏', 'feed.js', 'viewBookmarks', [new Map()]],
-  ['关注流', 'feed.js', 'viewFollowing', []],
+  ['关注流（旧）', 'feed.js', 'viewFollowing', []],
   ['个人主页', 'user.js', 'viewUser', ['admin', new Map()]],
   ['排行榜', 'user.js', 'viewRanking', [new Map()]],
   ['签到', 'checkin.js', 'viewCheckin', []],
@@ -281,10 +350,72 @@ if (!state.site || !Array.isArray(state.site.boards) || state.site.boards.length
 }
 if (!state.theme) problems.push('state.theme 没被初始化');
 
+/* ---------- 4. 交互：编辑框里的草稿必须扛得住外壳重画 ---------- */
+/*
+ * 为什么单独测这三条：动态首页的编辑框是**模块级状态 + 重画外壳**的组合，
+ * 而「点赞/取消编辑/保存/删除」都会走 `renderShell()`。
+ * 一旦状态漏同步，用户正在写的字就会在点一下别的按钮之后无声消失 ——
+ * 渲染类断言（上面 21 个页面）**永远发现不了**，因为渲染只关心有没有画出东西。
+ */
+{
+  const timeline = await view('timeline.js');
+  const input = registered('[data-feed-input]');
+  const scope = registered('[data-feed-scope]');
+  const refInput = registered('[data-feed-ref-input]');
+
+  // 假 DOM 不解析 HTML，所以「用户打字 / 选范围」用派发事件来模拟。
+  // 真实浏览器里 target 就是那个输入框（值在派发之前已经改好了），这里照做。
+  const fire = (element, type, selector, value) => {
+    element.value = value;
+    element.matches = (candidate) => candidate === selector;
+    dispatch(app, type, element);
+  };
+  fire(input, 'input', '[data-feed-input]', '半截草稿，还没写完');
+  fire(refInput, 'input', '[data-feed-ref-input]', '12');
+  fire(scope, 'change', '[data-feed-scope]', 'private');
+
+  if (input.value !== '半截草稿，还没写完') problems.push('草稿没有在 input 事件里同步进模块状态');
+  if (scope.value !== 'private') problems.push('可见范围没有在 change 事件里同步进模块状态');
+
+  // 重画一次外壳（viewTimeline 会先 renderShell() 再取数据）
+  await timeline.viewTimeline(new Map());
+
+  if (renderCount === 0) problems.push('整轮测试里一次外壳重画都没有触发，假 DOM 的近似没生效');
+  if (input.value !== '半截草稿，还没写完') problems.push(`外壳重画后草稿丢了（现在是 ${JSON.stringify(input.value)}）`);
+  if (scope.value !== 'private') problems.push(`外壳重画后可见范围回到了 ${JSON.stringify(scope.value)}`);
+  if (refInput.value !== '12') problems.push(`外壳重画后引用输入框里的编号丢了（现在是 ${JSON.stringify(refInput.value)}）`);
+  console.log(`  ${problems.length ? '❌' : '✅'} 交互：外壳重画后草稿 / 可见范围 / 引用编号都还在（重画 ${renderCount} 次）`);
+
+  /* ---- 引用帖子：用掉的编号不能留在框里，取消引用不能留下旧标题 ---- */
+  const refRow = registered('[data-feed-ref-row]');
+  const chip = registered('[data-feed-ref-chip]');
+
+  // 真实 DOM 里输入框就在这一行里面，假 DOM 得自己接上这个父子关系
+  refInput.closest = (selector) => (selector === '[data-feed-ref-row]' ? refRow : null);
+  fire(refInput, 'input', '[data-feed-ref-input]', '1');
+  refInput.closest = (selector) => (selector === '[data-feed-ref-row]' ? refRow : null);
+  dispatch(app, 'keydown', refInput, { key: 'Enter' });
+  await settle();
+
+  if (refInput.value !== '') problems.push(`引用确认之后编号还留在框里（现在是 ${JSON.stringify(refInput.value)}），下次重画就会冒出来`);
+  if (!String(chip.innerHTML).includes('引用')) problems.push('引用确认之后没看到那颗 chip');
+
+  // 点「取消引用」：chip 必须清空
+  const clearNode = { dataset: { feedAction: 'clear-ref' }, matches: () => false };
+  clearNode.closest = (selector) => (selector === '[data-feed-action]' ? clearNode : null);
+  dispatch(app, 'click', clearNode);
+  await settle();
+
+  if (String(chip.innerHTML).trim() !== '') {
+    problems.push(`点了「取消引用」之后 chip 里还留着 ${JSON.stringify(String(chip.innerHTML).slice(0, 40))}`);
+  }
+  console.log(`  ${problems.length ? '❌' : '✅'} 交互：引用确认后编号会腾空、取消引用后 chip 会清空`);
+}
+
 if (problems.length) {
   console.log('\n发现的问题：');
   for (const item of problems) console.log(`  ❌ ${item}`);
   process.exit(1);
 }
-console.log('  ✅ 18 个页面全部渲染通过，state 已就位');
+console.log(`  ✅ ${CASES.length} 个页面全部渲染通过，state 已就位`);
 process.exit(0);

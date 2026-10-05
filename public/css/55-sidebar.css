@@ -30,7 +30,7 @@
 
 .board-link.is-active {
   background: var(--accent-soft);
-  color: #cfe0ff;
+  color: var(--accent-fg);
 }
 
 .board-link .count {
@@ -98,7 +98,7 @@
 
 .hot-rank.top {
   background: var(--accent-soft);
-  color: #cfe0ff;
+  color: var(--accent-fg);
 }
 
 

@@ -94,18 +94,9 @@ function checkinCardHtml() {
       </div>
     </div>`;
 }
-function renderSidebar(activeBoardSlug = null) {
-  const boards = state.site.boards
-    .map(
-      (board) => `
-      <a class="board-link ${board.slug === activeBoardSlug ? 'is-active' : ''}" href="#/board/${esc(board.slug)}">
-        <span>${board.icon}</span>
-        <span>${esc(board.name)}</span>
-        <span class="count">${board.postCount}</span>
-      </a>`,
-    )
-    .join('');
-
+function renderSidebar() {
+  // v2：侧栏的「📚 板块」已经下线（论坛形态不再存在），换成一个动态流的快捷入口。
+  // 保留 `renderSidebar()` 这个无参签名，调用方不用改。
   const hot = state.site.hotPosts
     .map(
       (post, index) => `
@@ -150,8 +141,12 @@ function renderSidebar(activeBoardSlug = null) {
            </div>`
     }
     <div class="card card-tight">
-      <div class="card-head"><span class="card-title">📚 板块</span><a class="tag" href="#/">全部</a></div>
-      <div class="board-nav">${boards || '<div class="hint">暂无板块</div>'}</div>
+      <div class="card-head"><span class="card-title">🌊 动态</span><a class="tag" href="#/">去发一条</a></div>
+      <div class="side-links">
+        <a class="side-link" href="#/">🌍 全部动态</a>
+        <a class="side-link" href="#/?filter=following">👥 我关注的</a>
+        <a class="side-link" href="#/?filter=mine">📝 我的动态</a>
+      </div>
     </div>
     ${meCard}
     <div class="card card-tight">

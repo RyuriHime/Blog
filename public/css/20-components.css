@@ -133,7 +133,7 @@
 .btn.is-on {
   background: var(--accent-soft);
   border-color: var(--accent);
-  color: #cfe0ff;
+  color: var(--accent-fg);
 }
 
 /* ---------------- 标签 ---------------- */

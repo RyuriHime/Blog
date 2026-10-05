@@ -111,10 +111,28 @@ try {
   const postId = created.payload?.data?.post?.id ?? created.payload?.data?.id ?? 1;
   if (created.status !== 200) failures.push(`发帖失败：status=${created.status} ${JSON.stringify(created.payload)}`);
 
+  // 发一条动态，好让动态流的假数据里**真的有内容**。
+  // 空列表也能渲染，但「有内容的列表」才测得到作者、时间、引用卡片这些分支。
+  const feedItem = await call('POST', '/api/feed', {
+    content: '这是一条采样动态，带 $a^2+b^2=c^2$ 公式。',
+    scope: 'public',
+    refPostId: postId,
+  });
+  if (feedItem.status !== 200) {
+    failures.push(`发动态失败：status=${feedItem.status} ${JSON.stringify(feedItem.payload)}`);
+  }
+
   // 路径 → 要采集的请求。顺序无所谓，key 就是假 fetch 要匹配的路径。
+  // ⚠️ 动态这几条的 key 必须**逐字**等于 `public/views/timeline.js` 拼出来的查询串
+  // （`new URLSearchParams({ filter, page })`，q 只在有搜索词时才加），
+  // 差一个参数名就对不上，页面会走「加载失败」分支而看起来像代码坏了。
   const targets = [
     ['GET', '/api/site'],
     ['GET', '/api/auth/me'],
+    ['GET', '/api/feed?filter=all&page=1'],
+    ['GET', '/api/feed?filter=following&page=1'],
+    ['GET', '/api/feed?filter=mine&page=1'],
+    ['GET', '/api/feed?filter=all&page=1&q=采样'],
     ['GET', '/api/posts?page=1&sort=new'],
     ['GET', `/api/posts/${postId}`],
     ['GET', '/api/posts?board=general'],

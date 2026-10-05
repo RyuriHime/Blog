@@ -1,24 +1,52 @@
-// 动态（P1）—— 把「论坛板块 + 帖子 + 回复」换成一条时间线。
+// 动态模块（P1）：把「板块 + 帖子 + 回复」那套论坛形态换成一条时间线。
 //
-// 归属：动态本身、动态的点赞、动态的可见范围。
-// 不拥有：posts / replies / reactions（那是 core 的表，动态只是**引用**帖子）。
+//   owns  feed_items / feed_reactions   —— 只有两张表，别的表一律只读
+//   api   /api/feed/*                   —— 前缀不与任何已有接口重叠
 //
-// 现在这个文件是**空壳**：install() 里什么也不做，站点行为与 v1 完全一致。
-// 请在这里写你自己的东西，不要去改 src/modules/ 下别人文件夹里的文件。
+// ── 为什么表在 import 期登记，而不是在 install(ctx) 里 ──
+// 开库动作发生在 `src/server.js` 里（调用 `core/open-db.js` 导出的那个函数），
+// 那时 `schemas` 必须已经满员。
+// 所以这里的 `schemas.addScript(...)` 是模块顶层语句（副作用导入），
+// 和 `src/core/tables.sql.js` 用的是同一个套路。
+// 顺序：`src/server.js` 先 import `./store.js`（它 import `./db.js` → 登记 17 张 core 表），
+// 再 import `./modules/index.js`（登记本模块的两张表）—— 所以 `feed_items.user_id`
+// 引用 `users(id)` 时外键目标已经存在。
+// （注意：上面别写出「函数名 + 左括号」的字样，scripts/check-skeleton.mjs 用行正则
+//  查模块有没有偷偷自己开库，注释里出现那个样子也会被算成违规。）
+//
+// 加一块新功能就照这个文件抄：文件夹 + `src/modules/index.js` 一行，别处都不用动。
+import { schemas } from '../../core/schema.js';
+import { createFeedQueries } from './queries.js';
+import { registerFeedRoutes } from './routes.js';
+import { FEED_SCHEMA } from './schema.js';
+
+// 副作用：登记本模块的两张表（必须在 openDatabase 之前，见文件头注释）。
+schemas.addScript(FEED_SCHEMA, 'feed');
+
 export default {
   name: 'feed',
-  /** 新前缀。写完在这里登记路由，不要往 /api/posts 上加东西。 */
   apiPrefix: '/api/feed',
+  /** 本模块**拥有**的表。两张都是新增表，v1 的表一张都不动。 */
   owns: ['feed_items', 'feed_reactions'],
-  /** 会读、但不拥有的表（只读，不许写）。 */
-  reads: ['users', 'posts', 'follows', 'blocks', 'notifications'],
+  /**
+   * 会读、但不拥有的表（只读，绝不写）。
+   * `users` / `follows` / `blocks` / `posts` 用来做可见范围与引用卡片；
+   * `team_members` 归 P4，表存在时可见范围里的 `team` 档自动生效（不存在就跳过）。
+   */
+  reads: ['users', 'follows', 'blocks', 'posts', 'team_members'],
   install(ctx) {
-    // TODO(P1)：在这里建表、登记路由。
-    //   建表：ctx.schema.add('feed_items', `CREATE TABLE IF NOT EXISTS ...`, 'feed')
-    //         —— 表名必须在这个模块的 owns 数组里，否则 check-skeleton 会报错。
-    //   路由：ctx.routes.add('GET', '/api/feed', handler)
-    //         —— handler 拿到的 ctx 见 src/core/context.js；判登录用 ctx-guards。
-    //         注意：install() 拿到的 ctx 是**模块上下文**，与路由 handler 收到的请求 ctx 同名但不同物。
-    void ctx;
+    /**
+     * P4 还没建 `team_members` 时，`scope='team'` 的动态**谁也看不到**（包括作者以外的人）。
+     *
+     * 用「探测一次」而不是「写死 false」：P4 建好那张表以后，
+     * 这一档自动开始工作，不需要再回来改 P1 的代码 —— 五个人并行时这很重要。
+     * 用「谁也看不到」而不是「降级成公开」：宁可少显示，不能把私密内容漏出去。
+     */
+    const hasTeams = Boolean(
+      ctx.db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'team_members'").get(),
+    );
+
+    const queries = createFeedQueries(ctx.db, { hasTeams });
+    registerFeedRoutes(ctx, { queries });
   },
 };

@@ -34,8 +34,8 @@ const BUSINESS = ['feed', 'doc', 'ai', 'team', 'ui'];
  * 「owns 里声明的表都真的建了」就自动开始管它了。
  */
 const PLANNED_EMPTY = new Set([
-  'feed_items',
-  'feed_reactions',
+  // feed_items / feed_reactions 已由 P1（动态）落地建表，2026-10 从这里移除。
+  // 你要是看到这张清单少了什么，说明那块功能已经真的开工了 —— 这是设计如此。
   'documents',
   'document_blocks',
   'ai_capability_grants',

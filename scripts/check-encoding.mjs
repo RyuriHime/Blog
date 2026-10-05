@@ -25,7 +25,7 @@ const TARGETS = ['src', 'public', 'scripts', 'forum-ai/src', 'note-agent/src', '
  * 现在实测 155（多了 capture-fixtures.mjs 与 frontend-fixtures.json），同步抬到 155。
  * 这个数字存在的意义：前端文件被搬走却没同步检查脚本时，哨兵必须响。
  */
-const MIN_CHECKED = Number(process.env.MIN_CHECKED || 155);
+const MIN_CHECKED = Number(process.env.MIN_CHECKED || 162);
 
 /** 新布局里必须存在的关键文件。少一个就说明有人把文件搬走却没同步这份检查。 */
 const REQUIRED_FILES = [
@@ -72,15 +72,22 @@ const REQUIRED_FILES = [
   'public/views/feed.js',
   'public/views/graph.js',
   'public/views/notes.js',
+  'public/views/timeline.js',
+  'src/modules/feed/schema.js',
+  'src/modules/feed/queries.js',
+  'src/modules/feed/routes.js',
+  'src/modules/feed/shape.js',
   'public/css/00-themes.css',
   'public/css/10-base.css',
   'public/css/30-feed.css',
+  'public/css/31-timeline.css',
   // 前端冒烟与它的假数据（假数据是从真服务器采回来的，见 scripts/capture-fixtures.mjs）。
   'scripts/check-frontend.mjs',
   'scripts/capture-fixtures.mjs',
   'scripts/frontend-fixtures.json',
   'scripts/check-golden.mjs',
   'scripts/check-skeleton.mjs',
+  'scripts/feed-smoke.mjs',
 ];
 
 /**
@@ -120,7 +127,7 @@ const EXPECTED = [
   ['站长：建站者', ['src/db.js', 'src/core/open-db-support.js']],
 
   ['围炉论坛', ['public/index.html']],
-  ['搜索帖子标题或内容', ['public/index.html']],
+  ['搜索动态', ['public/index.html']],
   ['forum:theme', ['public/index.html']],
   ['首屏前应用背景主题', ['public/index.html']],
 
@@ -138,6 +145,17 @@ const EXPECTED = [
   ['正在压缩图片', ['public/core/events.js']],
   ['站长可以任命管理员', ['public/views/admin.js']],
   ['背景主题', ['public/core/theme.js', 'public/css/00-themes.css', 'public/css/76-theme-switch.css']],
+
+  // v2 动态系统（P1）。这些片段一头两用：既证明中文没被编码搞坏，
+  // 也证明**文件真的写进去了**（文件名在、内容空着的半成品一样会被抓住）。
+  ['说点什么', ['public/views/timeline.js']],
+  ['发布成功', ['public/views/timeline.js']],
+  ['引用了帖子', ['public/views/timeline.js']],
+  ['内联编辑框', ['public/css/31-timeline.css']],
+  ['冻结枚举', ['src/modules/feed/schema.js']],
+  ['SQL 占位符', ['src/modules/feed/queries.js']],
+  ['只能删除自己的动态', ['src/modules/feed/routes.js']],
+  ['拉黑之后看不到对方的公开动态', ['scripts/feed-smoke.mjs']],
 
   ['消息铃铛', ['public/css/75-social.css']],
   ['评价 / 投币按钮', ['public/css/75-social.css']],

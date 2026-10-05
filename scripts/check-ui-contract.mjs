@@ -29,7 +29,7 @@ const PORT = Number(process.env.CONTRACT_PORT || 3412);
 const BASE = `http://127.0.0.1:${PORT}`;
 
 /** 不下降哨兵：接手的模块只允许加，不允许把这些数字改小。 */
-const MIN_CHECKS = Number(process.env.MIN_UI_CHECKS || 185);
+const MIN_CHECKS = Number(process.env.MIN_UI_CHECKS || 200);
 
 /**
  * 前端源码入口清单。搬家前这三份文件在 public/ 根目录；骨架会把它们拆进
@@ -165,6 +165,90 @@ for (const match of swatchSource.matchAll(
     `预览 ${bg}/${panel}/${accent} vs CSS ${cssValue('--bg')}/${cssValue('--panel')}/${cssValue('--accent')}`,
   );
 }
+
+/* ---------- 1c. 浅色主题的可读性 ---------- */
+//
+// 用户报过「文字不适配亮色主题」：写死的浅色（#cfe0ff / #ffd479 / #dbe4f0 …）在
+// 暗色底上很好看，切到浅色底就和背景糊在一起。这种问题只有手动切主题才看得见，
+// 所以这里直接把它算出来 —— 对比度低于 4.5 就不算通过。
+
+/** '#rrggbb' → [r,g,b]；认不出来返回 null。 */
+function parseHex(value) {
+  const match = /^#([0-9a-fA-F]{6})$/.exec(String(value).trim());
+  if (!match) return null;
+  const n = Number.parseInt(match[1], 16);
+  return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+}
+
+/** 把可能带 alpha 的颜色摊在底色上，得到实际看到的颜色。 */
+function flatten(value, base) {
+  const text = String(value).trim();
+  const hex = parseHex(text);
+  if (hex) return hex;
+  const rgba = /^rgba?\(([^)]+)\)$/.exec(text);
+  if (!rgba) return null;
+  const parts = rgba[1].split(',').map((item) => Number(item.trim()));
+  if (parts.length < 3 || parts.slice(0, 3).some((item) => Number.isNaN(item))) return null;
+  const alpha = parts.length > 3 ? parts[3] : 1;
+  return [0, 1, 2].map((i) => Math.round(parts[i] * alpha + base[i] * (1 - alpha)));
+}
+
+function luminance(rgb) {
+  const channel = (value) => {
+    const s = value / 255;
+    return s <= 0.03928 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4;
+  };
+  return 0.2126 * channel(rgb[0]) + 0.7152 * channel(rgb[1]) + 0.0722 * channel(rgb[2]);
+}
+
+/** WCAG 对比度，1~21；算不出来返回 null。 */
+function contrast(fgValue, bgValue) {
+  const base = parseHex(bgValue) ?? flatten(bgValue, [255, 255, 255]);
+  if (!base) return null;
+  const fg = flatten(fgValue, base);
+  const bg = flatten(bgValue, base);
+  if (!fg || !bg) return null;
+  const a = luminance(fg);
+  const b = luminance(bg);
+  return (Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05);
+}
+
+/** 取某个主题里的变量值，没写就按 CSS 规则回退到 :root。 */
+function themeValue(key, name) {
+  const block = themeBlock(key) ?? '';
+  const pattern = new RegExp(`${name}:\\s*([^;]+);`);
+  const own = block.match(pattern);
+  if (own) return own[1].trim();
+  const root = rootBlock.match(pattern);
+  return root ? root[1].trim() : '';
+}
+
+// 只有浅底主题需要把「标签文字色」压深；暗底主题里这些值本来就是亮的，天然达标。
+for (const key of ['light', 'sand']) {
+  const bg = themeValue(key, '--bg');
+  for (const name of ['--text', '--text-dim', '--accent-fg', '--success-fg', '--warn-fg', '--danger-fg', '--violet-fg']) {
+    const ratio = contrast(themeValue(key, name), bg);
+    check(
+      `浅色主题「${key}」的 ${name} 在底色上看得清`,
+      ratio !== null && ratio >= 4.5,
+      `${name}=${themeValue(key, name)} on ${bg} → 对比度 ${ratio === null ? '算不出' : ratio.toFixed(2)}`,
+    );
+  }
+}
+
+// 写死的浅色文字只在暗底上成立。这类色值必须走变量，否则下次换主题又会糊。
+const BANNED_HARDCODED = [
+  '#cfe0ff', '#dbe4f0', '#b8f0d8', '#8ff0c4',
+  '#ffd479', '#ffe6b3', '#ffb4b4', '#ffc9c9', '#ffd9d9', '#c8b8ff',
+];
+const hardcodedOffenders = [...styleCss.matchAll(/^\s*color:\s*(#[0-9a-fA-F]{3,8})\s*;/gm)]
+  .filter((match) => BANNED_HARDCODED.includes(match[1].toLowerCase()))
+  .map((match) => match[0].trim());
+check(
+  '浅色小标签的文字色都走主题变量，没有写死的浅色',
+  hardcodedOffenders.length === 0,
+  hardcodedOffenders.slice(0, 5).join(' | '),
+);
 
 // 首屏内联脚本必须存在，并且用同一个 localStorage key（否则刷新会闪一下）
 const themeKeyInApp = (appJs.match(/const THEME_STORAGE_KEY = '([^']+)'/) ?? [])[1];
@@ -856,6 +940,9 @@ console.log(`通过 ${notes.length} 项（下限 ${MIN_CHECKS}），问题 ${pro
 for (const problem of problems) console.log(`  ❌ ${problem}`);
 if (problems.length) {
   console.log('\n服务器日志尾部（供排查）：');
-  console.log(readFileSync(LOG_FILE, 'utf8').slice(-1500));
+  // ⚠️ 必须 existsSync 兜一层：起服务器那步如果自己就失败了（端口被占、被沙箱拦），
+  // 日志文件根本不会生成，这里 readFileSync 会抛 ENOENT —— 那样「3 个问题」就变成
+  // 一个看不懂的堆栈，真正的失败原因反而被盖掉（踩过一次）。
+  console.log(existsSync(LOG_FILE) ? readFileSync(LOG_FILE, 'utf8').slice(-1500) : `（没有 ${LOG_FILE}）`);
 }
 process.exit(problems.length ? 1 : 0);

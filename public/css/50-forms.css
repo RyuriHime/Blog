@@ -73,7 +73,7 @@ textarea:focus {
 .form-error {
   background: rgba(255, 107, 107, 0.12);
   border: 1px solid rgba(255, 107, 107, 0.35);
-  color: #ffc9c9;
+  color: var(--danger-fg);
   border-radius: 10px;
   padding: 9px 12px;
   font-size: 13.5px;

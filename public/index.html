@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>围炉论坛 · 提问 / 分享 / 交流</title>
-    <meta name="description" content="一个轻量的中文技术论坛：板块分区、Markdown 发帖、搜索、点赞收藏与管理后台。" />
+    <meta name="description" content="围炉：以动态为首页的轻量社区。支持 Markdown 与 LaTeX、配图、可见范围与 @提醒。" />
     <!-- 样式入口只有一个：/style.css 里是 20 条 @import，按文件名前缀顺序拼回原来的级联顺序。
          静态分发从磁盘按路径读，所以 public/css/ 下的分片不需要在这里单独列出。 -->
     <link rel="stylesheet" href="/style.css" />
@@ -52,14 +52,14 @@
             id="search-input"
             type="search"
             name="q"
-            placeholder="搜索帖子标题或内容…"
+            placeholder="搜索动态…"
             autocomplete="off"
           />
         </form>
 
         <nav class="topnav">
           <div id="theme-area" class="theme-area"></div>
-          <a class="btn btn-primary btn-sm" href="#/new">✏️ 发帖</a>
+          <a class="btn btn-primary btn-sm" href="#/" title="回首页，编辑框就在最上面">✏️ 发动态</a>
           <div id="user-area" class="user-area"></div>
         </nav>
       </div>
@@ -71,7 +71,7 @@
     </div>
 
     <footer class="footer">
-      <span>围炉论坛 · 零依赖全栈示例</span>
+      <span>围炉 · 零依赖全栈示例</span>
       <span class="dot">·</span>
       <span>Node.js + node:sqlite + 原生前端</span>
     </footer>

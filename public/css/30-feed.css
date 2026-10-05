@@ -37,7 +37,7 @@
 
 .tab.is-active {
   background: var(--accent-soft);
-  color: #cfe0ff;
+  color: var(--accent-fg);
 }
 
 .post-list {
