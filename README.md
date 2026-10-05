@@ -560,9 +560,11 @@ note_documents(user_id, note_name, document_id, created_at)
 ```bash
 node scripts/check-golden.mjs      # ★ 行为金标准：96 条请求的状态码 + 响应结构，一条都不能变
 node scripts/check-skeleton.mjs    # ★ 骨架自检：模块能不能独立拆掉、薄入口有没有变胖
-node scripts/check-frontend.mjs    # ★ 前端渲染冒烟：18 个页面全部渲染一遍
+node scripts/check-frontend.mjs    # ★ 前端渲染冒烟：27 个页面全部渲染一遍 + 裸调用未定义名字的静态扫描
 node scripts/smoke.mjs             # 后端端到端：242 项（临时独立库+端口，跑完自动清理）
 node scripts/smoke-ai.mjs          # AI 接口端到端：61 项
+node scripts/feed-smoke.mjs        # 动态流端到端：95 项
+node scripts/doc-smoke.mjs         # 积木（可编程帖子）端到端：392 项
 node scripts/check-ui-contract.mjs # 前端契约：CSS 类名 + API 字段 + 主题/头像/角色/私信结构
 node scripts/check-encoding.mjs    # 源码编码体检：BOM / 乱码 / 关键中文内容
 node scripts/check-graph-ui.mjs    # 知识网络图 UI
@@ -572,12 +574,21 @@ node scripts/capture-fixtures.mjs  # 重采前端冒烟用的假数据（改了�
 node scripts/reset-db.mjs          # 清空数据库并重新播种
 ```
 
-一次跑完（`npm test` 就是这一串）：
+一次跑完（`npm test` 就是前 12 组）：
 
 ```
-check-encoding 162 文件 / 61 断言 · check-skeleton 47 项 · check-golden 96 项 0 差异
-check-frontend 21 个页面 · feed-smoke 95 · smoke 242 · smoke-ai 61 · check-ui-contract 200
-check-graph-ui 24 · check-notes-ui 33 · notes-smoke 44
+check-encoding 187 文件 / 77 断言 · check-skeleton 47 项 · check-golden 96 项 0 差异
+check-frontend 27 个页面 + 29 个模块静态扫描 · smoke 242 · smoke-ai 61 · feed-smoke 95
+doc-smoke 392 · check-ui-contract 210 · check-graph-ui 24 · check-notes-ui 33 · notes-smoke 44
+```
+
+另外四组在各自的包里，`npm test` 不带它们：
+
+```
+node note-studio/tests/run.mjs        # 学术笔记子系统
+node forum-ai/selftest.mjs            # AI 层：92 项
+node knowledge-pack/selftest.mjs      # 知识网络图计算：56 项
+npm run test:notes                    # AI 工作台抽屉：32 个文件 / 722 条断言
 ```
 
 **`check-golden.mjs` 是这套测试里最该先跑的一个**：它把 96 条固定请求的「状态码 + 响应 JSON 的键结构」
@@ -628,4 +639,66 @@ check-graph-ui 24 · check-notes-ui 33 · notes-smoke 44
 不要 import 隔壁模块的文件（模块之间只通过 `ctx` 通信，`check-skeleton.mjs` 会抓）。
 新增通知类型只需调用 `store.createNotification()`，并在 `public/core/session.js` 的 `NOTIF_META` 里补一条文案。
 **改完务必跑 `node scripts/check-golden.mjs`** —— 它保证你没顺手改坏现有页面。
+
+---
+
+## 10. 已知短板与还没做的
+
+这一节是**诚实的缺口清单**，不是路线图承诺。每条都写清现象和根因，方便想接手的人直接定位。
+
+### 10.1 积木帖子和帖子是两套东西，互动是断的（当前最大的缺口）
+
+**现象**：`#/doc/:id` 阅读页上**没有点赞 / 踩 / 投币 / 收藏 / 评论 / 转发**的按钮。
+只有一张卡片写着「👍 点赞 / 投币 / 收藏走的是它的互动锚点」，给一个「去帖子里互动」的链接，
+点过去会跳到 `#/post/:anchorPostId` —— 一个长得像旧帖子的页面，在那里才能互动。
+换句话说：**同一条内容有两个地址，一个是积木页（只能读），一个是帖子页（才能互动）。**
+
+**根因**：`documents` 和 `posts` 是两张表。所有互动（赞/踩/投币/收藏/通知/价值榜）都认 `posts.id`，
+所以建文档时会顺手插一条「影子行」当互动锚点（`src/modules/doc/anchor.js`）。
+但影子行有两条互相打架的硬约束：
+
+1. 它必须 `deleted = 0` —— 赞/踩走 `src/store.js` 的 `WHERE p.id = ? AND p.deleted = 0`，
+   投币走 `postRow` + `ensure(post && !post.deleted)`，`deleted = 1` 就找不到；
+2. 而 `deleted = 0` 的行**必然**被所有帖子列表收录（`src/store.js:412` 的 `buildFilter()` 第一句就是 `p.deleted = 0`），
+   只能靠 `hidden` 把自己藏起来，而 `hidden` 的语义是「非 staff 非作者 404」（`src/core/guards.js` 的 `assertPostVisible`）。
+
+于是 `src/modules/doc/anchor.js` 的 `anchorHidden(scope)` 只对 `scope === 'public'` 返回 0。
+**结果**：`followers` / `team` / `private` 可见的积木帖子，除了作者和 staff，**别人一点赞就 404**。
+这是登记在设计文档 §2.5 的已知短板，当时决定「不动 core」。
+
+**还有两个副作用**：
+
+- 公开的积木帖子会以「影子帖」的形态顺带出现在**首页动态流和全文搜索**里，标题与正文前 400 字是同步的
+  （`syncAnchor`）。所以同一篇内容在动态流里也能刷到，点进去却是帖子页而不是积木页。
+- 影子行的 `views` / `pinned` 是旧链路的财产，`syncAnchor` 刻意不重写这两列，
+  所以「积木页的阅读数」和「帖子页的阅读数」现在是两个不同的东西。
+
+**要修的话有两条路**（当时评估过，都没做）：
+
+- **改前端**（小）：在阅读页直接铺一条互动条，复用 `/api/posts/:id/like`、`/api/posts/:id/coin` 等既有接口，
+  拿 `doc.anchorPostId` 当目标。这解决「要跳页」，但**解决不了非公开档 404**。
+- **改 core**（大）：让 `buildFilter()` 与 `assertPostVisible()` 认识「文档的可见范围」，
+  或者干脆给非公开文档改成 `hidden = 1` 且允许作者以外的人对 `hidden = 1` 的行互动。
+  两条都会动到 `check-golden` 的 96 项指纹，所以必须谨慎重采。
+
+### 10.2 积木这一摊还没开发的
+
+按「影响从大到小」排：
+
+| 缺口 | 现状 |
+| --- | --- |
+| **积木没有自己的互动条** | 见 10.1；`#/docs` 广场、阅读页都没有赞/币/评/转入口 |
+| **AI 只在 Markdown 模式** | AI 抽屉挂在 Markdown 的 textarea 上（`createTextareaAdapter`）；块模式没有「让 AI 写一块」这种能力 |
+| **块类型撤不掉** | 注册接口 `POST /api/docs/meta/block-types` 对**所有登录用户**开放（记 `created_by`），但没有删除/停用接口，也没有管理后台界面 —— 注册错了只能改库 |
+| **沙箱能力只有四个** | 只有 `doc-meta` / `doc-blocks` / `viewer` / `state`。没有网络请求、没有跨文档读、也不能通过沙箱改文档内容（`POST /api/docs/:id/ops` 存在但沙箱没接） |
+| **块间联动只会取值** | `bind` 只支持「取另一块的某个字段来渲染」，没有条件、循环、计算 |
+| **保存没有冲突检测** | 保存是后写覆盖，没有 `If-Match` / 版本号；两个人同时编辑，后保存的那个赢 |
+| **没有实时协作** | 没有光标共享、没有在线状态、没有块级锁 |
+| **修订只有整体回滚** | `GET /api/docs/:id/revisions` 能列出历史，`POST .../rollback` 能整体回到某一版，但**没有逐行 diff 视图** |
+| **导入总是新建** | `POST /api/docs/meta/import` 每次都建一篇新文档，没有「按标题合并/覆盖」 |
+| **广场只有第一页** | 接口支持 `page` / `limit` / `sort`，前端只有搜索框 + 形态筛选 + 「只看我的」，**没有翻页器也没有排序选择器**（总篇数倒是显示了） |
+| **权限只到文档级** | 没有块级权限、没有「只允许某人编辑某一块」 |
+| **Wiki 还很薄** | 分类只有一级且不能重命名页面（改名 = 新建一页 + 软删旧的）、没有重定向、没有「谁链到我」的反向链接列表 |
+| **投票还很薄** | 没有截止时间、没有「投过才能看结果」的配置、没有匿名投票 |
+| **移动端只做了折行** | 窄屏是把两栏折成一栏，没有专门的小屏编辑体验 |
 
