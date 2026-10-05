@@ -94,7 +94,7 @@ document.addEventListener('click', async (event) => {
         Session.renderUserArea();
         Session.renderSidebar();
         toast('已退出登录', 'success');
-        navigate('/');
+        Router.navigate('/');
         break;
       }
       case 'reaction': {
@@ -327,7 +327,7 @@ document.addEventListener('click', async (event) => {
         await withButtonBusy(actionNode, () => api(`/api/posts/${postId}`, { method: 'DELETE' }));
         toast('帖子已删除', 'success');
         if (actionNode.dataset.back === 'admin') Router.route();
-        else navigate('/');
+        else Router.navigate('/');
         break;
       }
       case 'delete-reply': {
@@ -594,7 +594,7 @@ document.addEventListener('submit', async (event) => {
       );
       await Session.loadSession();
       toast(action === 'login' ? `欢迎回来，${result.user.displayName}` : '注册成功，欢迎加入 🎉', 'success');
-      navigate(state.redirect && state.redirect !== '/login' ? state.redirect : '/');
+      Router.navigate(state.redirect && state.redirect !== '/login' ? state.redirect : '/');
       state.redirect = '/';
       return;
     }
@@ -653,7 +653,7 @@ document.addEventListener('submit', async (event) => {
         : await withButtonBusy(submitButton, () => api('/api/posts', { method: 'POST', body }));
       await Session.loadSite();
       toast(postId ? '修改已保存' : '发布成功 🎉', 'success');
-      navigate(`/post/${result.id}`);
+      Router.navigate(`/post/${result.id}`);
       return;
     }
 
@@ -708,7 +708,7 @@ document.addEventListener('submit', async (event) => {
 ui.searchForm.addEventListener('submit', (event) => {
   event.preventDefault();
   const keyword = ui.searchInput.value.trim();
-  navigate(keyword ? `/search?q=${encodeURIComponent(keyword)}` : '/');
+  Router.navigate(keyword ? `/search?q=${encodeURIComponent(keyword)}` : '/');
 });
 document.addEventListener('keydown', (event) => {
   if (event.key === 'Escape') closeMenus();

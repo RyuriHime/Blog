@@ -50,14 +50,16 @@ src/
 public/
 ├── index.html           页面外壳（5 个挂载点：app / sidebar / user-area / search-input / toasts）
 ├── app.js               薄入口，44 行，只做 bootstrap
-├── style.css            只剩 20 行 @import（按文件名前缀顺序拼回原级联顺序）
-├── core/                前端核心层 11 个：state dom format preferences api theme avatar
-│                        events session widgets router
-├── views/               页面 13 个：feed user checkin settings notifications messages post
-│                        compose auth ai admin notes graph
-└── css/                 样式分片 20 个：00-themes 10-base 20-components 30-feed 40-post
-                         50-forms 55-sidebar 60-admin 65-helpers 70-responsive 75-social
-                         76-theme-switch 77-avatar 78-repost-ranking 80-checkin-profile
+├── style.css            只剩 25 行 @import（按文件名前缀顺序拼回原级联顺序）
+├── core/                前端核心层 12 个：state dom format preferences api theme avatar
+│                        events session widgets router sandbox
+│                        （sandbox.js = 沙箱宿主：消息白名单 / 看门狗 / 频率上限 / resize）
+├── views/               页面 15 个：feed user checkin settings notifications messages post
+│                        compose auth ai admin notes graph doc timeline
+│                        （+ doc-blocks.js = 积木编辑器的零件层，不是页面）
+└── css/                 样式分片 22 个：00-themes 10-base 20-components 30-feed 31-timeline
+                         40-post 41-doc 50-forms 55-sidebar 60-admin 65-helpers 70-responsive
+                         75-social 76-theme-switch 77-avatar 78-repost-ranking 80-checkin-profile
                          85-roles 88-messages 95-ai 96-graph 97-notes
 ```
 
@@ -144,7 +146,7 @@ ctx.log       日志
 | `ai_post_reviews` `ai_site_reports` | forum-ai（运行时自己建，不在核心建表清单里） |
 | `notes_*` | note-studio / note-agent |
 | `feed_items` `feed_reactions` | 🅿️ P1 |
-| `documents` `document_blocks` | 🅿️ P2 |
+| `documents` `document_blocks` `document_revisions` `doc_block_types` `doc_capability_logs` `note_documents` | 🅿️ P2 |
 | `ai_capability_grants` `ai_op_logs` | 🅿️ P3 |
 | `teams` `team_members` | 🅿️ P4 |
 
@@ -158,7 +160,7 @@ ctx.log       日志
 | 人 | 前缀 | 新目录 | 本地端口 | 新表 | 前端文件 |
 | --- | --- | --- | --- | --- | --- |
 | P1 动态 | `/api/feed/*` | `src/modules/feed/` | 3511 | `feed_items` `feed_reactions` | `public/views/feed2.js` 之类新文件 + `public/css/31-feed2.css` |
-| P2 可编程帖子 | `/api/docs/*` | `src/modules/doc/` | 3512 | `documents` `document_blocks` | `public/views/doc.js` + `public/css/41-doc.css` |
+| P2 可编程帖子 | `/api/docs/*` | `src/modules/doc/` | 3492 | `documents` `document_blocks` `document_revisions` `doc_block_types` `doc_capability_logs` `note_documents` | `public/views/doc.js` + `public/css/41-doc.css` |
 | P3 AI | `/api/ai/*` | `src/modules/ai/` | 3513 | `ai_capability_grants` `ai_op_logs` | `public/views/ai-edit.js` + `public/css/94-ai-edit.css` |
 | P4 团队 | `/api/teams/*` | `src/modules/team/` | 3514 | `teams` `team_members` | `public/views/team.js` + `public/css/86-team.css` |
 | P5 界面 | 不新增 | `src/modules/ui/` | 3515 | 无 | 随便改 `public/css/*`（**新功能别改，只改现有观感**） |

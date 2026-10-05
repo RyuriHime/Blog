@@ -1,6 +1,5 @@
 // 会话与站点数据：登录态、未读数、签到、币规则、消息未读。
 // 这些数据在多个视图里被读，所以读回来一律写进 core/state.js 的 state 对象。
-
 import { $, esc, toast, ui } from './dom.js';
 import { api } from './api.js';
 import { state } from './state.js';
@@ -14,7 +13,7 @@ function requireLogin(message) {
   if (state.me) return true;
   state.redirect = location.hash.replace(/^#/, '') || '/';
   toast(message || '请先登录', 'error');
-  navigate('/login');
+  Router.navigate('/login');
   return false;
 }
 
@@ -47,6 +46,7 @@ function renderUserArea() {
       <a class="menu-item" href="#/notifications">🔔 消息通知${state.unread > 0 ? ` <span class="menu-badge">${state.unread}</span>` : ''}</a>
       <a class="menu-item" href="#/following">👥 我的关注</a>
       <a class="menu-item" href="#/bookmarks">⭐ 我的收藏</a>
+      <a class="menu-item" href="#/docs">🧩 积木广场</a>
       <a class="menu-item" href="#/settings">⚙️ 账号设置</a>
       <a class="menu-item" href="#/new">✏️ 发布新帖</a>
       ${Fmt.isStaffUser(me) ? '<a class="menu-item" href="#/admin">🛠️ 管理后台</a>' : ''}
@@ -146,6 +146,13 @@ function renderSidebar() {
         <a class="side-link" href="#/">🌍 全部动态</a>
         <a class="side-link" href="#/?filter=following">👥 我关注的</a>
         <a class="side-link" href="#/?filter=mine">📝 我的动态</a>
+      </div>
+    </div>
+    <div class="card card-tight">
+      <div class="card-head"><span class="card-title">🧩 积木</span><a class="tag" href="#/docs">全部</a></div>
+      <div class="side-links">
+        <a class="side-link" href="#/docs">🧩 积木广场</a>
+        <a class="side-link" href="#/blocks">🧱 块类型表</a>
       </div>
     </div>
     ${meCard}

@@ -372,6 +372,12 @@ forum/
 | `#/search?q=关键词` | 全文搜索（标题 + 正文） |
 | `#/login`、`#/register` | 登录 / 注册 |
 | `#/admin` | 管理后台（仅管理员） |
+| `#/docs` | 积木广场：可编程帖子 / 笔记 / 主页文档的列表，支持 `?kind=` `?scope=` `?mine=1` `?q=` |
+| `#/doc/:id` | 积木阅读页：块渲染结果、降级警告、修订记录、导出/导入、赞/踩/投币/收藏（锚点走既有帖子接口） |
+| `#/doc/:id/edit` | 积木编辑器：逐块编辑、上下移动、Markdown 双向、`ops` 增量改动、套模板、回滚、沙箱开关 |
+| `#/doc/:id/blocks` | 同一个编辑器的高级入口（默认落在积木模式）：块列表 + 当前块的 props 表单 |
+| `#/blocks` | 块类型表：12 种内置块类型的声明式 schema 速查、「怎么自己编一个块」的指南 + 注册自己的块类型（可带渲染模板） |
+| `#/wiki/:name` | Wiki 多页面：`[[双链]]` 的落点；左侧是分类边栏（页内筛选 + 新建页，作者多一个「改分类」），有这一页就渲染它，没有就给「建这一页」（`?create=1` 一步进编辑器） |
 
 ---
 
@@ -429,6 +435,38 @@ forum/
 | POST | `/api/messages/:username` | 发私信（互关不限量 / 单向每天 1 条） | 登录 |
 | POST | `/api/admin/users/:id/role` | 任命 / 收回管理员（`role: 'admin'\|'member'`） | **仅站长** |
 | POST | `/api/admin/users/:id/ban` | 封禁 / 解封（立即踢掉该用户全部会话；不能封禁站长） | 站长/管理员 |
+| GET | `/api/docs` | 积木文档列表，支持 `kind` `scope` `mine=1` `q` `page` `limit` `sort` | 公开（按可见范围过滤） |
+| POST | `/api/docs` | 新建积木文档，body `{ title, kind, scope, template }`；`kind='profile'` 一个用户至多一份 | 登录 |
+| GET | `/api/docs/:id` | 文档详情：`{ doc, blocks, html, warnings, abilities }` | 按 scope |
+| PUT | `/api/docs/:id` | 改标题 / 可见范围 / 模板名 | 作者/管理员 |
+| DELETE | `/api/docs/:id` | 软删除文档并同步影子行 | 作者/管理员 |
+| POST | `/api/docs/:id/blocks` | 新增一块，body `{ type, props, after\|before\|position }` | 作者/管理员 |
+| PUT | `/api/docs/:id/blocks/:blockId` | 改一块的 props | 作者/管理员 |
+| DELETE | `/api/docs/:id/blocks/:blockId` | 删一块 | 作者/管理员 |
+| POST | `/api/docs/:id/blocks/:blockId/move` | 移动一块，body `{ after\|before }` | 作者/管理员 |
+| POST | `/api/docs/:id/reorder` | 整体重排，body `{ order: [blockId] }` | 作者/管理员 |
+| POST | `/api/docs/:id/ops` | 声明式增量改动，body `{ ops: [...] }`；返回 `{ applied, rejected }` | 作者/管理员 |
+| GET/PUT | `/api/docs/:id/markdown` | 文档 ⇄ Markdown（双向无损投影） | 读按 scope / 写作者 |
+| POST | `/api/docs/:id/apply-template` | 套模板，body `{ key, mode:'replace'\|'append' }` | 作者/管理员 |
+| GET | `/api/docs/:id/export` | 导出为 `forum-doc/1` 格式 JSON | 读按 scope |
+| GET | `/api/docs/:id/revisions` | 修订记录（保留最近 50 条） | 读按 scope |
+| POST | `/api/docs/:id/rollback` | 回滚到某一版，body `{ revision }` | 作者/管理员 |
+| POST | `/api/docs/:id/capabilities` | 沙箱块申请能力，body `{ blockId, capability, payload }`；能力限 `doc-meta` / `doc-blocks` / `viewer` / `state` 四种，放行与否都记审计 | 登录 |
+| GET | `/api/docs/:id/capabilities` | 沙箱能力调用审计（最近 `limit` 条） | 站长/管理员 |
+| POST | `/api/docs/:id/sandbox` | 开关沙箱，body `{ disabled }` | 站长/管理员 |
+| GET | `/api/docs/:id/polls` | 这篇文档里每个 `poll` 块的票数：`{ polls: { bN: { counts, total, voters, mine, multiple } } }`（0 票的块也有桶） | 读按 scope |
+| POST | `/api/docs/:id/blocks/:blockId/vote` | 投票，body `{ options: [...] }`（**提交完整选择集合**，不是增量）；再投即改票 | 登录 |
+| GET | `/api/docs/meta/templates` | 模板清单 + `kinds` + `scopes` 枚举（唯一真相） | 公开 |
+| GET | `/api/docs/meta/block-types` | 块类型清单（内置 12 种 ∪ 库里注册的），含声明式 schema | 公开 |
+| POST | `/api/docs/meta/block-types` | 注册自定义块类型（名字 `^[a-z][a-z0-9_]{0,31}$`，内置名与重名 409）；`rendererKind:'declarative'` 可带 `renderer:{html:'…{{字段}}…'}`（会剥掉 script/内联事件/`javascript:`），`'sandbox'` 则用 schema 里的 `code` 走玻璃房 | 登录 |
+| POST | `/api/docs/meta/import` | 按 `forum-doc/1` 格式导入一份新文档 | 登录 |
+| POST | `/api/docs/notes/import` | 把一篇笔记接成文档，body `{ name, title, markdown, scope }`；幂等 | 登录（只能导自己的） |
+| GET | `/api/docs/notes/lookup` | 按 `ownerId` + `name` 找笔记对应的文档；用 `{ found }` 标记而不是 404 | 按 scope |
+| GET | `/api/docs/profile/:username` | 按用户名找 `kind='profile'` 的主页文档；同样用 `{ found }` 标记 | 按 scope |
+| GET | `/api/docs/wiki` | wiki 目录：`{ pages, categories }`（只列当前用户看得见的页；没分类的排最后） | 公开（按可见范围过滤） |
+| GET | `/api/docs/wiki/:name` | 按标题找一页 wiki（`template='page'`），连同 `nav` 边栏一起回；看不见与不存在都回 `{ found:false }` | 按 scope |
+| POST | `/api/docs/wiki/:name` | 打开或**新建**一页 wiki（body `{ scope }`，默认 `public`）；返回 `created` 标记 | 登录 |
+| PUT | `/api/docs/:id/wiki` | 给一页 wiki 定分类与排序，body `{ category, sortOrder }`；回新的 `nav` | 作者/管理员 |
 
 ---
 
@@ -455,6 +493,20 @@ profile_categories(id, user_id, name, sort_order, created_at)
 moderation_logs(id, actor_id, action, target_type, target_id, target_label, reason, created_at)
 messages(id, sender_id, recipient_id, content, read_at, created_at)
 blocks(blocker_id, blocked_id, created_at)   -- 黑名单，主键 (blocker_id, blocked_id)
+
+-- 可编程帖子（积木，P2）：写在 src/modules/doc/，不放进 src/core/open-db-support.js
+documents(id, user_id, kind, title, scope, template, anchor_post_id,
+          sandbox_disabled, deleted, created_at, updated_at)   -- kind: post | note | profile
+document_blocks(id, document_id, block_id, type, type_version, position, props_json,
+                created_at, updated_at)   -- block_id 形如 b1，(document_id, block_id) 唯一；position 是 REAL，插中间取中点
+document_revisions(id, document_id, revision, blocks_json, reason, author_id, created_at)
+                    -- reason: create | edit | ops | template | import | rollback，每篇保留最近 50 条
+doc_block_types(name, version, label, icon, props_schema_json, renderer_kind, renderer_json,
+                created_by, created_at, updated_at)   -- 全局注册表，内置 12 种优先、不可被覆盖
+doc_capability_logs(id, document_id, block_id, capability, user_id, allowed, created_at)
+                    -- 沙箱能力调用的审计流水：被拒也记一行
+note_documents(user_id, note_name, document_id, created_at)
+                    -- 笔记子系统 ⇄ documents 的接线表，(user_id, note_name) 唯一
 ```
 
 设计要点：
@@ -466,6 +518,15 @@ blocks(blocker_id, blocked_id, created_at)   -- 黑名单，主键 (blocker_id, 
 - **投币/签到事务**：扣币、加币、记账包在 `BEGIN IMMEDIATE` 事务里，失败自动回滚。
 - **通知去重**：写通知前先查「同一 actor + 同一类型 + 同一对象 + 未读」是否存在，存在就跳过。
 - **分类归属校验**：只能把文章放进自己的分类，服务端逐次校验，前端下拉框只是便利。
+- **积木的影子行**：每份文档在 `posts` 里留一条只做互动锚点的行（`anchor_post_id`），赞/踩/投币/收藏/通知/价值榜因此**零改动**复用；`hidden` 由文档 scope 决定，`public` 的文档还会把标题与纯文本摘要同步过去，所以旧列表与搜索照样能用它。代价（已知短板）：`hidden=1` 的影子行对非站长非作者是 404，所以 `followers` / `team` 可见的文档，**别人点不了赞**。
+- **降级永不白屏**：块类型没注册、`props_json` 坏了、props 不合法、`bind` 成环、沙箱 2 秒没 `ready` —— 一律渲染成 `doc-block-unknown` 占位并往响应的 `warnings[]` 里记一条，绝不抛异常。
+- **沙箱是浏览器给的，不是自己写的**：`<iframe sandbox="allow-scripts">`（**不给** `allow-same-origin`）+ iframe 内 CSP `default-src 'none'`，服务端从不执行用户代码，只做转义与拼装；消息白名单只有 `ready` / `resize` / `value` / `request` 四种，能力调用逐条记审计。用户注册的沙箱块类型（`rendererKind:'sandbox'`）走的是同一个玻璃房，不是另一条路。
+- **JSON 是数据，JavaScript 才是行为**：`props` + schema 只负责「这块有哪些字段」（数据），凡是「这块要做什么」（行为）都写在 `app` 块的 `code` 里，跑在沙箱 iframe 中。沙箱里那套 `Sandbox` API 是真能落东西的：`Sandbox.props` / `inputs` / `value(v)` / `resize()` 之外，`Sandbox.doc()` 读文档元信息、`Sandbox.blocks()` 读正文里每一块（能「按别的块算点东西」）、`Sandbox.viewer()` 读正在看的人（不透明源里连「我登录了吗」都读不到，所以由宿主递进去）、`Sandbox.state.get(scope)` / `set(value, scope)` **把状态存到服务端**（`user` 作用域各人一份、`shared` 全站一份；写下要登录，读匿名也给）。每个 API 都是一次可审计的能力申请，白名单之外一律 403 且照样留一行 `allowed=0`。**记住 `request()` 成功时 resolve 的就是值本身**（失败才 reject），不要写 `if (r.ok)`。
+- **状态与内容分家**：投票的票落在 `doc_poll_votes`、沙箱状态落在 `doc_app_state`，**都不写回 `props`**。理由是同一条：`props` 是内容，改一次产生一条修订，把运行期数据写进去等于「作者改个选项 = 改掉所有人投的票」。两处都在块/文档被删时顺带清理，不留孤儿行。
+- **块是可编程的，而且是真能编的**：`POST /api/docs/meta/block-types` 注册的声明式类型如果带了 `renderer:{html:'…{{字段}}…'}`，渲染时就按它出 HTML（`{{字段}}` 一律转义，模板里的 `<script>` / 内联事件 / `javascript:` 在渲染那一步被剥掉——注册是登录用户就能做的，模板会出现在每个访客的页面上）；不带模板才退回「字段名 → 值」的表。块的底层形状只有三样：`{ block_id, type, version, props }`，Markdown 里就是一围栏 ` ```doc:<类型> `；每一块在编辑器里都能展开「源码」直接改 props JSON，`bind` 是唯一保留字段。
+- **Wiki 是有目录的多页面，不是一页带链接的帖子**：`template='page'` 标记「这一篇是 wiki 页」，`[[目标]]` 渲染成指向 `#/wiki/<标题>` 的真链接，`GET /api/docs/wiki/:name` 找页、`POST` 打开或**新建**（`[[还没写的页]]` 是正常用法），`PUT /api/docs/:id/wiki` 定分类与排序。`#/wiki/<标题>` 与 `#/doc/:id` 两个入口都会带回同一个 `nav` 边栏（分类分组 + 页内筛选 + 新建页；作者多一个「改分类」）——「有没有边栏」不该取决于用户从哪个链接点进来。边栏只列**当前用户看得见**的页：私有页不能因为名字出现在目录里而泄露存在性。双链在正文里怎么写都行：**独占一行**会被解析成一个 `wiki` 块（在 Markdown 往返里也是 `[[目标]]`），**夹在句子里**就是一个行内链接。
+- **投票块是真的能投的**：服务端把选项渲染成 `<button>` 而不是裸 `<li>`（键盘能 Tab、屏幕阅读器认得出这是一组选项），票数由 `GET /api/docs/:id/polls` 填、点击走 `POST …/vote`。提交的是**完整选择集合**而不是增量：单选换一个就是换掉原来那个，再点自己那项是撤销。
+- **公式复用站点原本那一套**：服务端只吐 `$…$` 原文，粘在积木页面与 Markdown 预览里的 `ntRenderMath(root)`（`public/views/notes.js` 的离线 KaTeX，`/notes/vendor/katex/**`）在 `innerHTML` 之后才排版 —— 与论坛动态那边完全同一条路，没有第二份数学渲染实现。**行间公式也一样**：`formula` 块渲染出 `$$…$$` 交给客户端 KaTeX，LaTeX 源码折叠在下面（排版失败时至少还看得到自己写了什么）。
 
 ### 从 v1.0 / v1.1 / v1.2 升级
 

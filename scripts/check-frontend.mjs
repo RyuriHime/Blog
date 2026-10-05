@@ -20,7 +20,7 @@
  *
  * 用法：node scripts/check-frontend.mjs
  */
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
@@ -226,6 +226,85 @@ const EXTRA = {
   '/api/markdown/preview': { html: '<p>ok</p>' },
   '/api/ai/site': { configured: false, ready: false },
   '/api/knowledge/status': { ready: false },
+  // 积木（doc 模块）的四个页面要用的接口。采集器还没采这几条 ——
+  // 手工给一小份真形状，渲染得出来就够了；接口形状改了就跟着改这里。
+  '/api/docs/meta/block-types': {
+    types: [
+      { name: 'heading', version: 1, label: '标题', icon: 'H', editor: 'text+level', builtin: true, rendererKind: 'declarative', schema: { text: { type: 'string', required: true, singleLine: true, maxLength: 300, label: '标题文字' }, level: { type: 'number', min: 1, max: 6, default: 1, label: '级别' } } },
+      { name: 'poll', version: 1, label: '投票', icon: '📊', editor: 'poll', builtin: true, rendererKind: 'declarative', schema: { question: { type: 'string', required: true, singleLine: true, maxLength: 200, label: '问题' }, options: { type: 'options', minItems: 2, maxItems: 10, label: '选项' }, multiple: { type: 'boolean', default: false, label: '可多选' } } },
+      { name: 'table', version: 1, label: '表格', icon: '▦', editor: 'table', builtin: true, rendererKind: 'declarative', schema: { rows: { type: 'rows', default: [], maxRows: 50, maxCols: 12, label: '表格' } } },
+    ],
+  },
+  '/api/docs/meta/templates': {
+    templates: [
+      { key: 'blank', title: '空白', description: '一块空正文' },
+      { key: 'wiki', title: '双链 wiki', description: '带修订记录的条目' },
+    ],
+    kinds: [
+      { value: 'post', label: '积木帖子' },
+      { value: 'note', label: '笔记' },
+      { value: 'profile', label: '个人主页' },
+    ],
+    scopes: [
+      { value: 'public', label: '公开' },
+      { value: 'followers', label: '仅关注我的人' },
+      { value: 'team', label: '仅团队' },
+      { value: 'private', label: '仅自己' },
+    ],
+  },
+  '/api/docs': {
+    total: 1,
+    page: 1,
+    limit: 20,
+    documents: [
+      {
+        id: 1,
+        kind: 'post',
+        kindLabel: '积木帖子',
+        title: '采样用的积木帖子',
+        scope: 'public',
+        scopeLabel: '公开',
+        template: 'wiki',
+        anchorPostId: FIXTURE_POST_ID,
+        author: { id: 1, username: FIXTURE_USERNAME, displayName: '站长', avatar: null, role: 'owner' },
+        createdAt: Date.now() - 86400000,
+        updatedAt: Date.now() - 3600000,
+        edited: true,
+      },
+    ],
+  },
+  '/api/docs/1': {
+    doc: {
+      id: 1,
+      kind: 'post',
+      kindLabel: '积木帖子',
+      title: '采样用的积木帖子',
+      scope: 'public',
+      scopeLabel: '公开',
+      template: 'wiki',
+      anchorPostId: FIXTURE_POST_ID,
+      sandboxDisabled: false,
+      deleted: false,
+      author: { id: 1, username: FIXTURE_USERNAME, displayName: '站长', avatar: null, role: 'owner' },
+      createdAt: Date.now() - 86400000,
+      updatedAt: Date.now() - 3600000,
+      edited: true,
+    },
+    blocks: [
+      { blockId: 'b1', type: 'heading', version: 1, props: { text: '采样标题', level: 2 } },
+      { blockId: 'b2', type: 'poll', version: 1, props: { question: '选哪个？', options: [{ id: 'o1', text: '甲' }, { id: 'o2', text: '乙' }], multiple: false } },
+    ],
+    html: '<div class="doc-block doc-block-heading" data-block-id="b1" data-block-type="heading"><h2>采样标题</h2></div>\n<div class="doc-block doc-block-unknown" data-block-id="b9" data-block-type="ghost">这一块降级了</div>',
+    warnings: [{ block_id: 'b9', code: 'unknown_type', message: '不认识的块类型：ghost' }],
+    abilities: { canView: true, canEdit: true, canReact: true, canCoin: true },
+  },
+  '/api/docs/1/markdown': { title: '采样用的积木帖子', markdown: '## 采样标题\n\n- 甲\n- 乙', updatedAt: Date.now() - 3600000 },
+  '/api/docs/1/revisions': {
+    revisions: [
+      { revision: 2, reason: 'edit', reasonLabel: '编辑', authorId: 1, author: { id: 1, username: FIXTURE_USERNAME, displayName: '站长' }, createdAt: Date.now() - 3600000 },
+      { revision: 1, reason: 'create', reasonLabel: '创建', authorId: 1, author: { id: 1, username: FIXTURE_USERNAME, displayName: '站长' }, createdAt: Date.now() - 86400000 },
+    ],
+  },
 };
 
 /**
@@ -315,6 +394,14 @@ const CASES = [
   ['注册页', 'auth.js', 'viewAuth', ['register']],
   ['AI 助手', 'ai.js', 'viewAI', []],
   ['管理后台', 'admin.js', 'viewAdmin', []],
+  // v2 积木（可编程帖子）的四个页面。正文 HTML 由后端出，这里测的是外壳会不会炸。
+  ['积木广场', 'doc.js', 'viewDocs', [new Map()]],
+  ['积木阅读页', 'doc.js', 'viewDoc', [1]],
+  ['积木编辑器', 'doc.js', 'viewDocEdit', [1, new Map()]],
+  ['积木 Markdown 模式', 'doc.js', 'viewDocEdit', [1, new Map([['mode', 'markdown']])]],
+  ['块类型表', 'doc.js', 'viewBlocks', []],
+  // 没建过的那一页：走的是「还不存在」分支（`found:false`），因此必渲染成一张建页卡。
+  ['Wiki 页面', 'doc.js', 'viewWiki', ['没建过的页', new Map()]],
 ];
 
 let rendered = 0;
@@ -410,6 +497,105 @@ if (!state.theme) problems.push('state.theme 没被初始化');
     problems.push(`点了「取消引用」之后 chip 里还留着 ${JSON.stringify(String(chip.innerHTML).slice(0, 40))}`);
   }
   console.log(`  ${problems.length ? '❌' : '✅'} 交互：引用确认后编号会腾空、取消引用后 chip 会清空`);
+}
+
+/* ---- 静态扫描：不许出现「裸调用一个既没 import、也没在本文件声明」的名字 ----
+ *
+ * 为什么加这一段：`public/core/events.js` 与 `public/core/session.js` 曾经只 `import * as Router`
+ * 却直接写 `navigate('/')`，于是「退出登录 / 登录成功 / 发帖成功 / 搜索」这四条路径一点就
+ * `navigate is not defined`。渲染测试全绿 —— 因为这几条路径只在**用户点了按钮**时才走到。
+ * 这类错误 lint 不跑就没人看得见，所以在这里钉住。
+ */
+{
+  const walkJs = (dir) =>
+    readdirSync(dir, { withFileTypes: true }).flatMap((entry) =>
+      entry.isDirectory() ? walkJs(join(dir, entry.name)) : [join(dir, entry.name)],
+    );
+
+  // 关键字不是函数名；浏览器/Node 内置的全局可以随便调。
+  const NOT_A_CALL = new Set([
+    'if', 'for', 'while', 'switch', 'catch', 'function', 'return', 'typeof', 'new', 'delete',
+    'await', 'case', 'do', 'else', 'in', 'of', 'void', 'yield', 'throw', 'super', 'this', 'async',
+  ]);
+  const BUILT_IN = new Set([
+    'document', 'window', 'console', 'fetch', 'JSON', 'Math', 'Object', 'Array', 'String', 'Number',
+    'Boolean', 'Promise', 'Set', 'Map', 'Date', 'Error', 'URL', 'URLSearchParams', 'setTimeout',
+    'clearTimeout', 'setInterval', 'clearInterval', 'requestAnimationFrame', 'cancelAnimationFrame',
+    'alert', 'confirm', 'prompt', 'isNaN', 'parseInt', 'parseFloat', 'encodeURIComponent',
+    'decodeURIComponent', 'localStorage', 'sessionStorage', 'navigator', 'IntersectionObserver',
+    'MutationObserver', 'WeakMap', 'Symbol', 'RegExp', 'Intl', 'queueMicrotask', 'structuredClone',
+    'CustomEvent', 'Event', 'FormData', 'Blob', 'FileReader', 'TextEncoder', 'btoa', 'atob',
+    'history', 'location', 'getComputedStyle', 'matchMedia', 'Image', 'Audio', 'Notification',
+    'Element', 'Function', 'globalThis', 'undefined', 'NaN', 'Infinity',
+  ]);
+
+  // 先把注释和字符串（含跨行模板串）整个抠掉，只留空格，行号才不会跑偏。
+  const blankOut = (source) =>
+    source
+      .replace(/\/\*[\s\S]*?\*\//g, (m) => m.replace(/[^\n]/g, ' '))
+      .replace(/\/\/[^\n]*/g, (m) => ' '.repeat(m.length))
+      .replace(/'(?:[^'\\\n]|\\.)*'/g, '""')
+      .replace(/"(?:[^"\\\n]|\\.)*"/g, '""')
+      .replace(/`(?:[^`\\]|\\.)*`/g, (m) => m.replace(/[^\n]/g, ' '));
+
+  const namesKnownTo = (source) => {
+    const known = new Set();
+    for (const m of source.matchAll(/import\s*(?:\*\s*as\s+([\w$]+)|\{([^}]*)\}|([\w$]+))\s*from/g)) {
+      if (m[1]) known.add(m[1]);
+      if (m[2]) for (const part of m[2].split(',')) {
+        const name = part.trim().split(/\s+as\s+/).pop().trim();
+        if (name) known.add(name);
+      }
+      if (m[3]) known.add(m[3]);
+    }
+    for (const m of source.matchAll(/\b(?:function|class|const|let|var)\s+([\w$]+)/g)) known.add(m[1]);
+    for (const m of source.matchAll(/\b(?:const|let|var)\s*\{([^}]*)\}/g)) {
+      for (const part of m[1].split(',')) {
+        const name = part.trim().split(':').pop().split('=')[0].trim();
+        if (name) known.add(name);
+      }
+    }
+    for (const m of source.matchAll(/\b(?:const|let|var)\s*\[([^\]]*)\]/g)) {
+      for (const part of m[1].split(',')) {
+        const name = part.trim().split('=')[0].trim();
+        if (name) known.add(name);
+      }
+    }
+    for (const m of source.matchAll(/function\s*[\w$]*\s*\(([^)]*)\)/g)) {
+      for (const part of m[1].split(',')) {
+        const name = part.trim().split('=')[0].trim().replace(/^\.\.\./, '');
+        if (name) known.add(name);
+      }
+    }
+    for (const m of source.matchAll(/\(([^()]*)\)\s*=>/g)) {
+      for (const part of m[1].split(',')) {
+        const name = part.trim().split('=')[0].trim().replace(/^\.\.\./, '');
+        if (name) known.add(name);
+      }
+    }
+    for (const m of source.matchAll(/([\w$]+)\s*=>/g)) known.add(m[1]);
+    return known;
+  };
+
+  let scanned = 0;
+  const publicDir = join(ROOT, 'public');
+  for (const file of walkJs(publicDir).filter((item) => item.endsWith('.js'))) {
+    const raw = readFileSync(file, 'utf8');
+    const known = namesKnownTo(raw);
+    const lines = blankOut(raw).split('\n');
+    scanned++;
+    lines.forEach((line, index) => {
+      for (const m of line.matchAll(/(?<![\w.$])([a-zA-Z_$][\w$]*)\s*\(/g)) {
+        const name = m[1];
+        if (NOT_A_CALL.has(name) || BUILT_IN.has(name) || known.has(name)) continue;
+        problems.push(
+          `${file.slice(ROOT.length + 1)}:${index + 1} 裸调用了 ${name}() —— 既没 import 也没在本文件声明，点到这条路径就会 ReferenceError`,
+        );
+      }
+    });
+  }
+  if (scanned < 25) problems.push(`只扫到 ${scanned} 个前端模块，文件枚举八成坏了（正常是二十九个）`);
+  console.log(`  ${problems.length ? '❌' : '✅'} 静态：${scanned} 个前端模块里没有「裸调用未定义的名字」`);
 }
 
 if (problems.length) {

@@ -11,6 +11,7 @@ import * as Ai from '../views/ai.js';
 import * as Auth from '../views/auth.js';
 import * as Checkin from '../views/checkin.js';
 import * as Compose from '../views/compose.js';
+import * as Doc from '../views/doc.js';
 import * as Events from './events.js';
 import * as Feed from '../views/feed.js';
 import * as Graph from '../views/graph.js';
@@ -86,6 +87,18 @@ async function route() {
     if (first === 'ai') return await Ai.viewAI();
     if (first === 'graph') return await Graph.viewGraph();
     if (first === 'notes') return await Notes.viewNotes();
+    // 积木（v2 可编程帖子）：`/doc/:id/edit` 与 `/doc/:id/blocks` 必须排在
+    // `/doc/:id` 前面，否则编辑页会被当成 id 是 "…/edit" 的文档（parts 里第三段会被丢掉）。
+    // 两个入口进的是同一个编辑器，只是默认落在哪个模式上；`?mode=markdown` 可覆盖。
+    if (first === 'docs') return await Doc.viewDocs(query);
+    if (first === 'blocks') return await Doc.viewBlocks();
+    if (first === 'doc' && second && parts[2] === 'edit') return await Doc.viewDocEdit(Number(second), query);
+    if (first === 'doc' && second && parts[2] === 'blocks') return await Doc.viewDocEdit(Number(second), query);
+    if (first === 'doc' && second) return await Doc.viewDoc(Number(second));
+    // Wiki 多页面：`[[双链]]` 指向 `#/wiki/<标题>`，没建过的页就在那里建。
+    // 不再 `decodeURIComponent` —— `parseHash` 已经把整条 hash 解过一次了，
+    // 再解一次会把标题里本来就有的 `%` 吃掉。标题里的 `/` 用 join 兜住。
+    if (first === 'wiki' && second) return await Doc.viewWiki(parts.slice(1).join('/'), query);
     if (first === 'ranking') return await User.viewRanking(query);
     if (first === 'settings') return await Settings.viewSettings();
     if (first === 'notifications') return await Notif.viewNotifications(query);

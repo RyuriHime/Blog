@@ -21,6 +21,19 @@ async function viewUser(username, query) {
   const toolsFor = isOwner ? (post) => Widgets.ownerToolsHtml(post, categories) : null;
   const categoryLimit = data.categoryLimit ?? Fmt.profileRules().categoryLimit;
 
+  // §8.2 积木优先：这位用户如果有一份 kind='profile' 的文档，主页正文就用它渲染。
+  // 任何一步失败都退回原来的「签名 + 帖子列表」—— 接线是「优先」，不是「替代」。
+  let profileDocHtml = '';
+  try {
+    const found = await api(`/api/docs/profile/${encodeURIComponent(user.username)}`);
+    if (found && found.found === true && found.html && !(found.doc && found.doc.deleted === true) && !(found.abilities && found.abilities.canView === false)) {
+      profileDocHtml = found.html;
+    }
+  } catch (error) {
+    profileDocHtml = '';
+  }
+  const hasProfileDoc = Boolean(profileDocHtml);
+
   const stats = [
     ['文章', user.postCount],
     ['回复', user.replyCount],
@@ -126,7 +139,10 @@ async function viewUser(username, query) {
         : ''
     }
 
-    <section class="card" style="padding:0">
+    ${
+      hasProfileDoc
+        ? `<section class="card doc-panel"><div class="doc-body">${profileDocHtml}</div></section>`
+        : `<section class="card" style="padding:0">
       <div class="card-head chips-head">
         <div class="chips">${chips}</div>
         <div class="tabs tabs-sm">${layoutTabs}</div>
@@ -142,7 +158,8 @@ async function viewUser(username, query) {
       <div class="profile-posts">
         ${Widgets.profilePostsHtml(otherPosts, { layout, toolsFor })}
       </div>
-    </section>
+    </section>`
+    }
 
     <section class="card">
       <div class="card-head"><span class="card-title">👥 关注者（${user.followerCount}）</span></div>

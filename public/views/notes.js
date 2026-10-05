@@ -234,11 +234,67 @@ async function ntMutate(path, method, successMessage) {
     ntState.busy = false;
   }
 }
+/**
+ * §8.1 积木优先：这一篇笔记如果已经长成了一份文档，就用文档渲染。
+ * 读的是 /api/docs/notes/lookup（笔记名 → 文档），失败一律返回 null 退回文件路径 ——
+ * 接线是「优先」而不是「替代」，老笔记一条都不能打不开。
+ */
+async function ntDocFor(ownerId, name) {
+  try {
+    const found = await api(
+      `/api/docs/notes/lookup?ownerId=${encodeURIComponent(ownerId)}&name=${encodeURIComponent(name)}`,
+    );
+    if (!found || found.found !== true || !found.doc) return null;
+    const data = await api(`/api/docs/${found.doc.id}`);
+    if (!data || !data.html) return null;
+    if (data.doc && data.doc.deleted === true) return null;
+    if (data.abilities && data.abilities.canView === false) return null;
+    const authorName = (data.doc.author && data.doc.author.username) || '';
+    return {
+      name,
+      title: (data.doc && data.doc.title) || name,
+      html: data.html,
+      markdown: '',
+      owner: { id: ownerId, name: authorName || String(ownerId) },
+      updatedAt: data.doc && data.doc.updatedAt,
+      readingMinutes: 1,
+    };
+  } catch (error) {
+    return null;
+  }
+}
+
+/**
+ * 打开自己公开出来的笔记时顺手把它导成一份文档（幂等，服务端只对变化写修订）。
+ * 失败不抛 —— 导入是加分项，不该挡住阅读。
+ */
+async function ntImportDoc(note, name) {
+  try {
+    await api('/api/docs/notes/import', {
+      method: 'POST',
+      body: {
+        name,
+        title: note.title || name,
+        markdown: note.markdown || '',
+        scope: note.public ? 'public' : 'private',
+      },
+    });
+  } catch (error) {
+    /* 导入失败退回文件路径，不打扰读者 */
+  }
+}
 async function ntOpenNote(ownerId, name) {
   ntState.busy = true;
   try {
     const note = await api(`/api/notes-square/${encodeURIComponent(ownerId)}/${encodeURIComponent(name)}`);
     if (!note || !note.html) throw new Error('这篇笔记已经不再公开了');
+    if (state.me && String(state.me.id) === String(ownerId)) await ntImportDoc(note, name);
+    const brick = await ntDocFor(ownerId, name);
+    if (brick) {
+      ntState.reading = brick;
+      ntRender();
+      return;
+    }
     ntState.reading = note;
     ntRender();
   } catch (error) {

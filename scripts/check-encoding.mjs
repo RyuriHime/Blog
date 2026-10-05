@@ -23,9 +23,10 @@ const TARGETS = ['src', 'public', 'scripts', 'forum-ai/src', 'note-agent/src', '
  * 骨架改造时实测的受检文件数。只许涨，不许跌。
  * 108 是「后端刚拆完」时的数；153 是前端拆迁 + 前端冒烟脚本进 scripts/ 之后的数；
  * 现在实测 155（多了 capture-fixtures.mjs 与 frontend-fixtures.json），同步抬到 155。
+ * 可编程帖子（P2）落地后实测 187，抬到 187。
  * 这个数字存在的意义：前端文件被搬走却没同步检查脚本时，哨兵必须响。
  */
-const MIN_CHECKED = Number(process.env.MIN_CHECKED || 162);
+const MIN_CHECKED = Number(process.env.MIN_CHECKED || 187);
 
 /** 新布局里必须存在的关键文件。少一个就说明有人把文件搬走却没同步这份检查。 */
 const REQUIRED_FILES = [
@@ -88,6 +89,32 @@ const REQUIRED_FILES = [
   'scripts/check-golden.mjs',
   'scripts/check-skeleton.mjs',
   'scripts/feed-smoke.mjs',
+  // 可编程帖子（P2，积木）：后端模块、块引擎、沙箱、页面、样式与它自己的冒烟脚本。
+  'src/modules/doc/schema.js',
+  'src/modules/doc/queries.js',
+  'src/modules/doc/routes.js',
+  'src/modules/doc/shape.js',
+  'src/modules/doc/store.js',
+  'src/modules/doc/visibility.js',
+  'src/modules/doc/anchor.js',
+  'src/modules/doc/templates.js',
+  'src/modules/doc/sandbox.js',
+  'src/modules/doc/blocks/index.js',
+  'src/modules/doc/blocks/types.js',
+  'src/modules/doc/blocks/registry.js',
+  'src/modules/doc/blocks/markdown.js',
+  'src/modules/doc/blocks/html.js',
+  'src/modules/doc/blocks/bind.js',
+  'src/modules/doc/blocks/ops.js',
+  'src/modules/doc/blocks/validate.js',
+  'src/modules/doc/blocks/agent.js',
+  'src/modules/doc/blocks/plain.js',
+  'src/modules/doc/blocks/text.js',
+  'public/core/sandbox.js',
+  'public/views/doc.js',
+  'public/views/doc-blocks.js',
+  'public/css/41-doc.css',
+  'scripts/doc-smoke.mjs',
 ];
 
 /**
@@ -171,6 +198,24 @@ const EXPECTED = [
   ['设置预设 emoji 头像成功', ['scripts/smoke.mjs']],
   ['角色与管理员分配', ['scripts/smoke.mjs']],
   ['单方面关注每天只能发一条', ['scripts/smoke.mjs']],
+
+  // 可编程帖子（P2，积木）：新模块与它的前端。
+  ['积木', ['src/modules/doc/schema.js']],
+  ['不认识的模板', ['src/modules/doc/store.js']],
+  ['只有管理员能开关沙箱', ['src/modules/doc/store.js']],
+  ['这篇笔记太长了', ['src/modules/doc/store.js']],
+  ['沙箱不能申请', ['src/modules/doc/store.js']],
+  ['doc 模块的 SQL 层', ['src/modules/doc/queries.js']],
+  ['笔记与个人主页的接线', ['src/modules/doc/routes.js']],
+  ['沙箱已被管理员禁用', ['src/modules/doc/sandbox.js']],
+  ['块类型注册表', ['src/modules/doc/blocks/registry.js']],
+  ['6 个内置模板', ['src/modules/doc/templates.js']],
+  ['积木广场', ['public/views/doc.js']],
+  ['块类型表', ['public/views/doc.js']],
+  ['这个积木还没写代码', ['src/modules/doc/sandbox.js']],
+  ['积木广场', ['public/core/session.js']],
+  ['端到端', ['scripts/doc-smoke.mjs']],
+  ['块引擎', ['scripts/doc-smoke.mjs']],
 ];
 
 function walk(target, files = []) {

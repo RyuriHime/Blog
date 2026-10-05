@@ -29,7 +29,7 @@ const PORT = Number(process.env.CONTRACT_PORT || 3412);
 const BASE = `http://127.0.0.1:${PORT}`;
 
 /** 不下降哨兵：接手的模块只允许加，不允许把这些数字改小。 */
-const MIN_CHECKS = Number(process.env.MIN_UI_CHECKS || 200);
+const MIN_CHECKS = Number(process.env.MIN_UI_CHECKS || 210);
 
 /**
  * 前端源码入口清单。搬家前这三份文件在 public/ 根目录；骨架会把它们拆进
@@ -96,6 +96,75 @@ check(
 );
 const missing = [...used].filter((name) => !defined.has(name));
 check('所有模板类名都在 style.css 中有定义', missing.length === 0, missing.join(', '));
+
+// 前端拼的是**字符串 HTML**，Markdown 的强调语法在这里不会被渲染 ——
+// 写进 innerHTML 的 `**加粗**` 会原样显示成两个星号（真机验收前踩到过：`#/blocks`
+// 页面上三处提示词带着字面的星号）。只扫真正会进 HTML 的行：
+// JS 注释与 HTML 注释（`<!-- … -->`，可能跨行）都不算。
+const strayEmphasis = [];
+for (const file of jsFiles) {
+  let inHtmlComment = false;
+  readFileSync(file, 'utf8')
+    .split('\n')
+    .forEach((raw, index) => {
+      let line = raw;
+      if (inHtmlComment) {
+        const close = line.indexOf('-->');
+        if (close === -1) return;
+        line = line.slice(close + 3);
+        inHtmlComment = false;
+      }
+      const open = line.indexOf('<!--');
+      if (open !== -1) {
+        const close = line.indexOf('-->', open);
+        if (close === -1) {
+          inHtmlComment = true;
+          line = line.slice(0, open);
+        } else {
+          line = line.slice(0, open) + line.slice(close + 3);
+        }
+      }
+      const trimmed = line.trim();
+      if (trimmed.startsWith('*') || trimmed.startsWith('//') || trimmed.startsWith('/*')) return;
+      if (!line.includes('<')) return;
+      if (!/\*\*[^*\n]+\*\*/.test(line)) return;
+      strayEmphasis.push(`${file.slice(ROOT.length + 1)}:${index + 1}: ${trimmed.slice(0, 100)}`);
+    });
+}
+check(
+  'HTML 字面量里没有 Markdown 的 **强调**（页面上会原样显示星号）',
+  strayEmphasis.length === 0,
+  strayEmphasis.join(' | '),
+);
+
+// 积木的**服务端**也会拼 HTML（`src/modules/doc/**`），那些类名不在 public/ 里，
+// 上面「所有模板类名都在 style.css 中有定义」那条扫不到它们 —— 于是四个类
+// （`.doc-block-warning` / `.doc-block-fields` / `.doc-block-tpl` / `.doc-poll-hint`）
+// 曾经一条 CSS 都没有：块降级时的「为什么降级」就是一句没有边框底色的灰字，
+// 真机验收被报成「警告渲染失效」。这里把服务端产出的类名也纳入同一份清单。
+// 只认字面量，跳过 `class="doc-block-${type}"` 这类拼接出来的名字。
+const docDir = join(ROOT, 'src', 'modules', 'doc');
+const docSources = existsSync(docDir) ? walk(docDir).filter((file) => file.endsWith('.js')) : [];
+const serverUsed = new Set();
+for (const file of docSources) {
+  for (const match of readFileSync(file, 'utf8').matchAll(/class="([^"]*)"/g)) {
+    for (const name of match[1].split(/\s+/)) {
+      if (name && !name.includes('${') && !name.includes('$')) serverUsed.add(name);
+    }
+  }
+}
+const serverMissing = [...serverUsed].filter((name) => !defined.has(name));
+// 真扫到了才断言，否则「0 个缺失」是假绿（改了目录结构就会变成这种）。
+check(
+  '确实扫到了服务端拼进页面的类名',
+  serverUsed.size >= 10,
+  `count=${serverUsed.size}`,
+);
+check(
+  '服务端产出的类名也都有 CSS（否则块降级提示、自定义块外壳会没有样式）',
+  serverMissing.length === 0,
+  serverMissing.join(', '),
+);
 
 // 前端有两种写法：原生 querySelector('#x') 与内部简写 $('#x')（= app.js 顶部的 $ 助手）。
 // 只认一种会让 idSelectors 直接变 0 —— 那样的「断言 0 条」也是假绿。
@@ -902,6 +971,66 @@ try {
     !(await dmB('/api/posts?perPage=30')).json.data.items.some((row) => row.author.username === dmAName),
   );
   check('解除拉黑', (await dmA(`/api/users/${idB}/block`, { method: 'POST', body: { blocked: false } })).json.data.blocked === false);
+
+  /* ---- 可编程帖子（积木）的对外契约 ---- */
+  const docTemplates = await dmA('/api/docs/meta/templates');
+  check(
+    '积木：模板清单给出 templates/kinds/scopes',
+    docTemplates.status === 200 &&
+      hasAll(docTemplates.json.data ?? {}, ['templates', 'kinds', 'scopes']) &&
+      docTemplates.json.data.templates.length === 7 &&
+      docTemplates.json.data.kinds.length === 3 &&
+      docTemplates.json.data.scopes.length === 4,
+    JSON.stringify(docTemplates.json).slice(0, 200),
+  );
+  const docTypes = await dmA('/api/docs/meta/block-types');
+  check(
+    '积木：块类型清单给出 12 种内置类型且带声明式 schema',
+    docTypes.status === 200 &&
+      docTypes.json.data?.types?.length === 12 &&
+      docTypes.json.data.types.every((type) => type.builtin === true && type.schema && typeof type.schema === 'object'),
+    JSON.stringify(docTypes.json).slice(0, 200),
+  );
+  const createdDoc = await dmA('/api/docs', {
+    method: 'POST',
+    body: { title: '契约用例', kind: 'post', scope: 'public', template: 'blank' },
+  });
+  check(
+    '积木：建文档返回 doc/blocks/html/warnings/abilities',
+    createdDoc.status === 200 &&
+      hasAll(createdDoc.json.data ?? {}, ['doc', 'blocks', 'html', 'warnings', 'abilities']) &&
+      hasAll(createdDoc.json.data.doc, ['id', 'kind', 'title', 'scope', 'anchorPostId', 'author', 'createdAt', 'updatedAt']) &&
+      hasAll(createdDoc.json.data.doc.author, ['id', 'username', 'displayName', 'avatar', 'role']) &&
+      hasAll(createdDoc.json.data.abilities, ['canView', 'canEdit', 'canReact', 'canCoin']) &&
+      typeof createdDoc.json.data.html === 'string' &&
+      createdDoc.json.data.html.includes('doc-block'),
+    JSON.stringify(createdDoc.json).slice(0, 300),
+  );
+  const listedDocs = await dmA('/api/docs?kind=post');
+  check(
+    '积木：列表接口返回 total/documents',
+    listedDocs.status === 200 &&
+      hasAll(listedDocs.json.data ?? {}, ['total', 'documents']) &&
+      Array.isArray(listedDocs.json.data.documents),
+    JSON.stringify(listedDocs.json).slice(0, 200),
+  );
+  check(
+    '积木：/api/docs/profile/:username 用 found 标记而不是 404',
+    (await dmA(`/api/docs/profile/${dmAName}`)).json.data?.found === false,
+  );
+  check(
+    '积木：/api/docs/notes/lookup 用 found 标记而不是 404',
+    (await dmA('/api/docs/notes/lookup?ownerId=1&name=nope')).json.data?.found === false,
+  );
+  const createdProfileDoc = await dmA('/api/docs', {
+    method: 'POST',
+    body: { title: '契约主页', kind: 'profile', scope: 'public', template: 'blank' },
+  });
+  check(
+    '积木：建了 profile 文档后按用户名查得到同一份',
+    createdProfileDoc.json.data?.doc?.kind === 'profile' &&
+      (await dmA(`/api/docs/profile/${dmAName}`)).json.data?.doc?.id === createdProfileDoc.json.data.doc.id,
+  );
 } catch (error) {
   problems.push(`契约检查异常：${error.message}`);
 } finally {
