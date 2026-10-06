@@ -29,7 +29,7 @@ const PORT = Number(process.env.CONTRACT_PORT || 3412);
 const BASE = `http://127.0.0.1:${PORT}`;
 
 /** 不下降哨兵：接手的模块只允许加，不允许把这些数字改小。 */
-const MIN_CHECKS = Number(process.env.MIN_UI_CHECKS || 242);
+const MIN_CHECKS = Number(process.env.MIN_UI_CHECKS || 245);
 
 /**
  * 前端源码入口清单。搬家前这三份文件在 public/ 根目录；骨架会把它们拆进
@@ -216,6 +216,19 @@ check('侧栏有「团队广场」入口', /class="side-link" href="#\/teams"/.t
 check(
   '团队入口和路由用的同一个地址',
   /href="#\/teams"/.test(appJs) && /first === 'teams'/.test(appJs),
+);
+
+// AI 编辑台（P3）同一个坑又差点踩一遍：路由 `#/ai-edit` 与 /api/ai-edit/* 都做好了，
+// 但顶栏和侧栏谁都不指向它，只能手打地址才进得去。入口挂在 AI 阅读助手的标题栏上
+// （`public/views/ai.js` 的 .ai-head-actions），这三条守住它别再掉。
+check('AI 阅读助手页有「AI 编辑台」入口', /href="#\/ai-edit"/.test(appJs));
+check(
+  'AI 编辑台入口和路由用的同一个地址',
+  /href="#\/ai-edit"/.test(appJs) && /first === 'ai-edit'/.test(appJs),
+);
+check(
+  'AI 编辑台不再用自造的块形状 { blockType, content }',
+  !/blockType/.test(appJs),
 );
 
 /* 团队第二批（成员管理 / 文件柜 / 群聊）的契约。

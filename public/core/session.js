@@ -28,7 +28,17 @@ function renderUserArea() {
     return;
   }
   const me = state.me;
+  // P5：AI 阅读助手 / 学术笔记 从侧栏「我的账户」搬到顶栏 —— user-area 紧跟在 topnav 里的
+  // 「✏️ 发动态」按钮后面，所以放在最前面就是「发动态的旁边」。
+  // 原本这里还有第三个「🕸 知识网络图」：知识网络图在 PR #5 里整条删除（路由、视图、样式分片、
+  // knowledge-pack 全没了），入口跟着去掉，否则顶栏会挂一个点了没反应的死链。
+  const quickLinks = `
+    <div class="top-links">
+      <a class="top-link" href="#/ai" title="AI 阅读助手">🤖<span class="top-link-text">AI 阅读助手</span></a>
+      <a class="top-link" href="#/notes" title="学术笔记">📓<span class="top-link-text">学术笔记</span></a>
+    </div>`;
   ui.userArea.innerHTML = `
+    ${quickLinks}
     <a class="bell" href="#/notifications" title="消息通知">
       🔔${state.unread > 0 ? `<span class="bell-badge">${state.unread > 99 ? '99+' : state.unread}</span>` : ''}
     </a>
@@ -39,6 +49,9 @@ function renderUserArea() {
       ${Avatar.avatarHtml(me, 'avatar-sm')}
       <span>${esc(me.displayName)}</span>
     </button>
+    <span class="coin-chip" title="可用币 · 签到可以领币，别人投给你的也会到账">
+      <span class="coin-chip-icon" aria-hidden="true">🪙</span><span class="coin-chip-value">${Fmt.fmtNum(me.coinBalance ?? 0)}</span>
+    </span>
     <div class="menu" id="user-menu" hidden>
       <a class="menu-item" href="#/u/${encodeURIComponent(me.username)}">👤 我的主页</a>
       <a class="menu-item" href="#/messages">✉️ 私信${state.messageUnread > 0 ? ` <span class="menu-badge">${state.messageUnread}</span>` : ''}</a>
@@ -110,24 +123,13 @@ function renderSidebar() {
     )
     .join('');
 
-  const meCard = state.me
-    ? `<div class="card card-tight">
-         <div class="card-head"><span class="card-title">🪙 我的账户</span></div>
-         <div class="coin-balance">
-           <span class="coin-value">${Fmt.fmtNum(state.me.coinBalance ?? 0)}</span>
-           <span class="hint">可用币 · 签到可以领币，别人投给你的也会到账</span>
-         </div>
-         <div class="side-links">
-           <a class="side-link" href="#/notifications">🔔 消息通知${state.unread > 0 ? ` <span class="menu-badge">${state.unread}</span>` : ''}</a>
-           <a class="side-link" href="#/following">👥 我的关注</a>
-           <a class="side-link" href="#/bookmarks">⭐ 我的收藏</a>
-           <a class="side-link" href="#/ai">🤖 AI 阅读助手</a>
-           <a class="side-link" href="#/notes">📓 学术笔记</a>
-           <a class="side-link" href="#/settings">⚙️ 账号设置</a>
-         </div>
-       </div>
-       ${checkinCardHtml()}`
-    : '';
+  // P5：侧栏「🪙 我的账户」卡片整体下线 ——
+  //   · 可用币                          → 搬到顶栏用户名右边（见 renderUserArea）
+  //   · AI 阅读助手 / 知识网络图 / 学术笔记 → 搬到顶栏「发动态」旁边
+  //   · 消息通知 / 我的关注 / 我的收藏 / 账号设置 → 在这里删除
+  //     （功能都还在：顶栏 🔔 铃铛进消息通知，用户菜单里四个入口一个不少）
+  //   · 签到卡保留：「轻」不等于「空」，签到、投币这些功能一个都不能砍。
+  const checkinCard = state.me ? checkinCardHtml() : '';
 
   ui.sidebar.innerHTML = `
     ${
@@ -164,7 +166,7 @@ function renderSidebar() {
         <a class="side-link" href="#/teams?mine=1">🙋 我加入的</a>
       </div>
     </div>
-    ${meCard}
+    ${checkinCard}
     <div class="card card-tight">
       <div class="card-head"><span class="card-title">📊 站点数据</span></div>
       <div class="stat-grid">

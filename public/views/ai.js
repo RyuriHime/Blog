@@ -164,6 +164,7 @@ async function viewAI() {
       <div class="card-head">
         <h1 style="font-size:21px">🤖 AI 阅读助手</h1>
         <div class="ai-head-actions">
+          <a class="btn btn-sm btn-ghost" href="#/ai-edit" title="选文档 → 选块 → 让 AI 改这一块，改完真的落盘，随时可回滚">🎛 AI 编辑台</a>
           ${isAdmin ? '<button class="btn btn-sm" type="button" data-action="ai-analyze-pending">⚡ 解读未整理的帖子</button>' : ''}
           ${isAdmin ? '<button class="btn btn-sm btn-primary" type="button" data-action="ai-site-analyze">🧭 重新整理全站</button>' : ''}
         </div>
