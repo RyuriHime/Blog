@@ -4,7 +4,7 @@
 `display: block`，见第 6 节）。
 接进去 = 加一个目录 + 追加 6 处代码；撤掉 = 删目录 + 撤这 6 处，不留痕。
 
-> 本文以"围炉论坛"这份 Node 原生 http 服务为例（它就是本包的第一个宿主）。
+> 本文以"格社"这份 Node 原生 http 服务为例（它就是本包的第一个宿主）。
 > 换成 Express / Koa / Fastify 也一样：**能拿到 `node:http` 的 `server` 实例**、
 > **有一个能按 `req` 认出用户的函数**、**有一个 `node:sqlite` 的 `DatabaseSync`**，就够了。
 

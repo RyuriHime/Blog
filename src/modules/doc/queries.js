@@ -108,7 +108,7 @@ export function createDocQueries(db) {
      * Wiki 用：按标题找一页。
      *
      * `template` 是「这一篇算不算 wiki 页」的标记（见 templates.js 的 `page`），
-     * 不传就只按标题找。标题按 NOCASE 比 —— `[[围炉]]` 与 `[[围炉 ]]` 得是同一页。
+     * 不传就只按标题找。标题按 NOCASE 比 —— `[[格社]]` 与 `[[格社 ]]` 得是同一页。
      */
     documentByTitle(title, template = null) {
       const where = ['d.title = ? COLLATE NOCASE', 'd.deleted = 0'];

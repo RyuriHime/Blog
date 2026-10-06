@@ -73,7 +73,7 @@ mountNoteAgent({ db, resolveUser, basePath: '/api/note-agent', quiet: false }).a
 // 7. 启动与优雅关闭。
 server.listen(PORT, HOST, () => {
   console.log('');
-  console.log('  🗣️  围炉论坛已启动');
+  console.log('  🗣️  格社已启动');
   console.log(`  → 本地访问: http://${HOST === '0.0.0.0' ? 'localhost' : HOST}:${PORT}`);
   console.log(`  → 数据库  : ${DB_FILE}`);
   console.log(`  → 已装模块: core${activeModules.length ? ' / ' + activeModules.join(' / ') : ''}`);

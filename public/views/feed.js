@@ -41,7 +41,7 @@ async function viewHome(query) {
   ui.app.innerHTML = loadingHtml();
   const hero = `
     <section class="hero">
-      <h1>围炉而坐，聊聊技术 👋</h1>
+      <h1>格物致知，聊聊技术 👋</h1>
       <p>分区讨论、Markdown 发帖、评价、关注作者，消息通知一个都不少。</p>
       <div class="hero-actions">
         <a class="btn btn-primary" href="#/new">✏️ 我要发帖</a>

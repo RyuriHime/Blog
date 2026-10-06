@@ -150,7 +150,7 @@ const REQUIRED_FILES = [
  * 允许给多个候选文件：骨架搬家后同一段文案可能落在不同的文件里。
  */
 const EXPECTED = [
-  ['围炉论坛已启动', ['src/server.js']],
+  ['格社已启动', ['src/server.js']],
   ['分类不存在或不属于你', ['src/core/shape.js']],
   ['只支持「赞」或「踩」', ['src/modules/core/routes-b.js']],
   ['把老的 likes 表迁进 reactions 后删除', ['src/core/open-db-support.js']],
@@ -178,7 +178,7 @@ const EXPECTED = [
   ['私信规则', ['src/core/open-db-support.js']],
   ['站长：建站者', ['src/db.js', 'src/core/open-db-support.js']],
 
-  ['围炉论坛', ['public/index.html']],
+  ['格社', ['public/index.html']],
   ['搜索动态', ['public/index.html']],
   ['forum:theme', ['public/index.html']],
   ['首屏前应用背景主题', ['public/index.html']],

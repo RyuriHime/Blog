@@ -4,7 +4,7 @@
  * 每个 handler 接收一个 context，返回 { status, body }，不碰 req/res，
  * 因此可以直接挂到原生 node:http，也可以包成 Express/Koa/Fastify 的中间件。
  *
- * 约定（与围炉论坛一致，宿主可按需改）：
+ * 约定（与格社一致，宿主可按需改）：
  *   成功 { ok: true, data }
  *   失败 { ok: false, error: { code, message } }
  *

@@ -221,7 +221,7 @@ export function registerDocRoutes(ctx, { store }) {
   });
 
   // GET 越权一律回 200 + `found:false`（不告诉陌生人「有这一页、只是你看不见」）；
-  // 标题按 NOCASE 比，`[[围炉]]` 与 `[[围炉 ]]` 是同一页。
+  // 标题按 NOCASE 比，`[[格社]]` 与 `[[格社 ]]` 是同一页。
   add('GET', '/api/docs/wiki/:name', async (reqCtx) => {
     const viewer = reqCtx.user;
     const page = store.getWikiPage({ name: readWikiName(reqCtx), viewer });

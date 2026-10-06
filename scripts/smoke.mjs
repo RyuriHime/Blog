@@ -134,7 +134,7 @@ try {
   );
   const home = await anon.call('/', { raw: true });
   const homeHtml = await home.text();
-  check('首页 HTML 正常返回', home.status === 200 && homeHtml.includes('围炉论坛'));
+  check('首页 HTML 正常返回', home.status === 200 && homeHtml.includes('格社'));
   const css = await anon.call('/style.css', { raw: true });
   check('样式表可访问', css.status === 200 && css.headers.get('content-type').includes('text/css'));
   const spa = await anon.call('/post/1', { raw: true });

@@ -449,7 +449,7 @@ function welcomeNotifications(db) {  const insert = db.prepare(
   );
   let created = 0;
   for (const user of db.prepare('SELECT id FROM users').all()) {
-    insert.run(user.id, '欢迎来到围炉论坛！先看看《论坛版规与发帖指南》，然后去发你的第一个帖子吧 🎉', Date.now());
+    insert.run(user.id, '欢迎来到格社！先看看《论坛版规与发帖指南》，然后去发你的第一个帖子吧 🎉', Date.now());
     created += 1;
   }
   return created;

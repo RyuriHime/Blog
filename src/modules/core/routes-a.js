@@ -38,7 +38,7 @@ export function registerRoutesA(route) {
     store.createNotification({
       userId: user.id,
       type: 'system',
-      excerpt: '欢迎来到围炉论坛！看看《论坛版规与发帖指南》，然后去发你的第一个帖子吧 🎉',
+      excerpt: '欢迎来到格社！看看《论坛版规与发帖指南》，然后去发你的第一个帖子吧 🎉',
     });
     ok(res_(ctx), { user: shapeUser(user) }, { 'Set-Cookie': sessionCookie(token) });
   });
