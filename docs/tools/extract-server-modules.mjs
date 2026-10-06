@@ -16,6 +16,10 @@
  *   - src/core/open-db.js —— 手工抽了 import 头，并加了循环 import 的说明
  *   - src/core/handler.js  —— 脚本只会切主体、不会补 import；手写版有完整的 import 头
  * 这两个文件由 writeIfGenerated() 保护，重复运行脚本不会覆盖它们。
+ *
+ * ⚠️ 历史脚本，**别再跑**：名单停留在搬家那一刻，里面的签到（`/api/checkin`、
+ *    `checkins` / `checkin_bonuses`）与价值排行（`/api/ranking`、`VALUE_WEIGHTS`）
+ *    都已随「删掉签到与价值排行」下线，照着跑会把删掉的路由与常量又切出来。
  */
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';

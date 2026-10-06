@@ -82,7 +82,6 @@ function reactionBarHtml(post) {
           : ''
       }
       <span class="spacer"></span>
-      ${post.valueScore !== undefined ? `<span class="value-chip" title="价值分由赞、投币、收藏、踩综合计算">⭐ 价值 ${post.valueScore}</span>` : ''}
       ${isAuthor ? `<a class="btn btn-sm" href="#/edit/${post.id}">✏️ 编辑</a>` : ''}
       ${
         state.me && Fmt.isStaffUser(state.me)
@@ -189,7 +188,7 @@ async function viewPost(id) {
                  <strong>这篇文章已被${post.hiddenBy && state.me && post.hiddenBy === state.me.id ? '你' : '管理团队'}隐藏</strong>
                  <div class="hint">
                    ${post.hiddenReason ? `原因：${esc(post.hiddenReason)} · ` : ''}
-                   隐藏期间普通访客访问会看到 404，且不出现在列表、搜索与排行榜里，只有作者本人和管理团队可见。
+                   隐藏期间普通访客访问会看到 404，且不出现在列表与搜索里，只有作者本人和管理团队可见。
                  </div>
                </div>
                ${

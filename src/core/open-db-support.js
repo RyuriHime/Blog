@@ -3,18 +3,17 @@
 //
 // 这里放的是「原来和 SCHEMA、openDatabase 挤在同一个文件里」的东西：
 //   SEED_BOARDS / SEED_USERS / 示例帖与回复数据 / migrate / seed / 六个 backfill*
-//   以及一堆规则常量（投币、签到、个人主页、私信、价值权重）。
+//   以及一堆规则常量（投币、个人主页、私信）。
 // 单独拆出来的理由是让依赖方向保持单向：
 //   db.js → core/open-db.js → core/open-db-support.js
 // 如果把这些函数和常量留在 db.js、再让 open-db.js 回头 import，就形成 db.js ↔ open-db.js 的循环 import。
 //
 // 这些常量在本文件被 export 之后，由 src/db.js 尾部再 re-export 一次
-// （DEFAULT_BOARDS / COIN_RULES / CHECKIN_RULES / PROFILE_RULES / POST_VALUE_WEIGHTS /
+// （DEFAULT_BOARDS / COIN_RULES / PROFILE_RULES /
 //   MESSAGE_RULES / ROLES / STAFF_ROLES），所以 src/store.js 等老调用方一行都不用改。
 import { DatabaseSync } from 'node:sqlite';
 import { hashPassword } from '../password.js';
 import { markdownToPlainText } from '../markdown.js';
-import { addDays, dayString, todayString, weekDays, weekStartOf } from '../dates.js';
 
 
 export const SEED_BOARDS = [
@@ -33,17 +32,13 @@ export const SEED_USERS = [
 ];
 
 /**
- * 投币经济：取消「每天补足」之后，币只从三个地方产生 ——
+ * 投币经济：取消「每天补足」之后，币只从两个地方产生 ——
  *   1) 注册赠送（下面这个常量，一次性）
- *   2) 每日签到（每天 +1，自然周全勤额外 +3）
- *   3) 别人给你的文章投的币（币会转进作者账户）
+ *   2) 别人给你的文章投的币（币会转进作者账户）
  * 所以币是真正稀缺的：不能自投、单帖最多 2 币，投出去就没了。
  */
 export const COIN_SIGNUP_GRANT = 10;
 export const COIN_PER_POST_LIMIT = 2;
-export const CHECKIN_DAILY_REWARD = 1;
-export const CHECKIN_WEEKLY_BONUS = 3;
-export const CHECKIN_FULL_WEEK_DAYS = 7;
 export const PROFILE_PIN_LIMIT = 3;
 export const PROFILE_CATEGORY_LIMIT = 8;
 
@@ -56,23 +51,6 @@ export const PROFILE_CATEGORY_LIMIT = 8;
  */
 export const MESSAGE_ONE_WAY_DAILY_LIMIT = 1;
 export const MESSAGE_MAX_LENGTH = 1000;
-
-/**
- * 文章价值权重（排行榜用）：
- *   D' = dislikeSoftCap · D / (D + dislikeSoftCap)         —— 踩的边际影响递减，最多相当于 dislikeSoftCap 次
- *   S  = like·赞 + coin·币 + bookmark·藏 − dislike·D'
- *   V  = 100 · S / (|S| + halfSaturation)                  —— 饱和映射，天然落在 (−100, 100)
- * 个人权重 W = Σ V（该用户所有未删除文章）。
- * 投币权重最高的理由：它最稀缺（每天 10 币、单帖上限 2 币、不能自投）。
- */
-export const VALUE_WEIGHTS = {
-  like: 1,
-  coin: 5,
-  bookmark: 3,
-  dislike: 3,
-  dislikeSoftCap: 3,
-  halfSaturation: 50,
-};
 
 const HOUR = 3600 * 1000;
 const DAY = 24 * HOUR;
@@ -411,7 +389,7 @@ export function seed(db) {
 }
 
 /* ------------------------------------------------------------------ */
-/* 个人主页分类 / 置顶 / 签到 的示例数据                                */
+/* 个人主页分类 / 置顶 的示例数据                                     */
 /* ------------------------------------------------------------------ */
 
 const SEED_CATEGORIES = {
@@ -445,27 +423,8 @@ export function backfillDemoAvatars(db) {
   return created;
 }
 
-/** 演示签到：上周全勤（便于展示全勤奖）+ 本周截至昨天。 */
-function seedCheckins(db, userId, now) {
-  const insert = db.prepare(
-    'INSERT OR IGNORE INTO checkins (user_id, day, reward, created_at) VALUES (?, ?, 1, ?)',
-  );
-  const today = todayString();
-  const thisWeekStart = weekStartOf(today);
-  const previousWeekStart = addDays(thisWeekStart, -7);
-  const days = [...weekDays(previousWeekStart)];
-  for (let day = thisWeekStart; day < today; day = addDays(day, 1)) days.push(day);
-
-  let created = 0;
-  for (const day of days) {
-    const info = insert.run(userId, day, now - 86400000);
-    created += Number(info.changes ?? 0);
-  }
-  return created;
-}
-
 /**
- * 给示例用户补上分类、主页置顶和签到记录，只在分类表为空时执行一次，
+ * 给示例用户补上分类与主页置顶，只在分类表为空时执行一次，
  * 所以从旧版本升级上来的库也会自动获得这些演示数据。
  */
 export function backfillProfileExtras(db) {
@@ -480,7 +439,6 @@ export function backfillProfileExtras(db) {
 
   let categories = 0;
   let pinned = 0;
-  let checkins = 0;
 
   for (const user of db.prepare('SELECT id, username FROM users ORDER BY id ASC').all()) {
     const names = SEED_CATEGORIES[user.username];
@@ -513,11 +471,9 @@ export function backfillProfileExtras(db) {
       pinPost.run(now - 3600 * 1000, posts[0].id);
       pinned += 1;
     }
-
-    checkins += seedCheckins(db, user.id, now);
   }
 
-  return { categories, pinned, checkins };
+  return { categories, pinned };
 }
 
 /** 给系统里每个用户发一条欢迎通知。 */

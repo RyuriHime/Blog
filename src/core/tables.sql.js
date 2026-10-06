@@ -1,9 +1,9 @@
 // 搬运自 src/db.js:8-201 的 SCHEMA 大字符串（预铺骨架，逐字未改，只去掉了外壳）。
-// 18 张 core 表：users / sessions / boards / posts / replies / reactions / coins /
-// bookmarks / follows / notifications / checkins / checkin_bonuses /
+// 16 张 core 表：users / sessions / boards / posts / replies / reactions / coins /
+// bookmarks / follows / notifications /
 // profile_categories / reposts / moderation_logs / messages / blocks。
 //
-// 这里是唯一还留着一大块 SQL 的地方。拆成 18 个文件并不划算：
+// 这里是唯一还留着一大块 SQL 的地方。拆成 16 个文件并不划算：
 // 它们之间靠外键互相引用，拆开只会让「按什么顺序建表」变得更难看出。
 // 各业务模块自己的表**不要**写在这里，走 schemas.add() 登记。
 import { schemas } from './table.js';
@@ -127,26 +127,6 @@ CREATE TABLE IF NOT EXISTS notifications (
 );
 CREATE INDEX IF NOT EXISTS idx_notifications_user ON notifications(user_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_notifications_unread ON notifications(user_id, read_at);
-
--- 每日签到（一天一行）
-CREATE TABLE IF NOT EXISTS checkins (
-  id         INTEGER PRIMARY KEY AUTOINCREMENT,
-  user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  day        TEXT    NOT NULL,
-  reward     INTEGER NOT NULL DEFAULT 1,
-  created_at INTEGER NOT NULL,
-  UNIQUE (user_id, day)
-);
-CREATE INDEX IF NOT EXISTS idx_checkins_user ON checkins(user_id, day DESC);
-
--- 全勤奖发放记录（同一用户同一周只发一次）
-CREATE TABLE IF NOT EXISTS checkin_bonuses (
-  user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  week_start TEXT    NOT NULL,
-  amount     INTEGER NOT NULL,
-  created_at INTEGER NOT NULL,
-  PRIMARY KEY (user_id, week_start)
-);
 
 -- 个人主页的文章分类（用户自建）
 CREATE TABLE IF NOT EXISTS profile_categories (

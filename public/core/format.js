@@ -31,32 +31,17 @@ const roleTag = (role) => {
   return '';
 };
 const coinRules = () => state.site.coinRules ?? { signupGrant: 10, perPostLimit: 2 };
-const checkinRules = () => state.site.checkinRules ?? { dailyReward: 1, weeklyBonus: 3, fullWeekDays: 7 };
 const profileRules = () => state.site.profileRules ?? { pinLimit: 3, categoryLimit: 8 };
-
-/** YYYY-MM-DD → 周一…周日 */
-function weekdayCn(day) {
-  const date = new Date(`${day}T00:00:00`);
-  if (Number.isNaN(date.getTime())) return '·';
-  return ['一', '二', '三', '四', '五', '六', '日'][(date.getDay() + 6) % 7];
-}
-function monthDayCn(day) {
-  const parts = String(day).split('-');
-  return parts.length === 3 ? `${Number(parts[1])}/${Number(parts[2])}` : day;
-}
 
 // ── 导出 ──────────────────────────────────────────────────────────────
 export { timeAgo };
 export { fullTime };
 export { fmtNum };
-export { weekdayCn };
-export { monthDayCn };
 export { isStaffRole };
 export { isStaffUser };
 export { roleLabel };
 export { roleTag };
 export { coinRules };
-export { checkinRules };
 export { profileRules };
 
 /* @hand-written */

@@ -309,24 +309,12 @@ table.data th {
 }
 
 @media (max-width: 900px) {
-  .checkin-hero {
-    flex-direction: column;
-  }
-
-  .checkin-stats {
-    width: 100%;
-  }
-
   .post-cards {
     grid-template-columns: minmax(0, 1fr);
   }
 
   .compact-title {
     white-space: normal;
-  }
-
-  .week-grid {
-    gap: 5px;
   }
 }
 

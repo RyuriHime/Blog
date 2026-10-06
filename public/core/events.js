@@ -10,7 +10,6 @@ import { apiErrorText, toastError } from './errors.js';
 import { state } from './state.js';
 import * as Admin from '../views/admin.js';
 import * as Ai from '../views/ai.js';
-import * as Checkin from '../views/checkin.js';
 import * as Compose from '../views/compose.js';
 import * as Fmt from './format.js';
 import * as Message from '../views/messages.js';
@@ -128,20 +127,6 @@ document.addEventListener('click', async (event) => {
         }
         break;
       }
-      case 'checkin': {
-        if (!Session.requireLogin('登录后才能签到')) break;
-        const result = await withButtonBusy(actionNode, () => api('/api/checkin', { method: 'POST' }));
-        state.checkin = result;
-        if (state.me) state.me.coinBalance = result.coinBalance;
-        Session.renderUserArea();
-        Session.renderSidebar();
-        const bonusText = result.bonus > 0 ? `，全勤奖 +${result.bonus} 币 🎁` : '';
-        toast(`签到成功 +${result.reward} 币${bonusText}，当前 ${result.coinBalance} 币`, 'success');
-        const { path } = Router.parseHash();
-        if (path === '/checkin') await Checkin.viewCheckin();
-        else if (path === '/settings') await Settings.viewSettings();
-        break;
-      }
       case 'toggle-category-form': {
         event.preventDefault();
         const categoryForm = document.querySelector('form[data-action="create-category"]');
@@ -242,7 +227,7 @@ document.addEventListener('click', async (event) => {
         if (result.myCoins >= limit) {
           Compose.lockCoinButton(actionNode, `这篇帖子你已经投满 ${limit} 币了`, hint);
         } else if (result.balance <= 0) {
-          Compose.lockCoinButton(actionNode, '币不够了：去「每日签到」领币，或等别人给你的文章投币', hint);
+          Compose.lockCoinButton(actionNode, '币不够了：等别人给你的文章投币，攒够了再来', hint);
         }
 
         Session.renderSidebar();

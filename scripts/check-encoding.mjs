@@ -31,6 +31,8 @@ const TARGETS = ['src', 'public', 'scripts', 'forum-ai/src', 'note-agent/src', '
  * AI 编辑台（P3：public/views/ai-edit.js、public/css/94-ai-edit.css、scripts/ai-smoke.mjs
  * 三个新文件）合进来之后实测 193，抬到 193。
  * 这个数字存在的意义：前端文件被搬走却没同步检查脚本时，哨兵必须响。
+ * 删掉签到功能时 `public/views/checkin.js` 整个文件被删，受检数从 195 落到 194：
+ * 这是**故意的减一**，所以下限跟着降到 194；片段断言也同步删掉了签到 / 排行榜那几条。
  */
 const MIN_CHECKED = Number(process.env.MIN_CHECKED || 194);
 
@@ -147,16 +149,13 @@ const EXPECTED = [
   ['围炉论坛已启动', ['src/server.js']],
   ['不能给自己的帖子投币', ['src/core/shape.js']],
   ['只支持「赞」或「踩」', ['src/modules/core/routes-b.js']],
-  ['每日签到', ['src/core/open-db-support.js']],
-  ['排行榜', ['src/store.js']],
+  ['投币经济', ['src/core/open-db-support.js']],
   ['头像：预设 emoji 或上传图片', ['src/core/sessions.js']],
   ['需要管理团队身份', ['src/core/guards.js']],
   ['黑名单', ['src/store.js']],
 
   ['数据访问层', ['src/store.js']],
   ['已取消「每天补足」机制', ['src/store.js']],
-  ['签到：+1 币', ['src/store.js']],
-  ['文章价值榜', ['src/store.js']],
   ['隐藏 / 取消隐藏', ['src/store.js']],
   ['互相关注', ['src/store.js']],
   ['私信', ['src/store.js']],
@@ -186,7 +185,6 @@ const EXPECTED = [
   //    仍保留 `public/app.js` 当候选是没用的 —— 它现在只是个 44 行的装配文件。
   ['消息通知', ['public/core/session.js', 'public/views/feed.js', 'public/views/user.js']],
   ['投币成功，感谢支持作者', ['public/core/events.js']],
-  ['价值排行榜', ['public/core/session.js', 'public/views/user.js']],
   ['转发会出现在你的主页', ['public/views/post.js']],
   ['跟随系统', ['public/core/theme.js', 'src/core/open-db-support.js']],
   ['暖阳', ['public/core/theme.js', 'public/css/00-themes.css']],
@@ -208,15 +206,13 @@ const EXPECTED = [
 
   ['消息铃铛', ['public/css/75-social.css']],
   ['评价 / 投币按钮', ['public/css/75-social.css']],
-  ['转发按钮与转发区', ['public/css/78-repost-ranking.css']],
+  ['转发按钮与转发区', ['public/css/78-repost.css']],
   ['暖阳：琥珀黄深色', ['public/css/00-themes.css']],
   ['头像设置', ['public/css/77-avatar.css']],
   ['角色与内容管理', ['public/css/85-roles.css']],
   ['私信与黑名单', ['public/css/88-messages.css']],
 
   ['端到端冒烟测试', ['scripts/smoke.mjs']],
-  ['每日签到', ['scripts/smoke.mjs']],
-  ['价值排行榜', ['scripts/smoke.mjs']],
   ['设置预设 emoji 头像成功', ['scripts/smoke.mjs']],
   ['角色与管理员分配', ['scripts/smoke.mjs']],
   ['单方面关注每天只能发一条', ['scripts/smoke.mjs']],

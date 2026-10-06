@@ -55,8 +55,6 @@ function shapePostListRow(row) {
     hiddenAt: row.hidden_at ?? null,
     hiddenReason: row.hidden_reason ?? '',
     hiddenBy: row.hidden_by ?? null,
-    baseScore: row.base_score === undefined ? undefined : Number(Number(row.base_score).toFixed(2)),
-    valueScore: row.value_score === undefined ? undefined : Number(Number(row.value_score).toFixed(2)),
     pinned: Boolean(row.pinned),
     locked: Boolean(row.locked),
     createdAt: row.created_at,
@@ -163,7 +161,6 @@ const shapeProfile = (row, extra = {}) => ({
   followingCount: Number(row.following_count ?? 0),
   likesReceived: Number(row.likes_received ?? 0),
   dislikesReceived: Number(row.dislikes_received ?? 0),
-  coinsReceived: Number(row.coins_received ?? 0),
   bookmarkCount: Number(row.bookmark_count ?? 0),
   ...extra,
 });
@@ -277,7 +274,7 @@ function coinAvailability(post, viewer) {
       ...common,
       available: false,
       reason: 'insufficient_coins',
-      message: '币不够了：去「每日签到」领币（每天 1 币，全勤再 +3），或等别人给你的文章投币',
+      message: '币不够了：等别人给你的文章投币，攒够了再来',
     };
   }
   return {

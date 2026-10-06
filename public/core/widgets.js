@@ -186,34 +186,6 @@ function personChipHtml(person, { unfollow = false, follow = false } = {}) {
       }
     </div>`;
 }
-const RANKING_WINDOWS = [
-  ['all', '全部时间'],
-  ['30', '近 30 天'],
-  ['7', '近 7 天'],
-];
-
-/** 前三名用金银铜徽标（写成函数，避免在 class 里嵌套模板字符串） */
-const rankBadgeClass = (index) => (index < 3 ? `top-${index + 1}` : '');
-function formulaCardHtml(weights) {
-  const w = weights ?? { like: 1, coin: 5, bookmark: 3, dislike: 3, dislikeSoftCap: 3, halfSaturation: 50 };
-  return `
-    <section class="card formula-card">
-      <div class="card-head"><span class="card-title">🧮 权重是怎么算的</span></div>
-      <div class="formula">
-        <div class="formula-line"><span class="formula-tag">①</span> 踩的软化：<code>D' = ${w.dislikeSoftCap}·踩 / (踩 + ${w.dislikeSoftCap})</code> —— 踩越多边际影响越小，最多相当于 ${w.dislikeSoftCap} 次踩</div>
-        <div class="formula-line"><span class="formula-tag">②</span> 基础分：<code>S = ${w.like}·赞 + ${w.coin}·币 + ${w.bookmark}·收藏 − ${w.dislike}·D'</code></div>
-        <div class="formula-line"><span class="formula-tag">③</span> 文章价值：<code>V = 100·S / (|S| + ${w.halfSaturation})</code> —— 饱和映射，天然落在 −100 ~ +100</div>
-        <div class="formula-line"><span class="formula-tag">④</span> 个人权重：<code>W = Σ V</code>（该作者所有未删除文章的价值之和）</div>
-      </div>
-      <div class="hint" style="margin-top:10px;line-height:1.9">
-        为什么投币权重最高（${w.coin}）：它最稀缺——注册只送 ${Fmt.coinRules().signupGrant} 币，之后只能靠签到（每天 1 币）和别人的投币获得，单帖最多 ${Fmt.coinRules().perPostLimit} 币，还不能自投；
-        收藏（${w.bookmark}）代表"以后还要回来看"，强于点赞（${w.like}）；
-        踩（${w.dislike}）通过软化函数避免围攻把一篇文章直接打成负无穷；
-        半饱和点 ${w.halfSaturation} 让分数有界且边际递减——S=${w.halfSaturation} 时恰好 50 分，S=150 得 75 分，S=450 得 90 分。
-        转发（🔁）目前只作为传播数据展示，暂不计入价值分，想计入的话改一个权重常量即可。
-      </div>
-    </section>`;
-}
 function messageQuotaHtml(availability) {
   if (!availability) return '';
   if (availability.blockedByMe) {
@@ -252,9 +224,6 @@ export { sortTabsHtml };
 export { feedTabsHtml };
 export { personChipHtml };
 export { boardOptions };
-export { formulaCardHtml };
-export { rankBadgeClass };
-export { RANKING_WINDOWS };
 export { messageQuotaHtml };
 
 /* @hand-written */

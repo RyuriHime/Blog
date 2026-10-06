@@ -183,7 +183,6 @@ try {
   await record('post-list-by-board', anon, '/api/posts?board=general');
   await record('post-detail', anon, '/api/posts/1');
   await record('post-detail-missing', anon, '/api/posts/99999');
-  await record('ranking', anon, '/api/ranking');
   await record('user-profile', anon, '/api/users/alice');
   await record('user-profile-missing', anon, '/api/users/nobody_here_at_all');
 
@@ -328,11 +327,7 @@ try {
     body: { content: '你好' },
   });
 
-  /* --- 签到 / 分类 / 收藏 / 关注流 --- */
-  await record('checkin-status', alice, '/api/checkin');
-  await record('checkin-do', alice, '/api/checkin', { method: 'POST' });
-  await record('checkin-repeat', alice, '/api/checkin', { method: 'POST' });
-  await record('checkin-anon', anon, '/api/checkin');
+  /* --- 分类 / 收藏 / 关注流（签到与排行榜已下线，这里不再记录） --- */
   await record('categories-list', member, '/api/me/categories');
   const cat = await record('categories-create', member, '/api/me/categories', {
     method: 'POST',

@@ -1,0 +1,80 @@
+/* 80-profile.css —— v1.2 新增：个人主页分类与置顶、账号设置。
+ *
+ * 本文件由 docs/tools/split-css.mjs 从原先的单体 public/style.css 切出来。
+ * 改样式请直接改这里；**不要**去改 public/style.css（它现在只是一个 @import 清单）。
+ */
+
+/* ================= v1.2 新增：主页分类与置顶 / 账号设置 ================= */
+
+/* ---------------- 个人主页分类 chips ---------------- */
+.chips-head {
+  align-items: flex-start;
+  flex-wrap: wrap;
+  padding: 16px 18px;
+  margin: 0;
+  border-bottom: 1px solid var(--border-soft);
+}
+
+.chips {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  flex: 1;
+  min-width: 200px;
+}
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 5px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--panel);
+  color: var(--text-dim);
+  font-size: 13px;
+}
+
+.chip.is-active {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+  color: var(--accent-fg);
+}
+
+.chip-label {
+  color: inherit;
+}
+
+.chip-label:hover {
+  text-decoration: none;
+  color: var(--text);
+}
+
+.chip-count {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.chip-x {
+  border: 0;
+  background: none;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 12px;
+  padding: 0 2px;
+  border-radius: 4px;
+}
+
+.chip-x:hover {
+  color: var(--danger);
+  background: rgba(255, 107, 107, 0.14);
+}
+
+.tag-category {
+  color: var(--violet-fg);
+  border-color: rgba(124, 91, 255, 0.4);
+  background: rgba(124, 91, 255, 0.12);
+}
+
+
+/* @hand-written */

@@ -20,8 +20,6 @@ const expected = [
   'boards',
   'bookmarks',
   'blocks',
-  'checkin_bonuses',
-  'checkins',
   'coins',
   'follows',
   'messages',

@@ -28,8 +28,12 @@ const LOG_FILE = join(ROOT, 'data', 'contract-server.log');
 const PORT = Number(process.env.CONTRACT_PORT || 3412);
 const BASE = `http://127.0.0.1:${PORT}`;
 
-/** 不下降哨兵：接手的模块只允许加，不允许把这些数字改小。 */
-const MIN_CHECKS = Number(process.env.MIN_UI_CHECKS || 313);
+/**
+ * 不下降哨兵：接手的模块只允许加，不允许把这些数字改小。
+ * 唯一一次**故意调小**：删掉签到与价值排行两套功能（用户要求删功能）之后，
+ * 13 条签到 / 排行榜断言随之删除、另加 7 条「删干净了」的守卫，实测 310，于是抬到 310。
+ */
+const MIN_CHECKS = Number(process.env.MIN_UI_CHECKS || 310);
 
 /**
  * 前端源码入口清单。搬家前这三份文件在 public/ 根目录；骨架会把它们拆进
@@ -710,6 +714,35 @@ check(
   /extraChildren/.test(teamSmokeJs) && /\[DB_FILE, SCAFFOLD_DB, LEGACY_DB, BROKEN_DB\]/.test(teamSmokeJs),
 );
 
+/* 签到与价值排行整体下线（用户要求删功能）的契约：这几条守住「删干净了」，
+ * 也守住别哪天又半路把它们加回来 —— 加分的人得先来改这几条断言。 */
+check('签到页文件真的删掉了（public/views/checkin.js）', !existsSync(join(ROOT, 'public', 'views', 'checkin.js')));
+check(
+  '服务端不再挂签到 / 排行榜路由',
+  !/route\('(?:GET|POST)', '\/api\/checkin'/.test(serverJs) && !/\/api\/ranking/.test(serverJs),
+);
+check(
+  '签到与价值权重的常量 / 算法 / 查询全拔掉了',
+  !/CHECKIN_RULES/.test(serverJs) &&
+    !/VALUE_WEIGHTS/.test(serverJs) &&
+    !/valueWeights/.test(serverJs) &&
+    !/profileValue|authorValueRank|rankPosts|rankAuthors/.test(serverJs) &&
+    !/checkin_bonuses/.test(serverJs),
+);
+check(
+  '帖子形状里不再有 baseScore / valueScore，资料里不再有 coinsReceived',
+  !/baseScore|valueScore|coinsReceived/.test(serverJs),
+);
+check('/api/site 不再下发 checkinRules / valueWeights', !/checkinRules/.test(serverJs));
+check(
+  '前端不再有签到卡片 / 榜单页 / 权重公式卡',
+  !/views\/checkin|viewCheckin|viewRanking|checkinCardHtml|formulaCardHtml/.test(appJs),
+);
+check(
+  '样式分片跟着改名（78-repost.css / 80-profile.css，旧名不再出现）',
+  /78-repost\.css/.test(styleCss) && !/80-checkin-profile\.css|78-repost-ranking\.css/.test(styleCss),
+);
+
 /* ---------- 1b. 背景主题契约 ---------- */
 
 /** 取出某个主题在 style.css 里的变量块（dark 用 :root 作为默认值） */
@@ -995,11 +1028,6 @@ try {
     '个人主页 user.avatar / 关注列表成员头像字段存在',
     typeof (await admin(`/api/users/${adminPostRow.author.username}`)).json.data.user.avatar === 'string',
   );
-  const rankForAvatar = (await admin('/api/ranking?limit=5')).json.data;
-  check(
-    '排行榜作者带头像字段',
-    typeof rankForAvatar.posts[0].author.avatar === 'string' && typeof rankForAvatar.authors[0].user.avatar === 'string',
-  );
   const notifForAvatar = (await admin('/api/notifications?perPage=20')).json.data;
   check(
     '通知里的 actor 带头像字段',
@@ -1069,7 +1097,7 @@ try {
   /* ---------- v1.3：转发 ---------- */
 
   const otherPostRow = list.items.find((row) => row.author.username !== 'admin');
-  check('列表字段 repostCount / reposted / valueScore', has(list, 'items.0.repostCount') && has(list, 'items.0.reposted') && has(list, 'items.0.valueScore'));
+  check('列表字段 repostCount / reposted', has(list, 'items.0.repostCount') && has(list, 'items.0.reposted'));
   const reposted = (await admin(`/api/posts/${otherPostRow.id}/repost`, { method: 'POST', body: { comment: '契约检查转发' } })).json.data;
   check(
     '转发返回 reposted/updated/repostCount/comment',
@@ -1086,61 +1114,6 @@ try {
   );
   const unreposted = (await admin(`/api/posts/${otherPostRow.id}/repost`, { method: 'DELETE' })).json.data;
   check('撤销转发返回 reposted=false 与新计数', unreposted.reposted === false && typeof unreposted.repostCount === 'number');
-
-  /* ---------- v1.3：排行榜 ---------- */
-
-  check('site.valueWeights 下发权重', hasAll(site.valueWeights ?? {}, ['like', 'coin', 'bookmark', 'dislike', 'dislikeSoftCap', 'halfSaturation']), JSON.stringify(site.valueWeights));
-  const ranking = (await admin('/api/ranking?limit=10')).json.data;
-  check(
-    '排行榜返回 window/weights/posts/authors',
-    hasAll(ranking, ['window', 'days', 'weights', 'posts', 'authors']) && ranking.posts.length > 0 && ranking.authors.length > 0,
-    JSON.stringify({ window: ranking.window, posts: ranking.posts.length, authors: ranking.authors.length }),
-  );
-  check(
-    '文章榜字段（含 baseScore/valueScore）',
-    hasAll(ranking.posts[0], [
-      'id',
-      'title',
-      'excerpt',
-      'board',
-      'author',
-      'createdAt',
-      'likeCount',
-      'dislikeCount',
-      'coinCount',
-      'bookmarkCount',
-      'repostCount',
-      'baseScore',
-      'valueScore',
-      'liked',
-      'bookmarked',
-    ]),
-    JSON.stringify(ranking.posts[0]).slice(0, 220),
-  );
-  check(
-    '作者榜字段（含 totalValue/avgValue/rank）',
-    hasAll(ranking.authors[0], [
-      'rank',
-      'user',
-      'postCount',
-      'totalValue',
-      'avgValue',
-      'bestValue',
-      'likesReceived',
-      'dislikesReceived',
-      'coinsReceived',
-      'bookmarksReceived',
-      'repliesReceived',
-    ]),
-    JSON.stringify(ranking.authors[0]).slice(0, 220),
-  );
-  const prof = (await admin(`/api/users/${otherPostRow.author.username}`)).json.data;
-  check(
-    '个人主页返回个人权重 value{totalValue,avgValue,rank}',
-    hasAll(prof.value ?? {}, ['totalValue', 'avgValue', 'bestValue', 'postCount', 'rank', 'weights']) &&
-      has(prof, 'repostCount'),
-    JSON.stringify(prof.value),
-  );
 
   const target = list.items.find((row) => row.author.username !== 'admin');
   const follow = (await admin(`/api/users/${target.author.id}/follow`, { method: 'POST' })).json.data;
@@ -1162,7 +1135,6 @@ try {
       'followingCount',
       'likesReceived',
       'dislikesReceived',
-      'coinsReceived',
       'isMe',
       'isFollowing',
     ]),
@@ -1202,43 +1174,10 @@ try {
   const preview = (await admin('/api/markdown/preview', { method: 'POST', body: { content: '**x**' } })).json.data;
   check('预览返回 html', typeof preview.html === 'string');
 
-  /* ---------- v1.2：签到 / 主页分类与置顶 / 账号设置 ---------- */
+  /* ---------- v1.2：主页分类与置顶 / 账号设置 ---------- */
 
-  check('site.checkinRules 下发签到规则', has(site, 'checkinRules.dailyReward') && has(site, 'checkinRules.weeklyBonus') && has(site, 'checkinRules.fullWeekDays'));
   check('site.profileRules 下发主页规则', has(site, 'profileRules.pinLimit') && has(site, 'profileRules.categoryLimit'));
-
-  const checkin = (await admin('/api/checkin')).json.data;
-  check(
-    '签到状态字段齐全',
-    hasAll(checkin, [
-      'today',
-      'checkedInToday',
-      'streak',
-      'total',
-      'weekStart',
-      'week',
-      'weekAttended',
-      'dailyReward',
-      'weeklyBonus',
-      'fullWeekDays',
-      'pendingBonus',
-      'bonusHistory',
-      'calendar',
-      'coinBalance',
-    ]),
-    JSON.stringify(checkin).slice(0, 200),
-  );
-  check('签到日历 35 天且结构完整', checkin.calendar.length === 35 && hasAll(checkin.calendar[0], ['day', 'attended', 'isToday', 'future']));
-  check('本周为 7 天且结构完整', checkin.week.length === 7 && hasAll(checkin.week[0], ['day', 'attended', 'isToday', 'future']));
-
-  const checkinResult = await admin('/api/checkin', { method: 'POST' });
-  check(
-    '签到接口返回奖励/全勤奖/余额',
-    checkinResult.status === 200
-      ? hasAll(checkinResult.json.data, ['reward', 'bonus', 'bonusWeeks', 'gain', 'streak', 'coinBalance'])
-      : checkinResult.json?.error?.code === 'already_checked_in',
-    JSON.stringify(checkinResult.json).slice(0, 180),
-  );
+  check('site 不再下发签到 / 价值权重（签到与排行榜已下线）', !('checkinRules' in site) && !('valueWeights' in site));
 
   const categoryList = (await admin('/api/me/categories')).json.data;
   check('分类列表返回 items/limit/uncategorizedCount', Array.isArray(categoryList.items) && has(categoryList, 'limit') && has(categoryList, 'uncategorizedCount'));

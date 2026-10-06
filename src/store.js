@@ -5,15 +5,14 @@
  * （liked / disliked / my_coins / bookmarked / author_followed / reposted），
  * 拼接查询时必须先传 6 个 viewerId，再传过滤条件参数。
  */
-import { CHECKIN_RULES, COIN_RULES, MESSAGE_RULES, POST_VALUE_WEIGHTS, PROFILE_RULES } from './db.js';
-import { addDays, parseDay, recentDays, todayString, weekDays, weekStartOf } from './dates.js';
+import { COIN_RULES, MESSAGE_RULES, PROFILE_RULES } from './db.js';
+import { addDays, parseDay, todayString } from './dates.js';
 
 const VIEWER_PARAM_COUNT = 6;
-const WEIGHTS = POST_VALUE_WEIGHTS;
 
 /**
  * 拉黑过滤：把「我拉黑的人」和「拉黑了我的人」都排除掉。
- * 用在帖子列表、排行榜与评论列表上：被拉黑的人看不到我的内容，我也眼不见为净。
+ * 用在帖子列表与评论列表上：被拉黑的人看不到我的内容，我也眼不见为净。
  * 两个 `?` 都传当前浏览者 id。
  */
 const BLOCKED_AUTHOR_SQL = `p.user_id NOT IN (
@@ -26,34 +25,14 @@ const BLOCKED_COMMENTER_SQL = `r.user_id NOT IN (
   UNION
   SELECT blocker_id FROM blocks WHERE blocked_id = ?
 )`;
-const BLOCKED_RANKED_SQL = `user_id NOT IN (
-  SELECT blocked_id FROM blocks WHERE blocker_id = ?
-  UNION
-  SELECT blocker_id FROM blocks WHERE blocked_id = ?
-)`;
 
-/* 单项计数的子查询（列表、详情、排行榜共用，保证口径一致） */
+/* 单项计数的子查询（列表、详情共用，保证口径一致） */
 const LIKE_COUNT_SQL = "(SELECT COUNT(*) FROM reactions rx WHERE rx.post_id = p.id AND rx.kind = 'like')";
 const DISLIKE_COUNT_SQL = "(SELECT COUNT(*) FROM reactions rx WHERE rx.post_id = p.id AND rx.kind = 'dislike')";
 const COIN_COUNT_SQL = '(SELECT COALESCE(SUM(c.amount), 0) FROM coins c WHERE c.post_id = p.id)';
 const BOOKMARK_COUNT_SQL = '(SELECT COUNT(*) FROM bookmarks bm2 WHERE bm2.post_id = p.id)';
 const REPOST_COUNT_SQL = '(SELECT COUNT(*) FROM reposts rp WHERE rp.post_id = p.id)';
 const REPLY_COUNT_SQL = '(SELECT COUNT(*) FROM replies r WHERE r.post_id = p.id AND r.deleted = 0)';
-
-/**
- * 文章价值公式（只用四则运算与 ABS()，不依赖 SQLite 的数学函数扩展）：
- *   D' = softCap·D / (D + softCap)
- *   S  = like·赞 + coin·币 + bookmark·藏 − dislike·D'
- *   V  = 100·S / (|S| + halfSaturation)
- * 展开写两遍是因为 SQLite 不允许在同层 SELECT 里引用结果别名。
- */
-const BASE_SCORE_SQL = `(
-     ${WEIGHTS.like} * ${LIKE_COUNT_SQL}
-   + ${WEIGHTS.coin} * ${COIN_COUNT_SQL}
-   + ${WEIGHTS.bookmark} * ${BOOKMARK_COUNT_SQL}
-   - ${WEIGHTS.dislike} * (${WEIGHTS.dislikeSoftCap}.0 * ${DISLIKE_COUNT_SQL}) / (${DISLIKE_COUNT_SQL} + ${WEIGHTS.dislikeSoftCap}.0)
-)`;
-const VALUE_SCORE_SQL = `(100.0 * ${BASE_SCORE_SQL} / (ABS(${BASE_SCORE_SQL}) + ${WEIGHTS.halfSaturation}.0))`;
 
 const POST_LIST_COLUMNS = `
   p.id, p.title, substr(p.content, 1, 400) AS content_head,
@@ -68,8 +47,6 @@ const POST_LIST_COLUMNS = `
   ${COIN_COUNT_SQL} AS coin_count,
   ${BOOKMARK_COUNT_SQL} AS bookmark_count,
   ${REPOST_COUNT_SQL} AS repost_count,
-  ${BASE_SCORE_SQL} AS base_score,
-  ${VALUE_SCORE_SQL} AS value_score,
   EXISTS (SELECT 1 FROM reactions rx WHERE rx.post_id = p.id AND rx.kind = 'like' AND rx.user_id = ?) AS liked,
   EXISTS (SELECT 1 FROM reactions rx WHERE rx.post_id = p.id AND rx.kind = 'dislike' AND rx.user_id = ?) AS disliked,
   COALESCE((SELECT SUM(c.amount) FROM coins c WHERE c.post_id = p.id AND c.user_id = ?), 0) AS my_coins,
@@ -144,8 +121,6 @@ export function createStore(db) {
                 WHERE p2.user_id = u.id AND p2.deleted = 0 AND rx.kind = 'like') AS likes_received,
               (SELECT COUNT(*) FROM reactions rx JOIN posts p2 ON p2.id = rx.post_id
                 WHERE p2.user_id = u.id AND p2.deleted = 0 AND rx.kind = 'dislike') AS dislikes_received,
-              (SELECT COALESCE(SUM(c.amount), 0) FROM coins c JOIN posts p3 ON p3.id = c.post_id
-                WHERE p3.user_id = u.id) AS coins_received,
               (SELECT COUNT(*) FROM bookmarks bm WHERE bm.user_id = u.id) AS bookmark_count
        FROM users u WHERE u.username = ?`,
     ),
@@ -246,19 +221,6 @@ export function createStore(db) {
               EXISTS (SELECT 1 FROM follows f2 WHERE f2.follower_id = ? AND f2.followee_id = u.id) AS viewer_follows
        FROM follows f JOIN users u ON u.id = f.follower_id
        WHERE f.followee_id = ? ORDER BY f.created_at DESC`,
-    ),
-
-    listCheckinDays: db.prepare('SELECT day, reward FROM checkins WHERE user_id = ? ORDER BY day ASC'),
-    getCheckin: db.prepare('SELECT * FROM checkins WHERE user_id = ? AND day = ?'),
-    insertCheckin: db.prepare(
-      'INSERT OR IGNORE INTO checkins (user_id, day, reward, created_at) VALUES (?, ?, ?, ?)',
-    ),
-    listBonuses: db.prepare(
-      'SELECT week_start, amount, created_at FROM checkin_bonuses WHERE user_id = ? ORDER BY week_start DESC',
-    ),
-    hasBonus: db.prepare('SELECT 1 AS hit FROM checkin_bonuses WHERE user_id = ? AND week_start = ?'),
-    insertBonus: db.prepare(
-      'INSERT OR IGNORE INTO checkin_bonuses (user_id, week_start, amount, created_at) VALUES (?, ?, ?, ?)',
     ),
 
     listCategories: db.prepare(
@@ -464,7 +426,6 @@ export function createStore(db) {
     raw: db,
     ANON,
     COIN_RULES,
-    CHECKIN_RULES,
     PROFILE_RULES,
 
     /* ---------------- 用户 ---------------- */
@@ -542,7 +503,7 @@ export function createStore(db) {
 
     /**
      * 读取用户钱包（余额就存在 users.coin_balance 上）。
-     * 注意：已取消「每天补足」机制——余额只会在注册赠送、签到奖励、
+     * 注意：已取消「每天补足」机制——余额只会在注册赠送、
      * 别人投币给你时增加，不会随时间自动回涨。
      * 列 coin_refresh_at 是历史遗留字段，现在只用于兼容旧库，不再读写。
      */
@@ -837,7 +798,7 @@ export function createStore(db) {
     },
 
     /**
-     * 投币：单帖每人上限 2 币，余额不足则拒绝（没有每日补足，币要靠签到和别人的投币赚），
+     * 投币：单帖每人上限 2 币，余额不足则拒绝（没有每日补足，币要靠别人的投币赚），
      * 投出的币会转进作者账户。
      * @returns {{error?: string} & Record<string, unknown>}
      */
@@ -982,108 +943,6 @@ export function createStore(db) {
       statements.deleteReadNotifications.run(userId);
     },
 
-    /* ---------------- 签到 ---------------- */
-    checkinStatus(userId) {
-      const today = todayString();
-      const rows = statements.listCheckinDays.all(userId);
-      const days = new Set(rows.map((row) => row.day));
-      const weekStart = weekStartOf(today);
-      const week = weekDays(weekStart).map((day) => ({
-        day,
-        attended: days.has(day),
-        isToday: day === today,
-        future: day > today,
-      }));
-
-      let streak = 0;
-      let cursor = days.has(today) ? today : addDays(today, -1);
-      while (days.has(cursor)) {
-        streak += 1;
-        cursor = addDays(cursor, -1);
-      }
-
-      const pending = this.pendingBonusWeeks(userId, days, weekStart);
-      return {
-        today,
-        checkedInToday: days.has(today),
-        streak,
-        total: rows.length,
-        weekStart,
-        week,
-        weekAttended: week.filter((item) => item.attended).length,
-        dailyReward: CHECKIN_RULES.dailyReward,
-        weeklyBonus: CHECKIN_RULES.weeklyBonus,
-        fullWeekDays: CHECKIN_RULES.fullWeekDays,
-        pendingBonusWeeks: pending,
-        pendingBonus: pending.length * CHECKIN_RULES.weeklyBonus,
-        bonusHistory: statements.listBonuses.all(userId).map((row) => ({
-          weekStart: row.week_start,
-          amount: row.amount,
-          createdAt: row.created_at,
-        })),
-        calendar: recentDays(35, today).map((day) => ({
-          day,
-          attended: days.has(day),
-          isToday: day === today,
-          future: day > today,
-        })),
-        coinBalance: Number(this.wallet(userId)?.coin_balance ?? 0),
-      };
-    },
-
-    /** 找出「整周全勤但还没发奖」的历史自然周（不含本周）。 */
-    pendingBonusWeeks(userId, daysSet, currentWeekStart) {
-      const attendance = new Map();
-      for (const day of daysSet) {
-        const start = weekStartOf(day);
-        if (start >= currentWeekStart) continue;
-        attendance.set(start, (attendance.get(start) ?? 0) + 1);
-      }
-      const pending = [];
-      for (const [start, count] of attendance) {
-        if (count < CHECKIN_RULES.fullWeekDays) continue;
-        if (statements.hasBonus.get(userId, start)) continue;
-        pending.push(start);
-      }
-      return pending.sort();
-    },
-
-    /** 签到：+1 币；若上一自然周全勤，补发 +3 币全勤奖。 */
-    performCheckin(userId) {
-      const today = todayString();
-      if (statements.getCheckin.get(userId, today)) return { error: 'already_checked_in' };
-      const user = this.wallet(userId);
-      if (!user) return { error: 'user_not_found' };
-
-      const weekStart = weekStartOf(today);
-      const daysSet = new Set(statements.listCheckinDays.all(userId).map((row) => row.day));
-      const pending = this.pendingBonusWeeks(userId, daysSet, weekStart);
-      const bonus = pending.length * CHECKIN_RULES.weeklyBonus;
-      const gain = CHECKIN_RULES.dailyReward + bonus;
-      const now = Date.now();
-
-      db.exec('BEGIN IMMEDIATE');
-      try {
-        statements.insertCheckin.run(userId, today, CHECKIN_RULES.dailyReward, now);
-        statements.addCoinBalance.run(gain, userId);
-        for (const start of pending) {
-          statements.insertBonus.run(userId, start, CHECKIN_RULES.weeklyBonus, now);
-        }
-        db.exec('COMMIT');
-      } catch (error) {
-        db.exec('ROLLBACK');
-        throw error;
-      }
-
-      return {
-        reward: CHECKIN_RULES.dailyReward,
-        bonus,
-        bonusWeeks: pending,
-        gain,
-        ...this.checkinStatus(userId),
-      };
-    },
-
     /* ---------------- 个人主页分类 / 置顶 ---------------- */
     listProfileCategories: (userId) => statements.listCategories.all(userId),
     profileCategoryCount: (userId) => Number(statements.categoryCount.get(userId).count),
@@ -1202,101 +1061,6 @@ export function createStore(db) {
       // 所以 ids 必须排在 blockParams 前面，否则 p.id IN (?) 会绑到 viewerId 上，
       // 查出来的是「浏览者自己的帖子」。
       return db.prepare(sql).all(...viewerParams, ...ids, ...blockParams);
-    },
-
-    /* ---------------- 排行榜 ---------------- */
-    /**
-     * 文章价值榜：V = 100·S/(|S|+50)，S = 赞 + 5·币 + 3·藏 − 3·D'
-     * @param {{ days?: number, limit?: number, boardId?: number|null }} options
-     */
-    rankPosts({ days = 0, limit = 20, boardId = null, hideBlockedFor = ANON } = {}) {
-      const since = days > 0 ? Date.now() - days * 86400000 : 0;
-      const sql = `
-        SELECT p.id, p.title, substr(p.content, 1, 200) AS content_head, p.created_at, p.views, p.pinned,
-               b.slug AS board_slug, b.name AS board_name, b.icon AS board_icon,
-               u.id AS author_id, u.username AS author_username, u.display_name AS author_display, u.role AS author_role, u.avatar AS author_avatar,
-               ${REPLY_COUNT_SQL} AS reply_count,
-               ${LIKE_COUNT_SQL} AS like_count,
-               ${DISLIKE_COUNT_SQL} AS dislike_count,
-               ${COIN_COUNT_SQL} AS coin_count,
-               ${BOOKMARK_COUNT_SQL} AS bookmark_count,
-               ${REPOST_COUNT_SQL} AS repost_count,
-               ${BASE_SCORE_SQL} AS base_score,
-               ${VALUE_SCORE_SQL} AS value_score
-        FROM posts p
-        JOIN users u ON u.id = p.user_id
-        JOIN boards b ON b.id = p.board_id
-        WHERE p.deleted = 0
-          AND p.hidden = 0
-          AND (? = 0 OR p.created_at >= ?)
-          AND (? IS NULL OR p.board_id = ?)
-          AND (${BLOCKED_RANKED_SQL} OR ? = -1)
-        ORDER BY value_score DESC, like_count DESC, p.created_at DESC
-        LIMIT ?`;
-      return db
-        .prepare(sql)
-        .all(since, since, boardId, boardId, hideBlockedFor, hideBlockedFor, hideBlockedFor, limit);
-    },
-
-    /** 作者价值榜：个人权重 = Σ V（该用户所有未删除文章） */
-    rankAuthors({ days = 0, limit = 20, minPosts = 1, hideBlockedFor = ANON } = {}) {
-      const since = days > 0 ? Date.now() - days * 86400000 : 0;
-      const sql = `
-        SELECT u.id, u.username, u.display_name, u.role, u.bio, u.avatar,
-               COUNT(*) AS post_count,
-               SUM(value_score) AS total_value,
-               AVG(value_score) AS avg_value,
-               MAX(value_score) AS best_value,
-               SUM(like_count) AS likes_received,
-               SUM(dislike_count) AS dislikes_received,
-               SUM(coin_count) AS coins_received,
-               SUM(bookmark_count) AS bookmarks_received,
-               SUM(reply_count) AS replies_received
-        FROM (
-          SELECT p.user_id, ${LIKE_COUNT_SQL} AS like_count, ${DISLIKE_COUNT_SQL} AS dislike_count,
-                 ${COIN_COUNT_SQL} AS coin_count, ${BOOKMARK_COUNT_SQL} AS bookmark_count,
-                 ${REPLY_COUNT_SQL} AS reply_count, ${VALUE_SCORE_SQL} AS value_score
-          FROM posts p
-          WHERE p.deleted = 0 AND p.hidden = 0 AND (? = 0 OR p.created_at >= ?)
-            AND (${BLOCKED_RANKED_SQL} OR ? = -1)
-        ) AS scored
-        JOIN users u ON u.id = scored.user_id
-        GROUP BY u.id
-        HAVING COUNT(*) >= ?
-        ORDER BY total_value DESC, post_count DESC
-        LIMIT ?`;
-      return db
-        .prepare(sql)
-        .all(since, since, hideBlockedFor, hideBlockedFor, hideBlockedFor, Math.max(1, minPosts), limit);
-    },
-
-    valueWeights: () => ({ ...WEIGHTS }),
-
-    /** 单个作者的价值汇总（个人权重 = 所有文章价值之和） */
-    profileValue(userId) {
-      const row = db
-        .prepare(
-          `SELECT COUNT(*) AS post_count,
-                  COALESCE(SUM(value_score), 0) AS total_value,
-                  COALESCE(AVG(value_score), 0) AS avg_value,
-                  COALESCE(MAX(value_score), 0) AS best_value
-           FROM (SELECT ${VALUE_SCORE_SQL} AS value_score
-                 FROM posts p WHERE p.deleted = 0 AND p.user_id = ?) AS scored`,
-        )
-        .get(userId);
-      return {
-        postCount: Number(row.post_count),
-        totalValue: Number(row.total_value),
-        avgValue: Number(row.avg_value),
-        bestValue: Number(row.best_value),
-      };
-    },
-
-    /** 该用户在作者价值榜上的名次（没有文章则返回 null） */
-    authorValueRank(userId) {
-      const rows = this.rankAuthors({ limit: 1000 });
-      const index = rows.findIndex((row) => row.id === userId);
-      return index >= 0 ? index + 1 : null;
     },
 
     /* ---------------- 账号设置 ---------------- */
