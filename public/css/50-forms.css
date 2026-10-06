@@ -32,7 +32,11 @@ input[type="text"],
 input[type="password"],
 input[type="search"],
 select,
-textarea {
+textarea,
+/* P5：<input class="input"> 经常不写 type —— 属性选择器匹配不到它，
+   它就会漏成浏览器默认外观（深色主题里是一个白框，非常突兀）。
+   把类名也纳进来，这些输入框才有主题样式。 */
+.input {
   width: 100%;
   padding: 10px 12px;
   border-radius: 10px;

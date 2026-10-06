@@ -114,9 +114,34 @@ body.feed-fullscreen {
   margin-top: 8px;
 }
 
+/* 「粘贴帖子链接或编号」那一行：平时贴着卡片背景，不要显出一个框；
+   鼠标经过给一条极淡的边，聚焦时才亮出强调色 —— 这样它不再喧宾夺主。 */
 .composer-ref-row .input {
   flex: 1;
   min-width: 200px;
+  padding: 7px 10px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: 13.6px;
+  outline: none;
+  transition: border-color 0.15s, background 0.15s, box-shadow 0.15s;
+}
+
+.composer-ref-row .input::placeholder {
+  color: var(--muted);
+}
+
+.composer-ref-row .input:hover {
+  border-color: var(--border-soft);
+}
+
+.composer-ref-row .input:focus {
+  border-color: var(--accent);
+  background: var(--bg-soft);
+  box-shadow: 0 0 0 3px var(--accent-soft);
 }
 
 .feed-ref-chip {

@@ -28,8 +28,9 @@ function renderUserArea() {
     return;
   }
   const me = state.me;
-  // P5：AI 阅读助手 / 学术笔记 从侧栏「我的账户」搬到顶栏 —— user-area 紧跟在 topnav 里的
-  // 「✏️ 发动态」按钮后面，所以放在最前面就是「发动态的旁边」。
+  // P5：AI 阅读助手 / 学术笔记 从侧栏「我的账户」搬到顶栏 —— 它们排在 user-area 的最前面，
+  // 也就是顶栏右边的第一组。顶栏原来还有个「✏️ 发动态」按钮，P5 一并删了：首页最上面
+  // 就是编辑框，用户菜单里也有「✏️ 发布新帖」→ #/new，功能没丢。
   // 原本这里还有第三个「🕸 知识网络图」：知识网络图在 PR #5 里整条删除（路由、视图、样式分片、
   // knowledge-pack 全没了），入口跟着去掉，否则顶栏会挂一个点了没反应的死链。
   // 「📓 学术笔记」也走同一条路：功能并进了**积木的标签**（给积木打「学术笔记」标签），
@@ -54,6 +55,7 @@ function renderUserArea() {
     <div class="menu" id="user-menu" hidden>
       <a class="menu-item" href="#/u/${encodeURIComponent(me.username)}">👤 我的主页</a>
       <a class="menu-item" href="#/messages">✉️ 私信${state.messageUnread > 0 ? ` <span class="menu-badge">${state.messageUnread}</span>` : ''}</a>
+      <a class="menu-item" href="#/start">🏠 起始页</a>
       <a class="menu-item" href="#/notifications">🔔 消息通知${state.unread > 0 ? ` <span class="menu-badge">${state.unread}</span>` : ''}</a>
       <a class="menu-item" href="#/following">📋 关注列表</a>
       <a class="menu-item" href="#/bookmarks">⭐ 我的收藏</a>
@@ -79,6 +81,8 @@ const SIDEBAR_MAX_WIDTH = 520;
 const SIDEBAR_DEFAULT_WIDTH = 306;
 // 沿用仓库现有的 forum: 前缀（见 core/preferences.js 的 THEME_STORAGE_KEY）
 const SIDEBAR_WIDTH_KEY = 'forum:sidebarWidth';
+/** 固定（钉住）：钉住之后鼠标移开也不收回。 */
+const SIDEBAR_PIN_KEY = 'forum:sidebarPinned';
 /** 鼠标移开后延迟一点再收回：从把手挪到面板的缝隙里时不会抖一下。 */
 const SIDEBAR_HIDE_DELAY = 160;
 
@@ -106,6 +110,29 @@ function applySidebarWidth(width, { persist = false } = {}) {
   return next;
 }
 
+function sidebarPinnedFromPrefs() {
+  return Prefs.readPreference(SIDEBAR_PIN_KEY, '') === '1';
+}
+
+function setSidebarPinned(pinned, { persist = false } = {}) {
+  state.sidebarPinned = Boolean(pinned);
+  if (typeof ui.sidebar?.classList?.toggle === 'function') ui.sidebar.classList.toggle('is-pinned', state.sidebarPinned);
+  const handle = ui.sidebar?.querySelector('.sidebar-handle');
+  if (handle) {
+    handle.setAttribute('aria-pressed', state.sidebarPinned ? 'true' : 'false');
+    handle.title = state.sidebarPinned ? '已钉住：鼠标移开也不会收回（点一下取消）' : '侧栏：鼠标移上来滑出，点一下钉住';
+  }
+  if (persist) Prefs.writePreference(SIDEBAR_PIN_KEY, state.sidebarPinned ? '1' : '0');
+  return state.sidebarPinned;
+}
+
+/** 点把手：钉住（并展开）↔ 取消钉住（并收回）。 */
+function toggleSidebarPin() {
+  const next = !state.sidebarPinned;
+  setSidebarPinned(next, { persist: true });
+  setSidebarOpen(next);
+}
+
 function setSidebarOpen(open) {
   state.sidebarOpen = Boolean(open);
   if (typeof ui.sidebar?.classList?.toggle === 'function') ui.sidebar.classList.toggle('is-open', state.sidebarOpen);
@@ -118,7 +145,10 @@ function setSidebarOpen(open) {
 /** 渲染完把状态贴回去（renderSidebar 会被重画，类名与宽度得重新应用）。 */
 function syncSidebarDrawer() {
   applySidebarWidth(state.sidebarWidth ?? sidebarWidthFromPrefs());
-  setSidebarOpen(Boolean(state.sidebarOpen));
+  if (state.sidebarPinned === undefined) state.sidebarPinned = sidebarPinnedFromPrefs();
+  setSidebarPinned(state.sidebarPinned);
+  // 钉住 = 常驻展开；没钉住就沿用上次的开合状态
+  setSidebarOpen(Boolean(state.sidebarPinned) || Boolean(state.sidebarOpen));
 }
 
 function initSidebarDrawer() {
@@ -140,6 +170,7 @@ function initSidebarDrawer() {
   });
   ui.sidebar.addEventListener('mouseleave', () => {
     cancelHide();
+    if (state.sidebarPinned) return; // 钉住了就不收回
     sidebarHideTimer = setTimeout(() => setSidebarOpen(false), SIDEBAR_HIDE_DELAY);
   });
 
@@ -149,13 +180,14 @@ function initSidebarDrawer() {
     setSidebarOpen(true);
   });
   ui.sidebar.addEventListener('focusout', (event) => {
+    if (state.sidebarPinned) return; // 钉住了就不收回
     const next = event.relatedTarget;
     if (!next || !inside(next)) setSidebarOpen(false);
   });
 
-  // 点把手：展开 / 收起（键盘与触屏都能用）
+  // 点把手：钉住 / 取消钉住（钉住 = 常驻展开，不自动收回；键盘与触屏也能用）
   ui.sidebar.addEventListener('click', (event) => {
-    if (event.target?.closest?.('#sidebar-handle')) setSidebarOpen(!state.sidebarOpen);
+    if (event.target?.closest?.('.sidebar-handle')) toggleSidebarPin();
   });
 
   // 拖面板左边缘改宽度
@@ -190,23 +222,18 @@ function initSidebarDrawer() {
 function renderSidebar() {
   // v2：侧栏的「📚 板块」已经下线（论坛形态不再存在），换成一个动态流的快捷入口。
   // 保留 `renderSidebar()` 这个无参签名，调用方不用改。
-  const hot = state.site.hotPosts
-    .map(
-      (post, index) => `
-      <a class="hot-item" href="#/post/${post.id}">
-        <span class="hot-rank ${index < 3 ? 'top' : ''}">${index + 1}</span>
-        <span>${esc(post.title)}</span>
-      </a>`,
-    )
-    .join('');
-
-  // P5：侧栏「我的账户」卡片整体下线 ——
-  //   · AI 阅读助手 / 知识网络图 / 学术笔记 → 搬到顶栏「发动态」旁边
-  //   · 消息通知 / 我的关注 / 我的收藏 / 账号设置 → 在这里删除
-  //     （功能都还在：顶栏 🔔 铃铛进消息通知，用户菜单里四个入口一个不少）
-  //   · P4 补回「📋 关注列表」：它跟「👥 我关注的」是两件事 ——
-  //     后者是**过滤后的动态流**（看 TA 们发了什么），前者是**名单**（我关注了谁、一键取关）。
-  //     之前 `#/following` 被改道去了动态流，名单页就没人到得了了，现在恢复。
+  //
+  // P5：侧栏只留「导航 + 站点数据 + 小贴士」这三类东西。删掉的三张卡，功能一个没丢：
+  //   · 「🪙 我的账户」卡 —— AI 阅读助手 / 学术笔记 搬到顶栏；消息通知 / 我的关注 /
+  //     我的收藏 / 账号设置 只留在用户菜单里。（「可用币」当时也搬到了顶栏，但它随后
+  //     随那次「删掉币系统」整体下线，所以顶栏只剩前两个入口。）
+  //   · 「📅 每日签到」卡 —— 签到已经随「删掉签到与价值排行两套功能」整条下线
+  //     （页面、接口、发币规则、样式分片全没了），这张卡是它最后的残留。
+  //   · 「🏆 价值排行榜」卡 —— 同上，排行榜也整条下线。
+  //   · 「🔥 热门讨论」卡 —— 这件事由顶部的动态流本身承担（首页就是动态流）。
+  // 另外，下面那条「📋 关注列表」是 P4 补回来的：它跟「👥 我关注的」是两件事 ——
+  //   后者是**过滤后的动态流**（看 TA 们发了什么），前者是**名单**（我关注了谁、一键取关）。
+  //   之前 `#/following` 被改道去了动态流，名单页就没人到得了了。
   ui.sidebar.innerHTML = `
     <button
       class="sidebar-handle"
@@ -214,9 +241,11 @@ function renderSidebar() {
       type="button"
       aria-controls="sidebar-panel"
       aria-expanded="false"
-      title="侧栏：鼠标移上来滑出（也可以点我）"
+      aria-pressed="false"
+      title="侧栏：鼠标移上来滑出，点一下钉住"
     >
       <span class="sidebar-handle-icon" aria-hidden="true">📚</span>
+      <span class="sidebar-handle-icon-pin" aria-hidden="true">📌</span>
       <span class="sidebar-handle-text">侧栏</span>
     </button>
     <div class="sidebar-panel" id="sidebar-panel">
@@ -236,6 +265,7 @@ function renderSidebar() {
     <div class="card card-tight">
       <div class="card-head"><span class="card-title">🌊 动态</span><a class="tag" href="#/">去发一条</a></div>
       <div class="side-links">
+        <a class="side-link" href="#/start">🏠 起始页</a>
         <a class="side-link" href="#/">🌍 全部动态</a>
         <a class="side-link" href="#/?filter=following">👥 我关注的</a>
         <a class="side-link" href="#/?filter=mine">📝 我的动态</a>
@@ -266,10 +296,6 @@ function renderSidebar() {
       </div>
     </div>
     <div class="card card-tight">
-      <div class="card-head"><span class="card-title">🔥 热门讨论</span></div>
-      <div class="hot-list">${hot || '<div class="hint">还没有内容</div>'}</div>
-    </div>
-    <div class="card card-tight">
       <div class="card-head"><span class="card-title">💡 小贴士</span></div>
       <div class="hint" style="line-height:1.8">
         · 标题写清楚问题，别写「救命」<br />
@@ -284,6 +310,8 @@ function renderSidebar() {
 async function loadSite() {
   try {
     state.site = await api('/api/site');
+    // P5：侧栏不再预取榜单 —— 排行榜已随「删掉签到与价值排行两套功能」整条下线，
+    // 首屏少打一次 /api/ranking 的请求。
   } catch (error) {
     toastError(error);
   }

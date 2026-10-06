@@ -7,6 +7,7 @@
 
 import { $, emptyHtml, toast, ui } from './dom.js';
 import { apiErrorText } from './errors.js';
+import { state } from './state.js';
 import * as Admin from '../views/admin.js';
 import * as Ai from '../views/ai.js';
 import * as AiEdit from '../views/ai-edit.js';
@@ -23,9 +24,16 @@ import * as Post from '../views/post.js';
 import { beginRoute, endRoute } from './route-guard.js';
 import * as Session from './session.js';
 import * as Settings from '../views/settings.js';
+import * as Start from '../views/start.js';
 import * as Team from '../views/team.js';
 import * as Timeline from '../views/timeline.js';
 import * as User from '../views/user.js';
+
+/**
+ * P5：本次页面加载里，动态首页（#/）有没有被访问过。
+ * 只用来判断「未登录的人是不是刚打开站点」—— 见 route() 里 !first 那一段。
+ */
+let homeSeen = false;
 
 function parseHash() {
   const raw = location.hash.replace(/^#/, '');
@@ -79,7 +87,20 @@ async function route() {
 
   try {
     // v2：首页是**动态**时间线，不再是「板块 + 帖子列表」。
-    if (!first) return await Timeline.viewTimeline(query);
+    //
+    // P5：未登录的人**第一次**落在 #/ 时先看起始页（左公告 + 右三块入口）。
+    //   为什么要分「第一次」：起始页上那块「动态」指向的就是 #/，
+    //   要是每次 #/ 都转走，点「动态」会立刻被弹回起始页 —— 死循环一样的体验。
+    //   只认不带查询串的 #/；`#/?filter=mine` 这类筛选照常进动态流。
+    if (!first) {
+      const firstHomeVisit = !homeSeen;
+      homeSeen = true;
+      if (firstHomeVisit && !state.me && !query.toString()) {
+        location.replace('#/start');
+        return await Start.viewStart();
+      }
+      return await Timeline.viewTimeline(query);
+    }
     // 论坛形态下线（FR-FEED-12）：板块页没有替代页面，但**也不能变成死链**，
     // 统一回首页。`replace` 而不是赋值，免得用户按返回又弹回来。
     if (first === 'board') {
@@ -137,6 +158,8 @@ async function route() {
     // `#/wiki`：所有看得见的站（一个帖子一个 wiki 里的「一个帖子」列表）。
     if (first === 'wiki') return await Doc.viewWikiIndex();
     if (first === 'settings') return await Settings.viewSettings();
+    // P5：起始页（左公告 / 右三块入口）。独立地址，`#/` 的语义一个字没改。
+    if (first === 'start') return await Start.viewStart();
     if (first === 'notifications') return await Notif.viewNotifications(query);
     if (first === 'messages' && second) return await Message.viewThread(second);
     if (first === 'messages') return await Message.viewMessages();

@@ -30,7 +30,7 @@ const PORT = Number(process.env.UI_SMOKE_PORT || 3418);
 const BASE = `http://127.0.0.1:${PORT}`;
 
 /** 不下降哨兵：断言条数（不含最后这条哨兵自己）。只允许往上加，不许改小。 */
-const MIN_PASS = 41;
+const MIN_PASS = 55;
 
 let passed = 0;
 const failures = [];
@@ -105,6 +105,120 @@ check('有过渡动画', /transition[\s\S]{0,60}transform|transform[\s\S]{0,60}t
 check('面板宽度走 CSS 变量且默认 306px', /var\(--sidebar-width,\s*306px\)/.test(sidebarCss));
 check('收起时容器不吃点击（只有把手/面板可点）', /\.sidebar\s*\{[\s\S]*?pointer-events:\s*none/.test(baseCss + sidebarCss));
 check('把手是一条窄条（宽度 ≤ 40px）', /\.sidebar-handle\s*\{[\s\S]*?width:\s*(?:[1-3]?\d)px/.test(sidebarCss));
+
+/* ================================================================== */
+/* 三·2、输入框：别让 <input class="input"> 裸奔成浏览器默认外观        */
+/* ================================================================== */
+
+console.log('\n▶ 输入框（「粘贴帖子链接」那一行）');
+
+const timelineCss = read('css/31-timeline.css');
+const formsCss = read('css/50-forms.css');
+
+check(
+  '「粘贴帖子链接」那一行有自己的主题样式（不再是浏览器默认的白框）',
+  /\.composer-ref-row\s+\.input\s*\{[^}]*(background|border)\s*:/.test(timelineCss),
+  '引用框只有 flex:1，没有背景/边框声明',
+);
+check(
+  '基础表单样式覆盖 .input（没写 type 的 input 属性选择器匹配不到，会漏成默认外观）',
+  /(^|\n)\s*\.input\s*[,{]/.test(formsCss),
+  '50-forms.css 的基础控件选择器里没有 .input',
+);
+
+/* ================================================================== */
+/* 三·3、侧栏内容裁剪 + 固定（pin）                                    */
+/* ================================================================== */
+
+console.log('\n▶ 侧栏内容与固定');
+
+check(
+  '侧栏不再渲染「📅 每日签到」卡（签到功能已整条下线，这张卡是它最后的残留）',
+  !/const checkinCard = state\.me/.test(session) && !/\$\{checkinCard\}/.test(session),
+);
+check('侧栏不再渲染「🏆 价值排行榜」卡', !session.includes('card-title">🏆 价值排行榜'));
+check('侧栏不再渲染「🔥 热门讨论」卡', !session.includes('card-title">🔥 热门讨论'));
+check('侧栏里也不再算热门列表（hotPosts 那个 map 去掉了）', !session.includes('state.site.hotPosts'));
+check(
+  '签到 / 排行榜整条下线后，用户菜单里也没留下点不动的死链',
+  !/menu-item" href="#\/checkin"/.test(session) && !/menu-item" href="#\/ranking"/.test(session),
+);
+check(
+  '固定（pin）：状态存进 localStorage（forum:sidebarPinned）',
+  session.includes('forum:sidebarPinned') && /Prefs\.writePreference\(SIDEBAR_PIN_KEY/.test(session),
+);
+check(
+  '固定（pin）：点把手 = 钉住 / 取消钉住',
+  /function toggleSidebarPin\s*\(/.test(session) && /closest\?\.\('\.sidebar-handle'\)\)\s*toggleSidebarPin\(\)/.test(session),
+);
+check(
+  '固定（pin）：钉住后 mouseleave 不收回',
+  /mouseleave'[\s\S]{0,220}?state\.sidebarPinned\)\s*return/.test(session),
+);
+check(
+  '固定（pin）：钉住后焦点离开也不收回',
+  /focusout'[\s\S]{0,220}?state\.sidebarPinned\)\s*return/.test(session),
+);
+check('固定（pin）：把手有钉住态（is-pinned + 图钉图标 + aria-pressed）', /classList\.toggle\('is-pinned'/.test(session) && session.includes('sidebar-handle-icon-pin') && /setAttribute\('aria-pressed'/.test(session));
+check('固定（pin）：钉住的样式在 55-sidebar.css 里', /\.sidebar\.is-pinned\s+\.sidebar-handle/.test(sidebarCss) && /\.sidebar-handle-icon-pin\s*\{/.test(sidebarCss));
+check(
+  '侧栏不再用榜单后，首屏不再为空榜多打一次请求（loadSite 里那次 /api/ranking?limit=5 去掉了）',
+  !/api\/ranking\?limit=5/.test(session),
+);
+
+/* ================================================================== */
+/* 三·4、起始页（#/start）                                             */
+/* ================================================================== */
+
+console.log('\n▶ 起始页（#/start）');
+
+const routerJs = read('core/router.js');
+const styleEntryCss = read('style.css');
+const startJs = read('views/start.js');
+const startCss = read('css/25-start.css');
+
+check('新页面文件存在并导出 viewStart', /async function viewStart\s*\(/.test(startJs) && /export \{ viewStart \}/.test(startJs));
+check('路由登记了 #/start', /first === 'start'[\s\S]{0,60}?Start\.viewStart\(\)/.test(routerJs));
+check(
+  '未登录访问 #/ 会转去起始页（登录用户仍然是动态流）',
+  /if \(!first\)[\s\S]{0,260}?!state\.me[\s\S]{0,140}?'#\/start'/.test(routerJs),
+  'router.js 的 #/ 分支里没看到「未登录 → #/start」',
+);
+check(
+  '三块入口分别指向 动态 #/ · 积木广场 #/docs · 团队 #/teams',
+  /href="\$\{href\}"/.test(startJs) && /href: '#\/'/.test(startJs) && /href: '#\/docs'/.test(startJs) && /href: '#\/teams'/.test(startJs),
+);
+check('公告取「站务公告」板块（/api/posts?board=meta），不用新后端', /\/api\/posts\?board=meta/.test(startJs));
+check('公告取不到时有兜底文案（不是空白一块）', /还没有公告|emptyHtml\(/.test(startJs));
+check(
+  '三块预览用的都是现成接口：/api/posts · /api/docs · /api/teams',
+  /\/api\/posts\?/.test(startJs) && /\/api\/docs/.test(startJs) && /\/api\/teams/.test(startJs),
+);
+check('新样式分片 25-start.css 已挂进 style.css', /25-start\.css/.test(styleEntryCss));
+check(
+  '起始页关键类名都有样式（两栏骨架 + 三块入口 + 标题）',
+  ['.start-page', '.start-title', '.start-columns', '.start-announce', '.start-entries', '.start-entry'].every((sel) => new RegExp(`\\${sel}\\b`).test(startCss)),
+);
+check('≤900px 两栏堆成一栏', /@media\s*\(max-width:\s*900px\)[\s\S]*?\.start-columns\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\)/.test(startCss + responsiveCss));
+check(
+  '起始页有两个常驻入口：用户菜单 + 侧栏',
+  /menu-item" href="#\/start"/.test(session) && /side-link" href="#\/start"/.test(session),
+);
+
+/* ================================================================== */
+/* 三·5、顶栏：发动态按钮已删（发布入口改由编辑框和用户菜单承担）        */
+/* ================================================================== */
+
+console.log('\n▶ 顶栏与发布入口');
+
+check(
+  '顶栏不再有「✏️ 发动态」按钮（注释里提到不算，只认那个 <a>）',
+  !/<a[^>]*>\s*✏️\s*发动态\s*<\/a>/.test(indexHtml),
+  'index.html 里还留着发动态按钮',
+);
+check('顶栏的其它东西没动（主题按钮容器 + 用户区 + 挂载点都还在）', /id="theme-area"/.test(indexHtml) && /id="user-area"/.test(indexHtml) && /id="app"/.test(indexHtml) && /id="sidebar"/.test(indexHtml));
+check('发布入口没丢：用户菜单里仍有 #/new', /menu-item" href="#\/new"/.test(session));
+check('首页顶部仍有编辑框可发帖（feed-composer）', /feed-composer/.test(read('views/timeline.js')));
 
 /* ================================================================== */
 /* 四、布局与窄屏                                                      */
