@@ -421,7 +421,26 @@ const EXTRA = {
   '/api/ai/site': { configured: false, ready: false },
   // 非成员视角的团队主页：详情里没有团队号、也没有公告（服务端就不给）。
   '/api/teams/outsider-group': { team: OUTSIDER_TEAM_FIXTURE, members: [], memberTotal: 0, scopes: SCOPES },
-  '/api/teams/outsider-group/posts': { items: [], page: 1, perPage: 20, total: 0, totalPages: 0, sort: 'new' },
+  // 列表里摆一条**别人发的**帖：`canEdit: false` 时不该画「编辑」，
+  // 但「💬 回复」必须还在（点它就是「进详情页去回」）。
+  '/api/teams/outsider-group/posts': {
+    items: [
+      {
+        ...TEAM_POST_FIXTURE,
+        canEdit: false,
+        canDelete: false,
+        scope: 'public',
+        scopeLabel: '公开',
+        scopeIcon: '🌍',
+        replyCount: 1,
+      },
+    ],
+    page: 1,
+    perPage: 20,
+    total: 1,
+    totalPages: 1,
+    sort: 'new',
+  },
   // 「需要申请」的团队：路人只能递申请，不能直接进。这两个 slug 是申请那条线上的哨兵。
   '/api/teams/apply-group': { team: APPLY_TEAM_FIXTURE, members: [], memberTotal: 0, scopes: SCOPES },
   '/api/teams/apply-group/posts': { items: [], page: 1, perPage: 20, total: 0, totalPages: 0, sort: 'new' },
@@ -1550,16 +1569,29 @@ if (!state.theme) problems.push('state.theme 没被初始化');
       problems.push('点「撤回申请」没有发出 DELETE …/join-requests/7');
     }
 
-    /* ③ 管理员审申请：面板拉待审列表 → 切页签 → 批准 */
+    /* ③ 管理员审申请：抽屉里拉待审列表 → 切页签 → 批准 */
     window.location.hash = '#/team/frontend-group';
     await team.viewTeam('frontend-group', new Map());
     click({ teamAction: 'toggle-requests' });
     await settle();
-    // 视图是往 `[data-team-requests]` 这个空盒子里写 innerHTML 的
-    //（`[data-team-requests-list]` 只是盒子里那张卡片，假 DOM 不会去解析 innerHTML）。
-    const list = registered('[data-team-requests]');
+    // 抽屉是壳体：视图先往 `[data-team-drawer]` 里塞整套 `<div class="team-drawer">…`，
+    // 申请列表再由 renderJoinRequests 写进其中的 `[data-team-drawer-body]`。
+    // 假 DOM 不解析 innerHTML，所以这两层要各查各的。
+    const drawer = registered('[data-team-drawer]');
+    const drawerHtml = String(drawer.innerHTML);
+    if (!drawerHtml.includes('data-team-drawer-panel="requests"')) {
+      problems.push('点「📨 加入申请」没有弹出抽屉');
+    }
+    if (!drawerHtml.includes('team-drawer-mask')) problems.push('抽屉没有遮罩（点空白处关不掉）');
+    if (!drawerHtml.includes('data-team-action="close-panel"')) problems.push('抽屉上没有「关闭」出口');
+    if (!drawerHtml.includes('data-team-drawer-body')) problems.push('抽屉没有装内容的那一层');
+    if (String(hero.innerHTML).includes('data-team-drawer')) {
+      problems.push('抽屉居然画进了 hero 里（它该是 fixed 的一层，不该把主页顶下去）');
+    }
+
+    const list = registered('[data-team-drawer-body]');
     html = String(list.innerHTML);
-    if (!html.includes('data-team-request-card')) problems.push('打开「加入申请」面板之后没有画出待审列表');
+    if (!html.includes('data-team-request-card')) problems.push('打开「加入申请」抽屉之后没有画出待审列表');
     if (!html.includes('新来的')) problems.push('待审列表里没有画出申请人');
     if (!html.includes('（没写理由）')) problems.push('申请没写理由时没有画成「（没写理由）」');
     const approveButtons = (html.match(/data-team-action="approve-request"/g) ?? []).length;
@@ -1585,11 +1617,20 @@ if (!state.theme) problems.push('state.theme 没被初始化');
       problems.push(`批准请求的动作不对：${JSON.stringify(approveReq.body)}（应该是 { action: 'approve' }）`);
     }
 
-    /* ④ 创建者在设置里把团队从广场藏起来 */
+    /* ④ 创建者在设置里把团队从广场藏起来（设置表单也住在抽屉里） */
     click({ teamAction: 'toggle-settings' });
     await settle();
-    html = String(hero.innerHTML);
-    if (!html.includes('data-team-field="listed"')) {
+    const settingsDrawer = String(registered('[data-team-drawer]').innerHTML);
+    if (!settingsDrawer.includes('data-team-drawer-panel="settings"')) {
+      problems.push('点「团队设置」没有弹出设置抽屉');
+    }
+    if (String(hero.innerHTML).includes('data-team-field="listed"')) {
+      problems.push('「出现在团队广场」那个开关还留在主页 hero 里（应该只出现在设置抽屉里）');
+    }
+    // 设置表单是**外层抽屉 innerHTML 字符串**的一部分；
+    // 只有申请列表会被 renderJoinRequests 直接写进 `[data-team-drawer-body]`。
+    // 假 DOM 不解析 innerHTML，所以这里只能在外层字符串上找。
+    if (!settingsDrawer.includes('data-team-field="listed"')) {
       problems.push('创建者打开团队设置之后看不到「出现在团队广场」那个开关');
     }
     const listedField = registered('[data-team-field="listed"]');
@@ -1613,10 +1654,51 @@ if (!state.theme) problems.push('state.theme 没被初始化');
       problems.push('保存设置时把团队名送成了空串 —— 只想点一下保存，结果名字被改没');
     }
 
-    console.log(`  ${problems.length ? '❌' : '✅'} 交互：路人递申请、管理员批申请、创建者能把团队藏起来`);
+    /* ⑤ 「💬 回复」按钮：列表上点它跳进详情页的回复框，详情页里点它只挪光标 */
+    window.location.hash = '#/team/outsider-group';
+    await team.viewTeam('outsider-group', new Map());
+    const postListHtml = String(registered('[data-team-posts]').innerHTML);
+    if (!postListHtml.includes('data-team-action="reply-post"')) {
+      problems.push('列表里的帖子没有「💬 回复」按钮');
+    }
+    if (postListHtml.includes('data-team-action="edit-post"')) {
+      problems.push('别人发的帖子（canEdit=false）居然画出了「编辑」按钮');
+    }
+
+    REQUESTS.length = 0;
+    click({ teamAction: 'reply-post', teamPost: '1' });
+    await settle();
+    if (!String(window.location.hash).includes('/team/outsider-group/post/1?reply=1')) {
+      problems.push(`列表上点「回复」没有落到详情页的回复框（hash = ${JSON.stringify(window.location.hash)}）`);
+    }
+    if (REQUESTS.length) problems.push('列表上点「回复」不该自己发请求（接口交给详情页去拉）');
+
+    // 已经在详情页：再点一次只聚焦，不跳页、不重画（否则读到一半的位置就没了）。
+    window.location.hash = '#/team/frontend-group/post/1';
+    await team.viewTeamPost('frontend-group', 1, new Map());
+    const focusBox = registered('[data-team-reply-field]');
+    let focused = 0;
+    focusBox.focus = () => {
+      focused += 1;
+    };
+    const stayHash = String(window.location.hash);
+    click({ teamAction: 'reply-post', teamPost: '1' });
+    await settle();
+    if (focused !== 1) problems.push('在详情页点「回复」没有把光标送进回复框');
+    if (String(window.location.hash) !== stayHash) problems.push('在详情页点「回复」居然跳走了（该原地聚焦）');
+
+    // 列表上那个按钮走的是 `?reply=1` 这条路：详情页画完就该自己把光标送进去。
+    let autoFocused = 0;
+    focusBox.focus = () => {
+      autoFocused += 1;
+    };
+    await team.viewTeamPost('frontend-group', 1, new Map([['reply', '1']]));
+    if (autoFocused !== 1) problems.push('带 ?reply=1 进详情页没有自动聚焦回复框');
+
+    console.log(`  ${problems.length ? '❌' : '✅'} 交互：路人递申请、管理员批申请、创建者能把团队藏起来、编辑权只归作者`);
   } catch (error) {
     problems.push(`团队申请 / 审核交互测试自身崩了：${error?.stack || error}`);
-    console.log('  ❌ 交互：路人递申请、管理员批申请、创建者能把团队藏起来');
+    console.log('  ❌ 交互：路人递申请、管理员批申请、创建者能把团队藏起来、编辑权只归作者');
   }
 }
 

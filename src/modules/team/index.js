@@ -1,5 +1,5 @@
 // 团队模块（P4）：让一群人有一块公共地方 —— 团队主页上能发帖，
-// 帖子能设「只有本团队看得见」，成员能一起编辑**且不互相覆盖**。
+// 帖子能设「只有本团队看得见」，成员各发各的帖、**只能改自己发的那一篇**（改自己的帖也不静默覆盖）。
 //
 //   owns  teams / team_members / team_posts / team_replies / team_files / team_messages
 //         / team_join_requests

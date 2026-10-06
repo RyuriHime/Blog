@@ -243,7 +243,7 @@ const EXPECTED = [
   ['团队（P4）的接口', ['src/modules/team/routes.js']],
   ['404 与 403 的差别本身就是一个探测信道', ['src/modules/team/routes.js']],
   ['只有团队的创建者可以解散团队', ['src/modules/team/routes.js']],
-  ['只有团队成员可以改这篇帖子', ['src/modules/team/routes.js']],
+  ['只有作者本人可以编辑这篇帖子', ['src/modules/team/routes.js']],
   ['有人在你之前改过了', ['src/modules/team/routes.js']],
   ['团队（P4）：团队列表', ['public/views/team.js']],
   ['86-team.css', ['public/css/86-team.css']],

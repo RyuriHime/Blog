@@ -234,9 +234,11 @@ export function shapeTeamPost(row, { viewer = null, team = null } = {}) {
           displayName: row.editor_display || row.editor_username,
         }
       : null,
-    // 能看见就能改：团队帖是大家的东西，一起编辑是这一版的核心需求。
-    // 删除则收紧到「作者或团队管理员」—— 不可逆的操作不该人人都有。
-    canEdit: isAuthor || myRole !== null,
+    // 编辑权只给作者本人：改别人的话既不打招呼也不留痕，想补充就回帖。
+    // （早先这里是「看得见就能改」，后来收紧了 —— 团队帖能一起看、一起回，
+    //  但「改稿」这件事得由写它的人自己决定。）
+    // 删除仍然是「作者或团队管理员」—— 删掉了管理员还能找回，改稿没有这一层。
+    canEdit: isAuthor,
     canDelete: isAuthor || canManageTeam,
     createdAt: row.created_at,
     updatedAt: row.updated_at,

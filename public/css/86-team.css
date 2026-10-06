@@ -983,7 +983,7 @@
   border-style: dashed;
 }
 
-/* 管理面板里那一整块申请列表。 */
+/* 抽屉里那一整块申请列表（它不再是卡片：边距由 .team-drawer-body 出）。 */
 .team-requests {
   display: flex;
   flex-direction: column;
@@ -995,10 +995,6 @@
   align-items: center;
   gap: 10px;
   flex-wrap: wrap;
-}
-
-.team-requests-title {
-  font-weight: 700;
 }
 
 /* 四条状态页签复用 .team-tabs / .team-tab 的样子，只把下边距收一收。 */
@@ -1055,4 +1051,73 @@
 
 .team-request-empty {
   padding: 6px 2px;
+}
+
+/* ================= 右侧抽屉（团队设置 / 加入申请） ================= */
+
+/*
+ * 这两件事以前是主页里贴一张卡：点开之后整页往下顶，旁边轮询群聊 / 重画公告时
+ * 还会把填到一半的表单整块换掉。改成右侧抽屉之后，主页不动，抽屉自己滚。
+ *
+ * 层级：站点里的规矩是 顶栏 50 / 展开的菜单与全屏编辑器 60 / 图片灯箱 90 / toast 100，
+ * 抽屉夹在中间取 70 —— 压得住顶栏与菜单，又不至于盖住灯箱和 toast。
+ */
+.team-drawer {
+  position: fixed;
+  inset: 0;
+  z-index: 70;
+  display: flex;
+  justify-content: flex-end;
+}
+
+/* 点遮罩就是关（视图里它挂的是 data-team-action="close-panel"）。 */
+.team-drawer-mask {
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.45);
+}
+
+.team-drawer-box {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  width: min(460px, 92vw);
+  height: 100%;
+  overflow: hidden;
+  background: var(--panel);
+  border-left: 1px solid var(--border);
+  box-shadow: -8px 0 24px rgba(0, 0, 0, 0.28);
+  animation: team-drawer-in 0.18s ease-out;
+}
+
+@keyframes team-drawer-in {
+  from {
+    transform: translateX(24px);
+    opacity: 0;
+  }
+
+  to {
+    transform: none;
+    opacity: 1;
+  }
+}
+
+.team-drawer-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--border-soft);
+}
+
+.team-drawer-title {
+  font-weight: 700;
+}
+
+/* 只有中间那块滚：申请三十条时，「关闭」也还在原地够得着。 */
+.team-drawer-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 14px 16px;
 }
