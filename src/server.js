@@ -941,6 +941,7 @@ route('POST', '/api/posts/:id/reaction', async (ctx) => {
   const post = store.postById(id, user.id);
   ensure(post, 404, 'post_not_found', '帖子不存在');
   assertPostVisible(post, ctx);
+  ensure(!post.locked || isStaff(user), 403, 'locked', '该帖子已锁定，暂时不能评价');
   const kind = ctx.body.kind;
   ensure(kind === 'like' || kind === 'dislike', 400, 'bad_kind', '只支持「赞」或「踩」');
 
@@ -970,6 +971,7 @@ route('POST', '/api/posts/:id/coin', async (ctx) => {
   const post = store.postRow(id);
   ensure(post && !post.deleted, 404, 'post_not_found', '帖子不存在');
   assertPostVisible(post, ctx);
+  ensure(!post.locked || isStaff(user), 403, 'locked', '该帖子已锁定，暂时不能投币');
   const rules = store.COIN_RULES;
   const amount = Number(ctx.body.amount ?? 1);
   ensure(Number.isFinite(amount) && amount >= 1, 400, 'bad_amount', '投币数量不正确');
@@ -1149,6 +1151,7 @@ route('POST', '/api/posts/:id/bookmark', async (ctx) => {
   const bookmarkedPost = store.postById(id, user.id);
   ensure(bookmarkedPost, 404, 'post_not_found', '帖子不存在');
   assertPostVisible(bookmarkedPost, ctx);
+  ensure(!bookmarkedPost.locked || isStaff(user), 403, 'locked', '该帖子已锁定，暂时不能收藏');
   ok(res_(ctx), store.toggleBookmark(user.id, id));
 });
 
