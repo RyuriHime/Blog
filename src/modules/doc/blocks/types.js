@@ -246,6 +246,11 @@ export const BUILTIN_TYPES = [
     // 前端要是自己拼一份选项出来，块引擎就实现两遍了（见 doc.js 文件头第 1 条纪律）。
     // `role` 按单选/多选给出，用真正的 <button> 而不是给 <li> 挂 role：
     // 键盘 Tab / 空格能用，屏幕阅读器也认得出这是一组选项。
+    //
+    // **样式（第二轮）：像 YouTube 的那样** —— 一行一颗胶囊按钮，底色从左往右按得票率填满，
+    // 右边是百分数（大、等宽数字），左边是选项文字，自己投的那一项打勾并加深边框。
+    // 票数条是**唯一**的表达方式：百分比与条宽同源（都由前端 paint 按 counts/total 算），
+    // 所以不会出现「条一半、数字另一套」的错位。
     toHtml: (props, block) => {
       const id = escapeHtml(block?.block_id ?? '');
       const role = props.multiple ? 'checkbox' : 'radio';
@@ -259,7 +264,7 @@ export const BUILTIN_TYPES = [
             '<span class="doc-poll-bar" aria-hidden="true"></span>' +
             '<span class="doc-poll-mark" aria-hidden="true"></span>' +
             `<span class="doc-poll-text">${escapeHtml(option.text)}</span>` +
-            '<span class="doc-poll-count">0</span>' +
+            '<span class="doc-poll-percent" data-poll-percent>0%</span>' +
             '</button></li>'
           );
         })

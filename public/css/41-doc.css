@@ -620,7 +620,7 @@
   padding: 0;
   margin: 0;
   display: grid;
-  gap: 6px;
+  gap: 8px;
 }
 
 .doc-poll-option,
@@ -629,17 +629,19 @@
   list-style: none;
 }
 
-/* 选项本身就是一颗按钮（键盘能 Tab、空格/回车能投）。票数条铺在按钮底下。 */
+/* 选项本身就是一颗按钮（键盘能 Tab、空格/回车能投）。票数条铺在按钮底下。
+   第二轮改成 YouTube 投票那种「胶囊 + 底色按得票率填满 + 右边百分数」：
+   行加高到 38px、圆角走满圆，条不再是淡背景而是一眼能看出比例的实色。 */
 .doc-poll-choice {
   position: relative;
   flex: 1;
   display: flex;
   gap: 10px;
   align-items: center;
-  justify-content: space-between;
+  min-height: 38px;
   border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  padding: 7px 12px;
+  border-radius: 999px;
+  padding: 7px 14px;
   background: var(--bg-soft);
   color: inherit;
   font: inherit;
@@ -658,19 +660,20 @@
   outline-offset: 1px;
 }
 
-/* 结果条：宽度由前端按得票比例写 style，只当背景，不吃鼠标事件。 */
+/* 结果条：宽度由前端按得票比例写 style，只当背景，不吃鼠标事件。
+   百分数与条宽是同一个数（doc.js 的 paintPollCard 一次算完），不会各说各话。 */
 .doc-poll-bar {
   position: absolute;
   inset: 0 auto 0 0;
   width: 0;
-  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  background: color-mix(in srgb, var(--accent) 30%, transparent);
   pointer-events: none;
   transition: width 0.25s ease;
 }
 
 .doc-poll-mark,
 .doc-poll-text,
-.doc-poll-count {
+.doc-poll-percent {
   position: relative;
 }
 
@@ -684,8 +687,13 @@
   border-color: var(--accent);
 }
 
+/* 自己投的那一项：文字也加粗一层（光靠边框在深色主题里不够显眼）。 */
+.doc-poll-choice.is-mine .doc-poll-text {
+  font-weight: 600;
+}
+
 .doc-poll-foot {
-  margin: 8px 0 0;
+  margin: 10px 0 0;
   color: var(--muted);
   font-size: 12px;
 }
@@ -699,9 +707,12 @@
   font-size: 14px;
 }
 
-.doc-poll-count {
-  color: var(--muted);
-  font-size: 12px;
+/* 右边的百分数：等宽数字，条在动的时候数字不会左右跳。 */
+.doc-poll-percent {
+  font-size: 13px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  opacity: 0.85;
 }
 
 /* ── Wiki 多页面（#/wiki/<标题>）：左边分类边栏，右边正文 ───────────────── */

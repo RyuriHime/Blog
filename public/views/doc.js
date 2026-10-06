@@ -544,10 +544,12 @@ function paintPollCard(card, bucket) {
     if (button.classList?.toggle) button.classList.toggle('is-mine', mineSet.has(optionId));
     const mark = item.querySelector?.('.doc-poll-mark');
     if (mark) mark.innerHTML = mineSet.has(optionId) ? '✔' : '';
-    const countNode = item.querySelector?.('.doc-poll-count');
-    if (countNode) countNode.innerHTML = `${count}`;
+    // 条宽与百分数**同一份数**算出来：YouTube 那种「一条胶囊按得票率填满 + 右边百分数」。
+    const percent = total > 0 ? Math.round((count / total) * 100) : 0;
+    const percentNode = item.querySelector?.('.doc-poll-percent');
+    if (percentNode) percentNode.innerHTML = `${percent}%`;
     const bar = item.querySelector?.('.doc-poll-bar');
-    if (bar) bar.style = `width:${total > 0 ? Math.round((count / total) * 100) : 0}%`;
+    if (bar) bar.style = `width:${percent}%`;
     if (button.dataset) button.dataset.pollMine = mineSet.has(optionId) ? '1' : '';
   }
   // 角上那块「你投了哪几个」的提示也归这个桶管，免得数字与勾选各说各话。
