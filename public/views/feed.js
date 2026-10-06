@@ -4,7 +4,6 @@ import { $, emptyHtml, esc, loadingHtml, ui } from '../core/dom.js';
 import { api } from '../core/api.js';
 import { navigate, routeQuery } from '../core/router.js';
 import { state } from '../core/state.js';
-import * as Fmt from '../core/format.js';
 import * as Session from '../core/session.js';
 import * as Widgets from '../core/widgets.js';
 
@@ -122,16 +121,13 @@ async function viewFollowing() {
   ui.app.innerHTML = `
     <section class="card">
       <div class="card-head" style="margin-bottom:4px">
-        <h1 style="font-size:20px">👥 我的关注</h1>
+        <h1 style="font-size:20px">📋 关注列表</h1>
         <span class="tag">关注 ${data.counts.followingCount} · 粉丝 ${data.counts.followerCount}</span>
       </div>
-      <div class="page-sub">关注作者后，首页「我关注的」只看 TA 们的帖子，TA 发新帖也会通知你。</div>
-      <div class="coin-balance" style="margin-top:12px">
-        <span class="coin-value">🪙 ${Fmt.fmtNum(data.coinBalance)}</span>
-        <span class="hint">可用币（注册送 ${Fmt.coinRules().signupGrant} 币；之后靠每日签到与别人投给你的币增加）</span>
-      </div>
+      <div class="page-sub">你关注的人都在下面。点名字进 TA 的主页，点「已关注」就取关。</div>
       <div class="form-actions" style="margin-top:12px">
-        <a class="btn btn-sm" href="#/?feed=following">去看 TA 们的帖子 →</a>
+        <a class="btn btn-sm" href="#/?filter=following">去看 TA 们发的动态 →</a>
+        <a class="btn btn-sm" href="#/u/${encodeURIComponent(state.me.username)}">我的主页（含粉丝名单）→</a>
       </div>
     </section>
     <section class="card" style="padding:0">
@@ -139,7 +135,7 @@ async function viewFollowing() {
         <span class="card-title">关注列表（${data.items.length}）</span>
       </div>
       <div class="chip-list">
-        ${data.items.length ? data.items.map((person) => Widgets.personChipHtml(person, { unfollow: true })).join('') : emptyHtml('👀', '还没有关注任何人', '去帖子里点「关注」试试')}
+        ${data.items.length ? data.items.map((person) => Widgets.personChipHtml(person, { unfollow: true })).join('') : emptyHtml('👀', '还没有关注任何人', '去动态里点作者旁边的「关注」试试')}
       </div>
     </section>`;
 }

@@ -89,8 +89,12 @@ async function route() {
     }
     // 搜索框搜的是动态（论坛没了，搜索的主要对象也就跟着变了）
     if (first === 'search') return await Timeline.viewTimeline(query);
-    // 「关注流」并进动态流的一个筛选，不再单独占一个页面
-    if (first === 'following') return await Timeline.viewTimeline(new URLSearchParams({ filter: 'following' }));
+    // `#/following` 是「我关注的人」**名单**（`public/views/feed.js` 的 viewFollowing：
+    // 头像 + 昵称 + 一键取关）。关注**流**（只看 TA 们发的动态）是动态流的一个筛选，
+    // 走 `#/?filter=following`。两件事别再并成一个 ——
+    // 并了之后名单页就没了入口（函数还在，只是没有任何地址能到达），
+    // 于是「我到底关注了谁」反而没地方看。这个坑真踩过。
+    if (first === 'following') return await Feed.viewFollowing();
     if (first === 'post' && second) return await Post.viewPost(Number(second));
     if (first === 'new') return await Compose.viewCompose(null);
     if (first === 'edit' && second) return await Compose.viewCompose(Number(second));
