@@ -17,7 +17,7 @@
 //   5) 群聊的定时轮询由本模块自己负责停。core/api.js 的「页面代次」守卫是给
 //      「视图渲染期间发出的请求」准备的，而 setInterval 回调发起请求时 routeInFlight
 //      是 null —— 守卫压根不会拦它。所以每个渲染入口都先 stopChatPolling()。
-import { $, esc, emptyHtml, loadingHtml, toast, ui } from '../core/dom.js';
+import { $, copyText, esc, emptyHtml, loadingHtml, toast, ui } from '../core/dom.js';
 import { api, withButtonBusy } from '../core/api.js';
 import { apiErrorText, toastError } from '../core/errors.js';
 import { state } from '../core/state.js';
@@ -945,17 +945,12 @@ async function handleAction(action, node) {
   if (action === 'copy-join-code') {
     const code = String(node.dataset.code || '');
     if (!code) return;
-    // navigator.clipboard 在非 https 的域名下、以及用户拒了权限时都会没有或者抛错。
     // 复制失败不算失败：把号原样报出来，用户手抄一遍就行。
-    if (navigator.clipboard?.writeText) {
-      try {
-        await navigator.clipboard.writeText(code);
-        return toast('团队号已复制', 'success');
-      } catch {
-        /* 落到下面的兜底 */
-      }
-    }
-    return toast(`团队号是 ${code}，手动记一下`, 'success');
+    // 别在这里直接调 navigator.clipboard —— 线上是明文 http，那个对象压根不存在，
+    // 兜底（execCommand）收在 core/dom.js 的 copyText 里。
+    return (await copyText(code))
+      ? toast('团队号已复制', 'success')
+      : toast(`团队号是 ${code}，手动记一下`, 'success');
   }
   if (action === 'edit-announcement' || action === 'cancel-announcement') {
     const editing = action === 'edit-announcement';
