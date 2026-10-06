@@ -80,6 +80,18 @@ export const APP_STATE_SCOPES = ['user', 'shared'];
 export const MAX_SCRIPT_CODE = 20000;
 
 /**
+ * 每个用户最多能存多少条**脚本模板**（`doc_script_templates`，「开发者功能」里的个人零件库）。
+ * 上限不是防攻击，是防自己：模板列表要在一屏里能读完。
+ */
+export const MAX_SCRIPT_TEMPLATES = 50;
+
+/** 模板名的长度上限（按字符数算，和标题一样）。 */
+export const MAX_SCRIPT_TEMPLATE_NAME = 40;
+
+/** 模板说明的长度上限。 */
+export const MAX_SCRIPT_TEMPLATE_DESC = 200;
+
+/**
  * 派生层（脚本产出）的配额。超限**不是错误**，是把超出部分丢掉并附一条警告 ——
  * 脚本写飞了不该让整篇帖子打不开。
  */
@@ -391,6 +403,24 @@ CREATE TABLE IF NOT EXISTS doc_site_state (
   updated_at INTEGER NOT NULL,
   PRIMARY KEY (namespace, key, user_id)
 );
+
+-- 用户自己的**脚本模板**（第三轮新增，「开发者功能」里的个人零件库）。
+-- 为什么不是 templates.js 里的那 8 个内置模板：那些是**一篇文档的起始块序列**（骨架），
+-- 跟着代码走、只读；这里的每一条是**一段可复用的沙箱代码**，按用户存、能改能删。
+-- 为什么不塞进 doc_block_types：块类型是**全站共享**的注册表（注册了所有人都能用，
+-- 而且目前撤不掉 —— README 记的已知缺口），模板必须是**个人**的、必须能删。
+-- code 的长度上限复用 MAX_SCRIPT_CODE，在 store 里查；每人的条数上限见 MAX_SCRIPT_TEMPLATES。
+CREATE TABLE IF NOT EXISTS doc_script_templates (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id     INTEGER NOT NULL REFERENCES users(id),
+  name        TEXT    NOT NULL,
+  description TEXT    NOT NULL DEFAULT '',
+  code        TEXT    NOT NULL DEFAULT '',
+  created_at  INTEGER NOT NULL,
+  updated_at  INTEGER NOT NULL,
+  UNIQUE (user_id, name)
+);
+CREATE INDEX IF NOT EXISTS idx_doc_script_templates_user ON doc_script_templates (user_id, updated_at DESC);
 `;
 
 /**

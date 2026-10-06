@@ -514,6 +514,24 @@ const EXTRA = {
       { value: 'private', label: '仅自己' },
     ],
   },
+  // 开发者功能里的「我的脚本模板」。**必须给一条真的**：空表只会渲染出一句
+  // 「还没有模板」，卡片那段 HTML（以及卡片里的 Fmt.timeAgo）根本没被跑到。
+  '/api/docs/meta/script-templates': {
+    limit: 50,
+    maxName: 40,
+    maxDescription: 200,
+    maxCode: 20000,
+    templates: [
+      {
+        id: 1,
+        name: '打卡本',
+        description: '每天点一下',
+        code: '<h3>今天做了什么</h3>\n<button id="ping" type="button">记一笔</button>\n<script>\n  Sandbox.resize();\n</script>',
+        createdAt: Date.now() - 86400000,
+        updatedAt: Date.now() - 3600000,
+      },
+    ],
+  },
   '/api/docs': {
     total: 1,
     page: 1,
@@ -937,6 +955,11 @@ const CASES = [
   ['积木编辑器', 'doc.js', 'viewDocEdit', [1, new Map()]],
   ['积木 Markdown 模式', 'doc.js', 'viewDocEdit', [1, new Map([['mode', 'markdown']])]],
   ['块类型表', 'doc.js', 'viewBlocks', []],
+  // 「块类型表」挪进了开发者功能（`#/dev`），老地址 `#/blocks` 进的是同一页 ——
+  // 这两行都留着：前者是契约（doc-smoke 认这个标签），后者是实际入口。
+  ['开发者功能', 'doc.js', 'viewDev', []],
+  // 积木教程：纯文档页，只拉一次块类型清单。
+  ['积木教程', 'guide.js', 'viewGuide', []],
   // 没建过的那一页：走的是「还不存在」分支（`found:false`），因此必渲染成一张建页卡。
   ['Wiki 页面', 'doc.js', 'viewWiki', ['没建过的页', new Map()]],
   // v2 团队（P4）的两个页面。slug 必须和上面 EXTRA 里的键对得上，

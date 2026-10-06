@@ -801,5 +801,54 @@ export function createDocQueries(db) {
     deleteSiteStateOfNamespace(namespace) {
       run('DELETE FROM doc_site_state WHERE namespace = ?', [namespace]);
     },
+
+    /* ---------- 脚本模板（doc_script_templates，第三轮：开发者功能） ---------- */
+
+    scriptTemplatesOfUser(userId) {
+      return all(
+        `SELECT id, name, description, code, created_at, updated_at
+           FROM doc_script_templates
+          WHERE user_id = ?
+          ORDER BY updated_at DESC, id DESC`,
+        [userId],
+      );
+    },
+
+    scriptTemplateOf({ id, userId }) {
+      return (
+        get('SELECT id, name, description, code, created_at, updated_at FROM doc_script_templates WHERE id = ? AND user_id = ?', [id, userId]) ?? null
+      );
+    },
+
+    scriptTemplateIdOfName(userId, name) {
+      return get('SELECT id FROM doc_script_templates WHERE user_id = ? AND name = ?', [userId, name]) ?? null;
+    },
+
+    countScriptTemplatesOfUser(userId) {
+      return Number(get('SELECT COUNT(*) AS n FROM doc_script_templates WHERE user_id = ?', [userId])?.n ?? 0);
+    },
+
+    insertScriptTemplate({ userId, name, description, code, now }) {
+      run(
+        `INSERT INTO doc_script_templates (user_id, name, description, code, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?)`,
+        [userId, name, description, code, now, now],
+      );
+    },
+
+    updateScriptTemplate({ id, userId, name, description, code, now }) {
+      run('UPDATE doc_script_templates SET name = ?, description = ?, code = ?, updated_at = ? WHERE id = ? AND user_id = ?', [
+        name,
+        description,
+        code,
+        now,
+        id,
+        userId,
+      ]);
+    },
+
+    deleteScriptTemplate({ id, userId }) {
+      run('DELETE FROM doc_script_templates WHERE id = ? AND user_id = ?', [id, userId]);
+    },
   };
 }

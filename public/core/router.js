@@ -16,6 +16,7 @@ import * as Compose from '../views/compose.js';
 import * as Doc from '../views/doc.js';
 import * as Events from './events.js';
 import * as Feed from '../views/feed.js';
+import * as Guide from '../views/guide.js';
 import * as Message from '../views/messages.js';
 import * as Notes from '../views/notes.js';
 import * as Notif from '../views/notifications.js';
@@ -110,7 +111,12 @@ async function route() {
     // `/doc/:id` 前面，否则编辑页会被当成 id 是 "…/edit" 的文档（parts 里第三段会被丢掉）。
     // 两个入口进的是同一个编辑器，只是默认落在哪个模式上；`?mode=markdown` 可覆盖。
     if (first === 'docs') return await Doc.viewDocs(query);
+    // `#/blocks` 是块类型表的老地址（README、侧栏、doc-smoke 都还引用它）——
+    // 它和 `#/dev` 进的是同一页：块类型表挪进了「开发者功能」，页面本身没下线。
     if (first === 'blocks') return await Doc.viewBlocks();
+    if (first === 'dev') return await Doc.viewDev();
+    // 积木教程：讲清楚「积木是什么、怎么用、怎么写自己的块」，纯文档页。
+    if (first === 'guide') return await Guide.viewGuide();
     if (first === 'doc' && second && parts[2] === 'edit') return await Doc.viewDocEdit(Number(second), query);
     if (first === 'doc' && second && parts[2] === 'blocks') return await Doc.viewDocEdit(Number(second), query);
     if (first === 'doc' && second) return await Doc.viewDoc(Number(second));

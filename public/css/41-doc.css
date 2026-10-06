@@ -1213,6 +1213,31 @@ body.doc-wide .sidebar {
 
 /* @hand-written */
 
+/*
+ * 积木教程（`#/guide`）里的代码样例。
+ *
+ * 和 `.doc-code-box`（可编辑的代码框，min-height 240px）不同：教程里的样例是**只读展示**，
+ * 长短不一，所以不要最小高度，改成按内容高、横向滚动。
+ */
+.guide-pre {
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 12.5px;
+  line-height: 1.65;
+  background: var(--code-bg);
+  color: var(--code-fg);
+  border-radius: var(--radius-sm);
+  padding: 10px 12px;
+  margin: 8px 0 0;
+  overflow-x: auto;
+  white-space: pre;
+  tab-size: 2;
+}
+
+/* 教程页的卡片之间留出距离（同一页十几个小节，贴在一起会读不出层次）。 */
+.doc-guide {
+  margin-bottom: 12px;
+}
+
 /* 代码框（app 块的 code、自定义沙箱类型的 code）：等宽、不折行、给足高度 —— 那是代码，不是文章。 */
 .doc-code-box {
   font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);

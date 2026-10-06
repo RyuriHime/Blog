@@ -98,6 +98,27 @@ export function registerDocRoutes(ctx, { store }) {
     ok(reqCtx.res, store.importDocument({ viewer: user, payload: reqCtx.body.payload ?? reqCtx.body, scope: reqCtx.body.scope }));
   });
 
+  /* ---------------- 脚本模板（开发者功能：把自己写的脚本存成模板） ---------------- */
+
+  // 一律走三段式 `/api/docs/meta/*`：两段式的固定路径会被下面的 `/api/docs/:id` 抢走。
+
+  add('GET', '/api/docs/meta/script-templates', async (reqCtx) => {
+    ok(reqCtx.res, store.listScriptTemplates({ viewer: reqCtx.user }));
+  });
+
+  // 不带 id = 新建，带 id = 覆盖自己那个（同一个人不允许两个同名模板，重名回 409）。
+  add('POST', '/api/docs/meta/script-templates', async (reqCtx) => {
+    const user = write(reqCtx, 'script-template');
+    ok(reqCtx.res, store.saveScriptTemplate({ viewer: user, id: intOrNull(reqCtx.body.id), payload: reqCtx.body }));
+  });
+
+  add('DELETE', '/api/docs/meta/script-templates/:id', async (reqCtx) => {
+    const user = write(reqCtx, 'script-template');
+    const id = Number(reqCtx.params.id);
+    ensure(Number.isInteger(id) && id > 0, 404, 'not_found', '没有这个模板');
+    ok(reqCtx.res, store.deleteScriptTemplate({ viewer: user, id }));
+  });
+
   /* ---------------- Wiki 站（§6：一个帖子一个 wiki） ---------------- */
 
   // 注意登记顺序：这几个的第三段是**字面量**（`stations` / `station`），

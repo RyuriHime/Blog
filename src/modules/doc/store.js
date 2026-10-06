@@ -31,6 +31,10 @@ import {
   APP_MODES,
   APP_STATE_SCOPES,
   SANDBOX_CAPABILITIES,
+  MAX_SCRIPT_CODE,
+  MAX_SCRIPT_TEMPLATES,
+  MAX_SCRIPT_TEMPLATE_NAME,
+  MAX_SCRIPT_TEMPLATE_DESC,
 } from './schema.js';
 import { createAnchor, syncAnchor, STATION_PAGE_HIDDEN } from './anchor.js';
 import { blockFromRow } from './queries.js';
@@ -1922,6 +1926,79 @@ export function createDocStore({ db, queries, now = () => Date.now() }) {
     }
   }
 
+  /* ---------- 脚本模板：开发者功能里把常用的脚本片段存下来 ---------- */
+
+  /** 模板一律按登录用户隔离：别人的模板既看不见也改不动。 */
+  function templateViewer(viewer) {
+    if (!viewer) throw new HttpError(401, 'unauthenticated', '要管理脚本模板得先登录');
+    return viewer;
+  }
+
+  function templateRow(row) {
+    return {
+      id: Number(row.id),
+      name: String(row.name),
+      description: String(row.description ?? ''),
+      code: String(row.code ?? ''),
+      createdAt: Number(row.created_at),
+      updatedAt: Number(row.updated_at),
+    };
+  }
+
+  function listScriptTemplates({ viewer } = {}) {
+    const user = templateViewer(viewer);
+    return {
+      templates: queries.scriptTemplatesOfUser(user.id).map(templateRow),
+      limit: MAX_SCRIPT_TEMPLATES,
+      maxName: MAX_SCRIPT_TEMPLATE_NAME,
+      maxDescription: MAX_SCRIPT_TEMPLATE_DESC,
+      maxCode: MAX_SCRIPT_CODE,
+    };
+  }
+
+  function readTemplateInput(payload) {
+    const name = singleLineText(payload?.name);
+    if (name.length === 0) throw badRequest('模板得先起个名字');
+    if (name.length > MAX_SCRIPT_TEMPLATE_NAME) throw badRequest(`模板名最多 ${MAX_SCRIPT_TEMPLATE_NAME} 个字`);
+    const description = singleLineText(payload?.description);
+    if (description.length > MAX_SCRIPT_TEMPLATE_DESC) throw badRequest(`模板说明最多 ${MAX_SCRIPT_TEMPLATE_DESC} 个字`);
+    const code = typeof payload?.code === 'string' ? payload.code : '';
+    if (code.trim().length === 0) throw badRequest('模板里得有点脚本代码');
+    if (code.length > MAX_SCRIPT_CODE) throw badRequest(`脚本最多 ${MAX_SCRIPT_CODE} 个字符`);
+    return { name, description, code };
+  }
+
+  /** 新建（id 省略）或覆盖（带 id）一个模板；同一个人不允许两个同名模板。 */
+  function saveScriptTemplate({ viewer, id = null, payload } = {}) {
+    const user = templateViewer(viewer);
+    const { name, description, code } = readTemplateInput(payload);
+    const at = now();
+    const targetId = Number.isInteger(id) && id > 0 ? id : null;
+    const clash = queries.scriptTemplateIdOfName(user.id, name);
+    if (targetId === null) {
+      if (queries.countScriptTemplatesOfUser(user.id) >= MAX_SCRIPT_TEMPLATES) {
+        throw badRequest(`脚本模板最多 ${MAX_SCRIPT_TEMPLATES} 个，先删掉几个再存`);
+      }
+      if (clash) throw new HttpError(409, 'conflict', `你已经有一个叫「${name}」的模板了`);
+      queries.insertScriptTemplate({ userId: user.id, name, description, code, now: at });
+      const created = queries.scriptTemplateIdOfName(user.id, name);
+      return { template: { id: Number(created?.id ?? 0), name, description, code, createdAt: at, updatedAt: at } };
+    }
+    const row = queries.scriptTemplateOf({ id: targetId, userId: user.id });
+    if (!row) throw new HttpError(404, 'not_found', '没有这个模板');
+    if (clash && Number(clash.id) !== targetId) throw new HttpError(409, 'conflict', `你已经有一个叫「${name}」的模板了`);
+    queries.updateScriptTemplate({ id: targetId, userId: user.id, name, description, code, now: at });
+    return { template: { id: targetId, name, description, code, createdAt: Number(row.created_at), updatedAt: at } };
+  }
+
+  function deleteScriptTemplate({ viewer, id } = {}) {
+    const user = templateViewer(viewer);
+    const row = queries.scriptTemplateOf({ id, userId: user.id });
+    if (!row) throw new HttpError(404, 'not_found', '没有这个模板');
+    queries.deleteScriptTemplate({ id, userId: user.id });
+    return { deleted: Number(id) };
+  }
+
   return {
     listDocuments,
     getDocument,
@@ -1969,5 +2046,8 @@ export function createDocStore({ db, queries, now = () => Date.now() }) {
     ensurePagesAttached,
     getPollState,
     votePoll,
+    listScriptTemplates,
+    saveScriptTemplate,
+    deleteScriptTemplate,
   };
 }

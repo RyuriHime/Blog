@@ -425,7 +425,9 @@ forum/
 | `#/doc/:id` | 积木阅读页：块渲染结果、降级警告、修订记录、导出/导入、赞/踩/投币/收藏（锚点走既有帖子接口） |
 | `#/doc/:id/edit` | 积木编辑器：逐块编辑、上下移动、Markdown 双向、`ops` 增量改动、套模板、回滚、沙箱开关 |
 | `#/doc/:id/blocks` | 同一个编辑器的高级入口（默认落在积木模式）：块列表 + 当前块的 props 表单 |
-| `#/blocks` | 块类型表：12 种内置块类型的声明式 schema 速查、「怎么自己编一个块」的指南 + 注册自己的块类型（可带渲染模板） |
+| `#/blocks` | 块类型表的老地址：进的是同一页 `#/dev`（页面没下线，收藏夹里的链接照样能开） |
+| `#/dev` | 开发者功能：块类型表（内置/自定义类型的 schema 速查 + 注册自己的块类型）+「我的脚本模板」（把自己常写的沙箱代码存下来，一键新建一篇只带这一块的积木） |
+| `#/guide` | 积木教程：从「一篇文档 = 一串块」讲到脚本怎么跑、能申请哪些能力、状态与派生层、六个可直接抄的样例、常见坑 |
 | `#/wiki/:name` | Wiki 多页面：`[[双链]]` 的落点；左侧是分类边栏（页内筛选 + 新建页，作者多一个「改分类」），有这一页就渲染它，没有就给「建这一页」（`?create=1` 一步进编辑器） |
 | `#/teams` | 团队列表：公开团队广场（**被创建者藏起来的团队不出现**），`?mine=1` 只看我加入的，`?page=` 翻页；未登录也能看。顶上是「🔑 用团队号加入」，填 6 位号直接进队（登录后才显示） |
 | `#/team/:slug` | 团队主页：最上面是**团队公告**（只有成员看得见）与团队号（点「复制」发给要拉的人）、团队简介与成员、发帖框、帖子列表（按四档可见范围过滤，标题点进详情页，右侧显示「💬 N 条回复」）；成员在这里**只能编辑自己发的帖**（别人发的帖右边只有「💬 回复」，编辑 / 删除按钮只画在团队主页列表上）。三个页签 `?tab=discuss`（默认）/ `?tab=files`（文件柜）/ `?tab=chat`（群聊）；`?page=` 翻帖子、`?fpage=` 翻文件。没加入的人看到的是「加入团队」（`open`）或「申请加入」（`apply`，被拒过就是「再申请一次」），递过申请是「⏳ 申请审核中 + 撤回申请」；团长 / 管理员多一个「📨 加入申请」抽屉（待审 / 已批准 / 已拒绝 / 全部；批准 / 拒绝 / 撤销），创建者的团队设置（同一个抽屉位）里多一个「出现在团队广场」开关。每篇帖右边都有「💬 回复」：列表上点它落进详情页的回复框（`?reply=1`），在详情页点它就是原地把光标送进去 |
@@ -509,9 +511,12 @@ forum/
 | GET | `/api/docs/:id/polls` | 这篇文档里每个 `poll` 块的票数：`{ polls: { bN: { counts, total, voters, mine, multiple } } }`（0 票的块也有桶） | 读按 scope |
 | POST | `/api/docs/:id/blocks/:blockId/vote` | 投票，body `{ options: [...] }`（**提交完整选择集合**，不是增量）；再投即改票 | 登录 |
 | GET | `/api/docs/meta/templates` | 模板清单 + `kinds` + `scopes` 枚举（唯一真相） | 公开 |
-| GET | `/api/docs/meta/block-types` | 块类型清单（内置 12 种 ∪ 库里注册的），含声明式 schema | 公开 |
+| GET | `/api/docs/meta/block-types` | 块类型清单（内置 14 种 ∪ 库里注册的），含声明式 schema | 公开 |
 | POST | `/api/docs/meta/block-types` | 注册自定义块类型（名字 `^[a-z][a-z0-9_]{0,31}$`，内置名与重名 409）；`rendererKind:'declarative'` 可带 `renderer:{html:'…{{字段}}…'}`（会剥掉 script/内联事件/`javascript:`），`'sandbox'` 则用 schema 里的 `code` 走玻璃房 | 登录 |
 | POST | `/api/docs/meta/import` | 按 `forum-doc/1` 格式导入一份新文档 | 登录 |
+| GET | `/api/docs/meta/script-templates` | 我的脚本模板清单：`{ templates, limit, maxName, maxDescription, maxCode }`（模板只自己可见） | 登录 |
+| POST | `/api/docs/meta/script-templates` | 存一个脚本模板，body `{ id?, name, description?, code }`；不带 `id` 是新建（重名 409、超过 50 个 400），带 `id` 是覆盖 | 登录（只能改自己的） |
+| DELETE | `/api/docs/meta/script-templates/:id` | 删掉自己的一个脚本模板（别人的 / 不存在的统一 404） | 登录（只能删自己的） |
 | POST | `/api/docs/notes/import` | 把一篇笔记接成文档，body `{ name, title, markdown, scope }`；幂等 | 登录（只能导自己的） |
 | GET | `/api/docs/notes/lookup` | 按 `ownerId` + `name` 找笔记对应的文档；用 `{ found }` 标记而不是 404 | 按 scope |
 | GET | `/api/docs/profile/:username` | 按用户名找 `kind='profile'` 的主页文档；同样用 `{ found }` 标记 | 按 scope |
@@ -625,7 +630,10 @@ document_blocks(id, document_id, block_id, type, type_version, position, props_j
 document_revisions(id, document_id, revision, blocks_json, reason, author_id, created_at)
                     -- reason: create | edit | ops | template | import | rollback，每篇保留最近 50 条
 doc_block_types(name, version, label, icon, props_schema_json, renderer_kind, renderer_json,
-                created_by, created_at, updated_at)   -- 全局注册表，内置 12 种优先、不可被覆盖
+                created_by, created_at, updated_at)   -- 全局注册表，内置 14 种优先、不可被覆盖
+doc_script_templates(id, user_id, name, description, code, created_at, updated_at)
+                    -- 「我的脚本模板」（开发者功能）：(user_id, name) 唯一，每人最多 50 个，
+                    --   code 是沙箱脚本原文；存下来只为「一键新建一篇」时少粘一次
 doc_capability_logs(id, document_id, block_id, capability, user_id, allowed, created_at)
                     -- 沙箱能力调用的审计流水：被拒也记一行
 note_documents(user_id, note_name, document_id, created_at)

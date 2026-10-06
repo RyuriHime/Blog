@@ -1,9 +1,13 @@
-// 积木（可编程帖子 / 笔记 / 个人主页）的四个页面。
+// 积木（可编程帖子 / 笔记 / 个人主页）的页面。
 //
-//   积木广场   #/docs              列表 + 筛选 + 新建
-//   阅读页     #/doc/:id           外壳 + 后端渲染好的正文
-//   编辑器     #/doc/:id/edit      积木模式 / Markdown 模式
-//   块类型表   #/blocks            内置与自定义块类型的 schema 速查 + 注册
+//   积木广场     #/docs            列表 + 筛选 + 新建
+//   阅读页       #/doc/:id         外壳 + 后端渲染好的正文
+//   编辑器       #/doc/:id/edit    积木模式 / Markdown 模式
+//   开发者功能   #/dev             块类型表（速查 + 注册）+ 我自己的脚本模板
+//
+// `#/blocks` 是登记在案的旧地址（README、侧栏、doc-smoke 都引用它），
+// 它进的还是这一页 —— 块类型表只是从「独立一个 Tab」挪进了开发者功能里，
+// 页面本身没有下线，旧书签照样能打开。
 //
 // 两条贯穿全文件的纪律：
 //   1. **正文的 HTML 一律由后端出**（`src/modules/doc/blocks/html.js`）。
@@ -28,6 +32,9 @@ import { ntRenderMath } from './notes.js';
 /** 元数据只拉一次：块类型表 / 模板表 / 两个枚举，整个会话里不会变。 */
 const docState = { types: [], templates: [], kinds: [], scopes: [], editor: null, viewing: null, stationId: 0 };
 
+/** 开发者功能里的「我的脚本模板」：只对登录用户有意义，没登录就是一份空表。 */
+const scriptTemplateState = { templates: [], limit: 0, maxCode: 0, loaded: false, failed: false };
+
 /** Markdown 模式的两件外挂的生命周期手柄（防抖句柄 + AI 抽屉实例）。 */
 let mdPreviewTimer = null;
 let mdNotesPanel = null;
@@ -40,6 +47,30 @@ async function loadMeta(force = false) {
   docState.kinds = meta.kinds ?? [];
   docState.scopes = meta.scopes ?? [];
 }
+
+/**
+ * 拉一次「我的脚本模板」。
+ *
+ * 未登录时这个接口是 401 —— 那一页对游客也开着（教程、块类型表都看得见），
+ * 所以这里**不能让它把整页带崩**：失败就当成一份空表，页面上照常显示「登录后可以存」。
+ */
+async function loadScriptTemplates(force = false) {
+  if (scriptTemplateState.loaded && !force) return;
+  scriptTemplateState.loaded = true;
+  scriptTemplateState.failed = false;
+  try {
+    const data = await api('/api/docs/meta/script-templates');
+    scriptTemplateState.templates = data.templates ?? [];
+    scriptTemplateState.limit = Number(data.limit ?? 0);
+    scriptTemplateState.maxCode = Number(data.maxCode ?? 0);
+  } catch {
+    scriptTemplateState.templates = [];
+    scriptTemplateState.failed = true;
+  }
+}
+
+const scriptTemplateById = (id) => scriptTemplateState.templates.find((item) => Number(item.id) === Number(id)) ?? null;
+
 
 const typeDef = (name) => docState.types.find((item) => item.name === name) ?? null;
 
@@ -135,7 +166,7 @@ async function viewDocs(query = new URLSearchParams()) {
       <div class="doc-actions">
         ${state.me ? '<button class="btn btn-sm" type="button" data-doc-action="new">＋ 新建一篇</button>' : '<a class="btn btn-sm" href="#/login">登录后可以新建</a>'}
         <a class="btn btn-sm" href="#/wiki">⧉ Wiki 站</a>
-        <a class="btn btn-sm btn-ghost" href="#/blocks">块类型表</a>
+        <a class="btn btn-sm btn-ghost" href="#/dev">🛠 开发者功能</a>
       </div>
     </div>
     ${
@@ -830,7 +861,7 @@ function blocksEditorHtml(blocks) {
           ${docState.types.map((type) => `<option value="${esc(type.name)}">${esc(type.icon ?? '')} ${esc(type.label ?? type.name)}</option>`).join('')}
         </select>
         <button class="btn btn-sm btn-primary" type="button" data-doc-action="insert">加一块</button>
-        <a class="btn btn-sm btn-ghost" href="#/blocks">想自己编一种块？看块类型表</a>
+        <a class="btn btn-sm btn-ghost" href="#/dev">想自己编一种块？看开发者功能</a>
       </div>
     </div>`;
 }
@@ -1197,6 +1228,8 @@ function renderEditor() {
         <label class="doc-field"><span class="doc-field-label">谁可以看</span>
           <select class="doc-input doc-select" data-doc-scope>${scopeOptionsHtml(doc.scope)}</select>
         </label>
+        <label class="doc-check-label"><input class="doc-check" type="checkbox" data-doc-script-write${editor.data.settings?.allowScriptWrite ? ' checked' : ''}>
+          允许脚本改块（打开后，沙箱里的 <code class="doc-code">Sandbox.render</code> 能往派生层写块）</label>
       </div>
       <div class="doc-actions">
         <button class="btn btn-sm btn-primary" type="button" data-doc-action="save-meta">保存标题与范围</button>
@@ -1237,7 +1270,13 @@ async function saveMeta() {
       body: { title, scope, template: editor.data.doc?.template ?? '' },
     }),
   );
-  toast('标题和可见范围存好了');
+  // 「允许脚本改块」是单独的 settings 接口（默认关）—— 没变就不发这一次请求。
+  const scriptWrite = Boolean($('[data-doc-script-write]')?.checked);
+  const before = Boolean(editor.data.settings?.allowScriptWrite);
+  if (scriptWrite !== before) {
+    absorb(await api(`/api/docs/${editor.id}/settings`, { method: 'PUT', body: { allowScriptWrite: scriptWrite } }));
+  }
+  toast(scriptWrite === before ? '标题和可见范围存好了' : `存好了，「允许脚本改块」已${scriptWrite ? '打开' : '关闭'}`);
 }
 
 /**
@@ -1389,14 +1428,23 @@ async function viewDocEdit(id, query = new URLSearchParams()) {
 }
 
 /* ------------------------------------------------------------------ */
-/* 块类型表                                                            */
+/* 开发者功能                                                          */
 /* ------------------------------------------------------------------ */
 
-/** 块类型表：`#/blocks`。内置的只读，自定义的可以在这里注册。 */
-async function viewBlocks() {
+/**
+ * 开发者功能：`#/dev`（登记在案的旧地址 `#/blocks` 也进这一页）。
+ *
+ * 两件事合在一页：
+ *   · **块类型表** —— 平台上有哪些块类型、各自的 props 长什么样、怎么注册一种新的；
+ *   · **我的脚本模板** —— 把常写的沙箱脚本存下来，下次一键起一篇。
+ * 前者是「平台能有哪些块」，后者是「我自己常用哪几段代码」，都是开发时才看的东西，
+ * 所以不再各占一个入口。
+ */
+async function viewDev() {
   leaveDocPage();
   docState.editor = null;
   await loadMeta(true);
+  await loadScriptTemplates(true);
   const builtin = docState.types.filter((type) => type.builtin);
   const custom = docState.types.filter((type) => !type.builtin);
   const card = (type, mark) => `<div class="card doc-type-card">
@@ -1434,12 +1482,126 @@ async function viewBlocks() {
         </div>
       </form>
     </div>
+    ${scriptTemplatesHtml()}
     ${guideHtml()}
     <div class="doc-grid">${builtin.map((type) => card(type, '内置')).join('')}</div>
     ${custom.length ? `<div class="doc-grid">${custom.map((type) => card(type, '自定义')).join('')}</div>` : ''}`;
   ensureDelegate();
   mountTypeForm();
 }
+
+/** 旧地址 `#/blocks` 进的还是这一页 —— 名字留着，避免书签与测试里的地址变成死链。 */
+const viewBlocks = viewDev;
+
+/* ------------------------------------------------------------------ */
+/* 脚本模板（开发者功能里保存自己的脚本）                                */
+/* ------------------------------------------------------------------ */
+
+/**
+ * 「我的脚本模板」这张卡：表单 + 自己存过的模板。
+ *
+ * 模板里存的就是一段沙箱脚本（同一个块里跑的 HTML/JS），
+ * 所以「保存」= 把开发时写得顺手的代码收起来，「用它新建一篇」= 省掉从零粘贴。
+ */
+function scriptTemplatesHtml() {
+  const list = scriptTemplateState.templates;
+  const limit = scriptTemplateState.limit > 0 ? ` / ${scriptTemplateState.limit}` : '';
+  const cards = list.length
+    ? `<div class="doc-grid">${list.map(scriptTemplateCard).join('')}</div>`
+    : `<div class="doc-hint">${
+        scriptTemplateState.failed
+          ? '登录之后这里会列出你自己的脚本模板。'
+          : '还没有模板。把下面那段代码存起来，下次就能一键起一篇。'
+      }</div>`;
+
+  return `<div class="card doc-panel" data-doc-template-panel>
+    <div class="card-head"><span class="card-title">🗂 我的脚本模板</span><span class="hint">${list.length}${limit} 个</span></div>
+    <div class="doc-hint">模板只自己可见。存的是<strong>一段沙箱脚本</strong>：「用它新建一篇」会建一篇只带这一块的积木，直接进编辑器。<br>
+      代码里带 HTML 标签就建成 <code class="doc-code">小应用</code> 块（画界面），纯 JS 就建成 <code class="doc-code">脚本</code> 块（画别的块）。</div>
+    <form class="doc-new" data-doc-form="script-template">
+      <input type="hidden" name="id" value="">
+      <div class="doc-new-row">
+        <input class="doc-input" name="name" maxlength="40" placeholder="模板名（如 打卡本）">
+        <input class="doc-input" name="description" maxlength="200" placeholder="一句话说明（选填）">
+      </div>
+      <label class="doc-field"><span class="doc-field-label">脚本代码（HTML / JS，在访客浏览器的沙箱里跑）</span>
+        <textarea class="doc-input doc-textarea doc-src-box" name="code" rows="8" spellcheck="false" placeholder="&lt;h3&gt;标题&lt;/h3&gt;&#10;&lt;script&gt; Sandbox.resize(); &lt;/script&gt;"></textarea>
+      </label>
+      <div class="doc-actions">
+        ${
+          state.me
+            ? '<button class="btn btn-sm btn-primary" type="submit">保存模板</button><button class="btn btn-sm btn-ghost" type="button" data-doc-action="tpl-reset">清空表单</button>'
+            : '<a class="btn btn-sm" href="#/login">登录后可以存模板</a>'
+        }
+        <button class="btn btn-sm btn-ghost" type="button" data-doc-action="tpl-sample">填入示例代码</button>
+      </div>
+    </form>
+    ${cards}
+  </div>`;
+}
+
+function scriptTemplateCard(item) {
+  const size = typeof item.code === 'string' ? item.code.length : 0;
+  return `<div class="card doc-type-card">
+    <div class="card-head">
+      <span class="card-title">🗂 ${esc(item.name)}</span>
+      <span class="doc-badge">${size} 字符 · ${esc(Fmt.timeAgo(item.updatedAt))}</span>
+    </div>
+    ${item.description ? `<div class="doc-hint">${esc(item.description)}</div>` : ''}
+    <textarea class="doc-input doc-textarea doc-src-box" rows="4" readonly spellcheck="false">${esc(item.code ?? '')}</textarea>
+    <div class="doc-actions">
+      <button class="btn btn-sm" type="button" data-doc-action="tpl-load" data-doc-script-template="${esc(item.id)}">编辑这段</button>
+      <button class="btn btn-sm btn-primary" type="button" data-doc-action="tpl-new" data-doc-script-template="${esc(item.id)}">用它新建一篇</button>
+      <button class="btn btn-sm btn-ghost" type="button" data-doc-action="tpl-delete" data-doc-script-template="${esc(item.id)}">删除</button>
+    </div>
+  </div>`;
+}
+
+const tplField = (name) => $(`[data-doc-form="script-template"] [name="${name}"]`);
+
+/** 把一份模板（或空值）填进表单：`id` 决定这是「新建」还是「覆盖那一条」。 */
+function fillScriptTemplateForm(item) {
+  const id = tplField('id');
+  const name = tplField('name');
+  const description = tplField('description');
+  const code = tplField('code');
+  if (id) id.value = item ? String(item.id) : '';
+  if (name) name.value = item ? String(item.name ?? '') : '';
+  if (description) description.value = item ? String(item.description ?? '') : '';
+  if (code) code.value = item ? String(item.code ?? '') : '';
+  const submit = $('[data-doc-form="script-template"] [type="submit"]');
+  if (submit) submit.textContent = item ? '保存修改' : '保存模板';
+}
+
+/**
+ * 「用它新建一篇」：建一篇只带一个脚本块的积木，然后直接进编辑器。
+ *
+ * 存模板时不问「这是哪一类块」，建的时候按内容认：
+ *   · 带 HTML 标签（`<div>`、`<script>`…）→ **小应用**块（`app`，画界面的那种）；
+ *   · 纯 JS → **脚本**块（`script`，帖子级脚本，用来画别的块）。
+ * 这两类块的 `code` 语义本来就不同：`script` 的正文是裸 JS（服务端会自己包 `<script>`），
+ * `app` 的正文是一整段 HTML/JS 文档。认错了块会变成一片看不懂的源码，所以这里要点一下。
+ */
+async function newDocFromScriptTemplate(item) {
+  const source = String(item.code ?? '');
+  const html = /<\/?[a-z][\w-]*(\s[^>]*)?>/i.test(source);
+  const block = html
+    ? { type: 'app', props: { app: item.name || '', config: {}, code: source } }
+    : { type: 'script', props: { code: source } };
+  const created = await api('/api/docs', {
+    method: 'POST',
+    body: {
+      title: item.name || '未命名',
+      kind: 'post',
+      scope: 'public',
+      template: '',
+      blocks: [block],
+    },
+  });
+  toast(`用「${item.name}」建好了一篇（${html ? '小应用' : '脚本'}块）`);
+  navigate(`/doc/${created.doc.id}/edit`);
+}
+
 
 /* 注册表单的两个默认值。差别只有一处：**沙箱类型必须声明一个 code 字段** ——
  * `sandboxInner()` 就是读 `props.code` 来当程序正文的，schema 里没有它，
@@ -1546,6 +1708,32 @@ const GUIDE_SNIPPET = `<!-- Sandbox.props 是这个块的全部字段；Sandbox.
   })();
 </script>`;
 
+/** 脚本模板表单的「填入示例代码」：一段最短的、在沙箱里真的跑得起来的脚本。 */
+const TEMPLATE_SAMPLE = `<h3 id="title">今天做了什么</h3>
+<button id="ping" type="button">记一笔</button>
+<ul id="log"></ul>
+<script>
+  (async () => {
+    // 沙箱拿不到本站身份，想知道什么就申请什么（被拒时 Promise 会 reject）。
+    const me = await Sandbox.viewer();
+    document.getElementById('title').textContent =
+      (me.loggedIn ? '@' + me.username : '访客') + ' 的记录';
+
+    // 状态存在服务端（按「块 + 人」各一份），刷新、明天再来都还在。
+    let items = (await Sandbox.state.get()) || [];
+    const paint = () => {
+      document.getElementById('log').innerHTML = items.map((x) => '<li>' + x + '</li>').join('');
+      Sandbox.resize();
+    };
+    document.getElementById('ping').onclick = async () => {
+      items = items.concat([new Date().toISOString().slice(0, 16).replace('T', ' ')]);
+      await Sandbox.state.set(items);
+      paint();
+    };
+    paint();
+  })();
+</script>`;
+
 /* ------------------------------------------------------------------ */
 /* 事件（挂在 ui.app 上，只挂一次）                                     */
 /* ------------------------------------------------------------------ */
@@ -1637,6 +1825,40 @@ async function onAppClick(event) {
   if (action === 'rollback') return withBusy(() => rollback(Number(node.dataset.revision)));
   if (action === 'export') return withBusy(() => exportDoc(currentId));
   if (action === 'delete') return withBusy(() => deleteDoc(currentId));
+
+  /* 开发者功能（`#/dev`）里的脚本模板 */
+  if (action === 'tpl-load') {
+    const item = scriptTemplateById(node.dataset.docScriptTemplate);
+    if (!item) return;
+    fillScriptTemplateForm(item);
+    toast(`把「${item.name}」填进表单了，改完点保存`);
+    return;
+  }
+  if (action === 'tpl-reset') {
+    fillScriptTemplateForm(null);
+    return;
+  }
+  if (action === 'tpl-sample') {
+    const code = tplField('code');
+    if (code) code.value = TEMPLATE_SAMPLE;
+    return;
+  }
+  if (action === 'tpl-delete') {
+    const item = scriptTemplateById(node.dataset.docScriptTemplate);
+    if (!item) return;
+    if (!confirm(`删掉模板「${item.name}」吗？`)) return;
+    return withBusy(async () => {
+      await api(`/api/docs/meta/script-templates/${encodeURIComponent(item.id)}`, { method: 'DELETE' });
+      await loadScriptTemplates(true);
+      toast(`「${item.name}」删了`);
+      return viewDev();
+    });
+  }
+  if (action === 'tpl-new') {
+    const item = scriptTemplateById(node.dataset.docScriptTemplate);
+    if (!item) return;
+    return withBusy(() => newDocFromScriptTemplate(item));
+  }
 }
 
 async function onAppSubmit(event) {
@@ -1686,7 +1908,16 @@ async function onAppSubmit(event) {
           },
         });
         toast('注册好了，去编辑器里就能用了');
-        return viewBlocks();
+        return viewDev();
+      }
+      if (form.dataset.docForm === 'script-template') {
+        const id = Number(values.id) || 0;
+        const body = { name: values.name, description: values.description, code: values.code };
+        if (id) body.id = id;
+        await api('/api/docs/meta/script-templates', { method: 'POST', body });
+        toast(id ? '模板改了' : '模板存好了，下次一键起一篇');
+        await loadScriptTemplates(true);
+        return viewDev();
       }
       return undefined;
     } catch (error) {
@@ -1737,6 +1968,7 @@ export { viewDoc };
 export { viewWiki };
 export { viewWikiIndex };
 export { viewDocEdit };
+export { viewDev };
 export { viewBlocks };
 
 /* @hand-written */

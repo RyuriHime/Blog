@@ -160,7 +160,8 @@ function renderSidebar() {
       <div class="card-head"><span class="card-title">🧩 积木</span><a class="tag" href="#/docs">全部</a></div>
       <div class="side-links">
         <a class="side-link" href="#/docs">🧩 积木广场</a>
-        <a class="side-link" href="#/blocks">🧱 块类型表</a>
+        <a class="side-link" href="#/guide">📖 积木教程</a>
+        <a class="side-link" href="#/dev">🛠 开发者功能</a>
       </div>
     </div>
     <div class="card card-tight">

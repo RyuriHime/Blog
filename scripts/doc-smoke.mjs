@@ -2290,6 +2290,114 @@ try {
     }
   }
 
+  /* ========== S11 开发者功能：块类型表搬了家 + 我的脚本模板 ========== */
+
+  console.log('\n【S11】开发者功能：模板存得下、只自己看得见，教程页接得上');
+
+  {
+    // 提醒：这一节把 60 次 / 10 分钟的写配额用掉 59 次（`doc:script-template:<user>`），
+    // 因为「存满 50 个」这条只能真的存 50 次。要往这里加用例，先想清楚配额。
+    const CODE = [
+      'const n = await Sandbox.state.get();',
+      'await Sandbox.state.set((n ?? 0) + 1);',
+      'Sandbox.resize();',
+    ].join('\n');
+
+    // 11.1 模板是私人物品：匿名连列表都不给（前端靠 401 把表单收成「登录后可以存模板」）。
+    const anonList = await anon.call('/api/docs/meta/script-templates');
+    check('11.1 匿名看脚本模板 → 401 unauthenticated（不是空表）', anonList.status === 401 && anonList.error?.code === 'unauthenticated', `${anonList.status} ${JSON.stringify(anonList.error)}`);
+    const anonSave = await anon.call('/api/docs/meta/script-templates', { method: 'POST', body: { name: '匿名的', code: CODE } });
+    check('11.1 匿名存模板 → 401', anonSave.status === 401, `${anonSave.status}`);
+
+    // 11.2 存一个，读回来必须是**逐字节原文**（模板就是拿来复用的，截断等于废了）。
+    const made = await author.call('/api/docs/meta/script-templates', { method: 'POST', body: { name: '打卡本', description: '每天点一下', code: CODE } });
+    const tplId = made.data?.template?.id;
+    check('11.2 登录用户能存下一个脚本模板', made.status === 200 && Number.isInteger(tplId), `${made.status} ${JSON.stringify(made.error ?? made.data)}`);
+    check('11.2 存回来的代码是原文（没被截断）', made.data?.template?.code === CODE, JSON.stringify(made.data?.template?.code));
+    const listed = await author.call('/api/docs/meta/script-templates');
+    check(
+      '11.2 列表里看得见它，并且带上限与字段长度（前端拿它做 maxlength）',
+      (listed.data?.templates ?? []).some((item) => item.id === tplId) && listed.data?.limit > 0 && listed.data?.maxCode > 0,
+      JSON.stringify(listed.data),
+    );
+
+    // 11.3 只自己看得见 / 只自己删得掉。
+    const mateList = await mate.call('/api/docs/meta/script-templates');
+    check('11.3 别人的模板不在我的列表里', !(mateList.data?.templates ?? []).some((item) => item.id === tplId), JSON.stringify(mateList.data?.templates));
+    const mateDelete = await mate.call(`/api/docs/meta/script-templates/${tplId}`, { method: 'DELETE' });
+    check('11.3 删别人的模板 → 404（不是 403：不告诉陌生人这个 id 存在）', mateDelete.status === 404, `${mateDelete.status} ${JSON.stringify(mateDelete.error)}`);
+
+    // 11.4 输入校验：名字、代码、长度、重名 —— 全部走人话提示，不是 500。
+    const noName = await author.call('/api/docs/meta/script-templates', { method: 'POST', body: { name: '   ', code: CODE } });
+    check('11.4 没名字 → 400', noName.status === 400 && String(noName.error?.message ?? '').includes('名字'), `${noName.status} ${JSON.stringify(noName.error)}`);
+    const noCode = await author.call('/api/docs/meta/script-templates', { method: 'POST', body: { name: '空壳' } });
+    check('11.4 没代码 → 400（存个空壳没意义）', noCode.status === 400, `${noCode.status}`);
+    const tooLong = await author.call('/api/docs/meta/script-templates', { method: 'POST', body: { name: '太长', code: 'x'.repeat(20001) } });
+    check('11.4 代码超长 → 400（和 app 块同一把尺子）', tooLong.status === 400, `${tooLong.status} ${JSON.stringify(tooLong.error)}`);
+    const clash = await author.call('/api/docs/meta/script-templates', { method: 'POST', body: { name: '打卡本', code: CODE } });
+    check('11.4 同名再存 → 409（同一个人不允许两个同名模板）', clash.status === 409, `${clash.status} ${JSON.stringify(clash.error)}`);
+
+    // 11.5 带 id 是覆盖，不是又存一个。
+    const updated = await author.call('/api/docs/meta/script-templates', { method: 'POST', body: { id: tplId, name: '打卡本 v2', description: '改过', code: `${CODE}\n// v2` } });
+    check('11.5 带 id 是覆盖（回到同一个 id）', updated.status === 200 && updated.data?.template?.id === tplId, `${updated.status} ${JSON.stringify(updated.error ?? updated.data)}`);
+    const afterUpdate = await author.call('/api/docs/meta/script-templates');
+    check('11.5 覆盖之后还是只有它一个（没长出第二条）', (afterUpdate.data?.templates ?? []).length === 1, JSON.stringify((afterUpdate.data?.templates ?? []).map((item) => item.name)));
+    const missing = await author.call('/api/docs/meta/script-templates', { method: 'POST', body: { id: 999999, name: '不存在', code: CODE } });
+    check('11.5 覆盖一个不存在的模板 → 404', missing.status === 404, `${missing.status}`);
+
+    // 11.6 上限：每人 50 个（存满之前一路 200，第 51 个被挡）。
+    const LIMIT = Number(afterUpdate.data?.limit) || 50;
+    let fillStatus = 0;
+    for (let index = (afterUpdate.data?.templates ?? []).length; index < LIMIT; index += 1) {
+      const res = await author.call('/api/docs/meta/script-templates', { method: 'POST', body: { name: `批量 ${index}`, code: 'Sandbox.resize();' } });
+      fillStatus = res.status;
+    }
+    check('11.6 存到上限之前一路 200', fillStatus === 200, `last=${fillStatus} limit=${LIMIT}`);
+    const over = await author.call('/api/docs/meta/script-templates', { method: 'POST', body: { name: '第 51 个', code: 'Sandbox.resize();' } });
+    check(`11.6 超过 ${LIMIT} 个 → 400 且是人话提示`, over.status === 400 && String(over.error?.message ?? '').includes('最多'), `${over.status} ${JSON.stringify(over.error)}`);
+
+    // 11.7 删除。
+    const removed = await author.call(`/api/docs/meta/script-templates/${tplId}`, { method: 'DELETE' });
+    check('11.7 删自己的模板 → 200 并回 id', removed.status === 200 && removed.data?.deleted === tplId, `${removed.status} ${JSON.stringify(removed.error ?? removed.data)}`);
+    const gone = await author.call('/api/docs/meta/script-templates');
+    check('11.7 删完就不在列表里了', !(gone.data?.templates ?? []).some((item) => item.id === tplId), JSON.stringify((gone.data?.templates ?? []).map((item) => item.id)));
+    const twice = await author.call(`/api/docs/meta/script-templates/${tplId}`, { method: 'DELETE' });
+    check('11.7 再删一次 → 404（不是 500）', twice.status === 404, `${twice.status}`);
+
+    // 11.8 落库的形状：表在、同名唯一、没有孤儿行。
+    const ddl = String(tableSql('doc_script_templates') ?? '');
+    check('11.8 doc_script_templates 表真建出来了', ddl.includes('doc_script_templates'), ddl.slice(0, 120));
+    check('11.8 (user_id, name) 唯一（同名模板在同一个人名下只可能一条）', /UNIQUE/i.test(ddl), ddl.replace(/\s+/g, ' ').slice(0, 200));
+    const rows = scalar('SELECT COUNT(*) AS n FROM doc_script_templates WHERE user_id = ?', authorId);
+    check(`11.8 库里正好剩 ${LIMIT - 1} 条（存满 ${LIMIT} 条、删掉 1 条）`, Number(rows?.n ?? -1) === LIMIT - 1, JSON.stringify({ rows, limit: LIMIT }));
+
+    // 11.9 前端接线：块类型表搬进「开发者功能」，老地址还开着；教程页接上了。
+    const readText = (relative) => {
+      const full = join(ROOT, ...relative.split('/'));
+      return existsSync(full) ? readFileSync(full, 'utf8') : '';
+    };
+    const docJs = readText('public/views/doc.js');
+    const guideJs = readText('public/views/guide.js');
+    const routerJs = readText('public/core/router.js');
+    const sessionJs = readText('public/core/session.js');
+    const css = readText('public/css/41-doc.css');
+    const frontendJs = readText('scripts/check-frontend.mjs');
+    check('11.9 块类型表搬进 viewDev，老地址 viewBlocks 还指过去（收藏夹不失效）', docJs.includes('function viewDev()') && docJs.includes('const viewBlocks = viewDev;'), '');
+    check('11.9 路由认识 #/dev、#/guide，同时保住 #/blocks', ["first === 'dev'", "first === 'guide'", "first === 'blocks'", "from '../views/guide.js'"].every((needle) => routerJs.includes(needle)), '');
+    check('11.9 侧栏三条入口齐了（广场 / 教程 / 开发者功能）', ['#/docs', '#/guide', '#/dev'].every((href) => sessionJs.includes(`href="${href}"`)), '');
+    check(
+      '11.9 开发者功能里有脚本模板表单（名字 / 说明 / 代码 / 示例 / 删除）',
+      docJs.includes('data-doc-form="script-template"') && docJs.includes('data-doc-action="tpl-sample"') && docJs.includes('data-doc-action="tpl-delete"') && docJs.includes('data-doc-action="tpl-new"'),
+      '',
+    );
+    check('11.9 「一键新建一篇积木」按内容认块类型（HTML → app，纯 JS → script）', docJs.includes('function newDocFromScriptTemplate(') && docJs.includes("type: 'app'") && docJs.includes("type: 'script'"), '');
+    check('11.10 编辑器里能开关「允许脚本改块」（以前这个开关没有界面）', docJs.includes('data-doc-script-write') && docJs.includes('allowScriptWrite'), '');
+    check('11.10 教程页顶上是动态块类型清单（谁注册了新类型，教程里就有）', guideJs.includes('export async function viewGuide') && guideJs.includes('/api/docs/meta/block-types'), '');
+    check('11.10 教程讲了能力、状态与坑（不是一页空话）', ['Sandbox.state.set', '能力', '超时'].every((needle) => guideJs.includes(needle)), '');
+    check('11.10 教程的代码框样式在 41-doc.css 里', css.includes('.guide-pre'), '');
+    check('11.10 前端清单里登记了开发者功能与积木教程两页', frontendJs.includes("['开发者功能'") && frontendJs.includes("['积木教程'"), '');
+  }
+
   await finish(failures.length ? 1 : 0);
 } catch (error) {
   console.log('❌ 测试脚本自己抛了异常：');
