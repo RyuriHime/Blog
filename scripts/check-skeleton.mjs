@@ -37,11 +37,11 @@ const PLANNED_EMPTY = new Set([
   // feed_items / feed_reactions 已由 P1（动态）落地建表，2026-10 从这里移除。
   // documents / document_blocks / document_revisions / doc_block_types
   //   已由 P2（积木帖子）落地建表，2026-10 从这里移除。
+  // teams / team_members / team_posts
+  //   已由 P4（团队）落地建表，2026-10 从这里移除。
   // 你要是看到这张清单少了什么，说明那块功能已经真的开工了 —— 这是设计如此。
   'ai_capability_grants',
   'ai_op_logs',
-  'teams',
-  'team_members',
 ]);
 /** 骨架交付时的入口长度上限。接手后写业务代码请写进模块，不要往入口堆。 */
 const MAX_SERVER_LINES = Number(process.env.MAX_SERVER_LINES || 120);

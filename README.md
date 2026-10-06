@@ -322,7 +322,7 @@ forum/
 │   └── modules/                 # 功能层：每个模块一个文件夹，互不 import
 │       ├── index.js             #   ★ 全仓库唯一列举模块的名册（MODULES）
 │       ├── core/                #   现有论坛本体（auth / posts / replies / 社交 / 管理）
-│       ├── feed/  doc/  ai/  team/  ui/   # 五路并行的空壳（见 docs/skeleton.md）
+│       ├── feed/ doc/ ai/ team/  ui/      # 拆分出来的功能模块（见 docs/skeleton.md）
 ├── public/
 │   ├── index.html               # 页面外壳（顶栏 / 侧栏 / 挂载点）
 │   ├── app.js                   # 薄入口（≤120 行）：只做 bootstrap
@@ -378,6 +378,8 @@ forum/
 | `#/doc/:id/blocks` | 同一个编辑器的高级入口（默认落在积木模式）：块列表 + 当前块的 props 表单 |
 | `#/blocks` | 块类型表：12 种内置块类型的声明式 schema 速查、「怎么自己编一个块」的指南 + 注册自己的块类型（可带渲染模板） |
 | `#/wiki/:name` | Wiki 多页面：`[[双链]]` 的落点；左侧是分类边栏（页内筛选 + 新建页，作者多一个「改分类」），有这一页就渲染它，没有就给「建这一页」（`?create=1` 一步进编辑器） |
+| `#/teams` | 团队列表：公开团队广场，`?mine=1` 只看我加入的，`?page=` 翻页；未登录也能看 |
+| `#/team/:slug` | 团队主页：团队简介与成员、发帖框、帖子列表（按四档可见范围过滤）；成员在这里一起编辑同一条帖子 |
 
 ---
 
@@ -467,6 +469,26 @@ forum/
 | GET | `/api/docs/wiki/:name` | 按标题找一页 wiki（`template='page'`），连同 `nav` 边栏一起回；看不见与不存在都回 `{ found:false }` | 按 scope |
 | POST | `/api/docs/wiki/:name` | 打开或**新建**一页 wiki（body `{ scope }`，默认 `public`）；返回 `created` 标记 | 登录 |
 | PUT | `/api/docs/:id/wiki` | 给一页 wiki 定分类与排序，body `{ category, sortOrder }`；回新的 `nav` | 作者/管理员 |
+| GET | `/api/teams` | 团队列表，支持 `mine=1`（我加入的）`page` `perPage`；未登录也能看 | 公开 |
+| POST | `/api/teams` | 建团队，body `{ name, slug?, intro?, joinPolicy? }`；中文名派生不出 slug 时自动生成 `team-xxxx` | 登录（每小时 5 个） |
+| GET | `/api/teams/:id` | 团队详情（`:id` 可以是数字 id 或 slug）：`{ team, members, memberTotal, scopes }` | 公开 |
+| PUT | `/api/teams/:id` | 改名字 / 简介 / 加入方式 | 团队管理员 |
+| DELETE | `/api/teams/:id` | 解散团队（软删除） | **仅创建者** |
+| GET | `/api/teams/:id/members` | 成员列表（创建者 → 管理员 → 成员，同类按加入时间） | 公开 |
+| POST | `/api/teams/:id/join` | 加入团队；`join_policy='invite'` 的团队会 403 | 登录 |
+| POST | `/api/teams/:id/leave` | 退出团队；创建者不能退出（只能解散或转交） | 登录 |
+| POST | `/api/teams/:id/members` | 拉人进来，body `{ username, role? }` | 团队管理员 |
+| PUT | `/api/teams/:id/members/:userId` | 改成员角色（只能设 `admin` / `member`） | 仅创建者 |
+| DELETE | `/api/teams/:id/members/:userId` | 踢人，或自己退自己；创建者不可被移出 | 团队管理员 |
+| GET | `/api/teams/:id/posts` | 团队帖子列表；未登录只会看到 `public` 的那几条 | 按 scope |
+| POST | `/api/teams/:id/posts` | 在团队里发帖，body `{ title, content, scope }` | 团队成员（每 10 分钟 30 条） |
+| GET | `/api/teams/:id/posts/:postId` | 帖子详情。**未登录访问非公开帖 → 401；已登录但无权 → 404**（404 而不是 403，否则能枚举出「哪些帖子存在」） | 按 scope |
+| PUT | `/api/teams/:id/posts/:postId` | 保存，body `{ title, content, scope, version, force? }`。版本对不上 → **409 `conflict`**，带上 `force:true` 再提交才覆盖 | 作者或任何能看见它的团队成员 |
+| DELETE | `/api/teams/:id/posts/:postId` | 删帖（软删除）。**与编辑故意不对称**：不可逆的破坏性操作只留给作者和团队管理员 | 作者/团队管理员 |
+
+> **团队为什么没有站长后门**：团队管理只认 `team_members` 里的 owner / admin，站长（`role='owner'`）也不例外。
+> 一旦站长能管理任意团队，他就能把自己加进一个「需要邀请」的团队然后读到里面的帖子 —— 那是一条提权通道。
+> 读取侧同理：少给一个后门最多是管理员看不到，多给一个就是一次不可逆的泄露（内容还会被搜索、被 AI 索引）。
 
 ---
 
@@ -507,6 +529,18 @@ doc_capability_logs(id, document_id, block_id, capability, user_id, allowed, cre
                     -- 沙箱能力调用的审计流水：被拒也记一行
 note_documents(user_id, note_name, document_id, created_at)
                     -- 笔记子系统 ⇄ documents 的接线表，(user_id, note_name) 唯一
+
+-- 团队（P4）：写在 src/modules/team/，不放进 src/core/open-db-support.js
+teams(id, slug, name, intro, owner_id, join_policy, deleted, created_at, updated_at)
+                    -- slug 唯一（团队地址，如 #/team/wenlan）；join_policy: open | invite
+team_members(team_id, user_id, role, joined_at)
+                    -- 主键 (team_id, user_id)：一个人在一个团队只有一行
+                    -- role: owner | admin | member，owner 唯一且不可退出
+team_posts(id, team_id, user_id, title, content, scope, version, updated_by,
+           deleted, created_at, updated_at)
+                    -- scope 与 feed / documents 共用同一套四档枚举
+                    -- version 从 1 开始，保存时把版本号带上；对不上就是 409，
+                    -- 不静默覆盖 —— 这是「成员一起编辑且不互相覆盖」的落点
 ```
 
 设计要点：
@@ -560,11 +594,12 @@ note_documents(user_id, note_name, document_id, created_at)
 ```bash
 node scripts/check-golden.mjs      # ★ 行为金标准：96 条请求的状态码 + 响应结构，一条都不能变
 node scripts/check-skeleton.mjs    # ★ 骨架自检：模块能不能独立拆掉、薄入口有没有变胖
-node scripts/check-frontend.mjs    # ★ 前端渲染冒烟：27 个页面全部渲染一遍 + 裸调用未定义名字的静态扫描
+node scripts/check-frontend.mjs    # ★ 前端渲染冒烟：30 个页面全部渲染一遍 + 裸调用未定义名字的静态扫描
 node scripts/smoke.mjs             # 后端端到端：242 项（临时独立库+端口，跑完自动清理）
 node scripts/smoke-ai.mjs          # AI 接口端到端：61 项
 node scripts/feed-smoke.mjs        # 动态流端到端：95 项
 node scripts/doc-smoke.mjs         # 积木（可编程帖子）端到端：392 项
+node scripts/team-smoke.mjs        # 团队端到端：97 项（可见范围 / 越权 / 版本冲突）
 node scripts/check-ui-contract.mjs # 前端契约：CSS 类名 + API 字段 + 主题/头像/角色/私信结构
 node scripts/check-encoding.mjs    # 源码编码体检：BOM / 乱码 / 关键中文内容
 node scripts/check-graph-ui.mjs    # 知识网络图 UI
@@ -574,13 +609,17 @@ node scripts/capture-fixtures.mjs  # 重采前端冒烟用的假数据（改了�
 node scripts/reset-db.mjs          # 清空数据库并重新播种
 ```
 
-一次跑完（`npm test` 就是前 12 组）：
+一次跑完（`npm test` 就是前 13 组）：
 
 ```
-check-encoding 187 文件 / 77 断言 · check-skeleton 47 项 · check-golden 96 项 0 差异
-check-frontend 27 个页面 + 29 个模块静态扫描 · smoke 242 · smoke-ai 61 · feed-smoke 95
-doc-smoke 392 · check-ui-contract 210 · check-graph-ui 24 · check-notes-ui 33 · notes-smoke 44
+check-encoding 194 文件 / 87 断言 · check-skeleton 47 项 · check-golden 96 项 0 差异
+check-frontend 30 个页面 + 30 个模块静态扫描 · smoke 242 · smoke-ai 61 · feed-smoke 95
+doc-smoke 392 · team-smoke 97 · check-ui-contract 210 · check-graph-ui 24 · check-notes-ui 33 · notes-smoke 44
 ```
+
+> 跑 `check-golden` 前先确认 `data/knowledge/` 里没有生成好的图（`data/` 是被 gitignore 的本地目录）。
+> 有图时 `/api/knowledge/graph` 会返回 200 而不是指纹里的 404，于是报两处「行为差异」——
+> 那是本地残留，不是代码回归；清掉 `data/knowledge/` 再跑就绿。CI 是干净检出，不受影响。
 
 另外四组在各自的包里，`npm test` 不带它们：
 

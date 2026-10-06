@@ -1,0 +1,384 @@
+// 团队（P4）自己的 SQL。
+//
+// 为什么单独一个文件：`src/store.js` 是 core 的地盘（它只认 posts / replies / users 那几张表），
+// 团队三张表归 P4，SQL 就该在 P4 的目录里 —— 五个人并行时才不会天天改同一个文件。
+//
+// ⚠️ 本文件照抄 P1（`src/modules/feed/queries.js`）用血换来的两条规矩：
+//   1) 所有语句都过 `bind()`：**占位符个数与实参个数不一致就当场抛错**。
+//      v1 的「转发列表 500」就是参数顺序错位，而 smoke 242 项 + check-ui-contract 175 项全绿。
+//   2) **一条 SQL 的参数只能由 `conditions` 数组里成对声明的 `{ sql, params }` 拼出来**，
+//      不准在调用点手写参数列表。把「成对」变成结构上的事实，而不是记性上的要求。
+import { ANON } from '../../core/paths.js';
+import { TEAM_SCOPES } from './schema.js';
+
+/**
+ * 拉黑关系（双向）过滤。语义与 `src/store.js` 的 `BLOCKED_AUTHOR_SQL` 一致：
+ * 我拉黑的人、拉黑我的人，互相都看不见对方发的东西。
+ */
+const BLOCKED_AUTHOR_SQL = `p.user_id NOT IN (
+      SELECT blocked_id FROM blocks WHERE blocker_id = ?
+      UNION
+      SELECT blocker_id FROM blocks WHERE blocked_id = ?
+    )`;
+
+/**
+ * 团队的列表/详情共用列。
+ *
+ * ⚠️ 前两个 `?` 在 SELECT 列表里（my_role / joined，都是「当前浏览者」），
+ * **排在整个语句最前面**，拼参数时务必先放这两个，再放 WHERE 的。
+ * 所以 `list()` / `byId()` 把「选择列参数」与「WHERE 参数」拆成两个常量再拼接，
+ * 不靠人肉排列。
+ */
+const TEAM_COLUMNS = `
+      t.id, t.slug, t.name, t.intro, t.owner_id, t.join_policy, t.created_at, t.updated_at,
+      ou.username AS owner_username, ou.display_name AS owner_display, ou.avatar AS owner_avatar,
+      (SELECT COUNT(*) FROM team_members m WHERE m.team_id = t.id) AS member_count,
+      (SELECT COUNT(*) FROM team_posts tp WHERE tp.team_id = t.id AND tp.deleted = 0) AS post_count,
+      (SELECT m.role FROM team_members m WHERE m.team_id = t.id AND m.user_id = ?) AS my_role,
+      EXISTS (SELECT 1 FROM team_members m WHERE m.team_id = t.id AND m.user_id = ?) AS joined`;
+
+/** `TEAM_COLUMNS` 里那两个 `?` 的实参（总是同一个浏览者 id，放两次）。 */
+const teamColumnParams = (viewerId) => [viewerId, viewerId];
+
+const TEAM_FROM = `
+    FROM teams t
+    JOIN users ou ON ou.id = t.owner_id`;
+
+/**
+ * 团队帖的列表/详情共用列。
+ *
+ * `my_role` 也要按**帖所属团队**取一遍：一条帖能不能改，取决于我在**这个团队**里
+ * 是 owner / admin 还是普通成员，跟我在别的团队里的身份无关。
+ */
+const POST_COLUMNS = `
+      p.id, p.team_id, p.user_id, p.title, p.content, p.scope, p.version, p.updated_by,
+      p.created_at, p.updated_at,
+      u.username, u.display_name, u.avatar, u.role,
+      eu.username AS editor_username, eu.display_name AS editor_display,
+      (SELECT m.role FROM team_members m WHERE m.team_id = p.team_id AND m.user_id = ?) AS my_role`;
+
+const postColumnParams = (viewerId) => [viewerId];
+
+const POST_FROM = `
+    FROM team_posts p
+    JOIN users u ON u.id = p.user_id
+    LEFT JOIN users eu ON eu.id = p.updated_by`;
+
+/**
+ * @param {object} db  node:sqlite 的 DatabaseSync
+ */
+export function createTeamQueries(db) {
+  /** 唯一的语句编译口。占位符个数对不上就抛 —— 宁可当场炸，也不要静默查错数据。 */
+  function bind(sql, params) {
+    const holes = (sql.match(/\?/g) ?? []).length;
+    if (holes !== params.length) {
+      throw new Error(
+        `[team] SQL 占位符 ${holes} 个，实参 ${params.length} 个 —— 数量对不上，绝不允许执行。\n` +
+          `（参数一律由 conditions 成对生成；顺序错误比数量错误更隐蔽。）\n${sql}`,
+      );
+    }
+    const statement = db.prepare(sql);
+    return {
+      all: () => statement.all(...params),
+      get: () => statement.get(...params),
+      run: () => statement.run(...params),
+    };
+  }
+
+  /** 把成对的 `{ sql, params }` 拼成 WHERE 片段。参数只从这里出来。 */
+  function buildWhere(conditions) {
+    return {
+      sql: conditions.map((part) => part.sql).join('\n      AND '),
+      params: conditions.flatMap((part) => part.params),
+    };
+  }
+
+  /**
+   * 团队帖的可见范围 WHERE 片段（**服务端强制**，不是前端藏起来）。
+   *
+   * 四档语义与 P1 的动态、P2 的积木完全一致：
+   *   public    谁都能看（含未登录）
+   *   followers 只有关注了作者的人（以及作者自己）能看
+   *   team      只有该团队成员（以及作者自己）能看
+   *   private   只有作者自己
+   *
+   * **不做 staff 越权。** P2 的积木给了管理员后门，P1 的动态没给，这里是团队 ——
+   * 更接近 P1 的私人性质，而且「宁可看不到，不可看漏」：少给一个后门最多是管理员看不到，
+   * 多给一个后门就是一次不可逆的泄露（这条内容还会被搜索、被 AI 索引）。
+   * 需要内容管理时应该是另一条明确的接口，不是悄悄放宽这里。
+   */
+  function postVisibilityConditions(viewerId) {
+    return [
+      {
+        sql: `(p.scope = 'public'
+        OR p.user_id = ?
+        OR (p.scope = 'followers' AND EXISTS (
+          SELECT 1 FROM follows fo WHERE fo.follower_id = ? AND fo.followee_id = p.user_id
+        ))
+        OR (p.scope = 'team' AND EXISTS (
+          SELECT 1 FROM team_members tm WHERE tm.team_id = p.team_id AND tm.user_id = ?
+        )))`,
+        params: [viewerId, viewerId, viewerId],
+      },
+      { sql: BLOCKED_AUTHOR_SQL, params: [viewerId, viewerId] },
+    ];
+  }
+
+  /** 团队列表自己的筛选条件（`mine=1` = 我加入的）。 */
+  function teamFilterConditions({ viewerId, mine = false }) {
+    const parts = [{ sql: 't.deleted = 0', params: [] }];
+    if (mine) {
+      parts.push({
+        sql: `EXISTS (SELECT 1 FROM team_members m WHERE m.team_id = t.id AND m.user_id = ?)`,
+        params: [viewerId],
+      });
+    }
+    return parts;
+  }
+
+  return {
+    scopes: TEAM_SCOPES,
+
+    /* ── 团队 ───────────────────────────────────────────────────────── */
+
+    /** 团队列表。`mine=1` 只看我加入的。 */
+    listTeams({ viewerId = ANON, mine = false, limit = 20, offset = 0 } = {}) {
+      const where = buildWhere(teamFilterConditions({ viewerId, mine }));
+      return bind(
+        `SELECT ${TEAM_COLUMNS}
+    ${TEAM_FROM}
+    WHERE ${where.sql}
+    ORDER BY t.created_at DESC, t.id DESC
+    LIMIT ? OFFSET ?`,
+        [...teamColumnParams(viewerId), ...where.params, limit, offset],
+      ).all();
+    },
+
+    countTeams({ viewerId = ANON, mine = false } = {}) {
+      const where = buildWhere(teamFilterConditions({ viewerId, mine }));
+      const row = bind(
+        `SELECT COUNT(*) AS n
+    FROM teams t
+    WHERE ${where.sql}`,
+        [...where.params],
+      ).get();
+      return Number(row?.n) || 0;
+    },
+
+    /** 按 id 取一个团队（含浏览者视角的 my_role / joined）。软删掉的不算。 */
+    teamById(id, viewerId = ANON) {
+      return bind(
+        `SELECT ${TEAM_COLUMNS}
+    ${TEAM_FROM}
+    WHERE t.id = ? AND t.deleted = 0`,
+        [...teamColumnParams(viewerId), id],
+      ).get();
+    },
+
+    /** 按 slug 取，给 `#/team/<slug>` 这种可读地址用。 */
+    teamBySlug(slug, viewerId = ANON) {
+      return bind(
+        `SELECT ${TEAM_COLUMNS}
+    ${TEAM_FROM}
+    WHERE t.slug = ? AND t.deleted = 0`,
+        [...teamColumnParams(viewerId), slug],
+      ).get();
+    },
+
+    /** slug 是否已被占用（软删掉的也算占用，否则 URL 会指向两个团队）。 */
+    slugTaken(slug) {
+      return Boolean(bind('SELECT 1 AS hit FROM teams WHERE slug = ?', [slug]).get());
+    },
+
+    createTeam({ slug, name, intro = '', ownerId, joinPolicy = 'open', now = Date.now() }) {
+      const result = bind(
+        `INSERT INTO teams (slug, name, intro, owner_id, join_policy, deleted, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, 0, ?, ?)`,
+        [slug, name, intro, ownerId, joinPolicy, now, now],
+      ).run();
+      return Number(result.lastInsertRowid);
+    },
+
+    updateTeam({ id, name, intro, joinPolicy, now = Date.now() }) {
+      const result = bind(
+        `UPDATE teams SET name = ?, intro = ?, join_policy = ?, updated_at = ?
+     WHERE id = ? AND deleted = 0`,
+        [name, intro, joinPolicy, now, id],
+      ).run();
+      return Number(result.changes) > 0;
+    },
+
+    softDeleteTeam(id, now = Date.now()) {
+      const result = bind('UPDATE teams SET deleted = 1, updated_at = ? WHERE id = ? AND deleted = 0', [
+        now,
+        id,
+      ]).run();
+      return Number(result.changes) > 0;
+    },
+
+    /* ── 成员 ───────────────────────────────────────────────────────── */
+
+    memberOf(teamId, userId) {
+      return bind('SELECT team_id, user_id, role, joined_at FROM team_members WHERE team_id = ? AND user_id = ?', [
+        teamId,
+        userId,
+      ]).get();
+    },
+
+    listMembers(teamId) {
+      return bind(
+        `SELECT m.team_id, m.user_id, m.role AS team_role, m.joined_at,
+            u.username, u.display_name, u.avatar, u.role AS role_in_site
+     FROM team_members m
+     JOIN users u ON u.id = m.user_id
+     WHERE m.team_id = ?
+     ORDER BY CASE m.role WHEN 'owner' THEN 0 WHEN 'admin' THEN 1 ELSE 2 END, m.joined_at ASC`,
+        [teamId],
+      ).all();
+    },
+
+    countMembers(teamId) {
+      const row = bind('SELECT COUNT(*) AS n FROM team_members WHERE team_id = ?', [teamId]).get();
+      return Number(row?.n) || 0;
+    },
+
+    /** 加入。已经有行就不动 —— 重复加入不该把角色从 admin 悄悄降成 member。 */
+    addMember({ teamId, userId, role = 'member', now = Date.now() }) {
+      const result = bind(
+        `INSERT INTO team_members (team_id, user_id, role, joined_at)
+     VALUES (?, ?, ?, ?)
+     ON CONFLICT (team_id, user_id) DO NOTHING`,
+        [teamId, userId, role, now],
+      ).run();
+      return Number(result.changes) > 0;
+    },
+
+    setMemberRole({ teamId, userId, role }) {
+      const result = bind('UPDATE team_members SET role = ? WHERE team_id = ? AND user_id = ?', [
+        role,
+        teamId,
+        userId,
+      ]).run();
+      return Number(result.changes) > 0;
+    },
+
+    removeMember(teamId, userId) {
+      const result = bind('DELETE FROM team_members WHERE team_id = ? AND user_id = ?', [teamId, userId]).run();
+      return Number(result.changes) > 0;
+    },
+
+    /* ── 团队帖子 ───────────────────────────────────────────────────── */
+
+    listPosts({ teamId, viewerId = ANON, limit = 20, offset = 0 } = {}) {
+      const where = buildWhere([
+        { sql: 'p.deleted = 0', params: [] },
+        { sql: 'p.team_id = ?', params: [teamId] },
+        ...postVisibilityConditions(viewerId),
+      ]);
+      return bind(
+        `SELECT ${POST_COLUMNS}
+    ${POST_FROM}
+    WHERE ${where.sql}
+    ORDER BY p.created_at DESC, p.id DESC
+    LIMIT ? OFFSET ?`,
+        [...postColumnParams(viewerId), ...where.params, limit, offset],
+      ).all();
+    },
+
+    countPosts({ teamId, viewerId = ANON } = {}) {
+      const where = buildWhere([
+        { sql: 'p.deleted = 0', params: [] },
+        { sql: 'p.team_id = ?', params: [teamId] },
+        ...postVisibilityConditions(viewerId),
+      ]);
+      const row = bind(
+        `SELECT COUNT(*) AS n
+    FROM team_posts p
+    WHERE ${where.sql}`,
+        [...where.params],
+      ).get();
+      return Number(row?.n) || 0;
+    },
+
+    /** 按 id 取一条**看得见**的帖子；看不见返回 undefined（调用方回 404）。 */
+    postById(id, viewerId = ANON) {
+      const where = buildWhere([
+        { sql: 'p.deleted = 0', params: [] },
+        { sql: 'p.id = ?', params: [id] },
+        ...postVisibilityConditions(viewerId),
+      ]);
+      return bind(
+        `SELECT ${POST_COLUMNS}
+    ${POST_FROM}
+    WHERE ${where.sql}`,
+        [...postColumnParams(viewerId), ...where.params],
+      ).get();
+    },
+
+    /**
+     * 不看可见性、直接取原始行。**只给权限判定用**：
+     * 「这条帖存在吗、是谁的、属于哪个团队、现在第几版」这几个问题必须在过滤之前回答，
+     * 否则会出现「因为看不见，所以告诉你它不存在」这种把 404 和 403 混在一起的结果。
+     */
+    postRaw(id) {
+      return bind(
+        `SELECT id, team_id, user_id, title, content, scope, version, updated_by, deleted, created_at, updated_at
+     FROM team_posts WHERE id = ?`,
+        [id],
+      ).get();
+    },
+
+    createPost({ teamId, userId, title = '', content = '', scope = 'team', now = Date.now() }) {
+      const result = bind(
+        `INSERT INTO team_posts (team_id, user_id, title, content, scope, version, updated_by, deleted, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, 1, ?, 0, ?, ?)`,
+        [teamId, userId, title, content, scope, userId, now, now],
+      ).run();
+      return Number(result.lastInsertRowid);
+    },
+
+    /**
+     * 保存（乐观并发）。
+     *
+     * 版本比对**写在 UPDATE 的 WHERE 里**，不是先 SELECT 再 UPDATE ——
+     * 后者在两件事之间留了一个窗口，node:sqlite 是同步的所以今天撞不上，
+     * 但这个写法把「不会覆盖别人」变成数据库层面的事实，而不是运行时的运气。
+     *
+     * @returns {{ok: true, version: number} | {ok: false, reason: 'missing' | 'conflict', current?: number}}
+     */
+    savePost({ id, title, content, scope, editorId, expectedVersion = null, force = false, now = Date.now() }) {
+      // `force = true`（用户在冲突提示里选了「仍然保存我的」）才放开版本比对。
+      // `expectedVersion` 没传也不比对 —— 那是「新客户端还没实现带版本」的兼容路径，
+      // 但只要前端传了就必须对上，不能靠不传绕过。
+      const checkVersion = force !== true && expectedVersion != null;
+      const params = [title, content, scope, editorId, now, id];
+      let sql = `UPDATE team_posts
+     SET title = ?, content = ?, scope = ?, version = version + 1, updated_by = ?, updated_at = ?
+     WHERE id = ? AND deleted = 0`;
+      if (checkVersion) {
+        sql += ' AND version = ?';
+        params.push(Number(expectedVersion));
+      }
+
+      const result = bind(sql, params).run();
+
+      if (Number(result.changes) > 0) {
+        const row = bind('SELECT version FROM team_posts WHERE id = ?', [id]).get();
+        return { ok: true, version: Number(row?.version) || 1 };
+      }
+
+      // 没改成：要么帖子没了，要么版本对不上。两种要给前端不同的话。
+      const row = bind('SELECT version, deleted FROM team_posts WHERE id = ?', [id]).get();
+      if (!row || Number(row.deleted) === 1) return { ok: false, reason: 'missing' };
+      return { ok: false, reason: 'conflict', current: Number(row.version) || 1 };
+    },
+
+    softDeletePost(id, now = Date.now()) {
+      const result = bind('UPDATE team_posts SET deleted = 1, updated_at = ? WHERE id = ? AND deleted = 0', [
+        now,
+        id,
+      ]).run();
+      return Number(result.changes) > 0;
+    },
+  };
+}

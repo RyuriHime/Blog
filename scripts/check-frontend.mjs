@@ -220,6 +220,34 @@ const FIXTURE_KEYS = Object.keys(FIXTURES).filter((key) => !key.startsWith('__')
 
 /** 知识图与可视化页在临时库里还没生成（真接口会 404），这里给个空壳让页面仍然渲染。 */
 const EMPTY_GRAPH = { nodes: [], edges: [], tags: [], generatedAt: Date.now() };
+/** 四档可见范围。团队页的兜底清单要和后端 shape.js 的 SCOPE_OPTIONS 一致。 */
+const SCOPES = [
+  { value: 'public', label: '公开' },
+  { value: 'followers', label: '仅关注我的人' },
+  { value: 'team', label: '仅团队' },
+  { value: 'private', label: '仅自己' },
+];
+
+/** 一个团队的真形状（P4）。列表、详情、帖子三个接口共用同一份，免得形状漂移。 */
+const TEAM_FIXTURE = {
+  id: 1,
+  slug: 'frontend-group',
+  name: '前端小组',
+  intro: '一起把前端做出来。',
+  joinPolicy: 'open',
+  joinPolicyLabel: '谁都能加入',
+  owner: { id: 1, username: FIXTURE_USERNAME, displayName: '站长', avatar: null },
+  memberCount: 1,
+  postCount: 1,
+  myRole: 'owner',
+  myRoleLabel: '创建者',
+  canManage: true,
+  joined: true,
+  canJoin: false,
+  createdAt: Date.now() - 86400000,
+  updatedAt: Date.now() - 3600000,
+};
+
 const EXTRA = {
   '/api/knowledge/graph': EMPTY_GRAPH,
   '/api/knowledge/viewer': { ready: false },
@@ -304,6 +332,58 @@ const EXTRA = {
       { revision: 2, reason: 'edit', reasonLabel: '编辑', authorId: 1, author: { id: 1, username: FIXTURE_USERNAME, displayName: '站长' }, createdAt: Date.now() - 3600000 },
       { revision: 1, reason: 'create', reasonLabel: '创建', authorId: 1, author: { id: 1, username: FIXTURE_USERNAME, displayName: '站长' }, createdAt: Date.now() - 86400000 },
     ],
+  },
+  // 团队（P4）的路由是 `#/teams`（列表）与 `#/team/<slug>`（主页）。
+  // 采集器还没采这几条，先手工给真形状 —— 接口形状改了就跟着改这里。
+  '/api/teams': {
+    items: [TEAM_FIXTURE],
+    page: 1,
+    perPage: 20,
+    total: 1,
+    totalPages: 1,
+    filter: 'all',
+  },
+  '/api/teams/frontend-group': {
+    team: TEAM_FIXTURE,
+    members: [
+      {
+        user: { id: 1, username: FIXTURE_USERNAME, displayName: '站长', avatar: null, role: 'owner' },
+        teamRole: 'owner',
+        teamRoleLabel: '创建者',
+        joinedAt: Date.now() - 86400000,
+      },
+    ],
+    memberTotal: 1,
+    scopes: SCOPES,
+  },
+  '/api/teams/frontend-group/posts': {
+    items: [
+      {
+        id: 1,
+        teamId: 1,
+        team: { id: 1, slug: 'frontend-group', name: '前端小组' },
+        title: '团队第一条帖子',
+        content: '大家好，这里是团队的地盘。',
+        contentHtml: '<p>大家好，这里是团队的地盘。</p>',
+        scope: 'team',
+        scopeLabel: '仅团队',
+        scopeIcon: '🎽',
+        version: 2,
+        author: { id: 1, username: FIXTURE_USERNAME, displayName: '站长', avatar: null, role: 'owner' },
+        editor: { id: 1, username: FIXTURE_USERNAME, displayName: '站长' },
+        canEdit: true,
+        canDelete: true,
+        createdAt: Date.now() - 7200000,
+        updatedAt: Date.now() - 3600000,
+        edited: true,
+      },
+    ],
+    page: 1,
+    perPage: 20,
+    total: 1,
+    totalPages: 1,
+    scopes: SCOPES,
+    myRole: 'owner',
   },
 };
 
@@ -402,6 +482,11 @@ const CASES = [
   ['块类型表', 'doc.js', 'viewBlocks', []],
   // 没建过的那一页：走的是「还不存在」分支（`found:false`），因此必渲染成一张建页卡。
   ['Wiki 页面', 'doc.js', 'viewWiki', ['没建过的页', new Map()]],
+  // v2 团队（P4）的两个页面。slug 必须和上面 EXTRA 里的键对得上，
+  // 否则假 fetch 只会回一个空壳 —— 页面照样不炸，但等于什么都没测到。
+  ['团队列表', 'team.js', 'viewTeams', [new Map()]],
+  ['团队·我加入的', 'team.js', 'viewTeams', [new Map([['mine', '1']])]],
+  ['团队主页', 'team.js', 'viewTeam', ['frontend-group', new Map()]],
 ];
 
 let rendered = 0;

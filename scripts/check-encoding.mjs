@@ -26,7 +26,7 @@ const TARGETS = ['src', 'public', 'scripts', 'forum-ai/src', 'note-agent/src', '
  * 可编程帖子（P2）落地后实测 187，抬到 187。
  * 这个数字存在的意义：前端文件被搬走却没同步检查脚本时，哨兵必须响。
  */
-const MIN_CHECKED = Number(process.env.MIN_CHECKED || 187);
+const MIN_CHECKED = Number(process.env.MIN_CHECKED || 194);
 
 /** 新布局里必须存在的关键文件。少一个就说明有人把文件搬走却没同步这份检查。 */
 const REQUIRED_FILES = [
@@ -115,6 +115,14 @@ const REQUIRED_FILES = [
   'public/views/doc-blocks.js',
   'public/css/41-doc.css',
   'scripts/doc-smoke.mjs',
+  // 团队（P4）：三张表、SQL、路由、形状、页面、样式分片与它自己的冒烟脚本。
+  'src/modules/team/schema.js',
+  'src/modules/team/queries.js',
+  'src/modules/team/routes.js',
+  'src/modules/team/shape.js',
+  'public/views/team.js',
+  'public/css/86-team.css',
+  'scripts/team-smoke.mjs',
 ];
 
 /**
@@ -216,6 +224,18 @@ const EXPECTED = [
   ['积木广场', ['public/core/session.js']],
   ['端到端', ['scripts/doc-smoke.mjs']],
   ['块引擎', ['scripts/doc-smoke.mjs']],
+
+  // 团队（P4）：可见性判定在服务端、401 与 404 的分工、版本冲突。
+  ['团队（P4）的数据表', ['src/modules/team/schema.js']],
+  ['团队（P4）自己的 SQL', ['src/modules/team/queries.js']],
+  ['团队（P4）的接口', ['src/modules/team/routes.js']],
+  ['404 与 403 的差别本身就是一个探测信道', ['src/modules/team/routes.js']],
+  ['只有团队的创建者可以解散团队', ['src/modules/team/routes.js']],
+  ['只有团队成员可以改这篇帖子', ['src/modules/team/routes.js']],
+  ['有人在你之前改过了', ['src/modules/team/routes.js']],
+  ['团队（P4）：团队列表', ['public/views/team.js']],
+  ['86-team.css', ['public/css/86-team.css']],
+  ['前端藏起来不叫权限', ['scripts/team-smoke.mjs']],
 ];
 
 function walk(target, files = []) {

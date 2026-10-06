@@ -148,7 +148,7 @@ ctx.log       日志
 | `feed_items` `feed_reactions` | 🅿️ P1 |
 | `documents` `document_blocks` `document_revisions` `doc_block_types` `doc_capability_logs` `note_documents` | 🅿️ P2 |
 | `ai_capability_grants` `ai_op_logs` | 🅿️ P3 |
-| `teams` `team_members` | 🅿️ P4 |
+| `teams` `team_members` `team_posts` | 🅿️ P4 |
 
 **`boards` 是 `posts.board_id` 的外键目标，`checkin_bonuses` / `documents` 这些也都要参与外键，
 所以建表顺序必须由 core 统一控制**，不许模块自己抢跑。
@@ -162,7 +162,7 @@ ctx.log       日志
 | P1 动态 | `/api/feed/*` | `src/modules/feed/` | 3511 | `feed_items` `feed_reactions` | `public/views/feed2.js` 之类新文件 + `public/css/31-feed2.css` |
 | P2 可编程帖子 | `/api/docs/*` | `src/modules/doc/` | 3492 | `documents` `document_blocks` `document_revisions` `doc_block_types` `doc_capability_logs` `note_documents` | `public/views/doc.js` + `public/css/41-doc.css` |
 | P3 AI | `/api/ai/*` | `src/modules/ai/` | 3513 | `ai_capability_grants` `ai_op_logs` | `public/views/ai-edit.js` + `public/css/94-ai-edit.css` |
-| P4 团队 | `/api/teams/*` | `src/modules/team/` | 3514 | `teams` `team_members` | `public/views/team.js` + `public/css/86-team.css` |
+| P4 团队 | `/api/teams/*` | `src/modules/team/` | 3514 | `teams` `team_members` `team_posts` | `public/views/team.js` + `public/css/86-team.css` |
 | P5 界面 | 不新增 | `src/modules/ui/` | 3515 | 无 | 随便改 `public/css/*`（**新功能别改，只改现有观感**） |
 
 **四条底线：**
@@ -172,6 +172,16 @@ ctx.log       日志
    `public/views/*.js` / `public/css/*.css` 需要改动时，**先提出来**，别自己动手。
 3. **不等别人做完**：每个人用 `git worktree` 或自己的分支开工，本地起自己的端口、
    自己的库（`DB_FILE=data/p1.db` 这样），互不阻塞。
+
+> **落地进度（2026-10）**：P1 动态、P2 积木、P4 团队**都已经进过代码**——`src/modules/feed/`、
+> `src/modules/doc/`、`src/modules/team/` 不再是空壳，各自的 `<名字>-smoke.mjs` 都在跑。
+> P3（AI）与 P5（界面）的目录仍是空壳。
+>
+> **团队（P4）与这份规格有一处出入**：团队帖没有放进 `posts`，也没有复用 P2 的 `documents`，
+> 而是自建了第三张表 `team_posts`。理由写在 `src/modules/team/schema.js` 的文件头：
+> 挂进 `posts` 就得凭空造一个「团队」板块、还会漂进首页与全文搜索，用 `hidden` 藏又会撞上
+> `assertPostVisible` 的「非 staff 非作者一律 404」；而 `documents` 没有 `team_id` 也没有
+> `version`，表达不了「这一篇属于哪个团队」、也撑不起「一起编辑且不互相覆盖」。
 4. **合并只动一行**：把自己的模块加进 `src/modules/index.js` 的 `MODULES` 名册。
    名册里有、`src/modules/` 下却没有对应文件夹，或反过来，`installModules()` 会直接抛错。
 
