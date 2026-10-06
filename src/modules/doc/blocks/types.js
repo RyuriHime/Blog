@@ -361,10 +361,13 @@ export const BUILTIN_TYPES = [
     },
     toMarkdown: (props) => rawMarkdown('script', props.code),
     toPlain: () => '',
+    // 块体是**原始 JS**（不是 HTML），所以这里得自己把它包进 `<script>`：
+    // 直接塞进 iframe 的 body 只会把这段代码当普通文字显示出来 —— 一个字都不会跑。
+    // 包好之后它是沙箱文档里的一个内联脚本，CSP 的 `script-src 'unsafe-inline'` 放行。
     toHtml: (props, block, options) => shell(
       'script',
       block,
-      sandboxInner({ ...props, app: '脚本' }, block, options),
+      sandboxInner({ ...props, app: '脚本', code: `<script>\n${String(props.code ?? '')}\n</script>` }, block, options),
     ),
   },
   {

@@ -1016,6 +1016,19 @@
   font-size: 12px;
 }
 
+.doc-station-new {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+  margin: 12px 0 8px;
+}
+
+.doc-station-new .doc-wiki-search {
+  flex: 1 1 220px;
+  min-width: 180px;
+}
+
 @media (max-width: 1100px) {
   .doc-wiki-station {
     grid-template-columns: 232px minmax(0, 1fr);

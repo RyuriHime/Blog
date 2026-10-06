@@ -476,8 +476,22 @@ async function viewWikiIndex() {
   ui.app.innerHTML = `<div class="card doc-panel">
     <div class="card-head"><span class="card-title">⧉ Wiki 站</span><span class="hint">一个帖子一个 wiki</span></div>
     <div class="doc-station-list">${cards || '<div class="doc-hint">还没有 wiki 站。</div>'}</div>
+    <div class="doc-station-new">
+      <input class="doc-wiki-search" data-wiki-station-name maxlength="80" placeholder="新站的名字，例如「算法笔记」">
+      <button class="btn" data-doc-action="wiki-new-station" type="button">＋ 新建一个 wiki</button>
+    </div>
     <div class="doc-hint">站里的页是独立文档，用 <code>[[双链]]</code> 互相链；站本身就是一个普通帖子。</div>
   </div>`;
+}
+
+/** `#/wiki` 上那个「＋ 新建一个 wiki」：建完直接开站（站首页就是你说的那篇帖子）。 */
+async function newStationFromInput() {
+  const input = $('[data-wiki-station-name]');
+  const title = (input?.value ?? '').trim() || 'Wiki';
+  const created = await api('/api/docs/wiki/stations', { method: 'POST', body: { title, scope: 'public' } });
+  const row = created?.doc ?? {};
+  toast('站建好了，往里加页就行');
+  return navigate(`/wiki/${encodeURIComponent(row.title ?? title)}`);
 }
 
 
@@ -1556,6 +1570,7 @@ async function onAppClick(event) {
   if (action === 'block-save') return withBusy(() => saveBlock(blockId));
   if (action === 'source-save') return withBusy(() => saveBlockSource(blockId));
   if (action === 'wiki-open') return withBusy(() => openWikiPage(node.dataset.wikiName));
+  if (action === 'wiki-new-station') return withBusy(newStationFromInput);
   if (action === 'wiki-new') {
     const name = String($('[data-wiki-new-name]')?.value ?? '').trim();
     if (!name) {

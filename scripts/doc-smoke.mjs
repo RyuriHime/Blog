@@ -2165,6 +2165,20 @@ try {
     check('10.9 前端有站列表与三栏渲染', ['viewWikiIndex', 'stationTreeHtml', 'stationShellHtml', 'mountStationTools'].every((name) => docJs.includes(name)), '');
     check('10.9 路由认识 #/wiki（站列表）且保住 #/wiki/<名字>', routerJs.includes("first === 'wiki' && second") && routerJs.includes('viewWikiIndex'), '');
     check('10.9 CSS 有三栏 / 树 / 目录 / 卡片 / 红链的规则', ['.doc-wiki-station', '.doc-wiki-tree-link', '.doc-wiki-toc-link', '.doc-wiki-pager-link', '.doc-subpage', '.doc-wiki-link.is-missing'].every((selector) => css.includes(selector)), '');
+    check('10.9 #/wiki 上能新建站（入口 + 处理函数 + 样式都在）', docJs.includes('wiki-new-station') && docJs.includes('newStationFromInput') && css.includes('.doc-station-new'), '');
+
+    // 10.10 脚本块的块体是原始 JS，必须被包进 `<script>` 才会跑（不然只是把代码当文字显示）。
+    {
+      const scriptPost = await author.call('/api/docs', { method: 'POST', body: { title: 'S10 脚本页', kind: 'post', scope: 'public' } });
+      const scriptId = scriptPost.data?.doc?.id;
+      const scriptSource = ['# S10 脚本页', '', '```doc:script {#b1}', 'var n = 40 + 2;', 'Sandbox.render.put("s1", "paragraph", { text: "答案是 " + n }, "shared");', '```', ''].join('\n');
+      const saved = await author.call(`/api/docs/${scriptId}/markdown`, { method: 'PUT', body: { markdown: scriptSource } });
+      check('10.10 源码里的 doc:script 存得下', saved.status === 200, `${saved.status} ${JSON.stringify(saved.error)}`);
+      const shown = await anon.call(`/api/docs/${scriptId}`);
+      const html = String(shown.data?.html ?? '');
+      check('10.10 脚本块渲染成 iframe 沙箱', html.includes('doc-app-frame'), html.slice(0, 300));
+      check('10.10 原始 JS 被包进 script 标签里（否则不会跑）', html.includes('&lt;script&gt;') && html.includes('40 + 2'), html.slice(0, 600));
+    }
   }
 
   await finish(failures.length ? 1 : 0);
