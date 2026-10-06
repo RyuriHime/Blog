@@ -135,6 +135,60 @@
   border-color: var(--accent);
 }
 
+/* ---------------- 顶栏快捷入口（P5：从侧栏「我的账户」搬上来） ----------------
+   三个入口紧跟在「✏️ 发动态」按钮后面 —— user-area 就排在那个按钮之后。
+   窄屏只留图标，规则在 70-responsive.css。 */
+.top-links {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.top-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 9px;
+  border-radius: 10px;
+  border: 1px solid transparent;
+  color: var(--text-dim);
+  font-size: 13.5px;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+
+.top-link:hover {
+  background: var(--bg-soft);
+  border-color: var(--border);
+  color: var(--text);
+  text-decoration: none;
+}
+
+/* ---------------- 顶栏可用币（P5：从侧栏搬到用户名右边） ---------------- */
+.coin-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 6px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--bg-soft);
+  color: var(--warn-fg);
+  font-size: 13.5px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.coin-chip-icon {
+  font-size: 15px;
+  line-height: 1;
+}
+
+/* 等宽数字：币数变化时宽度不跳，顶栏不会跟着抖 */
+.coin-chip-value {
+  font-variant-numeric: tabular-nums;
+}
+
 .menu {
   position: absolute;
   right: 0;
