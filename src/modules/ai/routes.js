@@ -375,8 +375,15 @@ export function registerAiRoutes(ctx) {
       throw new HttpError(503, 'ai_not_configured', '没有配置 AI_API_KEY，无法调用模型');
     }
 
-    const baseUrl = String(process.env.AI_BASE_URL || 'https://api.openai.com/v1').replace(/\/+$/, '');
-    const model = String(process.env.AI_MODEL || 'gpt-4o-mini');
+    // 默认值必须和 `forum-ai/src/ai.mjs` 的 DEFAULT_BASE_URL / DEFAULT_MODEL 一致：
+    // 同一个项目里 `AI_BASE_URL` / `AI_MODEL` 只能有一个默认值。两边不一致的时候，
+    // 只配 `AI_API_KEY`（forum-ai/README.md 里的最小配法）就会把 key 发到另一个
+    // 服务商去 —— 既肯定调不通，也等于把密钥递给了第三方。
+    // `scripts/ai-smoke.mjs` 第 16 节直接读这两个源文件比对，只改一边会红。
+    // 超时默认 180000 是 FR-AI-13 写的「超时按 180 秒级」，跟 forum-ai 的 60000
+    // 不同是有意的，不参与这项比对。
+    const baseUrl = String(process.env.AI_BASE_URL || 'https://api.deepseek.com/v1').replace(/\/+$/, '');
+    const model = String(process.env.AI_MODEL || 'deepseek-chat');
     const configured = Number(process.env.AI_TIMEOUT_MS);
     const timeoutMs = Number.isFinite(configured) && configured > 0 ? configured : 180000;
 

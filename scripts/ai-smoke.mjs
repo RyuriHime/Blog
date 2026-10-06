@@ -13,7 +13,7 @@
  * 最后两条用例专门把这个事实钉住，免得以后有人「顺手修回去」。
  */
 import { spawn } from 'node:child_process';
-import { mkdirSync, openSync, rmSync } from 'node:fs';
+import { mkdirSync, openSync, readFileSync, rmSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
@@ -394,6 +394,34 @@ try {
     'router.js 里有 #/ai-edit 路由',
     routerEntry.status === 200 && routerEntryText.includes("'ai-edit'"),
     `实际 ${routerEntry.status}`,
+  );
+
+  /* ---------- 16. 和 forum-ai 必须是同一套模型默认值 ---------- */
+  //
+  // 同一个项目里 `AI_BASE_URL` / `AI_MODEL` 只能有一个默认值。两边不一致时，
+  // 只配 `AI_API_KEY`（forum-ai/README.md 里的最小配法）就会把 key 发到另一个
+  // 服务商：既肯定调不通，也等于把密钥递给了第三方。
+  // 这里直接读两个源文件静态比对，谁只改一边都会红。
+  const forumAiSrc = readFileSync(join(ROOT, 'forum-ai', 'src', 'ai.mjs'), 'utf8');
+  const aiRoutesSrc = readFileSync(join(ROOT, 'src', 'modules', 'ai', 'routes.js'), 'utf8');
+  const grabConst = (src, name) => (src.match(new RegExp(`\\b${name}\\s*=\\s*'([^']+)'`)) || [])[1];
+  const grabFallback = (src, name) => (src.match(new RegExp(`${name}\\s*\\|\\|\\s*'([^']+)'`)) || [])[1];
+
+  const forumBaseUrl = grabConst(forumAiSrc, 'DEFAULT_BASE_URL');
+  const forumModel = grabConst(forumAiSrc, 'DEFAULT_MODEL');
+  const myBaseUrl = grabFallback(aiRoutesSrc, 'AI_BASE_URL');
+  const myModel = grabFallback(aiRoutesSrc, 'AI_MODEL');
+
+  check('读到了 forum-ai 的 DEFAULT_BASE_URL', Boolean(forumBaseUrl), String(forumBaseUrl));
+  check(
+    '我的 AI_BASE_URL 默认值和 forum-ai 一致（不一致会把 key 发错服务商）',
+    myBaseUrl === forumBaseUrl,
+    `我=${myBaseUrl} forum-ai=${forumBaseUrl}`,
+  );
+  check(
+    '我的 AI_MODEL 默认值和 forum-ai 一致',
+    myModel === forumModel,
+    `我=${myModel} forum-ai=${forumModel}`,
   );
 
   await finish(failures.length ? 1 : 0);
