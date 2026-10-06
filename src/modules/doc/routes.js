@@ -270,6 +270,28 @@ export function registerDocRoutes(ctx, { store }) {
       viewer: user,
       markdown: reqCtx.body.markdown,
       title: reqCtx.body.title,
+      // 块数暴跌时会先回 409，作者确认后带 `?confirm=1` 再发一次。
+      confirm: reqCtx.query.get('confirm') === '1',
+    }));
+  });
+
+  // 源码预览：编辑器右边那块，纯读（不落库、不建修订）。
+  add('POST', '/api/docs/:id/preview', async (reqCtx) => {
+    const user = write(reqCtx, 'edit');
+    ok(reqCtx.res, store.previewMarkdown({
+      id: readId(reqCtx),
+      viewer: user,
+      markdown: reqCtx.body.markdown,
+    }));
+  });
+
+  add('PUT', '/api/docs/:id/settings', async (reqCtx) => {    const user = write(reqCtx, 'edit');
+    ok(reqCtx.res, store.putSettings({
+      id: readId(reqCtx),
+      viewer: user,
+      allowScriptWrite: reqCtx.body.allowScriptWrite,
+      appMode: reqCtx.body.appMode,
+      icon: reqCtx.body.icon,
     }));
   });
 
@@ -323,6 +345,18 @@ export function registerDocRoutes(ctx, { store }) {
       id: readId(reqCtx),
       viewer: reqCtx.user,
       limit: intOrNull(reqCtx.query.get('limit')) ?? 50,
+    }));
+  });
+
+  // 「采纳为真块」（§4.5）：作者把一条脚本产出**固化进正文**。
+  // 这是一次普通的文档写：发新块 id、写一条 `adopt` 修订、产出行删掉。
+  add('POST', '/api/docs/:id/adopt', async (reqCtx) => {
+    const user = write(reqCtx, 'adopt');
+    ok(reqCtx.res, store.adoptDerived({
+      id: readId(reqCtx),
+      viewer: user,
+      blockId: field(reqCtx.body.blockId, { name: '产出块 id', min: 1, max: 32 }),
+      scope: reqCtx.body.scope,
     }));
   });
 

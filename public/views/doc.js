@@ -237,16 +237,46 @@ function leaveDocPage() {
  * 块数据从**服务端返回的 `blocks`** 里取，不从 DOM 里反推 ——
  * props 是 `init` 消息要送的东西，DOM 里只剩一份转义过的 HTML。
  */
-function mountSandboxes(data) {
+function mountSandboxes(data, root = ui.app, onDerivedChange = scheduleDerivedReload) {
   const blocks = new Map((data.blocks ?? []).map((block) => [block.blockId, block]));
   const documentId = data.doc?.id;
-  const frames = typeof ui.app.querySelectorAll === 'function'
-    ? ui.app.querySelectorAll('iframe.doc-app-frame')
+  const frames = typeof root.querySelectorAll === 'function'
+    ? root.querySelectorAll('iframe.doc-app-frame')
     : [];
   for (const frame of frames) {
     const block = blocks.get(frame.dataset?.docBlock ?? '');
-    attachSandbox(frame, block, { documentId });
+    attachSandbox(frame, block, { documentId, onDerivedChange });
   }
+}
+
+/** 上一次渲染出来的正文 HTML 与文档 id（脚本产出后判断要不要重画）。 */
+let lastRenderedHtml = '';
+let lastRenderedId = null;
+let derivedReloadTimer = 0;
+
+/**
+ * 脚本往派生层写了东西（`blocks.derived` 的 put / delete）→ 重新拉一次这篇文档。
+ *
+ * 250ms 防抖：一个脚本循环里连写十块，只该重画一次。
+ * 重画之前必须 `unmountSandboxes()` —— 旧 iframe 会被 innerHTML 丢掉，
+ * 而它们的看门狗还挂在 registry 里（见 core/sandbox.js 的注释）。
+ */
+function scheduleDerivedReload() {
+  if (derivedReloadTimer) clearTimeout(derivedReloadTimer);
+  derivedReloadTimer = setTimeout(async () => {
+    derivedReloadTimer = 0;
+    const id = docState.viewing;
+    if (!id) return;
+    try {
+      const fresh = await api(`/api/docs/${id}`);
+      if (docState.viewing !== id) return;
+      if (lastRenderedId === id && String(fresh?.html ?? '') === lastRenderedHtml) return;
+      unmountSandboxes();
+      renderDoc(fresh);
+    } catch (error) {
+      console.warn('[doc] 脚本产出刷新失败：', error);
+    }
+  }, 250);
 }
 
 /**
@@ -443,6 +473,10 @@ function renderDoc(data) {
   const author = doc.author ?? {};
   const abilities = data.abilities ?? {};
   const warnings = data.warnings ?? [];
+  // 脚本写完派生块之后要重画正文，靠这个指纹判断「真的改出东西了没有」——
+  // 没变就不重画，免得 iframe 里的脚本被反复重建（脚本重跑又会写一次）。
+  lastRenderedHtml = String(data.html ?? '');
+  lastRenderedId = doc.id ?? null;
   const article = `
     <article class="doc-page">
       <header class="card doc-header">
@@ -599,13 +633,141 @@ function blocksEditorHtml(blocks) {
     </div>`;
 }
 
+/**
+ * 源码模式 —— 这一轮的主编辑面（§5.1）。
+ *
+ * 一整篇就是一段文本：正文是 Markdown，积木是 ` ```doc:类型 ` 的围栏，
+ * 脚本块是 ` ```doc:script ` 后面直接跟 JS 原文。右边是**真的渲染**：
+ * 走 `POST /api/docs/:id/preview`，解析 + `renderBlocks`，不落库，
+ * 所以 `app` / `script` 块的 iframe 在里面真的会跑起来。
+ *
+ * 为什么不做 CodeMirror：仓库的规矩是「零依赖、无构建」，而沙箱化的环境里
+ * 没有网络、拉不到 vendor。一个 `textarea` + 服务端预览已经能写脚本、能看结果。
+ */
+function sourceEditorHtml(source) {
+  // `name="content"` 与 Markdown 模式同款：AI 抽屉的 textarea 适配器按它找人。
+  return `<div class="card doc-panel">
+    <div class="card-head">
+      <span class="card-title">⚡ 源码模式</span>
+      <span class="hint">整篇就是这段文本；右边实时预览，脚本会真的跑起来</span>
+    </div>
+    <div class="doc-md-grid">
+      <div class="doc-md-edit" data-doc-editor-host>
+        <textarea class="doc-input doc-textarea doc-md" name="content" data-doc-source rows="26" spellcheck="false">${esc(source ?? '')}</textarea>
+      </div>
+      <div class="doc-md-side">
+        <div class="doc-md-preview" data-doc-preview><div class="md"><div class="hint">右边跟着打字实时更新。</div></div></div>
+        <div id="docNotesMount" class="notes-mount"></div>
+      </div>
+    </div>
+    <div class="doc-actions">
+      <button class="btn btn-sm btn-primary" type="button" data-doc-action="src-save">保存源码</button>
+      <button class="btn btn-sm btn-ghost" type="button" data-doc-action="src-reload">重新拉取</button>
+      <span class="doc-hint" data-doc-src-status></span>
+    </div>
+    <div class="doc-hint">
+      正文直接写 Markdown（标题 / 段落 / 列表 / 表格 / 代码围栏 / $$公式$$ / 图片 / [[双链]]）；
+      积木写成一段 \`\`\`doc:poll 这样的围栏，块体是它的属性 JSON；
+      \`\`\`doc:script 的块体是**原始 JS**（不是 JSON）。
+      块 id（\`{#b3}\`）是票、脚本产出、块间联动认的锚，保存时会自动带上，不用手写。
+    </div>
+  </div>`;
+}
+
+/** 源码模式的挂载：Tab 缩进 + 实时预览 + AI 抽屉（与 Markdown 模式共用同一份面板）。 */
+function mountSourceTools() {
+  const editor = docState.editor;
+  const textarea = $('[data-doc-source]');
+  if (!editor || !textarea) return;
+  const box = $('[data-doc-preview] .md');
+  const status = $('[data-doc-src-status]');
+
+  const paint = () => {
+    if (paint.timer) clearTimeout(paint.timer);
+    paint.timer = setTimeout(async () => {
+      paint.timer = 0;
+      const text = textarea.value ?? '';
+      if (!box) return;
+      if (text.trim() === '') {
+        box.innerHTML = '<div class="hint">右边跟着打字实时更新。</div>';
+        return;
+      }
+      try {
+        const data = await api(`/api/docs/${editor.id}/preview`, {
+          method: 'POST',
+          body: { markdown: text },
+        });
+        // 旧 iframe 会被 innerHTML 丢掉，但它们的看门狗还挂在 registry 里 —— 先清。
+        unmountSandboxes();
+        box.innerHTML = data.html || '<div class="hint">（这段源码没有渲染出内容）</div>';
+        ntRenderMath(box);
+        // 预览里的沙箱**不接** onDerivedChange：脚本写派生层时重画 ui.app 会把编辑器整个冲掉。
+        mountSandboxes({ blocks: data.blocks, doc: { id: data.documentId } }, box, null);
+        if (status) {
+          status.textContent = (data.warnings ?? []).map((item) => item.message).join('；');
+        }
+      } catch (error) {
+        if (status) status.textContent = `预览失败：${error.message}`;
+      }
+    }, 400);
+  };
+
+  textarea.addEventListener('input', paint);
+  // Tab 键插两个空格 —— 源码里要写脚本，没有缩进等于没法写。
+  textarea.addEventListener('keydown', (event) => {
+    if (event.key !== 'Tab') return;
+    event.preventDefault();
+    const start = textarea.selectionStart ?? 0;
+    const end = textarea.selectionEnd ?? 0;
+    if (typeof textarea.setRangeText === 'function') textarea.setRangeText('  ', start, end, 'end');
+    else textarea.value = `${textarea.value.slice(0, start)}  ${textarea.value.slice(end)}`;
+    paint();
+  });
+
+  paint();
+  mountNotesPanel(document.getElementById('docNotesMount'), $('[data-doc-editor-host]'), status);
+}
+
+/**
+ * 保存源码。
+ *
+ * 服务端那两道防手滑（§3.5）都要能走完：源码解析不出块 → 400（直接把话甩给作者）；
+ * 块数暴跌 → 409，**问一次**再带 `?confirm=1` 重发，不循环。
+ */
+async function saveSource(force = false) {
+  const editor = docState.editor;
+  const text = $('[data-doc-source]')?.value ?? '';
+  try {
+    const data = await api(`/api/docs/${editor.id}/markdown${force ? '?confirm=1' : ''}`, {
+      method: 'PUT',
+      body: { markdown: text },
+    });
+    // 重画而不是就地改：响应的 `source` 是服务端对齐 id 之后的结果，
+    // 用它重置 textarea 才是「脏基线归零」，手写一份本地推定迟早对不上。
+    absorb(data);
+    toast('源码存好了');
+  } catch (error) {
+    if (Number(error?.status) !== 409) throw error;
+    if (!window.confirm(`${error.message}（点确定就照这样存）`)) return;
+    return saveSource(true);
+  }
+}
+
+/** 重新拉一次源码（放弃本地改动）。 */
+async function reloadSource() {
+  const editor = docState.editor;
+  const data = await api(`/api/docs/${editor.id}`);
+  absorb(data);
+  toast('拿回服务端的版本了');
+}
+
 function markdownEditorHtml(markdown) {
   // `name="content"` 不是装饰：`NotesAgent.createTextareaAdapter()` 就是按 `#content`
   // 或 `[name="content"]` 找编辑区的，改了它 AI 抽屉就挂不上去。
   return `<div class="card doc-panel">
     <div class="card-head"><span class="card-title">📝 Markdown 模式</span><span class="hint">右边跟着打字实时更新；保存会把整篇的块换成这份 Markdown 解析出来的块</span></div>
     <div class="doc-md-grid">
-      <div class="doc-md-edit" id="docMdHost">
+      <div class="doc-md-edit" id="docMdHost" data-doc-editor-host>
         <textarea class="doc-input doc-textarea doc-md" name="content" data-doc-markdown rows="18" spellcheck="false">${esc(markdown ?? '')}</textarea>
       </div>
       <div class="doc-md-side">
@@ -668,17 +830,30 @@ function mountMarkdownTools() {
 
   const mount = document.getElementById('docNotesMount');
   const host = document.getElementById('docMdHost');
+  mountNotesPanel(mount, host, status);
+}
+
+/**
+ * AI 抽屉（`/notes-panel.js` 的 `window.NotesAgent.attach`，与 compose 同一份）。
+ *
+ * 适配器就是契约里的 `createTextareaAdapter`：它按 `[name="content"]` 找编辑区，
+ * 所以源码模式那个 textarea 特意也叫 `content` —— 编辑器换了形态，契约不用换。
+ * 挂不上（脚本没加载、假 DOM）就只写一句状态：**绝不让编辑器本身挂掉**。
+ */
+function mountNotesPanel(mount, host, status) {
   const agent = typeof window === 'undefined' ? null : window.NotesAgent;
   if (!mount || !agent || typeof agent.attach !== 'function' || typeof agent.createTextareaAdapter !== 'function') {
     if (status) status.textContent = mount ? 'AI 抽屉没加载（/notes-panel.js 不在）' : '';
-    return;
+    return null;
   }
   try {
     mdNotesPanel = agent.attach({ mount, editor: agent.createTextareaAdapter(host) });
+    return mdNotesPanel;
   } catch (error) {
     console.warn('[notes-agent] 积木编辑器挂载失败：', error);
     mdNotesPanel = null;
-    if (status) status.textContent = 'AI 抽屉挂载失败，Markdown 编辑照常能用';
+    if (status) status.textContent = 'AI 抽屉挂载失败，编辑照常能用';
+    return null;
   }
 }
 
@@ -729,15 +904,23 @@ function renderEditor() {
         <button class="btn btn-sm btn-primary" type="button" data-doc-action="save-meta">保存标题与范围</button>
       </div>
       <div class="doc-tabs">
+        <button class="doc-tab${editor.mode === 'source' ? ' doc-tab-on' : ''}" type="button" data-doc-tab="source">⚡ 源码模式</button>
         <button class="doc-tab${editor.mode === 'blocks' ? ' doc-tab-on' : ''}" type="button" data-doc-tab="blocks">🧱 积木模式</button>
-        <button class="doc-tab${editor.mode === 'markdown' ? ' doc-tab-on' : ''}" type="button" data-doc-tab="markdown">📝 Markdown 模式</button>
+        <button class="doc-tab${editor.mode === 'markdown' ? ' doc-tab-on' : ''}" type="button" data-doc-tab="markdown">📝 纯 Markdown</button>
       </div>
     </div>
-    ${editor.mode === 'markdown' ? markdownEditorHtml(editor.markdown) : blocksEditorHtml(blocks)}
+    ${
+      editor.mode === 'source'
+        ? sourceEditorHtml(editor.data.source ?? '')
+        : editor.mode === 'markdown'
+          ? markdownEditorHtml(editor.markdown)
+          : blocksEditorHtml(blocks)
+    }
     ${toolboxHtml(doc)}
     <div class="card doc-revisions" data-doc-revisions hidden></div>`;
   ensureDelegate();
   if (editor.mode === 'markdown') mountMarkdownTools();
+  if (editor.mode === 'source') mountSourceTools();
 }
 
 /** 保存一次之后统一用后端的新形状重画 —— 永不本地推定服务端状态。 */
@@ -890,7 +1073,14 @@ async function viewDocEdit(id, query = new URLSearchParams()) {
     toast('只有作者和站务能编辑这篇文档', 'error');
     return navigate(`/doc/${id}`);
   }
-  docState.editor = { id, data, mode: query.get('mode') === 'markdown' ? 'markdown' : 'blocks', markdown: '' };
+  // 默认进源码模式：这一轮的主编辑面就是「整篇一段文本」，积木与脚本都在里面。
+  const wanted = query.get('mode') ?? 'source';
+  docState.editor = {
+    id,
+    data,
+    mode: wanted === 'markdown' || wanted === 'blocks' ? wanted : 'source',
+    markdown: '',
+  };
   if (docState.editor.mode === 'markdown') return loadMarkdown();
   renderEditor();
 }
@@ -1142,6 +1332,8 @@ async function onAppClick(event) {
   if (action === 'save-meta') return withBusy(saveMeta);
   if (action === 'md-save') return withBusy(saveMarkdown);
   if (action === 'md-reload') return withBusy(loadMarkdown);
+  if (action === 'src-save') return withBusy(saveSource);
+  if (action === 'src-reload') return withBusy(reloadSource);
   if (action === 'apply-template') {
     const key = $('[data-doc-template]')?.value ?? '';
     if (!key) {

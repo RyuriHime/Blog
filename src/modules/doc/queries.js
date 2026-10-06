@@ -502,5 +502,263 @@ export function createDocQueries(db) {
     appStateBlocks(documentId) {
       return all('SELECT DISTINCT block_id FROM doc_app_state WHERE document_id = ?', [documentId]).map((row) => String(row.block_id));
     },
+
+    /* ---------- 每篇文档一份的设置（doc_settings，第二轮） ---------- */
+
+    /**
+     * 这篇文档的设置行；**没有就返回 null**（调用方按默认值算）。
+     * 刻意不在这里造默认行：绝大多数文档一辈子不改设置，
+     * 每次 GET 顺手 INSERT 一行会把「读接口」变成「写接口」。
+     */
+    settingsOf(documentId) {
+      return (
+        get('SELECT document_id, allow_script_write, app_mode, station_id, parent_id, sort_order, icon, source_text, updated_at FROM doc_settings WHERE document_id = ?', [
+          documentId,
+        ]) ?? null
+      );
+    },
+
+    /** 整行 upsert（store 传的是「合并后的完整设置」，所以这里不做部分更新）。 */
+    upsertSettings({ documentId, allowScriptWrite, appMode, stationId, parentId, sortOrder, icon, sourceText, now }) {
+      run(
+        `INSERT INTO doc_settings (document_id, allow_script_write, app_mode, station_id, parent_id, sort_order, icon, source_text, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT (document_id) DO UPDATE SET
+           allow_script_write = excluded.allow_script_write,
+           app_mode           = excluded.app_mode,
+           station_id         = excluded.station_id,
+           parent_id          = excluded.parent_id,
+           sort_order         = excluded.sort_order,
+           icon               = excluded.icon,
+           source_text        = excluded.source_text,
+           updated_at         = excluded.updated_at`,
+        [documentId, allowScriptWrite ? 1 : 0, appMode, stationId, parentId, sortOrder, icon, sourceText, now],
+      );
+    },
+
+    /**
+     * 只动 `source_text`（保存源码的热路径）。
+     * 单独一条而不是先读后写整行：读-改-写在两个人同时保存时会互相踩掉对方刚改的开关。
+     */
+    setSourceText({ documentId, sourceText, now }) {
+      run(
+        `INSERT INTO doc_settings (document_id, source_text, updated_at) VALUES (?, ?, ?)
+         ON CONFLICT (document_id) DO UPDATE SET source_text = excluded.source_text, updated_at = excluded.updated_at`,
+        [documentId, sourceText, now],
+      );
+    },
+
+    /** 只动 `station_id`（迁移收编一页时用，别碰作者可能已经设过的其它开关）。 */
+    setStationId({ documentId, stationId, parentId, sortOrder, now }) {
+      run(
+        `INSERT INTO doc_settings (document_id, station_id, parent_id, sort_order, updated_at) VALUES (?, ?, ?, ?, ?)
+         ON CONFLICT (document_id) DO UPDATE SET station_id = excluded.station_id, parent_id = excluded.parent_id, sort_order = excluded.sort_order, updated_at = excluded.updated_at`,
+        [documentId, stationId, parentId, sortOrder, now],
+      );
+    },
+
+    /* ---------- Wiki 站与站内页面（第二轮） ---------- */
+
+    /** 一行的站本体（`template='station'`，kind 照旧是 post => 它照旧是一个正常帖子）。 */
+    stationDocument(stationId) {
+      return (
+        get(`SELECT ${DOC_COLUMNS} ${DOC_SOURCE} WHERE d.id = ? AND d.template = 'station' AND d.deleted = 0`, [stationId]) ?? null
+      );
+    },
+
+    /** 按标题找一个站（`#/wiki/<名字>` 老语义的兼容入口）。 */
+    stationByTitle(title) {
+      return (
+        get(
+          `SELECT ${DOC_COLUMNS} ${DOC_SOURCE} WHERE d.template = 'station' AND d.title = ? COLLATE NOCASE AND d.deleted = 0 ORDER BY d.id ASC LIMIT 1`,
+          [String(title)],
+        ) ?? null
+      );
+    },
+
+    /**
+     * 站列表。`pages` 是站里的页数 —— 站卡片上要显示「12 页」。
+     * 只数 `deleted = 0` 的页，逻辑删除的页不该算进目录里。
+     */
+    stations({ visible = null } = {}) {
+      const where = ["d.template = 'station'", 'd.deleted = 0'];
+      const params = [];
+      if (visible) {
+        where.push(visible.sql);
+        params.push(...visible.params);
+      }
+      return all(
+        `SELECT ${DOC_COLUMNS},
+                (SELECT COUNT(*) FROM doc_settings s
+                   JOIN documents p ON p.id = s.document_id
+                  WHERE s.station_id = d.id AND p.deleted = 0) AS pages
+           FROM documents d JOIN users u ON u.id = d.user_id
+          WHERE ${where.join(' AND ')}
+          ORDER BY d.updated_at DESC, d.id DESC`,
+        params,
+      );
+    },
+
+    /**
+     * 一个站里的所有页（带树需要的 parent_id / sort_order / icon）。
+     *
+     * `visible` 必须给：树是**唯一一处「把一个站的所有页一次性端出来」**的地方，
+     * 漏一个条件就是泄露别人的私有页。
+     */
+    pagesOfStation({ stationId, visible = null } = {}) {
+      const where = ["d.template = 'page'", 'd.deleted = 0', 's.station_id = ?'];
+      const params = [stationId];
+      if (visible) {
+        where.push(visible.sql);
+        params.push(...visible.params);
+      }
+      return all(
+        `SELECT d.id, d.title, d.scope, d.user_id, d.updated_at, u.username, u.display_name,
+                s.parent_id, s.sort_order, s.icon, s.source_text
+           FROM documents d
+           JOIN users u ON u.id = d.user_id
+           JOIN doc_settings s ON s.document_id = d.id
+          WHERE ${where.join(' AND ')}
+          ORDER BY s.parent_id ASC, s.sort_order ASC, d.title COLLATE NOCASE ASC`,
+        params,
+      );
+    },
+
+    /**
+     * 还没归站的 wiki 页（`template='page'` 且没有 station_id）。
+     * 迁移用：幂等收编就是「把这一批各挂到一个站上，下次查就是空集」。
+     */
+    orphanPages(limit = 200) {
+      return all(
+        `SELECT d.id, d.title, d.user_id, d.created_at, d.updated_at
+           FROM documents d
+           LEFT JOIN doc_settings s ON s.document_id = d.id
+          WHERE d.template = 'page' AND d.deleted = 0 AND COALESCE(s.station_id, 0) = 0
+          ORDER BY d.id ASC LIMIT ?`,
+        [Math.min(Math.max(Number(limit) || 200, 1), 500)],
+      );
+    },
+
+    /**
+     * 站内搜索。**不建新表、不搞 FTS**：标题 + `source_text` 两个 LIKE 就够用，
+     * 而且 `source_text` 是作者敲的原文（比「解析再拼回来」的块序列更忠实）。
+     * `%` / `_` 按字面量处理（ESCAPE 子句），否则用户搜 `100%` 会命中全站。
+     */
+    searchStationPages({ stationId, q, visible = null, limit = 50 } = {}) {
+      const pattern = `%${String(q ?? '').replace(/[\\%_]/g, (ch) => `\\${ch}`)}%`;
+      const where = ["d.template = 'page'", 'd.deleted = 0', 's.station_id = ?', "(d.title LIKE ? ESCAPE '\\' OR s.source_text LIKE ? ESCAPE '\\')"];
+      const params = [stationId, pattern, pattern];
+      if (visible) {
+        where.push(visible.sql);
+        params.push(...visible.params);
+      }
+      return all(
+        `SELECT d.id, d.title, d.scope, d.user_id, d.updated_at, s.parent_id, s.source_text
+           FROM documents d
+           JOIN doc_settings s ON s.document_id = d.id
+          WHERE ${where.join(' AND ')}
+          ORDER BY d.updated_at DESC, d.id DESC
+          LIMIT ?`,
+        [...params, Math.min(Math.max(Number(limit) || 50, 1), 50)],
+      );
+    },
+
+    /* ---------- 派生层：脚本产出的块（doc_script_blocks，第二轮） ---------- */
+
+    /**
+     * 这篇文档的派生行：**全站共享的 + 当前访问者自己的**，按位置排。
+     * 未登录（userId = null）只看得到 shared —— 这正好是「脚本能画什么」的天然边界。
+     */
+    derivedBlocks(documentId, userId = null) {
+      return all(
+        `SELECT document_id, scope, user_id, block_id, type, props_json, position, updated_at
+           FROM doc_script_blocks
+          WHERE document_id = ? AND (scope = 'shared' OR (scope = 'user' AND user_id = ?))
+          ORDER BY position ASC, block_id ASC`,
+        [documentId, Number(userId) || 0],
+      );
+    },
+
+    derivedBlockRow(documentId, scope, userId, blockId) {
+      return (
+        get('SELECT document_id, scope, user_id, block_id, type, props_json, position, updated_at FROM doc_script_blocks WHERE document_id = ? AND scope = ? AND user_id = ? AND block_id = ?', [
+          documentId,
+          scope,
+          userId,
+          blockId,
+        ]) ?? null
+      );
+    },
+
+    upsertDerivedBlock({ documentId, scope, userId, blockId, type, propsJson, position, now }) {
+      run(
+        `INSERT INTO doc_script_blocks (document_id, scope, user_id, block_id, type, props_json, position, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT (document_id, scope, user_id, block_id) DO UPDATE SET
+           type = excluded.type, props_json = excluded.props_json, position = excluded.position, updated_at = excluded.updated_at`,
+        [documentId, scope, userId, blockId, type, propsJson, position, now],
+      );
+    },
+
+    deleteDerivedBlock(documentId, scope, userId, blockId) {
+      run('DELETE FROM doc_script_blocks WHERE document_id = ? AND scope = ? AND user_id = ? AND block_id = ?', [
+        documentId,
+        scope,
+        userId,
+        blockId,
+      ]);
+    },
+
+    deleteDerivedBlockEverywhere(documentId, blockId) {
+      run('DELETE FROM doc_script_blocks WHERE document_id = ? AND block_id = ?', [documentId, blockId]);
+    },
+
+    deleteDerivedBlocksOfDocument(documentId) {
+      run('DELETE FROM doc_script_blocks WHERE document_id = ?', [documentId]);
+    },
+
+    countDerivedBlocks(documentId, scope, userId) {
+      return Number(
+        get('SELECT COUNT(*) AS n FROM doc_script_blocks WHERE document_id = ? AND scope = ? AND user_id = ?', [documentId, scope, userId])?.n ?? 0,
+      );
+    },
+
+    /** 整篇派生层的字节数（配额判定用；`length()` 在 SQLite 里数的是字符，够用）。 */
+    derivedBytesOfDocument(documentId) {
+      return Number(get('SELECT COALESCE(SUM(LENGTH(props_json)), 0) AS n FROM doc_script_blocks WHERE document_id = ?', [documentId])?.n ?? 0);
+    },
+
+    maxDerivedPosition(documentId, scope, userId) {
+      const row = get('SELECT MAX(position) AS p FROM doc_script_blocks WHERE document_id = ? AND scope = ? AND user_id = ?', [
+        documentId,
+        scope,
+        userId,
+      ]);
+      return row?.p == null ? 0 : Number(row.p);
+    },
+
+    /* ---------- 全站共享状态（doc_site_state，第二轮） ---------- */
+
+    siteStateOf(namespace, key, userId = 0) {
+      return get('SELECT value, updated_at FROM doc_site_state WHERE namespace = ? AND key = ? AND user_id = ?', [namespace, key, userId]) ?? null;
+    },
+
+    upsertSiteState({ namespace, key, userId = 0, value, now }) {
+      run(
+        `INSERT INTO doc_site_state (namespace, key, user_id, value, updated_at)
+         VALUES (?, ?, ?, ?, ?)
+         ON CONFLICT (namespace, key, user_id) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`,
+        [namespace, key, userId, value, now],
+      );
+    },
+
+    countSiteStateKeys(namespace) {
+      return Number(get('SELECT COUNT(*) AS n FROM doc_site_state WHERE namespace = ?', [namespace])?.n ?? 0);
+    },
+
+    /** namespace 级联清空（staff 用；脚本块被删时也走它回收）。 */
+    deleteSiteStateOfNamespace(namespace) {
+      run('DELETE FROM doc_site_state WHERE namespace = ?', [namespace]);
+    },
   };
 }

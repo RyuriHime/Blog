@@ -79,6 +79,12 @@ async function handleRequest(entry, data) {
       },
     });
     reply(entry, { type: 'capability', id, ok: true, value: result?.value });
+    // 脚本往派生层写了东西（或删了）：正文明天要跟着变，通知宿主重画。
+    // 只有**写**才通知；`list` 每帧都在问，通知它等于自激。
+    const op = String(data.payload?.op ?? 'list');
+    if (String(data.capability ?? '') === 'blocks.derived' && op !== 'list' && typeof entry.onDerivedChange === 'function') {
+      entry.onDerivedChange();
+    }
   } catch (error) {
     // 被拒也要回话，否则沙箱里的 Promise 会一直悬着（它自己 5 秒超时，但那太晚）。
     reply(entry, { type: 'capability', id, ok: false, message: error?.message || '能力被拒绝' });
@@ -135,6 +141,7 @@ export function attachSandbox(frame, block, context = {}) {
     inputs: sanitizeInputs(context.inputs),
     documentId: context.documentId,
     onValue: context.onValue,
+    onDerivedChange: context.onDerivedChange,
     ready: false,
     dead: false,
     value: undefined,

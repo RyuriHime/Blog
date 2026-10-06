@@ -13,7 +13,7 @@
 //   { name, version, label, icon, editor, schema, toMarkdown, toPlain, toHtml }
 // 其中 `schema` 是声明式的 props 形状（见 validate.js），
 // `toHtml` 是**服务端**渲染（唯一的安全边界：所有文本都已经转义）。
-import { BLOCK_TYPE_PATTERN, MAX_APP_CODE } from '../schema.js';
+import { BLOCK_TYPE_PATTERN, MAX_APP_CODE, MAX_SCRIPT_CODE } from '../schema.js';
 import { sandboxInner } from '../sandbox.js';
 import {
   escapeCell,
@@ -28,7 +28,10 @@ import {
 /** 用一个 div 包住块内容（所有块共用的外壳）。 */
 function shell(type, block, inner) {
   const id = escapeHtml(block?.block_id ?? '');
-  return `<div class="doc-block doc-block-${type}" data-block-id="${id}" data-block-type="${type}">${inner}</div>`;
+  // 脚本产出的派生块打个标记：前端据此加一条「脚本产出」的小标，
+  // 读者才分得清「作者写的」与「跑出来的」。
+  const derived = block?.derived ? ' doc-derived' : '';
+  return `<div class="doc-block doc-block-${type}${derived}" data-block-id="${id}" data-block-type="${type}">${inner}</div>`;
 }
 
 /** 结构化的类型用 `doc:` 围栏存 markdown（markdown 本身表达不了投票 / 小应用）。 */
@@ -36,6 +39,16 @@ function structuredMarkdown(kind, props) {
   const json = JSON.stringify(props, null, 2);
   const fence = fenceFor(json);
   return `${fence}doc:${kind}\n${json}\n${fence}`;
+}
+
+/**
+ * **源码体不是 JSON** 的结构化块（目前只有 `doc:script`）：块体原样进出。
+ * 脚本得以代码的形态待在源码里，而不是被 JSON 转义成一行带 `\n` 的字符串。
+ */
+function rawMarkdown(kind, body) {
+  const text = String(body ?? '');
+  const fence = fenceFor(text);
+  return `${fence}doc:${kind}\n${text}\n${fence}`;
 }
 
 export const BUILTIN_TYPES = [
@@ -53,7 +66,11 @@ export const BUILTIN_TYPES = [
     toPlain: (props) => props.text,
     toHtml: (props, block) => {
       const level = Math.min(Math.max(Number(props.level) || 1, 1), 6);
-      return shell('heading', block, `<h${level}>${escapeHtml(props.text)}</h${level}>`);
+      // `id="h-<blockId>"`：右栏 ToC 与「上一页 / 下一页」之外还有 `#/wiki/<站>/<页>?h=h-b12`
+      // 这种站内跳转，它们都需要一个**不随标题改动而失效**的锚点 —— 稳定块 id 正好是。
+      // 块 id 在服务端保证唯一（`b` 加数字），所以这里不需要 slug，也不会撞。
+      const anchor = block?.block_id ? ` id="h-${escapeHtml(block.block_id)}"` : '';
+      return shell('heading', block, `<h${level}${anchor}>${escapeHtml(props.text)}</h${level}>`);
     },
   },
   {
@@ -320,6 +337,32 @@ export const BUILTIN_TYPES = [
     toMarkdown: (props) => structuredMarkdown('app', props),
     toPlain: (props) => props.app || '小应用',
     toHtml: (props, block, options) => shell('app', block, sandboxInner(props, block, options)),
+  },
+  {
+    // 第 13 种：**帖子级脚本**。一篇最多一块（这条校验在 store 的写入层，见 `assertOneScript`）。
+    //
+    // 与 `app` 的关键差别有两处：
+    //   1. `sourceBody: 'raw'` —— 源码里它是 ```` ```doc:script ```` 围栏包着的**原始 JS**，
+    //      不是 JSON（见 `blocks/markdown.js` 的解析分支）；
+    //   2. 它不画自己的界面，而是**画别的块**：脚本通过 `blocks.derived` 能力
+    //      把块写进派生层（`doc_script_blocks`），派生层再照常走渲染管线。
+    name: 'script',
+    version: 1,
+    label: '脚本',
+    icon: '⌘',
+    editor: 'code',
+    sourceBody: 'raw',
+    schema: {
+      // 代码只在读者的浏览器里跑，服务端从不执行（见 ../sandbox.js 的长注释）。
+      code: { type: 'string', default: '', maxLength: MAX_SCRIPT_CODE, label: 'JavaScript' },
+    },
+    toMarkdown: (props) => rawMarkdown('script', props.code),
+    toPlain: () => '',
+    toHtml: (props, block, options) => shell(
+      'script',
+      block,
+      sandboxInner({ ...props, app: '脚本' }, block, options),
+    ),
   },
 ];
 

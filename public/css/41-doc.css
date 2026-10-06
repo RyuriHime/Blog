@@ -97,6 +97,33 @@
   overflow: auto;
 }
 
+/*
+ * 脚本产出的派生块（`block.derived` → `types.js` 的 `shell()` 加的那个类）。
+ *
+ * 它的语义是「这不是正文，是脚本此刻画出来的东西」：所以给它一条虚线边、
+ * 一个左上角的小标，并且**不可点选拖拽**（它不是 document_blocks 里的一行）。
+ * 作者在编辑器里点「采纳」之后，它才变成真块、褪掉这层皮。
+ */
+.doc-block.doc-derived {
+  position: relative;
+  border-left: 3px dashed var(--accent);
+  padding-left: 10px;
+}
+
+.doc-block.doc-derived::before {
+  content: '脚本产出';
+  position: absolute;
+  top: -10px;
+  left: 8px;
+  font-size: 11px;
+  line-height: 1;
+  padding: 2px 6px;
+  border-radius: 999px;
+  border: 1px solid var(--accent);
+  color: var(--accent);
+  background: var(--panel);
+}
+
 /* 块间联动：这一块的值从哪一块的哪个字段来（`bind`，跨块约定，见设计 §3.3③）。 */
 .doc-bind {
   display: flex;

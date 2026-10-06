@@ -1,7 +1,8 @@
 // markdown ⇄ 块。
 //
-// 两个方向都被当成**契约**：
-//   `blocksToMarkdown` 在旧 7 种类型上的输出必须与 note-agent 逐字节相同；
+// 三个方向都被当成**契约**：
+//   `blocksToMarkdown` 在旧 7 种类型上的输出必须与 note-agent 逐字节相同（一个 id 都不输出）；
+//   `toSource` 是编辑器用的带 id 版本，`toSource → parseSourceBlocks → toSource` 必须逐字节往返；
 //   `markdownToBlocks(markdownToBlocks)` 必须能往返（100 篇随机文档的属性测试守着）。
 //
 // 解析器是一个行式状态机：先把行按「块的开头」归类，再逐块消费。
@@ -18,6 +19,17 @@ const IMAGE = /^!\[([\s\S]*)\]\(([^()]*)\)\s*$/;
 const WIKI = /^\[\[([^\][|]+)(?:\|([^\]]*))?\]\]$/;
 const QUOTE_LINE = /^\s*>/;
 const LIST_LINE = /^\s*(?:[-*+]|\d{1,9}[.)])\s+\S/;
+// 结构化围栏的信息串：`doc:poll {#b3}`（id 可选，老源码里没有）。
+const DOC_FENCE_INFO = /^doc:([A-Za-z0-9_-]+)\s*(?:\{#([A-Za-z0-9_-]+)\})?$/;
+// 天然 markdown 块上一行的 id 标记：`<!-- b3 -->`。
+const ID_MARKER = /^<!--\s*(b[0-9]+)\s*-->$/;
+
+/**
+ * 哪些块 id **必须**写进源码：这些块带着服务端副数据（票 / 沙箱状态 / 绑定目标），
+ * id 一漂移，数据就被当成孤儿清掉。纯文字块的 id 可以随位置重发，源码也就保持干净。
+ *（`store.js` 的按 id 对齐也用它 —— 一个 poll 的 id 绝不交给别的块。）
+ */
+export const ID_BEARING_TYPES = new Set(['poll', 'app', 'script']);
 
 /** 一个块 → markdown 片段（空字符串表示这块不输出）。 */
 function markdownForBlock(block) {
@@ -33,6 +45,71 @@ export function blocksToMarkdown(blocks) {
   const list = Array.isArray(blocks) ? blocks : [];
   return list
     .map((block) => markdownForBlock(block))
+    .filter((piece) => piece.length > 0)
+    .join('\n\n');
+}
+
+/**
+ * 哪些 id 要出现在源码里（§3.1 三条判据）：
+ *   (a) 自己有 `bind.from` 的块 —— 记下自己，别人才能反过来引用它；
+ *   (b) 每一个 `bind.from` 指向的目标 —— 漂了别人就绑错块；
+ *   (c) `ID_BEARING_TYPES` 里的块 —— 它们挂着票 / 状态 / 代码。
+ */
+function sourceIdsToMark(blocks, derivedBlocks = []) {
+  const marked = new Set();
+  const scan = (list) => {
+    for (const block of Array.isArray(list) ? list : []) {
+      const id = String(block?.block_id ?? '');
+      const from = String(block?.props?.bind?.from ?? '');
+      if (from === '') continue;
+      if (id !== '') marked.add(id); // (a)
+      marked.add(from); // (b)
+    }
+  };
+  scan(blocks);
+  scan(derivedBlocks);
+  for (const block of Array.isArray(blocks) ? blocks : []) {
+    const id = String(block?.block_id ?? '');
+    const type = String(block?.type ?? '');
+    if (id !== '' && ID_BEARING_TYPES.has(type)) marked.add(id); // (c)
+  }
+  return marked;
+}
+
+/** 结构化围栏的第一行：```` ```doc:poll ````（可选带一个已有的 id）。 */
+const DOC_FENCE_FIRST = /^(`{3,})doc:([A-Za-z0-9_-]+)(\s*\{#[A-Za-z0-9_-]+\})?\s*$/;
+
+/** 把一个块的片段加上 id：结构化块写进信息串，天然 markdown 块写成上一行的注释。 */
+function withSourceId(piece, id) {
+  const lines = piece.split('\n');
+  const head = DOC_FENCE_FIRST.exec(lines[0]);
+  if (head) {
+    if (head[3]) return piece; // 已经有 id 了，不重复写
+    lines[0] = `${head[1]}doc:${head[2]} {#${id}}`;
+    return lines.join('\n');
+  }
+  return `<!-- ${id} -->\n${piece}`;
+}
+
+/**
+ * 块数组 → **带 id 的源码**（编辑器与 `PUT /api/docs/:id/markdown` 用的就是这个）。
+ *
+ * 与 `blocksToMarkdown` 只差两处：结构化块的信息串带 `{#id}`，
+ * 需要固定 id 的天然 markdown 块上一行写 `<!-- id -->`。其余逐字节相同，
+ * 所以「同样输入 → 同样文本」，往返不发散。
+ *
+ * `derivedBlocks`（脚本产出的派生块）只参与判据 (b)：它们绑谁，谁就得有 id。
+ */
+export function toSource(blocks, { derivedBlocks = [] } = {}) {
+  const list = Array.isArray(blocks) ? blocks : [];
+  const marked = sourceIdsToMark(list, derivedBlocks);
+  return list
+    .map((block) => {
+      const piece = markdownForBlock(block);
+      const id = String(block?.block_id ?? '');
+      if (id === '' || !marked.has(id) || piece === '') return piece;
+      return withSourceId(piece, id);
+    })
     .filter((piece) => piece.length > 0)
     .join('\n\n');
 }
@@ -54,22 +131,35 @@ function readFence(lines, start) {
 /**
  * markdown → `{blocks, warnings}`。
  *
- * 解析顺序很重要：围栏（含 `doc:` 结构化块）→ 公式 → 空行 → 标题 → 图片 → 双链 →
- * 表格 → 引用 → 列表 → 段落兜底。列表与表格要**整段吞掉**连续行，
+ * 解析顺序很重要：围栏（含 `doc:` 结构化块）→ 公式 → 空行 → id 标记 → 标题 → 图片 →
+ * 双链 → 表格 → 引用 → 列表 → 段落兜底。列表与表格要**整段吞掉**连续行，
  * 否则 `- 甲\n- 乙` 会被拆成两个块。
+ *
+ * `positionalIds: false` 时，**没写 id 的块 `block_id` 留成空串** —— 这是「请按旧序列
+ * 给我对齐一个 id」的信号，给 store 的按 id 对齐写入用（见 `parseSourceBlocks`）。
+ * 默认 `true`：老路径照旧按位置发号，`markdownToBlocks` 的调用方一字不用改。
  */
-export function parseBlocks(markdown) {
+export function parseBlocks(markdown, { positionalIds = true } = {}) {
   const text = String(markdown ?? '').replace(/\r\n?/g, '\n');
   const lines = text.split('\n');
   const raw = [];
   let paragraph = null;
   let index = 0;
+  // 上一行 `<!-- b3 -->` 记下的 id，交给**下一个**推入的块。
+  let pendingId = '';
 
   const flushParagraph = () => {
     if (paragraph !== null) {
-      raw.push({ type: 'paragraph', props: { text: paragraph } });
+      raw.push({ type: 'paragraph', props: { text: paragraph }, blockId: pendingId });
       paragraph = null;
+      pendingId = '';
     }
+  };
+
+  /** 推入一个块；`explicitId`（写在围栏信息串里的）优先于上一行的标记行。 */
+  const pushRaw = (type, props, explicitId = '') => {
+    raw.push({ type, props, blockId: explicitId || pendingId });
+    pendingId = '';
   };
 
   while (index < lines.length && raw.length < MAX_DOC_BLOCKS) {
@@ -80,22 +170,29 @@ export function parseBlocks(markdown) {
       flushParagraph();
       const { info, body, next } = readFence(lines, index);
       if (info.startsWith('doc:')) {
-        const kind = info.slice(4);
+        const shape = DOC_FENCE_INFO.exec(info);
+        const kind = shape ? shape[1] : info.slice(4);
+        const explicitId = shape && shape[2] ? shape[2] : '';
         const type = getBlockType(kind);
-        let parsed = null;
-        try {
-          parsed = JSON.parse(body);
-        } catch {
-          parsed = null;
-        }
-        if (type && parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-          raw.push({ type: kind, props: parsed });
+        if (type && type.sourceBody === 'raw') {
+          // 源码体就是原始代码（`doc:script`），不做 JSON 解析。
+          pushRaw(kind, { code: body }, explicitId);
         } else {
-          // 结构化块坏了就退回代码块 —— 至少内容还在，不会被悄悄丢掉。
-          raw.push({ type: 'code', props: { text: body, lang: kind } });
+          let parsed = null;
+          try {
+            parsed = JSON.parse(body);
+          } catch {
+            parsed = null;
+          }
+          if (type && parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+            pushRaw(kind, parsed, explicitId);
+          } else {
+            // 结构化块坏了就退回代码块 —— 至少内容还在，不会被悄悄丢掉。
+            pushRaw('code', { text: body, lang: kind });
+          }
         }
       } else {
-        raw.push({ type: 'code', props: { text: body, lang: info } });
+        pushRaw('code', { text: body, lang: info });
       }
       index = next;
       continue;
@@ -109,7 +206,7 @@ export function parseBlocks(markdown) {
         body.push(lines[cursor]);
         cursor += 1;
       }
-      raw.push({ type: 'formula', props: { text: body.join('\n') } });
+      pushRaw('formula', { text: body.join('\n') });
       index = Math.min(cursor + 1, lines.length);
       continue;
     }
@@ -120,10 +217,19 @@ export function parseBlocks(markdown) {
       continue;
     }
 
+    // id 标记行：只作用于后面那个块，中间隔空行也不算断。
+    const marker = ID_MARKER.exec(line.trim());
+    if (marker) {
+      flushParagraph();
+      pendingId = marker[1];
+      index += 1;
+      continue;
+    }
+
     const heading = HEADING.exec(line);
     if (heading) {
       flushParagraph();
-      raw.push({ type: 'heading', props: { level: heading[1].length, text: heading[2].trim() } });
+      pushRaw('heading', { level: heading[1].length, text: heading[2].trim() });
       index += 1;
       continue;
     }
@@ -132,7 +238,7 @@ export function parseBlocks(markdown) {
     const image = IMAGE.exec(trimmed);
     if (image) {
       flushParagraph();
-      raw.push({ type: 'image', props: { alt: image[1], src: image[2] } });
+      pushRaw('image', { alt: image[1], src: image[2] });
       index += 1;
       continue;
     }
@@ -140,7 +246,7 @@ export function parseBlocks(markdown) {
     const wiki = WIKI.exec(trimmed);
     if (wiki) {
       flushParagraph();
-      raw.push({ type: 'wiki', props: { target: wiki[1], label: wiki[2] ?? '' } });
+      pushRaw('wiki', { target: wiki[1], label: wiki[2] ?? '' });
       index += 1;
       continue;
     }
@@ -154,7 +260,7 @@ export function parseBlocks(markdown) {
         cursor += 1;
       }
       // 源文件里常留着 `| --- | --- |` 的分隔行，结构化时去掉。
-      raw.push({ type: 'table', props: { text: '', rows: rows.filter((row, i) => !(i > 0 && isSeparatorRow(row))) } });
+      pushRaw('table', { text: '', rows: rows.filter((row, i) => !(i > 0 && isSeparatorRow(row))) });
       index = cursor;
       continue;
     }
@@ -171,7 +277,7 @@ export function parseBlocks(markdown) {
       if (parts.length > 1 && /^——\s*/.test(parts[parts.length - 1])) {
         source = parts.pop().replace(/^——\s*/, '').trim();
       }
-      raw.push({ type: 'quote', props: { text: parts.join('\n'), source } });
+      pushRaw('quote', { text: parts.join('\n'), source });
       index = cursor;
       continue;
     }
@@ -184,7 +290,7 @@ export function parseBlocks(markdown) {
         parts.push(lines[cursor]);
         cursor += 1;
       }
-      raw.push({ type: 'list', props: { text: parts.join('\n') } });
+      pushRaw('list', { text: parts.join('\n') });
       index = cursor;
       continue;
     }
@@ -197,14 +303,30 @@ export function parseBlocks(markdown) {
 
   const blocks = [];
   const warnings = [];
+  // 显式 id 先占位：位置发号要绕开它们，免得撞号（也免得整篇重排）。
+  const claimed = new Set();
+  for (const entry of raw) {
+    const id = String(entry.blockId ?? '');
+    if (id !== '' && BLOCK_ID_PATTERN.test(id)) claimed.add(id);
+  }
+  const used = new Set();
+  let next = 1;
   for (const entry of raw) {
     const type = getBlockType(entry.type);
     if (!type) {
       warnings.push({ block_id: '', code: 'unknown_type', message: `解析出未注册的块类型「${entry.type}」` });
       continue;
     }
+    const wanted = String(entry.blockId ?? '');
+    let blockId = wanted !== '' && BLOCK_ID_PATTERN.test(wanted) && !used.has(wanted) ? wanted : '';
+    if (blockId === '' && positionalIds) {
+      while (used.has(`b${next}`) || claimed.has(`b${next}`)) next += 1;
+      blockId = `b${next}`;
+      next += 1;
+    }
+    used.add(blockId);
     blocks.push({
-      block_id: `b${blocks.length + 1}`,
+      block_id: blockId,
       type: entry.type,
       version: 1,
       props: coerceProps(type, entry.props),
@@ -216,6 +338,14 @@ export function parseBlocks(markdown) {
 /** markdown → 块数组（只要块，不要警告）。 */
 export function markdownToBlocks(markdown) {
   return parseBlocks(markdown).blocks;
+}
+
+/**
+ * 保存源码那条路用的解析：**不给没写 id 的块发号**（`block_id: ''`）。
+ * 「这个块是谁」由 store 的按 id 对齐（LCS）决定，解析器不猜。
+ */
+export function parseSourceBlocks(markdown) {
+  return parseBlocks(markdown, { positionalIds: false });
 }
 
 /** `document_blocks.blocks_json` / `document_revisions.blocks_json` → `{blocks, warnings}`。 */

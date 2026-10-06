@@ -9,19 +9,20 @@
 // 和 `src/modules/feed/index.js`、`src/core/tables.sql.js` 用的是同一个套路。
 import { schemas } from '../../core/schema.js';
 import { DOC_SCHEMA } from './schema.js';
+import { migrateDocTables } from './migrate.js';
 import { createDocQueries } from './queries.js';
 import { createDocStore } from './store.js';
 import { registerDocRoutes } from './routes.js';
 import { loadBlockTypes } from './blocks/index.js';
 
-// 副作用：登记本模块的九张表（必须在开库之前，见文件头注释）。
+// 副作用：登记本模块的十二张表（必须在开库之前，见文件头注释）。
 schemas.addScript(DOC_SCHEMA, 'doc');
 
 export default {
   name: 'doc',
   /** 新前缀。写完在这里登记路由，不要往 /api/posts 上加东西。 */
   apiPrefix: '/api/docs',
-  /** 本模块**拥有**的表。九张都是新增表，v1 的表一张都不动。 */
+  /** 本模块**拥有**的表。十二张都是新增表，v1 的表一张都不动。 */
   owns: [
     'documents',
     'document_blocks',
@@ -32,6 +33,9 @@ export default {
     'doc_poll_votes',
     'doc_wiki_pages',
     'doc_app_state',
+    'doc_settings',
+    'doc_script_blocks',
+    'doc_site_state',
   ],
   /**
    * 会读、但不拥有的表。
@@ -45,8 +49,10 @@ export default {
    */
   reads: ['users', 'posts', 'reactions', 'boards'],
   install(ctx) {
-    // 顺序不能换：先把数据库里注册过的块类型装进注册表，
-    // 再建 store —— 否则「渲染一篇用了自定义类型的文档」会退化成占位。
+    // 顺序不能换：先补老库的结构（守卫式迁移，幂等），
+    // 再把数据库里注册过的块类型装进注册表，最后建 store ——
+    // 否则「渲染一篇用了自定义类型的文档」会退化成占位。
+    migrateDocTables(ctx.db);
     loadBlockTypes(ctx.db);
     const queries = createDocQueries(ctx.db);
     const store = createDocStore({ db: ctx.db, queries });

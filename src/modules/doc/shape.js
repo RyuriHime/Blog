@@ -28,7 +28,35 @@ const REASON_LABELS = {
   template: '套模板',
   import: '导入',
   rollback: '回滚',
+  adopt: '采纳脚本产出',
 };
+
+/** `doc_settings` 的默认值（老文档还没有这一行的时候）。 */
+const SETTINGS_DEFAULTS = {
+  allowScriptWrite: false,
+  appMode: 'inline',
+  stationId: 0,
+  parentId: 0,
+  sortOrder: 0,
+  icon: '',
+};
+
+/**
+ * 一行 `doc_settings` → 对外形状（没有行就给默认值）。
+ *
+ * `sourceText` **不外发**：它只属于编辑器，是 `present()` 里那条单独的 `source` 字段。
+ */
+export function shapeSettings(row) {
+  if (!row) return { ...SETTINGS_DEFAULTS };
+  return {
+    allowScriptWrite: Boolean(row.allow_script_write),
+    appMode: row.app_mode === 'fullpage' ? 'fullpage' : 'inline',
+    stationId: Number(row.station_id) || 0,
+    parentId: Number(row.parent_id) || 0,
+    sortOrder: Number(row.sort_order) || 0,
+    icon: String(row.icon ?? ''),
+  };
+}
 
 /** 一行 `documents`（带作者信息）→ 对外形状。 */
 export function shapeDoc(row) {
@@ -105,4 +133,4 @@ export function shapeRevision(row) {
   };
 }
 
-export { SCOPE_LABELS, KIND_LABELS, REASON_LABELS };
+export { SCOPE_LABELS, KIND_LABELS, REASON_LABELS, SETTINGS_DEFAULTS };

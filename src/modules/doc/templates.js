@@ -1,4 +1,4 @@
-// 6 个内置模板（设计文档 §7）。
+// 8 个内置模板（设计文档 §7）。
 //
 // 模板 = 一段块序列。**刻意不做成"另一套格式"** ——
 // 套模板就是一次普通的块序列替换，于是它自动拥有导入/导出、
@@ -22,12 +22,31 @@ export function defaultTitle(templateKey) {
 /** 「这一篇是 wiki 页」的标记模板（多页面 wiki 与 `/api/docs/wiki/:name` 都靠它）。 */
 export const WIKI_TEMPLATE = 'page';
 
+/** 「这一篇是 wiki 站」的标记模板（一个帖子一个 wiki：站本身是一篇普通帖子）。 */
+export const STATION_TEMPLATE = 'station';
+
 export const TEMPLATES = [
   {
     key: 'blank',
     title: '空白文档',
     description: '一个正文块，从零开始写。',
     blocks: () => [{ type: 'paragraph', props: { text: '写点什么…' } }],
+  },
+  {
+    // **一个帖子一个 wiki（第二轮）**：站本身是一篇普通文档（kind=post），照旧有影子帖、
+    // 照旧出现在「积木」板块里 —— 这就是「一个帖子一个 wiki」的字面意思。
+    // 站里的每一页仍是**独立文档**（template='page'），但不生成影子帖，
+    // 只通过一个 `subpage` 块挂进这个站的正文里（见 store.js 的 stationPages）。
+    // 模板里刻意**不放** subpage 块：站刚建出来时一页都没有，
+    // 放一块空的 subpage 只会渲染成一张坏卡片；页是「新建页面」时服务端追加的。
+    key: 'station',
+    title: 'Wiki 站',
+    description: '一个站一篇帖子：说明 + 目录，每一页以积木块挂进来。',
+    blocks: () => [
+      { type: 'heading', props: { text: '站名', level: 1 } },
+      { type: 'paragraph', props: { text: '这个 wiki 站是干什么的、怎么读。' } },
+      { type: 'heading', props: { text: '目录', level: 2 } },
+    ],
   },
   {
     // Wiki 的**单页**。多页面 wiki = 一堆这个模板建出来的文档，

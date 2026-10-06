@@ -978,16 +978,16 @@ try {
     '积木：模板清单给出 templates/kinds/scopes',
     docTemplates.status === 200 &&
       hasAll(docTemplates.json.data ?? {}, ['templates', 'kinds', 'scopes']) &&
-      docTemplates.json.data.templates.length === 7 &&
+      docTemplates.json.data.templates.length === 8 &&
       docTemplates.json.data.kinds.length === 3 &&
       docTemplates.json.data.scopes.length === 4,
     JSON.stringify(docTemplates.json).slice(0, 200),
   );
   const docTypes = await dmA('/api/docs/meta/block-types');
   check(
-    '积木：块类型清单给出 12 种内置类型且带声明式 schema',
+    '积木：块类型清单给出 13 种内置类型且带声明式 schema',
     docTypes.status === 200 &&
-      docTypes.json.data?.types?.length === 12 &&
+      docTypes.json.data?.types?.length === 13 &&
       docTypes.json.data.types.every((type) => type.builtin === true && type.schema && typeof type.schema === 'object'),
     JSON.stringify(docTypes.json).slice(0, 200),
   );

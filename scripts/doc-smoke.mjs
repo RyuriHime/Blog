@@ -242,15 +242,15 @@ try {
   /* ---------- 2.1 类型清单与契约对拍 ---------- */
 
   const typeNames = engine.listBlockTypes().map((type) => type.name);
-  check('内置 12 种块类型', typeNames.length === 12, typeNames.join(','));
+  check('内置 13 种块类型', typeNames.length === 13, typeNames.join(','));
   check(
     '前 7 种与 note-agent 的 BLOCK_TYPES 逐字同序（契约对拍，两边块序列可互换）',
     JSON.stringify(typeNames.slice(0, 7)) === JSON.stringify(agent.BLOCK_TYPES),
     `${JSON.stringify(typeNames.slice(0, 7))} vs ${JSON.stringify(agent.BLOCK_TYPES)}`,
   );
   check(
-    '新增 5 种是 quote / poll / wiki / embed / app',
-    JSON.stringify(typeNames.slice(7)) === JSON.stringify(['quote', 'poll', 'wiki', 'embed', 'app']),
+    '新增 6 种是 quote / poll / wiki / embed / app / script',
+    JSON.stringify(typeNames.slice(7)) === JSON.stringify(['quote', 'poll', 'wiki', 'embed', 'app', 'script']),
     JSON.stringify(typeNames.slice(7)),
   );
   check('每种类型都有 name / version / label / icon / schema / editor', engine.listBlockTypes().every(
@@ -415,6 +415,7 @@ try {
         case 'wiki': return { target: sentence(1, 2), label: rnd() < 0.5 ? sentence(1, 2) : '', note: '' };
         case 'embed': return { url: `https://example.com/${Math.floor(rnd() * 20)}`, title: sentence(1, 2), height: 200 + Math.floor(rnd() * 4) * 40 };
         case 'app': return { app: pick(['todo', 'calc']), config: { n: Math.floor(rnd() * 10) }, code: pick(['', '<b>hi</b>', 'Sandbox.value(1)']) };
+        case 'script': return { code: pick(['', 'Sandbox.value(1);', 'const a = 1;\nSandbox.render.put("s1", "paragraph", { text: "hi" });']) };
         default: return {};
       }
     };
@@ -537,13 +538,13 @@ try {
   {
     const templates = await anon.call('/api/docs/meta/templates');
     check(
-      'GET /api/docs/meta/templates 匿名可读且给出 7 个模板',
-      templates.status === 200 && templates.data?.templates?.length === 7,
+      'GET /api/docs/meta/templates 匿名可读且给出 8 个模板',
+      templates.status === 200 && templates.data?.templates?.length === 8,
       `${templates.status} ${JSON.stringify(templates.data).slice(0, 160)}`,
     );
 
     const types = await anon.call('/api/docs/meta/block-types');
-    check('GET /api/docs/meta/block-types 给出 12 个内置类型', types.status === 200 && types.data?.types?.length === 12, `len=${types.data?.types?.length}`);
+    check('GET /api/docs/meta/block-types 给出 13 个内置类型', types.status === 200 && types.data?.types?.length === 13, `len=${types.data?.types?.length}`);
     check(
       '内置类型都标了 builtin:true 且带声明式 schema',
       types.data?.types?.every((type) => type.builtin === true && type.schema && typeof type.schema === 'object'),
@@ -687,7 +688,7 @@ try {
     const linkDoc = created.data?.doc?.id;
     check('联动试验文档建得出来', Number.isInteger(linkDoc), `${created.status} ${JSON.stringify(created.error)}`);
 
-    await author.call(`/api/docs/${linkDoc}/markdown`, { method: 'PUT', body: { markdown: '甲段的正文' } });
+    await author.call(`/api/docs/${linkDoc}/markdown?confirm=1`, { method: 'PUT', body: { markdown: '甲段的正文' } });
     const seedBlocks = (await author.call(`/api/docs/${linkDoc}`)).data?.blocks ?? [];
     const sourceId = seedBlocks[0]?.blockId;
     check('联动试验有了源块', Boolean(sourceId), JSON.stringify(seedBlocks));
@@ -927,8 +928,8 @@ try {
     const types = await anon.call('/api/docs/meta/block-types');
     const timeline = types.data?.types?.find((type) => type.name === 'timeline');
     check(
-      '注册表变成 13 种，新类型 builtin=false 且带自己的 schema',
-      types.data?.types?.length === 13 && timeline?.builtin === false && timeline?.schema?.text,
+      '注册表变成 14 种，新类型 builtin=false 且带自己的 schema',
+      types.data?.types?.length === 14 && timeline?.builtin === false && timeline?.schema?.text,
       JSON.stringify(timeline),
     );
 
@@ -1401,7 +1402,7 @@ try {
     for (const id of created) await staff.call(`/api/docs/${id}`, { method: 'DELETE' });
 
     const list = await anon.call('/api/docs/meta/templates');
-    check('模板清单是 7 个', list.data?.templates?.length === 7, JSON.stringify(list.data?.templates?.length));
+    check('模板清单是 8 个', list.data?.templates?.length === 8, JSON.stringify(list.data?.templates?.length));
 
     const readText = (relative) => {
       const full = join(ROOT, relative);
@@ -1635,7 +1636,7 @@ try {
 
       // 行内双链：`markdownToBlocks` 只把**独占一行**的 `[[x]]` 变 wiki 块，
       // 夹在句子里的那条不能就原样显示成 `[[x]]`（用户会以为双链坏了）。
-      const inline = await staff.call(`/api/docs/${first.data?.doc?.id}/markdown`, {
+      const inline = await staff.call(`/api/docs/${first.data?.doc?.id}/markdown?confirm=1`, {
         method: 'PUT',
         body: { markdown: '下一站：[[S8 子页面]]。' },
       });
@@ -1943,6 +1944,101 @@ try {
       check('8.9 新样式都在 41-doc.css 里', ['.doc-wizard', '.doc-tpl-pick', '.doc-steps', '.doc-howto', '.doc-block-foot', '.doc-code-box'].every((item) => css.includes(item)), '');
       // display:grid 会盖掉 hidden 属性（这个坑踩过两次），新建面板默认是收着的。
       check('8.9 hidden 的新建面板不会被 display:grid 顶出来', css.includes('.doc-wizard[hidden]'), '');
+    }
+
+    /* ---------- 【S9】脚本运行时：直接往帖子上写代码，块是数据 ---------- */
+    // 用户点名的第 1 件事：「底层逻辑不再是只能改 JSON，而是能直接往帖子上写代码」。
+    // 这一节从 HTTP 走完整条链：源码里的 `doc:script` → 解析成代码 → 能力申请（默认被拒）
+    // → 作者开开关 → 脚本写派生块 → 渲染 → 采纳为真块 → 审计留痕。
+    {
+      const created = await author.call('/api/docs', { method: 'POST', body: { title: 'S9 脚本帖', kind: 'post', scope: 'public' } });
+      const docId = created.data?.doc?.id;
+      check('9.1 建得出一篇脚本帖', Number.isInteger(docId), `${created.status} ${JSON.stringify(created.error)}`);
+
+      const src = [
+        '```doc:script {#b1}',
+        'const me = await Sandbox.viewer();',
+        'await Sandbox.render.put("s1", "paragraph", { text: "脚本产出的一段话" });',
+        '```',
+        '',
+        '## 正文标题',
+        '',
+        '这一段是作者写的。',
+      ].join('\n');
+      const saved = await author.call(`/api/docs/${docId}/markdown?confirm=1`, { method: 'PUT', body: { markdown: src } });
+      check('9.1 源码里能直接写 JS（doc:script 的块体不是 JSON）', saved.status === 200, `${saved.status} ${JSON.stringify(saved.error)}`);
+      const savedTypes = (saved.data?.blocks ?? []).map((block) => block.type);
+      check('9.1 解析成 script + heading + paragraph', JSON.stringify(savedTypes) === JSON.stringify(['script', 'heading', 'paragraph']), JSON.stringify(savedTypes));
+      check('9.1 源码逐字节原样回来了（编辑器往返靠它）', saved.data?.source === src, JSON.stringify(saved.data?.source));
+      check('9.1 script 块的 code 就是那段原文', String((saved.data?.blocks ?? [])[0]?.props?.code ?? '').includes('Sandbox.render.put'), JSON.stringify((saved.data?.blocks ?? [])[0]?.props));
+      check('9.1 沙箱代码按 20000 字卡（不是 app 的那条路）', typeof (saved.data?.blocks ?? [])[0]?.props?.code === 'string', '');
+
+      const denied = await author.call(`/api/docs/${docId}/capabilities`, {
+        method: 'POST',
+        body: { blockId: 'b1', capability: 'blocks.derived', payload: { op: 'put', blockId: 's1', type: 'paragraph', props: { text: 'hi' }, scope: 'shared' } },
+      });
+      check('9.2 开关默认关着 → 脚本写块被拒（403）', denied.status === 403, `${denied.status} ${JSON.stringify(denied.error)}`);
+      // 白名单之外的能力连「尝试」都要留痕（allowed:false 的那条就是它）。
+      const rejected = await author.call(`/api/docs/${docId}/capabilities`, {
+        method: 'POST',
+        body: { blockId: 'b1', capability: 'blocks.secret', payload: { op: 'put' } },
+      });
+      check('9.2 白名单外的能力 → 403，而且照样记一条审计', rejected.status === 403, `${rejected.status}`);
+
+      const settings = await author.call(`/api/docs/${docId}/settings`, { method: 'PUT', body: { allowScriptWrite: true } });
+      check('9.2 作者能打开「脚本可以改块」', settings.status === 200 && settings.data?.settings?.allowScriptWrite === true, `${settings.status} ${JSON.stringify(settings.data?.settings)}`);
+      const badMode = await author.call(`/api/docs/${docId}/settings`, { method: 'PUT', body: { appMode: 'nope' } });
+      check('9.2 乱给 appMode → 400（枚举真的在校验）', badMode.status === 400, `${badMode.status}`);
+
+      const put = await author.call(`/api/docs/${docId}/capabilities`, {
+        method: 'POST',
+        body: { blockId: 'b1', capability: 'blocks.derived', payload: { op: 'put', blockId: 's1', type: 'paragraph', props: { text: '脚本产出的一段话' }, scope: 'shared' } },
+      });
+      check('9.3 开了开关之后脚本能写派生块', put.status === 200 && put.data?.value?.blockId === 's1', `${put.status} ${JSON.stringify(put.data)}`);
+
+      const shown = await author.call(`/api/docs/${docId}`);
+      const derivedBlock = (shown.data?.blocks ?? []).find((block) => block.derived === true);
+      check('9.3 派生块进 blocks 且打了 derived 标记', derivedBlock?.blockId === 's1' && derivedBlock?.scope === 'shared', JSON.stringify((shown.data?.blocks ?? []).map((block) => block.blockId)));
+      const shownHtml = String(shown.data?.html ?? '');
+      check('9.3 派生块接在真块之后，照样走渲染管线', shownHtml.includes('脚本产出的一段话') && shownHtml.includes('doc-derived'), shownHtml.slice(-320));
+      check('9.3 派生块一个字节都没写进正文（真块还是 3 个）', (shown.data?.blocks ?? []).filter((block) => !block.derived).length === 3, '');
+
+      const bogus = await author.call(`/api/docs/${docId}/capabilities`, {
+        method: 'POST',
+        body: { blockId: 'b1', capability: 'blocks.derived', payload: { op: 'put', blockId: 's2', type: 'not_a_type', props: {} } },
+      });
+      check('9.3 脚本不能凭空造类型（400，不是渲染出裸 HTML）', bogus.status === 400, `${bogus.status} ${JSON.stringify(bogus.error)}`);
+
+      const adopted = await author.call(`/api/docs/${docId}/adopt`, { method: 'POST', body: { blockId: 's1', scope: 'shared' } });
+      check('9.4 采纳为真块：发新 id 并接进正文', adopted.status === 200 && /^b\d+$/.test(String(adopted.data?.adopted?.blockId ?? '')), `${adopted.status} ${JSON.stringify(adopted.data?.adopted)}`);
+      const after = await author.call(`/api/docs/${docId}`);
+      check('9.4 采纳之后它不再是派生块', !(after.data?.blocks ?? []).some((block) => block.blockId === 's1'), JSON.stringify((after.data?.blocks ?? []).map((block) => block.blockId)));
+      check('9.4 采纳之后源码里看得见这个新块', String(after.data?.source ?? '').includes('脚本产出的一段话'), String(after.data?.source ?? ''));
+      const revisions = await author.call(`/api/docs/${docId}/revisions`);
+      check('9.4 采纳写了一条 adopt 修订（不是偷偷改正文）', (revisions.data?.revisions ?? []).some((revision) => revision.reasonLabel === '采纳脚本产出'), JSON.stringify((revisions.data?.revisions ?? []).map((revision) => revision.reasonLabel)));
+
+      const deniedLogs = await author.call(`/api/docs/${docId}/capabilities`);
+      check('9.5 审计只有管理员看得到（作者也不行）', deniedLogs.status === 403, `${deniedLogs.status}`);
+      const logs = await staff.call(`/api/docs/${docId}/capabilities`);
+      const entries = logs.data?.logs ?? [];
+      check('9.5 能力申请（含被拒的那次）全进了审计', entries.some((log) => log.allowed === false) && entries.some((log) => log.allowed === true), JSON.stringify(entries.slice(0, 2)));
+
+      // 【S9.6】源码预览：编辑器右边那块。纯读 —— 不落库、不动 source_text、不建修订。
+      const beforePreview = await author.call(`/api/docs/${docId}`);
+      const preview = await author.call(`/api/docs/${docId}/preview`, {
+        method: 'POST',
+        body: { markdown: '# 预览标题\n\n预览里的一段话\n' },
+      });
+      check('9.6 预览回渲染好的 HTML 与块清单', preview.status === 200 && String(preview.data?.html ?? '').includes('预览标题') && (preview.data?.blocks ?? []).length === 2, `${preview.status} ${JSON.stringify(preview.data?.blocks)}`);
+      const afterPreview = await author.call(`/api/docs/${docId}`);
+      check(
+        '9.6 预览不改正文、不改源码、不建修订',
+        (afterPreview.data?.blocks ?? []).length === (beforePreview.data?.blocks ?? []).length
+          && afterPreview.data?.source === beforePreview.data?.source,
+        `${(beforePreview.data?.blocks ?? []).length} → ${(afterPreview.data?.blocks ?? []).length}`,
+      );
+
+      await author.call(`/api/docs/${docId}`, { method: 'DELETE' });
     }
   }
 

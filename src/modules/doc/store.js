@@ -20,8 +20,15 @@ import {
   MAX_DOC_REVISIONS,
   MAX_DOC_TITLE,
   BLOCK_TYPE_PATTERN,
+  BLOCK_ID_PATTERN,
+  DERIVED_ID_PATTERN,
+  DERIVED_SCOPES,
+  MAX_DERIVED_BLOCKS,
+  MAX_DERIVED_PROPS_BYTES,
+  MAX_DERIVED_TOTAL_BYTES,
   MAX_APP_CODE,
   MAX_APP_STATE,
+  APP_MODES,
   APP_STATE_SCOPES,
   SANDBOX_CAPABILITIES,
 } from './schema.js';
@@ -33,15 +40,18 @@ import {
   blocksToPlainText,
   coerceProps,
   getBlockType,
+  ID_BEARING_TYPES,
   isSandboxType,
   listBlockTypes as engineListBlockTypes,
   markdownToBlocks,
+  parseSourceBlocks,
   registerBlockType,
   renderBlocks,
+  toSource,
 } from './blocks/index.js';
 import { applyDocOps, MAX_OPS } from './blocks/ops.js';
 import { hasTemplate, templateBlocks, templateList, WIKI_TEMPLATE } from './templates.js';
-import { KIND_LABELS, REASON_LABELS, SCOPE_LABELS, shapeDoc, shapeRevision } from './shape.js';
+import { KIND_LABELS, REASON_LABELS, SCOPE_LABELS, shapeDoc, shapeRevision, shapeSettings } from './shape.js';
 
 /** 一条 op 被拒的原因 → 给人看的话（前端直接显示，不再自己映射一遍）。 */
 const OP_REASON_LABELS = {
@@ -124,6 +134,152 @@ export function createDocStore({ db, queries, now = () => Date.now() }) {
     return queries.blocksOf(documentId).map(blockFromRow);
   }
 
+  /** `doc_settings` 的原始行（没有就是 null —— 读路径绝不顺手造一行）。 */
+  function readSettings(documentId) {
+    return queries.settingsOf(documentId) ?? null;
+  }
+
+  /**
+   * 编辑器要用的源码：`doc_settings.source_text`（作者最后一次逐字节输入）优先；
+   * 老文档还没存过就现场用 `toSource(blocks)` 生成一份 —— **不落库**，
+   * 作者第一次保存时它才成为基准。
+   */
+  function sourceOf(settingsRow, blocks) {
+    const stored = settingsRow?.source_text;
+    if (typeof stored === 'string' && stored !== '') return stored;
+    return toSource(blocks);
+  }
+
+  /* ---------------- 派生层：脚本产出的块 ---------------- */
+
+  /**
+   * 派生行 → 渲染层认识的块形状。
+   *
+   * 它们**不是**正文：不进 `document_blocks`、不产生修订、不算作者编辑。
+   * 渲染时接在真块之后（`present` 里拼），打上 `derived: true` 让前端标出来。
+   */
+  function derivedRows(documentId, viewer) {
+    return queries.derivedBlocks(documentId, viewer?.id ?? 0).map((row) => {
+      let props = {};
+      try {
+        const parsed = JSON.parse(String(row.props_json ?? '{}'));
+        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) props = parsed;
+      } catch {
+        props = {};
+      }
+      return {
+        block_id: String(row.block_id),
+        type: String(row.type),
+        version: 1,
+        props,
+        derived: true,
+        scope: String(row.scope),
+      };
+    });
+  }
+
+  /**
+   * 「采纳为真块」（§4.5）：把一条脚本产出**固化进正文**。
+   *
+   * 这就是一次普通的文档写：新块拿到自己的 `b\d+`、接到末尾、写一条 `adopt` 修订、
+   * 产出行删掉。此后它与别的块没有区别 —— 脚本可以再改它，但那是改正文了。
+   */
+  function adoptDerived({ id, viewer, blockId = '', scope = 'user' } = {}) {
+    const row = mustEdit(id, viewer);
+    const at = now();
+    const scopeName = DERIVED_SCOPES.includes(scope) ? scope : 'user';
+    const owner = scopeName === 'shared' ? 0 : viewer?.id ?? 0;
+    const found = queries.derivedBlockRow(row.id, scopeName, owner, String(blockId ?? '').slice(0, 32));
+    if (!found) throw new HttpError(404, 'not_found', '找不到这个脚本产出块');
+    const typeDef = getBlockType(String(found.type));
+    if (!typeDef) throw badRequest(`这个产出块的类型已经不存在了：${found.type}`);
+    let props = {};
+    try {
+      const parsed = JSON.parse(String(found.props_json ?? '{}'));
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) props = parsed;
+    } catch {
+      props = {};
+    }
+    const shaped = serializeBlock({ type: typeDef.name, props });
+    const newBlockId = `b${queries.nextBlockNumber(row.id)}`;
+    queries.insertBlockRow({
+      documentId: row.id,
+      blockId: newBlockId,
+      type: shaped.type,
+      version: shaped.version,
+      position: queries.maxPosition(row.id) + 1,
+      propsJson: shaped.propsJson,
+      now: at,
+    });
+    queries.deleteDerivedBlock(row.id, scopeName, owner, String(found.block_id));
+    snapshot(row.id, 'adopt', viewer?.id ?? null, at);
+    // 源头也得跟上：采纳进来的块现在在正文里，编辑器要看得见它。
+    const nextBlocks = readBlocks(row.id);
+    queries.setSourceText({ documentId: row.id, sourceText: toSource(nextBlocks), now: at });
+    return { ...present(row, viewer), adopted: { blockId: newBlockId, from: String(found.block_id) } };
+  }
+
+  /**
+   * `blocks.derived` 能力（§4.4）：脚本**画块**的那条路。
+   *
+   * 三道闸：① 作者得先打开「脚本可以改块」（默认关）；② 得登录；
+   * ③ 类型必须注册过 —— 脚本不能凭一个能力把任意 HTML 塞进别人的页面，
+   * 它只能产出「已知类型的块」，渲染仍然走同一条管线（照样转义）。
+   */
+  function derivedPayload({ row, viewer, payload, at }) {
+    const scope = DERIVED_SCOPES.includes(payload?.scope) ? payload.scope : 'user';
+    const owner = scope === 'shared' ? 0 : viewer?.id ?? 0;
+    const op = ['list', 'put', 'delete'].includes(String(payload?.op)) ? String(payload.op) : 'list';
+    const settings = readSettings(row.id);
+    const canWrite = Number(settings?.allow_script_write) === 1;
+
+    if (op === 'list') {
+      return { scope, canWrite, blocks: derivedRows(row.id, viewer).map((block) => ({ id: block.block_id, type: block.type, props: block.props, scope: block.scope })) };
+    }
+
+    if (!canWrite) {
+      throw new HttpError(403, 'owner_only', '这篇帖子没有打开「脚本可以改块」这个开关');
+    }
+    if (!viewer) throw new HttpError(401, 'unauthenticated', '脚本要写块，先请登录');
+
+    const blockId = String(payload?.blockId ?? '').slice(0, 32);
+    if (!DERIVED_ID_PATTERN.test(blockId)) {
+      throw badRequest('脚本产出块的 id 只能是字母、数字、下划线和短横线（1–32 个字符）');
+    }
+    if (op === 'delete') {
+      queries.deleteDerivedBlock(row.id, scope, owner, blockId);
+      return { scope, blockId, deleted: true };
+    }
+
+    const typeDef = getBlockType(String(payload?.type ?? ''));
+    if (!typeDef) throw badRequest(`不认识的块类型：${payload?.type}`);
+    const props = coerceProps(typeDef, payload?.props && typeof payload.props === 'object' ? payload.props : {});
+    const propsJson = JSON.stringify(props);
+    if (propsJson.length > MAX_DERIVED_PROPS_BYTES) {
+      throw badRequest(`脚本产出块最多 ${Math.round(MAX_DERIVED_PROPS_BYTES / 1024)}KB，这个超了`);
+    }
+    const existing = queries.derivedBlockRow(row.id, scope, owner, blockId);
+    if (!existing && queries.countDerivedBlocks(row.id, scope, owner) >= MAX_DERIVED_BLOCKS) {
+      throw badRequest(`一篇帖子最多 ${MAX_DERIVED_BLOCKS} 个脚本产出块`);
+    }
+    const before = existing ? String(existing.props_json ?? '').length : 0;
+    if (queries.derivedBytesOfDocument(row.id) - before + propsJson.length > MAX_DERIVED_TOTAL_BYTES) {
+      throw badRequest(`这篇帖子的脚本产出加起来太大了（上限 ${Math.round(MAX_DERIVED_TOTAL_BYTES / 1024)}KB）`);
+    }
+    const position = existing ? Number(existing.position) : queries.maxDerivedPosition(row.id, scope, owner) + 1;
+    queries.upsertDerivedBlock({
+      documentId: row.id,
+      scope,
+      userId: owner,
+      blockId,
+      type: typeDef.name,
+      propsJson,
+      position,
+      now: at,
+    });
+    return { scope, blockId, type: typeDef.name, props };
+  }
+
   /**
    * 把 props 规范成可存的形式：注册过的类型走 `coerceProps` 补默认值，
    * 没注册过的（导入进来的未知块）**原样保留** —— 我们不该毁掉别人的数据。
@@ -153,26 +309,159 @@ export function createDocStore({ db, queries, now = () => Date.now() }) {
     if (count > MAX_DOC_BLOCKS) throw badRequest(`一篇文档最多 ${MAX_DOC_BLOCKS} 块，当前 ${count} 块`);
   }
 
-  /** 整篇替换块序列（Markdown 导入、ops、套模板、回滚都走它）。 */
+  /**
+   * 最长公共子序列：`pick[j]` 是 `b[j]` 配上的 `a` 下标（没配上为 -1）。
+   * 用来把「没写 id 的新块」和「旧行」对齐 —— 键（类型 + 规范化 props）相同才算同一个块。
+   */
+  function alignBlocks(a, b) {
+    const n = a.length;
+    const m = b.length;
+    const table = Array.from({ length: n + 1 }, () => new Uint32Array(m + 1));
+    for (let i = n - 1; i >= 0; i -= 1) {
+      for (let j = m - 1; j >= 0; j -= 1) {
+        table[i][j] = a[i] === b[j]
+          ? table[i + 1][j + 1] + 1
+          : Math.max(table[i + 1][j], table[i][j + 1]);
+      }
+    }
+    const pick = new Array(m).fill(-1);
+    let i = 0;
+    let j = 0;
+    while (i < n && j < m) {
+      if (a[i] === b[j]) {
+        pick[j] = i;
+        i += 1;
+        j += 1;
+      } else if (table[i + 1][j] >= table[i][j + 1]) {
+        i += 1;
+      } else {
+        j += 1;
+      }
+    }
+    return pick;
+  }
+
+  /** 块的「身份键」：类型 + 规范化 props。改过内容的块对不上，就当作新块。 */
+  function blockKey(type, propsJson) {
+    return `${type}\u0000${propsJson}`;
+  }
+
+  /**
+   * 写块序列 —— **按 id 对齐**，不再「先全删再全插」。
+   *
+   * 老实现每次保存都把整篇块删掉重插，而块 id 是按位置发的，于是在开头插一段
+   * 就会让后面所有 id 后移：投给 poll 的票、沙箱状态、`bind` 引用全被当孤儿清掉（丢数据）。
+   * 现在三步：
+   *   1. 带显式 id 的块（源码里写了 `{#b3}` / `<!-- b3 -->`）就用那个 id，身份不动；
+   *   2. 没写 id 的块与「旧行里没被占走的那些」做 LCS 对齐，键相同就留住旧 id；
+   *   3. 只插真正新增的、删真正消失的、更新真正变了的。
+   * 即便因此丢了一个 id，也只可能丢在纯文字块上：有副数据（票 / 状态 / bind 目标）的块
+   * 在源码里必然带显式 id（见 `blocks/markdown.js` 的 `sourceIdsToMark`）。
+   */
   function writeBlocks(documentId, blocks, at) {
     assertBudget(blocks.length);
-    queries.deleteBlocksOf(documentId);
-    for (const [index, block] of blocks.entries()) {
-      const shaped = serializeBlock(block);
-      if (!shaped.block_id || !/^b\d+$/.test(shaped.block_id)) shaped.block_id = `b${index + 1}`;
-      queries.insertBlockRow({
-        documentId,
-        blockId: shaped.block_id,
-        type: shaped.type,
-        version: shaped.version,
-        position: index + 1,
-        propsJson: shaped.propsJson,
-        now: at,
-      });
+    const shapedList = blocks.map((block) => serializeBlock(block));
+    const oldRows = queries.blocksOf(documentId);
+    const oldById = new Map(oldRows.map((row) => [String(row.block_id), row]));
+
+    // 显式 id 先占位：位置对齐不许碰它们。
+    const taken = new Set();
+    const explicitIds = shapedList.map((shaped) => {
+      const id = String(shaped.block_id ?? '');
+      if (id === '' || !BLOCK_ID_PATTERN.test(id) || taken.has(id)) return '';
+      taken.add(id);
+      return id;
+    });
+
+    const freeOld = oldRows.filter((row) => !taken.has(String(row.block_id)));
+    const freeNew = [];
+    shapedList.forEach((shaped, index) => {
+      if (explicitIds[index] === '') freeNew.push(index);
+    });
+    const pick = alignBlocks(
+      freeOld.map((row) => blockKey(row.type, row.props_json)),
+      freeNew.map((index) => blockKey(shapedList[index].type, shapedList[index].propsJson)),
+    );
+    const pairedWith = new Map();
+    freeNew.forEach((index, position) => {
+      if (pick[position] >= 0) pairedWith.set(index, freeOld[pick[position]]);
+    });
+
+    // LCS 没配上的按顺序两两补齐 —— 但**只在两边都不是「带副数据的块」时**。
+    // 改一个标题的错字不该换掉它的块 id（老实现会把整篇 id 平移，这里保住它）；
+    // 而一个 poll 的 id 绝不能交给别的块（那等于让票"继承"过去）。
+    const usedOld = new Set([...pairedWith.values()].map((row) => String(row.block_id)));
+    const leftovers = freeOld.filter((row) => !usedOld.has(String(row.block_id)));
+    let cursor = 0;
+    for (const index of freeNew) {
+      if (pairedWith.has(index)) continue;
+      const shaped = shapedList[index];
+      while (cursor < leftovers.length) {
+        const candidate = leftovers[cursor];
+        cursor += 1;
+        if (ID_BEARING_TYPES.has(String(candidate.type)) || ID_BEARING_TYPES.has(shaped.type)) continue;
+        pairedWith.set(index, candidate);
+        break;
+      }
     }
-    // 整批换过块序列之后，投给「已经被换掉的投票块 / 已经删掉的选项」的票必须清掉。
+
+    let nextNumber = queries.nextBlockNumber(documentId);
+    const keep = new Set();
+    const plan = shapedList.map((shaped, index) => {
+      let blockId = explicitIds[index];
+      if (blockId === '') {
+        const old = pairedWith.get(index) ?? null;
+        if (old) {
+          blockId = String(old.block_id);
+        } else {
+          while (taken.has(`b${nextNumber}`)) nextNumber += 1;
+          blockId = `b${nextNumber}`;
+          nextNumber += 1;
+        }
+      }
+      taken.add(blockId);
+      keep.add(blockId);
+      return { shaped, blockId, old: oldById.get(blockId) ?? null };
+    });
+
+    plan.forEach(({ shaped, blockId, old }, index) => {
+      const position = index + 1;
+      if (!old) {
+        queries.insertBlockRow({
+          documentId,
+          blockId,
+          type: shaped.type,
+          version: shaped.version,
+          position,
+          propsJson: shaped.propsJson,
+          now: at,
+        });
+        return;
+      }
+      if (old.type !== shaped.type
+        || Number(old.type_version) !== shaped.version
+        || String(old.props_json) !== shaped.propsJson) {
+        queries.updateBlockRow({
+          documentId,
+          blockId,
+          type: shaped.type,
+          version: shaped.version,
+          propsJson: shaped.propsJson,
+          now: at,
+        });
+      }
+      if (Number(old.position) !== position) {
+        queries.setBlockPosition({ documentId, blockId, position, now: at });
+      }
+    });
+
+    for (const row of oldRows) {
+      const blockId = String(row.block_id);
+      if (!keep.has(blockId)) queries.deleteBlockRow(documentId, blockId);
+    }
+
+    // 剩下的孤儿数据才真的没有主人：投给已被删掉的投票块的票、已被删块的状态。
     reconcilePollVotes(documentId);
-    // 同理：被换掉的块存过的沙箱状态也没有主人了。
     reconcileAppState(documentId);
   }
 
@@ -204,6 +493,24 @@ export function createDocStore({ db, queries, now = () => Date.now() }) {
       const text = rows.map((row) => `- r${row.revision} · ${stamp(row.created_at)} · ${row.display_name || row.username || '—'} · ${REASON_LABELS[row.reason] ?? row.reason}`).join('\n');
       return { ...block, props: { ...block.props, text } };
     });
+  }
+
+  /**
+   * 目录（ToC）：只收标题块，锚点用**稳定块 id**。
+   *
+   * 为什么不扫 DOM：右栏要在正文渲染之前就画出来，`#/wiki/<站>/<页>` 的站内跳转
+   * 也要一份不依赖前端的目录；而块 id 在服务端本来就是唯一的，
+   * 不需要 slug（slug 会撞、会随标题改动失效）。
+   * 锚点是 `h-<blockId>`（见 `blocks/types.js` 的 heading.toHtml）。
+   */
+  function tocOf(blocks) {
+    return blocks
+      .filter((block) => block.type === 'heading')
+      .map((block) => ({
+        blockId: String(block.block_id),
+        level: Math.min(Math.max(Number(block.props?.level) || 1, 1), 6),
+        text: String(block.props?.text ?? ''),
+      }));
   }
 
   /** 影子行同步：public 才带标题与摘要，其余范围写空串（少泄露一点是一点）。 */
@@ -240,29 +547,68 @@ export function createDocStore({ db, queries, now = () => Date.now() }) {
 
   /** 详情形状（列表、创建、更新、回滚共用这一个出口）。 */
   function present(docRow, viewer) {
+    const settingsRow = readSettings(docRow.id);
+    // 注意：这里的 `blocks` 是**没被 materialize 过**的原始块。
+    // 源码要的是作者写下的东西，不是「此刻渲染出来的修订列表」。
     const blocks = readBlocks(docRow.id);
     const materialized = materializeSources(blocks, docRow.id);
+    // 脚本产出的派生块**接在真块之后**：真块序列一个字节都不动，派生层是叠加物（§4.4）。
+    const derived = derivedRows(docRow.id, viewer);
+    const living = derived.length ? [...materialized, ...derived] : materialized;
     // `sandboxDisabled` 要交给渲染层：沙箱块据此**连 iframe 都不建**（§6.4）。
-    const rendered = renderBlocks(materialized, {
+    const rendered = renderBlocks(living, {
       sandboxDisabled: Boolean(docRow.sandbox_disabled),
       documentId: docRow.id,
     });
-    return {
+    const abilities = abilitiesOf(docRow, viewer);
+    const data = {
       doc: shapeDoc(docRow),
-      blocks: materialized.map((block) => ({
+      blocks: living.map((block) => ({
+        blockId: block.block_id,
+        type: block.type,
+        version: Number(block.version) || 1,
+        props: block.props ?? {},
+        ...(block.derived ? { derived: true, scope: block.scope } : {}),
+      })),
+      html: rendered.html,
+      toc: tocOf(living),
+      warnings: rendered.warnings,
+      abilities,
+      settings: shapeSettings(settingsRow),
+    };
+    // 源码只给改得动的人：它带着块 id，是编辑器的起点，不是读者需要的东西。
+    if (abilities.canEdit) data.source = sourceOf(settingsRow, blocks);
+    return data;
+  }
+
+  /**
+   * 源码预览：解析 + 渲染，**一个字都不落库**。
+   *
+   * 编辑器右侧那块靠它 —— 所以它必须便宜（不写库、不建修订、不动 `source_text`），
+   * 也必须诚实：`warnings` 原样带回，别替作者过滤掉。
+   */
+  function previewMarkdown({ id, viewer, markdown } = {}) {
+    const row = mustEdit(id, viewer);
+    const parsed = parseSourceBlocks(String(markdown ?? ''));
+    const rendered = renderBlocks(parsed.blocks, {
+      sandboxDisabled: Boolean(row.sandbox_disabled),
+      documentId: row.id,
+    });
+    return {
+      documentId: row.id,
+      html: rendered.html,
+      warnings: [...parsed.warnings, ...rendered.warnings],
+      // props 要带全：预览里的沙箱 iframe 拿它当 `init` 消息（与阅读页同一套挂载代码）。
+      blocks: parsed.blocks.map((block) => ({
         blockId: block.block_id,
         type: block.type,
         version: Number(block.version) || 1,
         props: block.props ?? {},
       })),
-      html: rendered.html,
-      warnings: rendered.warnings,
-      abilities: abilitiesOf(docRow, viewer),
     };
   }
 
   /* ---------------- 位置计算 ---------------- */
-
   /**
    * 算出新块该放在哪个 position。
    *
@@ -786,17 +1132,61 @@ export function createDocStore({ db, queries, now = () => Date.now() }) {
     return { title: row.title, markdown: blocksToMarkdown(readBlocks(row.id)), updatedAt: row.updated_at };
   }
 
-  function putMarkdown({ id, viewer, markdown, title } = {}) {
+  function putMarkdown({ id, viewer, markdown, title, confirm = false } = {}) {
     const row = mustEdit(id, viewer);
     const text = typeof markdown === 'string' ? markdown : '';
     if (Buffer.byteLength(text, 'utf8') > MAX_DOC_BODY_BYTES) throw badRequest('正文太大了（上限 256 KB）');
-    const blocks = markdownToBlocks(text);
-    assertBudget(blocks.length);
+    // 没写 id 的块**不发号**：交给 writeBlocks 按旧序列对齐，块 id 才不会整篇平移。
+    const parsed = parseSourceBlocks(text);
+    const before = queries.countBlocks(row.id);
+    // 防手滑第 1 道：源码非空却一块都没解析出来 —— 多半是语法写坏了，宁可拒绝。
+    if (text.trim() !== '' && parsed.blocks.length === 0) throw badRequest('源码没能解析出任何块');
+    // 防手滑第 2 道：块数暴跌不直接拒绝，但要作者再点一次确认（`?confirm=1`）。
+    if (!confirm && before >= 4 && parsed.blocks.length * 2 < before) {
+      throw new HttpError(409, 'conflict', `块数从 ${before} 掉到 ${parsed.blocks.length}，确认这样存？`);
+    }
     const at = now();
     const cleanTitle = title === undefined ? row.title : normalizeTitle(title);
     queries.updateDocumentMeta({ id: row.id, title: cleanTitle, scope: row.scope, template: row.template, updatedAt: at });
-    writeBlocks(row.id, blocks, at);
+    writeBlocks(row.id, parsed.blocks, at);
+    // 源码逐字节留着：解析器是有损的（表格分隔行被剥、嵌套列表被吞成一个块），
+    // 编辑器的往返基准必须是作者自己写下的那份文本，而不是「解析再拼回来」。
+    queries.setSourceText({ documentId: row.id, sourceText: text, now: at });
     snapshot(row.id, 'edit', viewer.id, at);
+    const fresh = mustExist(row.id);
+    syncDocumentAnchor(fresh, at);
+    return present(fresh, viewer);
+  }
+
+  /* ---------------- 每篇一份的设置 ---------------- */
+
+  /**
+   * 改这篇文档自己的开关（只有作者改得动）。
+   *
+   * `station_id` / `parent_id` / `sort_order` **刻意不在这里改**：页面归哪个站、
+   * 在站里排第几，是站说了算，不是页自己说了算（见 Wiki 那组接口）。
+   */
+  function putSettings({ id, viewer, allowScriptWrite, appMode, icon } = {}) {
+    const row = mustEdit(id, viewer);
+    const before = readSettings(row.id);
+    const nextAppMode = appMode === undefined ? String(before?.app_mode ?? 'inline') : String(appMode);
+    if (!APP_MODES.includes(nextAppMode)) throw badRequest(`不认识的展现方式：${nextAppMode}`);
+    const at = now();
+    queries.upsertSettings({
+      documentId: row.id,
+      // 这一条是「脚本能不能改这篇帖子」，**默认只能是「不能」**：
+      // 只有明确传了真值才打开，别的（undefined 就沿用旧值）一律按关闭算。
+      allowScriptWrite: allowScriptWrite === undefined
+        ? Boolean(before?.allow_script_write)
+        : allowScriptWrite === true || allowScriptWrite === 1 || allowScriptWrite === '1',
+      appMode: nextAppMode,
+      stationId: Number(before?.station_id) || 0,
+      parentId: Number(before?.parent_id) || 0,
+      sortOrder: Number(before?.sort_order) || 0,
+      icon: icon === undefined ? String(before?.icon ?? '') : singleLineText(icon).slice(0, 32),
+      sourceText: String(before?.source_text ?? ''),
+      now: at,
+    });
     const fresh = mustExist(row.id);
     syncDocumentAnchor(fresh, at);
     return present(fresh, viewer);
@@ -809,16 +1199,24 @@ export function createDocStore({ db, queries, now = () => Date.now() }) {
     if (!hasTemplate(key)) throw badRequest(`不认识的模板：${key}`);
     if (mode !== 'replace' && mode !== 'append') throw badRequest('mode 只能是 replace 或 append');
     const at = now();
+    const incoming = templateBlocks(key);
     let list;
     if (mode === 'append') {
-      list = [...readBlocks(row.id), ...templateBlocks(key)];
+      // 追加：旧块**保住自己的 id**（票 / 沙箱状态 / bind 都挂在上面），
+      // 新块从现有最大号往后发。
+      const base = queries.nextBlockNumber(row.id) - 1;
+      list = [
+        ...readBlocks(row.id),
+        ...incoming.map((block, index) => ({ ...block, block_id: `b${base + index + 1}` })),
+      ];
     } else {
       // 覆盖前先留一条旧快照：模板是"一键换掉整篇"，没有快照就真的找不回来了。
       snapshot(row.id, 'template', viewer.id, at);
-      list = templateBlocks(key);
+      // 覆盖：新 id 一律从旧号之后开始，旧行会被真删掉，不会跟模板的块撞号
+      //（撞号会让旧块的票 / 状态被"继承"到一块完全不相干的块上）。
+      const base = queries.nextBlockNumber(row.id);
+      list = incoming.map((block, index) => ({ ...block, block_id: `b${base + index}` }));
     }
-    const base = queries.nextBlockNumber(row.id) - 1;
-    list = list.map((block, index) => ({ ...block, block_id: `b${base + index + 1}` }));
     assertBudget(list.length);
     writeBlocks(row.id, list, at);
     queries.updateDocumentMeta({ id: row.id, title: row.title, scope: row.scope, template: String(key), updatedAt: at });
@@ -973,6 +1371,7 @@ export function createDocStore({ db, queries, now = () => Date.now() }) {
     if (name === 'viewer') return { capability: name, value: viewerPayload(viewer) };
     if (name === 'doc-blocks') return { capability: name, value: blocksPayload(row) };
     if (name === 'state') return { capability: name, value: sandboxState({ row, blockId: block.block_id, viewer, payload, at }) };
+    if (name === 'blocks.derived') return { capability: name, value: derivedPayload({ row, viewer, payload, at }) };
     return {
       capability: name,
       value: {
@@ -1151,6 +1550,8 @@ export function createDocStore({ db, queries, now = () => Date.now() }) {
     runOps,
     getMarkdown,
     putMarkdown,
+    previewMarkdown,
+    putSettings,
     applyTemplate,
     exportDocument,
     importDocument,
@@ -1164,6 +1565,7 @@ export function createDocStore({ db, queries, now = () => Date.now() }) {
     listBlockTypes,
     setSandboxDisabled,
     requestCapability,
+    adoptDerived,
     listCapabilityLogs,
     importNote,
     getNoteDocument,
