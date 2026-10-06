@@ -179,20 +179,39 @@ for (const suffix of ['', '-wal', '-shm']) rmSync(DB_FILE + suffix, { force: tru
 await new Promise((done) => mockServer.listen(MOCK_PORT, '127.0.0.1', done));
 
 let child = null;
-const finish = (code) => {
+
+/** 等子进程真的退出：Windows 上刚被 kill 时它占着 .db，立刻删会失败（以前这里静默吞掉了）。 */
+async function waitForExit(proc) {
+  if (!proc || proc.exitCode !== null || proc.signalCode !== null) return;
+  await Promise.race([new Promise((done) => proc.once('exit', done)), sleep(2000)]);
+}
+
+/** 删临时文件，删不掉就重试几次；返回是否删干净。 */
+async function removeTempFile(file) {
+  for (let attempt = 0; attempt < 10; attempt += 1) {
+    try {
+      rmSync(file, { force: true });
+      return true;
+    } catch {
+      await sleep(100);
+    }
+  }
+  return false;
+}
+
+const finish = async (code) => {
   try {
     child?.kill();
   } catch {
     /* 忽略 */
   }
+  await waitForExit(child);
   mockServer.close();
-  for (const suffix of ['', '-wal', '-shm']) {
-    try {
-      rmSync(DB_FILE + suffix, { force: true });
-    } catch {
-      /* 忽略 */
-    }
+  const leftovers = [];
+  for (const file of [DB_FILE, `${DB_FILE}-wal`, `${DB_FILE}-shm`, LOG_FILE]) {
+    if (!(await removeTempFile(file))) leftovers.push(file);
   }
+  if (leftovers.length) console.warn(`⚠️  这些临时文件没能删掉，请手动清理：${leftovers.join('、')}`);
   process.exit(code);
 };
 
@@ -202,7 +221,7 @@ try {
   child = startForum({ AI_API_KEY: '', AI_BASE_URL: `http://127.0.0.1:${MOCK_PORT}/v1` });
   if (!(await waitForServer(PORT))) {
     console.error('服务器启动失败：\n', readFileSync(LOG_FILE, 'utf8').slice(-3000));
-    finish(1);
+    await finish(1);
   }
 
   const anon = createClient();
@@ -252,7 +271,7 @@ try {
   child = startForum({ AI_API_KEY: 'test-key-123', AI_BASE_URL: `http://127.0.0.1:${MOCK_PORT}/v1`, AI_MODEL: 'mock-model' });
   if (!(await waitForServer(PORT))) {
     console.error('服务器重启失败：\n', readFileSync(LOG_FILE, 'utf8').slice(-3000));
-    finish(1);
+    await finish(1);
   }
 
   const admin2 = createClient();
@@ -377,7 +396,7 @@ try {
   });
   if (!(await waitForServer(PORT))) {
     console.error('服务器重启失败（不可达用例）\n');
-    finish(1);
+    await finish(1);
   }
   const member3 = createClient();
   await member3.call('/api/auth/login', { method: 'POST', body: { username: 'alice', password: 'demo1234' } });
@@ -398,7 +417,7 @@ try {
     console.log('\n失败明细：');
     for (const item of failures) console.log(`  · ${item}`);
   }
-  finish(failures.length ? 1 : 0);
+  await finish(failures.length ? 1 : 0);
 } catch (error) {
   console.error('\nAI 冒烟测试异常终止：', error);
   try {

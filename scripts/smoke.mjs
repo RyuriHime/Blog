@@ -943,6 +943,34 @@ try {
     '管理团队列表里能看到并标记',
     (await admin.call('/api/posts?perPage=30')).data.items.some((row) => row.id === hideTarget.id && row.hidden),
   );
+
+  /* 回归：/api/site 是匿名接口，它的首页侧栏热门列表曾漏掉 hidden 过滤（store.hotPosts）。
+     直接拿「当前热门第一名」来验，避免造一篇挤不进前 5 名的帖子导致断言空转。 */
+  const hotBeforeHide = (await anon.call('/api/site')).data.hotPosts;
+  check('匿名首页侧栏热门列表非空', hotBeforeHide.length > 0);
+  /* 挑一篇「不是上面那个 hideTarget」的热门：hideTarget 在这段开头就被隐藏了，
+     拿它来验的话，最后那次「恢复显示」会把它一起放出来，后面几条断言全乱。 */
+  const topHot = hotBeforeHide.find((row) => row.id !== hideTarget.id);
+  if (topHot) {
+    const hideTop = await admin.call(`/api/admin/posts/${topHot.id}/hide`, {
+      method: 'POST',
+      body: { hidden: true, reason: '回归测试' },
+    });
+    check('把热门第一名隐藏成功', hideTop.status === 200 && hideTop.data.hidden === true);
+    check(
+      '被隐藏的文章不再出现在匿名热门列表里',
+      !(await anon.call('/api/site')).data.hotPosts.some((row) => row.id === topHot.id),
+    );
+    check(
+      '被隐藏的热门文章对访客返回 404',
+      (await anon.call(`/api/posts/${topHot.id}`)).status === 404,
+    );
+    const unhideTop = await admin.call(`/api/admin/posts/${topHot.id}/hide`, {
+      method: 'POST',
+      body: { hidden: false, reason: '回归测试结束' },
+    });
+    check('恢复显示成功', unhideTop.status === 200 && unhideTop.data.hidden === false);
+  }
   check(
     '访客不能对隐藏文章点赞（404）',
     (await carolClient.call(`/api/posts/${hideTarget.id}/reaction`, { method: 'POST', body: { kind: 'like' } }))

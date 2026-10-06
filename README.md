@@ -322,7 +322,7 @@ forum/
 │   ├── check-ui-contract.mjs    # 前端契约检查：CSS 类名 + API 字段 + 主题/头像/角色/私信结构（175 项）
 │   ├── check-encoding.mjs       # 源码编码体检（BOM / 乱码 / 批处理换行与 ASCII）
 │   ├── fix-cmd.mjs              # 把 .cmd 规范化为 CRLF + 去 BOM
-│   └── reset-db.mjs             # 清库并重新播种
+│   └── reset-db.mjs             # 清库并重新播种（危险操作，必须加 --yes）
 └── data/forum.db                # SQLite 数据文件（首次运行自动生成）
 ```
 
@@ -481,8 +481,9 @@ blocks(blocker_id, blocked_id, created_at)   -- 黑名单，主键 (blocker_id, 
 node scripts/smoke.mjs             # 后端端到端：242 项（临时独立库+端口，跑完自动清理）
 node scripts/check-ui-contract.mjs # 前端契约：CSS 类名 + API 字段 + 主题/头像/角色/私信结构，175 项
 node scripts/check-encoding.mjs    # 源码编码体检：BOM / 乱码 / 关键中文内容
-node scripts/reset-db.mjs          # 清空数据库并重新播种
 ```
+
+> ⚠️ `scripts/reset-db.mjs` **不属于测试流程**（它以前被列在上面这段里，容易照着复制粘贴）：它会删掉 `data/forum.db`（连带 `-wal` / `-shm`）再重新播种，用户、帖子、私信、签到记录全部**不可恢复**，`data/` 又不在版本库里。要清库请按「常见问题」里那条走，并且必须显式加 `--yes`。
 
 当前状态：**417 项全部通过**（242 + 175）。
 
@@ -505,7 +506,13 @@ node scripts/reset-db.mjs          # 清空数据库并重新播种
 `set HOST=0.0.0.0 && node src/server.js`，然后用本机内网 IP 访问，例如 `http://192.168.1.10:3000`。
 
 **Q：数据想全部重来（并获得最新版示例数据）？**
-停掉服务，执行 `node scripts/reset-db.mjs`（相当于删掉 `data/forum.db` 重新播种）。
+先停掉服务，然后**先跑一次不带参数的** `node scripts/reset-db.mjs`：它只列出将要删除的文件（用户、帖子、私信、签到记录都在里面，删掉不可恢复）。确认这就是你要清的库，再加上 `--yes` 重跑：
+
+```bash
+node scripts/reset-db.mjs --yes
+```
+
+Windows 上如果报文件被占用，说明服务或测试脚本还在跑，关掉再试。
 
 **Q：想调整规则数值？**
 都在 `src/db.js` 顶部：`COIN_SIGNUP_GRANT`（注册赠送币数）、`COIN_PER_POST_LIMIT`（单帖投币上限）、`CHECKIN_DAILY_REWARD`（签到奖励）、`CHECKIN_WEEKLY_BONUS`（全勤奖）、`PROFILE_PIN_LIMIT`（主页置顶数）、`PROFILE_CATEGORY_LIMIT`（分类数上限）、`VALUE_WEIGHTS`（价值公式里赞/币/藏/踩的权重、踩的软化系数、半饱和点）。
