@@ -6,6 +6,19 @@
 
 /* ---------------- 响应式 ---------------- */
 
+/* 顶栏三个快捷入口：带文字的固定宽度约 386px，加上品牌/搜索/主题/发动态/铃铛/用户名/币，
+   顶栏内容宽约 1060px。所以标签要提前收起来 —— 只写在 900px 那档的话，
+   900–1100px 的窗口（分屏很常见）会被挤爆。 */
+@media (max-width: 1100px) {
+  .top-link-text {
+    display: none;
+  }
+
+  .top-link {
+    padding: 6px 8px;
+  }
+}
+
 @media (max-width: 900px) {
   .layout {
     grid-template-columns: minmax(0, 1fr);
@@ -18,6 +31,20 @@
 
   .brand-text {
     display: none;
+  }
+
+  /* 顶栏快捷入口/可用币的「只留图标」在 ≤1100px 那档已经处理；这里只再收紧间距，
+     375px 宽的手机上把每一像素都省出来。 */
+  .top-links {
+    gap: 2px;
+  }
+
+  .top-link {
+    padding: 6px 6px;
+  }
+
+  .coin-chip {
+    padding: 5px 8px;
   }
 
   .topbar-inner {

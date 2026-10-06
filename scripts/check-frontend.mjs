@@ -608,6 +608,8 @@ const CASES = [
   ['登录页', 'auth.js', 'viewAuth', ['login']],
   ['注册页', 'auth.js', 'viewAuth', ['register']],
   ['AI 助手', 'ai.js', 'viewAI', []],
+  // P3 的 AI 编辑台：能力授权 / 按块改写 / 审计与回滚。数据走 /api/ai-edit/*。
+  ['AI 编辑台', 'ai-edit.js', 'viewAiEdit', []],
   ['管理后台', 'admin.js', 'viewAdmin', []],
   // v2 积木（可编程帖子）的四个页面。正文 HTML 由后端出，这里测的是外壳会不会炸。
   ['积木广场', 'doc.js', 'viewDocs', [new Map()]],

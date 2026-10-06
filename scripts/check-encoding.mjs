@@ -22,15 +22,17 @@ const TARGETS = ['src', 'public', 'scripts', 'forum-ai/src', 'note-agent/src', '
 /**
  * 骨架改造时实测的受检文件数。只许涨，不许跌。
  * 108 是「后端刚拆完」时的数；153 是前端拆迁 + 前端冒烟脚本进 scripts/ 之后的数；
- * 现在实测 155（多了 capture-fixtures.mjs 与 frontend-fixtures.json），同步抬到 155。
+ * 155 是多了 capture-fixtures.mjs 与 frontend-fixtures.json 之后的数。
  * 可编程帖子（P2）落地后实测 187，抬到 187。
  * v2 骨架 + 团队（P4）合进 main 后实测 196；删掉知识网络图（knowledge-pack 7 个 mjs、
  * public/views/graph.js、public/css/96-graph.css、scripts/build-graph.mjs、
  * scripts/check-graph-ui.mjs、src/modules/core/graph-paths.js、src/core/json-file.js）
- * 后实测 183，落回 183。
+ * 后落回 183。
+ * AI 编辑台（P3：public/views/ai-edit.js、public/css/94-ai-edit.css、scripts/ai-smoke.mjs
+ * 三个新文件）合进来之后实测 193，抬到 193。
  * 这个数字存在的意义：前端文件被搬走却没同步检查脚本时，哨兵必须响。
  */
-const MIN_CHECKED = Number(process.env.MIN_CHECKED || 183);
+const MIN_CHECKED = Number(process.env.MIN_CHECKED || 193);
 
 /** 新布局里必须存在的关键文件。少一个就说明有人把文件搬走却没同步这份检查。 */
 const REQUIRED_FILES = [
@@ -92,6 +94,9 @@ const REQUIRED_FILES = [
   'scripts/check-golden.mjs',
   'scripts/check-skeleton.mjs',
   'scripts/feed-smoke.mjs',
+  'scripts/ai-smoke.mjs',
+  'src/modules/ai/schema.js',
+  'src/modules/ai/routes.js',
   // 可编程帖子（P2，积木）：后端模块、块引擎、沙箱、页面、样式与它自己的冒烟脚本。
   'src/modules/doc/schema.js',
   'src/modules/doc/queries.js',
@@ -126,6 +131,9 @@ const REQUIRED_FILES = [
   'public/views/team.js',
   'public/css/86-team.css',
   'scripts/team-smoke.mjs',
+  // AI 编辑台（P3 前端）：能力授权可视化页面 + 它的样式分片。
+  'public/views/ai-edit.js',
+  'public/css/94-ai-edit.css',
 ];
 
 /**

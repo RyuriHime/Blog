@@ -9,6 +9,7 @@ import { $, emptyHtml, toast, ui } from './dom.js';
 import { apiErrorText } from './errors.js';
 import * as Admin from '../views/admin.js';
 import * as Ai from '../views/ai.js';
+import * as AiEdit from '../views/ai-edit.js';
 import * as Auth from '../views/auth.js';
 import * as Checkin from '../views/checkin.js';
 import * as Compose from '../views/compose.js';
@@ -96,6 +97,10 @@ async function route() {
     if (first === 'bookmarks') return await Feed.viewBookmarks(query);
     if (first === 'checkin') return await Checkin.viewCheckin();
     if (first === 'ai') return await Ai.viewAI();
+    // AI 编辑台（P3）：能力授权 / 按块改写 / 审计与回滚。
+    // 数据在 /api/ai-edit/*，**不是** /api/ai/* —— 那一段被 forum-ai 挂载层短路了。
+    // （P5 的顶栏快捷入口原本还有一个 `#/graph`，知识网络图整条删除后一并去掉了。）
+    if (first === 'ai-edit') return await AiEdit.viewAiEdit();
     if (first === 'notes') return await Notes.viewNotes();
     // 积木（v2 可编程帖子）：`/doc/:id/edit` 与 `/doc/:id/blocks` 必须排在
     // `/doc/:id` 前面，否则编辑页会被当成 id 是 "…/edit" 的文档（parts 里第三段会被丢掉）。
