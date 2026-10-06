@@ -958,7 +958,37 @@ const CASES = [
   ['团队帖详情·非成员', 'team.js', 'viewTeamPost', ['outsider-group', 1, new Map()]],
 ];
 
+/**
+ * 扫「一个 `<a>` 里又套着另一个 `<a>`」。
+ *
+ * 为什么非扫不可：HTML 解析器碰到「已经有一个 `<a>` 开着时再来一个 `<a>` 起始标签」，
+ * 会**隐含地闭合外层那个**（规范里写死了这条），于是外层链接只包住最前面那一小截，
+ * 后面的内容全掉到链接外面去。`#/notifications` 就这么坏过：
+ * `notif-item` 是个 `<a>`，里面又嵌了个 `<a class="notif-actor">` 指作者主页 ——
+ * 结果每条通知只剩一个 30px 的图标方块，正文全跑到卡片左边缘逐行堆着，未读蓝点掉在最左边。
+ * 这个假 DOM 不解析 HTML（`innerHTML` 只存字符串），所以「只有真解析器才会犯的错」
+ * 只能自己在字符串上扫一遍。
+ *
+ * 返回第一处嵌套的外层开头（截一小段方便定位），没有就返回 null。
+ */
+function nestedAnchorAt(html) {
+  let depth = 0;
+  let outer = -1;
+  for (const m of html.matchAll(/<a(?:\s[^>]*)?>|<\/a>/gi)) {
+    if (m[0][1] === '/') {
+      if (depth > 0) depth -= 1;
+      if (depth === 0) outer = -1;
+      continue;
+    }
+    depth += 1;
+    if (depth === 1) outer = m.index;
+    else if (outer >= 0) return html.slice(outer, outer + 160).replace(/\s+/g, ' ');
+  }
+  return null;
+}
+
 let rendered = 0;
+let pagesScanned = 0;
 for (const [label, file, fn, argv] of CASES) {
   let target;
   try {
@@ -976,12 +1006,29 @@ for (const [label, file, fn, argv] of CASES) {
   try {
     await handler(...argv);
     rendered += 1;
+    const pageHtml = String(app.innerHTML);
+    if (pageHtml.length > 200) pagesScanned += 1;
+    const nested = nestedAnchorAt(pageHtml);
+    if (nested) {
+      problems.push(
+        `${label}：渲染出的 HTML 里有一个 <a> 套着另一个 <a> —— 浏览器会强行闭合外层，布局会散架。外层是 ${nested}`,
+      );
+    }
   } catch (error) {
     const top = (error.stack ?? '').split('\n').slice(0, 3).join(' | ');
     problems.push(`${label}（${file}.${fn}）渲染失败：${error.message}  ← ${top}`);
   }
 }
 console.log(`  ${problems.length ? '❌' : '✅'} 渲染 ${rendered}/${CASES.length} 个页面`);
+
+/* 守卫的自检与覆盖哨兵。一个「什么都不报」的检测器跟没有检测器一样糟：
+ * 假 DOM 不解析 HTML，万一以后 `app.innerHTML` 取不到东西，上面那条扫描会一路绿灯地假通过。 */
+if (!nestedAnchorAt('<a href="#/a">x<a href="#/b">y</a></a>')) {
+  problems.push('嵌套 <a> 的检测器失灵了：喂一段已知的嵌套都抓不到');
+}
+if (pagesScanned < 30) {
+  problems.push(`只拿到 ${pagesScanned} 个页面的 HTML（正常是三十多个），嵌套 <a> 那条守卫等于没生效`);
+}
 void feedMod;
 
 // 把 bootstrap 拉回来的 state 直接看一眼，确认关键字段真的落到了 state 上。
