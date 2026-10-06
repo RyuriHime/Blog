@@ -411,8 +411,14 @@ async function handleAction(action, node) {
   const cached = postCache.get(postId);
 
   if (action === 'open-create') {
+    // ⚠️ 这里**不能**写成「设好 panel 再调一次 viewTeams()」。
+    // viewTeams() 一进来就 resetTransient()，而它会把 panel 清成 null ——
+    // 刚点开的面板被自己抹掉，表现是「点『＋ 新建团队』毫无反应」（渲染断言看不出来这种 bug）。
+    // 只重画这一个盒子就够，还顺带省掉一次整页的接口请求，用户的草稿也不会被冲掉。
     teamState.panel = 'create';
-    return viewTeams(new URLSearchParams(window.location.hash.split('?')[1] || ''));
+    const box = $('[data-team-create]');
+    if (box) box.innerHTML = createFormHtml();
+    return;
   }
   if (action === 'close-panel') {
     teamState.panel = null;

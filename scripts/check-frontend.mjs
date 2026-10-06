@@ -91,7 +91,12 @@ function makeElement(tag = 'div') {
     querySelectorAll: () => [],
     closest: () => null,
     contains: () => false,
-    matches: (selector) => { this._lastMatch = selector; return false; },
+    // 注意：这里必须是**方法简写**而不是箭头函数。箭头函数里的 `this` 是模块作用域（ES module 里是 undefined），
+    // 于是任何视图里的一句 `event.target.matches('[data-xxx]')` 都会抛
+    // `TypeError: Cannot set properties of undefined (setting '_lastMatch')` ——
+    // 异常又被上面的 uncaughtException/unhandledRejection 处理器吃掉，
+    // 表现是「脚本跑到一半就没了、exit=0、什么错都不报」，非常难查。别改回箭头函数。
+    matches(selector) { this._lastMatch = selector; return false; },
     focus() {}, blur() {}, click() {}, scrollTo() {},
     getBoundingClientRect: () => ({ width: 800, height: 600, top: 0, left: 0, right: 800, bottom: 600 }),
     getContext: () => ({
@@ -403,12 +408,18 @@ function pickFixture(fullPath) {
 }
 
 const unknownPaths = new Set();
+/** 所有请求都记下来：点按钮的那条路径里「到底发出去了什么」只有这里看得到。 */
+const REQUESTS = [];
 
 let fetchCount = 0;
 globalThis.fetch = async (url, options = {}) => {
   fetchCount += 1;
   const raw = String(url).replace(/^https?:\/\/[^/]+/, '');
-  const data = pickFixture(raw);
+  const method = String(options.method || 'GET').toUpperCase();
+  REQUESTS.push({ url: raw, method, body: options.body ? JSON.parse(options.body) : null });
+  // 建团队：假数据里给它一条真形状的响应（否则 data.team.slug 会是 undefined，报错像是代码坏了）
+  const created = { team: { ...TEAM_FIXTURE, slug: 'new-team-1', name: '新团队' } };
+  const data = method === 'POST' && raw.split('?')[0] === '/api/teams' ? created : pickFixture(raw);
   if (data === undefined) unknownPaths.add(raw.split('?')[0]);
   return {
     ok: true,
@@ -577,6 +588,70 @@ if (!state.theme) problems.push('state.theme 没被初始化');
     problems.push(`点了「取消引用」之后 chip 里还留着 ${JSON.stringify(String(chip.innerHTML).slice(0, 40))}`);
   }
   console.log(`  ${problems.length ? '❌' : '✅'} 交互：引用确认后编号会腾空、取消引用后 chip 会清空`);
+}
+
+/* ---- 交互：点「＋ 新建团队」必须真的把表单打开 ----
+ *
+ * 为什么单独测这一条：团队列表页的 `viewTeams()` 一进来就 `resetTransient()`，
+ * 而 `resetTransient()` 会把 `panel` 清成 null。于是「先设 panel = 'create'、
+ * 再重画页面」这个写法会自己把刚点开的面板抹掉 —— 用户看到的现象是
+ * **点「＋ 新建团队」毫无反应**，而渲染类断言全绿（页面确实画出来了，
+ * 画出来的是那个还没被点开的按钮）。这类「点了等于没点」只有真派发一次点击才测得到。
+ */
+{
+  // 这一段自己有 try/catch：脚本装了 uncaughtException / unhandledRejection 处理器，
+  // 顶层 await 之后抛出来的异常会被它们吞掉（表现是「跑到这里就没了、exit=0、什么错都不报」）。
+  // 包一层才能看见真正的错 —— 写这段时正是被这个坑住了很久。
+  try {
+    const team = await view('team.js');
+    const createBox = registered('[data-team-create]');
+
+    await team.viewTeams(new Map());
+    if (String(createBox.innerHTML).includes('data-team-field="name"')) {
+      problems.push('团队列表一渲染就把新建表单展开了（应该是折叠的）');
+    }
+
+    // 点「＋ 新建团队」：真实 DOM 里事件目标是按钮本身，closest 往上找到带 data-team-action 的它
+    const openNode = { dataset: { teamAction: 'open-create' }, matches: () => false };
+    openNode.closest = (selector) => (selector === '[data-team-action]' ? openNode : null);
+    dispatch(app, 'click', openNode);
+    await settle();
+
+    const opened = String(createBox.innerHTML).includes('data-team-field="name"');
+    if (!opened) {
+      problems.push('点了「＋ 新建团队」之后表单没出现 —— panel 被重画页面时的 resetTransient() 抹掉了');
+    }
+
+    // 填名字 → 点「建好了」：请求体里必须有这个名字，建完还要跳到新团队的主页。
+    // 假 DOM 不解析 HTML，属性得手工补：`closest` 接上父子关系（team.js 读的是
+    // `event.target.closest('[data-team-field]')`，不是 matches），`dataset.teamField` 是它真正读的字段名。
+    const nameInput = registered('[data-team-field="name"]');
+    nameInput.value = '前端小组·新';
+    nameInput.closest = (selector) => (selector === '[data-team-field]' ? nameInput : null);
+    nameInput.dataset.teamField = 'name';
+    dispatch(app, 'input', nameInput);
+
+    const submitNode = { dataset: { teamAction: 'create-team' }, disabled: false, matches: () => false };
+    submitNode.closest = (selector) => (selector === '[data-team-action]' ? submitNode : null);
+    REQUESTS.length = 0;
+    dispatch(app, 'click', submitNode);
+    await settle();
+
+    const post = REQUESTS.find((item) => item.method === 'POST' && item.url.split('?')[0] === '/api/teams');
+    if (!post) problems.push('点「建好了」之后没有发出 POST /api/teams');
+    else if (post.body?.name !== '前端小组·新') {
+      problems.push(`建团队发出去的队名不对：${JSON.stringify(post.body?.name)}（草稿没有从输入框同步进 teamState.draft）`);
+    }
+    // 真浏览器里 location.hash 会自动带上 `#`，假 DOM 不会 —— 两种都认。
+    if (!String(window.location.hash).replace(/^#/, '').startsWith('/team/')) {
+      problems.push(`建完团队没有跳到团队主页（hash = ${JSON.stringify(window.location.hash)}）`);
+    }
+
+    console.log(`  ${problems.length ? '❌' : '✅'} 交互：新建团队的表单能打开、队名能提交、建完会跳转`);
+  } catch (error) {
+    problems.push(`团队交互测试自身崩了：${error?.stack || error}`);
+    console.log('  ❌ 交互：新建团队的表单能打开、队名能提交、建完会跳转');
+  }
 }
 
 /* ---- 静态扫描：不许出现「裸调用一个既没 import、也没在本文件声明」的名字 ----
