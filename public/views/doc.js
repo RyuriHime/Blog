@@ -203,7 +203,7 @@ function leaveDocPage() {
   mdNotesPanel = null;
   unmountSandboxes();
   // wiki 站是三栏（左树 / 中正文 / 右目录），再叠上论坛自己的 306px 侧栏
-  //（每日签到、我的账户、热榜）正文就只剩三百来像素 —— 所以站页面挂 `body.doc-wide`
+  //（我的账户、热榜）正文就只剩三百来像素 —— 所以站页面挂 `body.doc-wide`
   // 把侧栏让开（规则见 41-doc.css；换页时由 router 统一摘掉）。
   document.body.classList.remove('doc-wide');
   ui.app.innerHTML = loadingHtml();

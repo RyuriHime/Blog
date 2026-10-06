@@ -1,4 +1,4 @@
-// 会话与站点数据：登录态、未读数、签到、币规则、消息未读。
+// 会话与站点数据：登录态、未读数、币规则、消息未读。
 // 这些数据在多个视图里被读，所以读回来一律写进 core/state.js 的 state 对象。
 import { $, esc, toast, ui } from './dom.js';
 import { api } from './api.js';
@@ -49,14 +49,12 @@ function renderUserArea() {
       ${Avatar.avatarHtml(me, 'avatar-sm')}
       <span>${esc(me.displayName)}</span>
     </button>
-    <span class="coin-chip" title="可用币 · 签到可以领币，别人投给你的也会到账">
+    <span class="coin-chip" title="可用币 · 别人投给你的会到账">
       <span class="coin-chip-icon" aria-hidden="true">🪙</span><span class="coin-chip-value">${Fmt.fmtNum(me.coinBalance ?? 0)}</span>
     </span>
     <div class="menu" id="user-menu" hidden>
       <a class="menu-item" href="#/u/${encodeURIComponent(me.username)}">👤 我的主页</a>
       <a class="menu-item" href="#/messages">✉️ 私信${state.messageUnread > 0 ? ` <span class="menu-badge">${state.messageUnread}</span>` : ''}</a>
-      <a class="menu-item" href="#/checkin">📅 每日签到${state.checkin && !state.checkin.checkedInToday ? ' <span class="menu-badge">未签</span>' : ''}</a>
-      <a class="menu-item" href="#/ranking">🏆 价值排行榜</a>
       <a class="menu-item" href="#/notifications">🔔 消息通知${state.unread > 0 ? ` <span class="menu-badge">${state.unread}</span>` : ''}</a>
       <a class="menu-item" href="#/following">📋 关注列表</a>
       <a class="menu-item" href="#/bookmarks">⭐ 我的收藏</a>
@@ -68,46 +66,6 @@ function renderUserArea() {
       ${Fmt.isStaffUser(me) ? '<a class="menu-item" href="#/admin">🛠️ 管理后台</a>' : ''}
       <div class="menu-sep"></div>
       <button class="menu-item" data-action="logout" type="button">🚪 退出登录</button>
-    </div>`;
-}
-function checkinCardHtml() {
-  const rules = Fmt.checkinRules();
-  const status = state.checkin;
-  if (!status) {
-    return `<div class="card card-tight">
-      <div class="card-head"><span class="card-title">📅 每日签到</span></div>
-      <div class="hint">正在读取签到状态…</div>
-    </div>`;
-  }
-
-  const dots = status.week
-    .map(
-      (item) =>
-        `<span class="checkin-dot ${item.attended ? 'is-on' : ''} ${item.isToday ? 'is-today' : ''} ${item.future ? 'is-future' : ''}" title="${item.day}">${Fmt.weekdayCn(item.day)}</span>`,
-    )
-    .join('');
-
-  return `
-    <div class="card card-tight">
-      <div class="card-head">
-        <span class="card-title">📅 每日签到</span>
-        <a class="tag" href="#/checkin">看日历</a>
-      </div>
-      <div class="checkin-row">
-        ${
-          status.checkedInToday
-            ? `<span class="checkin-done">✅ 今日已签到</span><span class="hint">连续 ${status.streak} 天</span>`
-            : `<button class="btn btn-sm btn-primary" data-action="checkin">签到领 ${rules.dailyReward} 币</button>`
-        }
-      </div>
-      <div class="checkin-dots">${dots}</div>
-      <div class="hint">
-        本周 ${status.weekAttended}/${status.fullWeekDays} 天${
-          status.pendingBonus > 0
-            ? ` · 有 ${status.pendingBonus} 币全勤奖待领`
-            : ` · 全勤再得 ${rules.weeklyBonus} 币`
-        }
-      </div>
     </div>`;
 }
 /* ------------------------------------------------------------------ */
@@ -251,9 +209,6 @@ function renderSidebar() {
   //   · P4 补回「📋 关注列表」：它跟「👥 我关注的」是两件事 ——
   //     后者是**过滤后的动态流**（看 TA 们发了什么），前者是**名单**（我关注了谁、一键取关）。
   //     之前 `#/following` 被改道去了动态流，名单页就没人到得了了，现在恢复。
-  //   · 签到卡保留：「轻」不等于「空」，签到、投币这些功能一个都不能砍。
-  const checkinCard = state.me ? checkinCardHtml() : '';
-
   ui.sidebar.innerHTML = `
     <button
       class="sidebar-handle"
@@ -303,31 +258,12 @@ function renderSidebar() {
         <a class="side-link" href="#/teams?mine=1">🙋 我加入的</a>
       </div>
     </div>
-    ${checkinCard}
     <div class="card card-tight">
       <div class="card-head"><span class="card-title">📊 站点数据</span></div>
       <div class="stat-grid">
         <div class="stat"><div class="stat-value">${Fmt.fmtNum(state.site.stats.posts)}</div><div class="stat-label">帖子</div></div>
         <div class="stat"><div class="stat-value">${Fmt.fmtNum(state.site.stats.replies)}</div><div class="stat-label">回复</div></div>
         <div class="stat"><div class="stat-value">${Fmt.fmtNum(state.site.stats.users)}</div><div class="stat-label">成员</div></div>
-      </div>
-    </div>
-    <div class="card card-tight">
-      <div class="card-head"><span class="card-title">🏆 价值排行榜</span><a class="tag" href="#/ranking">完整榜单</a></div>
-      <div class="hot-list">
-        ${
-          (state.ranking ?? [])
-            .slice(0, 5)
-            .map(
-              (post, index) => `
-          <a class="hot-item" href="#/post/${post.id}">
-            <span class="hot-rank ${index < 3 ? 'top' : ''}">${index + 1}</span>
-            <span>${esc(post.title)}</span>
-            <span class="rank-value">${post.valueScore}</span>
-          </a>`,
-            )
-            .join('') || '<div class="hint">榜单加载中…</div>'
-        }
       </div>
     </div>
     <div class="card card-tight">
@@ -349,18 +285,8 @@ function renderSidebar() {
 async function loadSite() {
   try {
     state.site = await api('/api/site');
-    const ranking = await api('/api/ranking?limit=5');
-    state.ranking = ranking.posts ?? [];
   } catch (error) {
     toastError(error);
-  }
-}
-async function loadCheckin() {
-  if (!state.me) return null;
-  try {
-    return await api('/api/checkin');
-  } catch {
-    return null;
   }
 }
 async function loadSession() {
@@ -373,7 +299,6 @@ async function loadSession() {
     state.unread = 0;
   }
   state.messageUnread = 0;
-  state.checkin = await loadCheckin();
   renderUserArea();
   void refreshMessageUnread();
 }
@@ -433,12 +358,10 @@ async function bootstrap() {
 export { bootstrap };
 export { loadSite };
 export { loadSession };
-export { loadCheckin };
 export { refreshUnread };
 export { refreshMessageUnread };
 export { renderUserArea };
 export { renderSidebar };
 export { requireLogin };
-export { checkinCardHtml };
 
 /* @hand-written */

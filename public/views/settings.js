@@ -17,8 +17,6 @@ async function viewSettings() {
   }
 
   const me = state.me;
-  const status = state.checkin ?? (await api('/api/checkin'));
-  state.checkin = status;
   const blocks = await api('/api/me/blocks').catch(() => ({ items: [], total: 0 }));
 
   ui.app.innerHTML = `
@@ -117,22 +115,12 @@ async function viewSettings() {
 
     <section class="card">
       <div class="card-head">
-        <span class="card-title">📅 签到与资产</span>
-        <a class="tag" href="#/checkin">去签到</a>
+        <span class="card-title">🪙 我的资产</span>
       </div>
       <div class="stat-grid stat-grid-wide">
-        <div class="stat"><div class="stat-value">${status.streak}</div><div class="stat-label">连续签到</div></div>
-        <div class="stat"><div class="stat-value">${status.total}</div><div class="stat-label">累计签到</div></div>
-        <div class="stat"><div class="stat-value">${status.weekAttended}/${status.fullWeekDays}</div><div class="stat-label">本周进度</div></div>
-        <div class="stat"><div class="stat-value">🪙 ${Fmt.fmtNum(me.coinBalance ?? status.coinBalance)}</div><div class="stat-label">可用币</div></div>
+        <div class="stat"><div class="stat-value">🪙 ${Fmt.fmtNum(me.coinBalance ?? 0)}</div><div class="stat-label">可用币</div></div>
       </div>
-      ${
-        status.checkedInToday
-          ? '<div class="hint" style="margin-top:12px">✅ 今天已经签到过了</div>'
-          : '<div class="form-actions" style="margin-top:12px"><button class="btn btn-sm btn-primary" data-action="checkin">立即签到，领 ' +
-            Fmt.checkinRules().dailyReward +
-            ' 币</button></div>'
-      }
+      <div class="hint" style="margin-top:12px">币来自注册赠送和别人的投币，投给别人时也会扣掉。</div>
     </section>
 
     <section class="card">
@@ -176,7 +164,6 @@ async function viewSettings() {
 }
 
 /* ------------------------------------------------------------------ */
-/* 视图：排行榜                                                        */
 
 // ── 导出 ──────────────────────────────────────────────────────────────
 export { viewSettings };

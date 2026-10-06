@@ -11,7 +11,6 @@ import * as Admin from '../views/admin.js';
 import * as Ai from '../views/ai.js';
 import * as AiEdit from '../views/ai-edit.js';
 import * as Auth from '../views/auth.js';
-import * as Checkin from '../views/checkin.js';
 import * as Compose from '../views/compose.js';
 import * as Doc from '../views/doc.js';
 import * as Events from './events.js';
@@ -99,7 +98,6 @@ async function route() {
     if (first === 'new') return await Compose.viewCompose(null);
     if (first === 'edit' && second) return await Compose.viewCompose(Number(second));
     if (first === 'bookmarks') return await Feed.viewBookmarks(query);
-    if (first === 'checkin') return await Checkin.viewCheckin();
     if (first === 'ai') return await Ai.viewAI();
     // AI 编辑台（P3）：能力授权 / 按块改写 / 审计与回滚。
     // 数据在 /api/ai-edit/*，**不是** /api/ai/* —— 那一段被 forum-ai 挂载层短路了。
@@ -132,7 +130,6 @@ async function route() {
     if (first === 'team' && second) return await Team.viewTeam(second, query);
     // `#/wiki`：所有看得见的站（一个帖子一个 wiki 里的「一个帖子」列表）。
     if (first === 'wiki') return await Doc.viewWikiIndex();
-    if (first === 'ranking') return await User.viewRanking(query);
     if (first === 'settings') return await Settings.viewSettings();
     if (first === 'notifications') return await Notif.viewNotifications(query);
     if (first === 'messages' && second) return await Message.viewThread(second);

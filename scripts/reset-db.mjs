@@ -27,7 +27,7 @@ if (targets.length && !confirmed) {
   console.log('将要删除并重建的数据库：');
   for (const file of targets) console.log(`  · ${file}（${statSync(file).size} 字节）`);
   console.log('');
-  console.log('这些文件会被永久删除：用户、帖子、私信、签到记录全都在里面，删了无法恢复。');
+  console.log('这些文件会被永久删除：用户、帖子、私信全都在里面，删了无法恢复。');
   console.log('确认这就是你要清的库之后，加上 --yes 重跑：');
   console.log('  node scripts/reset-db.mjs --yes');
   process.exit(1);

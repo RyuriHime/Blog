@@ -90,7 +90,7 @@ export const MAX_DERIVED_TOTAL_BYTES = 64 * 1024;
 /**
  * 派生块的两种作用域。
  *   user   每个访问者一份（「我的待办」这类）
- *   shared 全站共享一份（user_id 恒为 0，排行榜这类）
+ *   shared 全站共享一份（user_id 恒为 0，站点公告这类）
  */
 export const DERIVED_SCOPES = ['user', 'shared'];
 

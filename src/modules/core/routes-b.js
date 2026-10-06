@@ -265,7 +265,7 @@ export function registerRoutesB(route) {
       throw new HttpError(400, 'per_post_limit', `每个帖子最多投 ${rules.perPostLimit} 币`);
     }
     if (result.error === 'insufficient_coins') {
-      throw new HttpError(400, 'insufficient_coins', '币不够了：去「每日签到」领币，或等别人给你的文章投币');
+      throw new HttpError(400, 'insufficient_coins', '币不够了：等别人给你的文章投币，攒够了再来');
     }
     ensure(!result.error, 400, 'coin_failed', '投币失败');
 

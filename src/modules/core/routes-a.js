@@ -1,4 +1,4 @@
-// core 路由：认证 / 资料 / 头像 / 密码 / 签到 / 个人主页分类
+// core 路由：认证 / 资料 / 头像 / 密码 / 个人主页分类
 // // 搬运自 src/server.js 的固定行区间（预铺骨架，逐字未改），见 docs/tools/extract-server-modules.mjs。
 import { HttpError, ensure, field, ok, rateLimit, res_ } from '../../core/http.js';
 import { assertPinAllowed, coinAvailability, notifyMentions, resolveOwnCategory, shapeAuthor, shapeCategory, shapeConversation, shapeMessage, shapeNotification, shapePerson, shapePostDetail, shapePostListRow, shapeProfile, shapeReply, shapeReposter, shapeUser } from '../../core/shape.js';
@@ -128,24 +128,6 @@ export function registerRoutesA(route) {
     ok(res_(ctx), { changed: true, revokedSessions });
   });
 
-  /* ---------------- 每日签到 ---------------- */
-
-  route('GET', '/api/checkin', async (ctx) => {
-    const user = requireUser(ctx);
-    ok(res_(ctx), store.checkinStatus(user.id));
-  });
-
-  route('POST', '/api/checkin', async (ctx) => {
-    const user = requireUser(ctx);
-    rateLimit(`checkin:${user.id}`, 20, 60 * 1000);
-    const result = store.performCheckin(user.id);
-    if (result.error === 'already_checked_in') {
-      throw new HttpError(409, 'already_checked_in', '今天已经签到过了，明天再来');
-    }
-    ensure(!result.error, 400, 'checkin_failed', '签到失败，请稍后再试');
-    ok(res_(ctx), result);
-  });
-
   /* ---------------- 个人主页分类 ---------------- */
 
   route('GET', '/api/me/categories', async (ctx) => {
@@ -210,9 +192,7 @@ export function registerRoutesA(route) {
       ai: forumAiStatus(),
       notes: noteAgentStatus(),
       coinRules: store.COIN_RULES,
-      checkinRules: store.CHECKIN_RULES,
       profileRules: store.PROFILE_RULES,
-      valueWeights: store.valueWeights(),
       messageRules: store.MESSAGE_RULES,
       hotPosts: store.hotPosts(5).map((row) => ({
         id: row.id,

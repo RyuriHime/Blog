@@ -54,12 +54,12 @@ public/
 ├── core/                前端核心层 12 个：state dom format preferences api theme avatar
 │                        events session widgets router sandbox
 │                        （sandbox.js = 沙箱宿主：消息白名单 / 看门狗 / 频率上限 / resize）
-├── views/               页面 15 个：feed user checkin settings notifications messages post
+├── views/               页面 14 个：feed user settings notifications messages post
 │                        compose auth ai admin notes doc timeline team
 │                        （+ doc-blocks.js = 积木编辑器的零件层，不是页面）
 └── css/                 样式分片 22 个：00-themes 10-base 20-components 30-feed 31-timeline
                          40-post 41-doc 50-forms 55-sidebar 60-admin 65-helpers 70-responsive
-                         75-social 76-theme-switch 77-avatar 78-repost-ranking 80-checkin-profile
+                         75-social 76-theme-switch 77-avatar 78-repost 80-profile
                          85-roles 86-team 88-messages 95-ai 97-notes
 ```
 
@@ -129,7 +129,7 @@ ctx.log       日志
 
 | 前缀 | 归谁 |
 | --- | --- |
-| `/api/auth` `/api/me` `/api/site` `/api/markdown` `/api/knowledge` `/api/notifications` `/api/admin` `/api/ranking` `/api/users` `/api/messages` `/api/posts` `/api/replies` `/api/checkin` | core（现有论坛本体） |
+| `/api/auth` `/api/me` `/api/site` `/api/markdown` `/api/knowledge` `/api/notifications` `/api/admin` `/api/users` `/api/messages` `/api/posts` `/api/replies` | core（现有论坛本体） |
 | `/api/feed/*` | 🅿️ P1 动态 |
 | `/api/docs/*` | 🅿️ P2 可编程帖子 |
 | `/api/ai/*` | 🅿️ P3 AI（注意：`forum-ai` 已占用 8 条 `/api/ai/...`，别撞） |
@@ -142,7 +142,7 @@ ctx.log       日志
 
 | 表 | 归谁 |
 | --- | --- |
-| `users` `sessions` `boards` `posts` `replies` `reactions` `coins` `bookmarks` `follows` `notifications` `checkins` `checkin_bonuses` `profile_categories` `reposts` `moderation_logs` `messages` `blocks` | core |
+| `users` `sessions` `boards` `posts` `replies` `reactions` `coins` `bookmarks` `follows` `notifications` `profile_categories` `reposts` `moderation_logs` `messages` `blocks` | core |
 | `ai_post_reviews` `ai_site_reports` | forum-ai（运行时自己建，不在核心建表清单里） |
 | `notes_*` | note-studio / note-agent |
 | `feed_items` `feed_reactions` | 🅿️ P1 |
@@ -150,7 +150,7 @@ ctx.log       日志
 | `ai_capability_grants` `ai_op_logs` | 🅿️ P3 |
 | `teams` `team_members` `team_join_requests` `team_posts` `team_replies` `team_files` `team_messages` | 🅿️ P4 |
 
-**`boards` 是 `posts.board_id` 的外键目标，`checkin_bonuses` / `documents` 这些也都要参与外键，
+**`boards` 是 `posts.board_id` 的外键目标，`documents` 这些也都要参与外键，
 所以建表顺序必须由 core 统一控制**，不许模块自己抢跑。
 
 ---

@@ -1,0 +1,84 @@
+/* 78-repost.css —— v1.3 新增：转发区。
+ *
+ * 本文件由 docs/tools/split-css.mjs 从原先的单体 public/style.css 切出来。
+ * 改样式请直接改这里；**不要**去改 public/style.css（它现在只是一个 @import 清单）。
+ */
+
+/* ================= v1.3 新增：转发 ================= */
+
+/* ---------------- 转发按钮与转发区 ---------------- */
+.reaction.is-on-repost,
+.btn.is-on-repost {
+  background: rgba(67, 211, 158, 0.14);
+  border-color: rgba(67, 211, 158, 0.5);
+  color: var(--success-fg);
+}
+
+.tag-repost {
+  color: var(--success-fg);
+  border-color: rgba(67, 211, 158, 0.4);
+  background: rgba(67, 211, 158, 0.12);
+}
+
+.repost-form {
+  padding: 14px 18px 0;
+  border-bottom: 1px dashed var(--border-soft);
+}
+
+.repost-form textarea {
+  min-height: 62px;
+}
+
+.repost-list {
+  display: flex;
+  flex-direction: column;
+}
+
+.repost-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 11px 0;
+  border-bottom: 1px solid var(--border-soft);
+}
+
+.repost-item:last-child {
+  border-bottom: 0;
+}
+
+.repost-body {
+  flex: 1;
+  min-width: 0;
+}
+
+.repost-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.repost-comment {
+  margin-top: 4px;
+  font-size: 14px;
+  color: var(--text-dim);
+  background: var(--bg-soft);
+  border-left: 3px solid rgba(67, 211, 158, 0.5);
+  border-radius: 0 8px 8px 0;
+  padding: 6px 12px;
+}
+
+.repost-quote {
+  margin: 0 0 8px;
+  padding: 5px 12px;
+  border-left: 3px solid rgba(67, 211, 158, 0.5);
+  background: rgba(67, 211, 158, 0.06);
+  border-radius: 0 8px 8px 0;
+  color: var(--text-dim);
+  font-size: 13.5px;
+}
+
+
+/* @hand-written */

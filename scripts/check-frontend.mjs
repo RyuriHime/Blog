@@ -917,8 +917,6 @@ const CASES = [
   ['帖子搜索（旧）', 'feed.js', 'viewSearch', [new Map()]],
   ['收藏', 'feed.js', 'viewBookmarks', [new Map()]],
   ['个人主页', 'user.js', 'viewUser', ['admin', new Map()]],
-  ['排行榜', 'user.js', 'viewRanking', [new Map()]],
-  ['签到', 'checkin.js', 'viewCheckin', []],
   ['设置', 'settings.js', 'viewSettings', []],
   ['通知', 'notifications.js', 'viewNotifications', [new Map()]],
   ['私信列表', 'messages.js', 'viewMessages', []],

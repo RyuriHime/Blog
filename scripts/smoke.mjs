@@ -292,7 +292,11 @@ try {
   check('注册赠送的 10 币可以花完', spent === 10, `spent=${spent}`);
   const broke = await spender.call(`/api/posts/${targets[5].id}/coin`, { method: 'POST', body: { amount: 1 } });
   check('币花完后拒绝投币（400）', broke.status === 400 && broke.error?.code === 'insufficient_coins', JSON.stringify(broke.body));
-  check('拒绝原因文案指向签到而不是每日刷新', /签到/.test(broke.error?.message ?? ''), broke.error?.message);
+  check(
+    '拒绝原因文案指向「等别人投币」而不是签到',
+    /投币/.test(broke.error?.message ?? '') && !/签到/.test(broke.error?.message ?? ''),
+    broke.error?.message,
+  );
 
   // 关键回归：把「上次刷新时间」改成一万小时前，再登录也不应该补币（已取消每日补足）
   {
@@ -345,7 +349,7 @@ try {
   check(
     '个人主页返回统计信息',
     profile.status === 200 &&
-      ['postCount', 'replyCount', 'followerCount', 'followingCount', 'likesReceived', 'coinsReceived'].every(
+      ['postCount', 'replyCount', 'followerCount', 'followingCount', 'likesReceived'].every(
         (key) => key in profile.data.user,
       ),
     JSON.stringify(profile.data.user).slice(0, 200),
@@ -435,47 +439,11 @@ try {
   const selfDeleteNoNotif = await admin.call('/api/notifications?perPage=50');
   check('管理员删自己的帖子不会通知自己', !typeOf(selfDeleteNoNotif.data.items, 'moderation'));
 
-  console.log('\n▶ 每日签到');
-  const alice = createClient();
-  await alice.call('/api/auth/login', { method: 'POST', body: { username: 'alice', password: 'demo1234' } });
-  const beforeCheckin = await alice.call('/api/auth/me');
-  const checkinStatus = await alice.call('/api/checkin');
-  check(
-    '签到状态接口可用',
-    checkinStatus.status === 200 && typeof checkinStatus.data.checkedInToday === 'boolean' && Array.isArray(checkinStatus.data.week),
-    JSON.stringify(checkinStatus.data).slice(0, 140),
-  );
-  check(
-    '下发签到规则（每天 1 币、满 7 天 +3 币）',
-    checkinStatus.data.dailyReward === 1 && checkinStatus.data.weeklyBonus === 3 && checkinStatus.data.fullWeekDays === 7,
-  );
-  check(
-    '示例数据自带历史签到（上周全勤）',
-    checkinStatus.data.checkedInToday === false && checkinStatus.data.total >= 7 && checkinStatus.data.pendingBonus === 3,
-    JSON.stringify({ total: checkinStatus.data.total, pending: checkinStatus.data.pendingBonus }),
-  );
-
-  const firstCheckin = await alice.call('/api/checkin', { method: 'POST' });
-  check('签到成功 +1 币', firstCheckin.status === 200 && firstCheckin.data.reward === 1, JSON.stringify(firstCheckin.data).slice(0, 160));
-  check(
-    '上周全勤补发 +3 币',
-    firstCheckin.data.bonus === 3 && firstCheckin.data.bonusWeeks.length === 1,
-    JSON.stringify({ bonus: firstCheckin.data.bonus, weeks: firstCheckin.data.bonusWeeks }),
-  );
-  check(
-    '签到后余额增加 4 币',
-    firstCheckin.data.coinBalance === beforeCheckin.data.user.coinBalance + 4,
-    `${beforeCheckin.data.user.coinBalance} → ${firstCheckin.data.coinBalance}`,
-  );
-  check('签到后状态为已签到且连续天数 ≥ 1', firstCheckin.data.checkedInToday === true && firstCheckin.data.streak >= 1);
-
-  const repeatCheckin = await alice.call('/api/checkin', { method: 'POST' });
-  check('同一天重复签到被拒绝（409）', repeatCheckin.status === 409 && repeatCheckin.error?.code === 'already_checked_in');
-  const afterRepeat = await alice.call('/api/checkin');
-  check('重复签到不会重复加币', afterRepeat.data.coinBalance === firstCheckin.data.coinBalance);
-  check('签到日历返回 35 天', Array.isArray(afterRepeat.data.calendar) && afterRepeat.data.calendar.length === 35);
-  check('未登录不能签到（401）', (await anon.call('/api/checkin')).status === 401);
-  check('未登录不能查看签到状态（401）', (await anon.call('/api/checkin')).status === 401);
+  console.log('\n▶ 签到已下线');
+  const goneCheckin = await member.call('/api/checkin');
+  check('签到状态接口已下线（404）', goneCheckin.status === 404, JSON.stringify(goneCheckin.body).slice(0, 120));
+  check('签到 POST 也下线了（404，而不是 405 / 401）', (await member.call('/api/checkin', { method: 'POST' })).status === 404);
+  check('未登录访问签到同样是 404（路由整条没了）', (await anon.call('/api/checkin')).status === 404);
 
   console.log('\n▶ 个人主页分类与置顶');
   const memberName = `smoke_${unique}`;
@@ -714,70 +682,20 @@ try {
   );
   check('重复撤销返回 400', (await member.call(`/api/posts/${adminPost.id}/repost`, { method: 'DELETE' })).status === 400);
 
-  console.log('\n▶ 价值排行榜');
-  const ranking = await anon.call('/api/ranking?limit=20');
-  check('排行榜接口可用', ranking.status === 200 && Array.isArray(ranking.data.posts) && Array.isArray(ranking.data.authors));
+  console.log('\n▶ 价值排行已下线');
+  const goneRanking = await anon.call('/api/ranking?limit=20');
+  check('排行榜接口已下线（404）', goneRanking.status === 404, JSON.stringify(goneRanking.body).slice(0, 120));
+  check('排行榜带时间窗参数同样 404', (await anon.call('/api/ranking?window=7&limit=50')).status === 404);
+  const siteGone = await anon.call('/api/site');
   check(
-    '排行榜下发权重常量',
-    ranking.data.weights.like === 1 &&
-      ranking.data.weights.coin === 5 &&
-      ranking.data.weights.bookmark === 3 &&
-      ranking.data.weights.halfSaturation === 50,
-    JSON.stringify(ranking.data.weights),
+    '/api/site 不再下发签到规则与价值权重',
+    siteGone.data.checkinRules === undefined && siteGone.data.valueWeights === undefined,
+    JSON.stringify({ checkinRules: siteGone.data.checkinRules, valueWeights: siteGone.data.valueWeights }),
   );
-
-  // 构造一篇帖子逐项验证公式：3 赞 + 1 币 + 1 收藏 + 1 踩
-  const formulaPost = await admin.call('/api/posts', {
-    method: 'POST',
-    body: { boardId, title: `价值公式验证 ${unique}`, content: '用于验证权重公式' },
-  });
-  const formulaId = formulaPost.data.id;
-  check('（准备）新帖初始价值为 0', (await anon.call(`/api/posts/${formulaId}`)).data.post.valueScore === 0);
-
-  await admin.call(`/api/posts/${formulaId}/reaction`, { method: 'POST', body: { kind: 'like' } });
-  await bob.call(`/api/posts/${formulaId}/reaction`, { method: 'POST', body: { kind: 'like' } });
-  await member.call(`/api/posts/${formulaId}/reaction`, { method: 'POST', body: { kind: 'like' } });
-  await admin.call(`/api/posts/${formulaId}/bookmark`, { method: 'POST' });
-  await bob.call(`/api/posts/${formulaId}/coin`, { method: 'POST', body: { amount: 1 } });
+  check('帖子详情不再有 baseScore / valueScore', (await anon.call(`/api/posts/${postId}`)).data.post.valueScore === undefined);
+  // carol 的会话留给后面「隐藏帖之后还能不能互动」那一段用（原来建在这段里）
   const carolClient = createClient();
   await carolClient.call('/api/auth/login', { method: 'POST', body: { username: 'carol', password: 'demo1234' } });
-  await carolClient.call(`/api/posts/${formulaId}/reaction`, { method: 'POST', body: { kind: 'dislike' } });
-
-  const scored = (await anon.call(`/api/posts/${formulaId}`)).data.post;
-  // D' = 3/(1+3) = 0.75 → S = 3 + 5 + 3 − 2.25 = 8.75 → V = 100·8.75/(8.75+50) ≈ 14.89
-  const expectedBase = 3 * 1 + 1 * 5 + 1 * 3 - 3 * (3 / 4);
-  const expectedValue = (100 * expectedBase) / (Math.abs(expectedBase) + 50);
-  check(
-    '公式计算与接口一致（3赞 + 1币 + 1藏 + 1踩）',
-    Math.abs(scored.baseScore - expectedBase) < 0.01 && Math.abs(scored.valueScore - expectedValue) < 0.01,
-    `base=${scored.baseScore}(期望 ${expectedBase}) value=${scored.valueScore}(期望 ${expectedValue.toFixed(2)})`,
-  );
-
-  const rankedPost = (await anon.call('/api/ranking?limit=50')).data.posts.find((item) => item.id === formulaId);
-  check('该帖进入文章价值榜且分数一致', Boolean(rankedPost) && Math.abs(rankedPost.valueScore - scored.valueScore) < 0.01);
-
-  const authorRow = (await anon.call('/api/ranking?limit=50')).data.authors.find((item) => item.user.username === 'admin');
-  const adminProfile = (await anon.call('/api/users/admin')).data;
-  const expectedTotal = adminProfile.posts.reduce((sum, item) => sum + item.valueScore, 0);
-  check(
-    '作者权重 = 其所有未删除文章价值之和',
-    Boolean(authorRow) && Math.abs(authorRow.totalValue - expectedTotal) < 0.05,
-    `W=${authorRow?.totalValue} 期望≈${expectedTotal.toFixed(2)}`,
-  );
-  check('个人主页返回个人权重与榜单排名', adminProfile.value.totalValue === authorRow.totalValue && adminProfile.value.rank >= 1);
-  check(
-    '榜单按价值降序',
-    (await anon.call('/api/ranking?limit=50')).data.posts.every(
-      (item, index, list) => index === 0 || list[index - 1].valueScore >= item.valueScore,
-    ),
-  );
-  const windowed = await anon.call('/api/ranking?window=7&limit=50');
-  check(
-    '时间窗筛选生效（近 7 天不含 9 天前的版规帖）',
-    windowed.data.window === '7' && windowed.data.posts.every((item) => item.id !== 1),
-    JSON.stringify(windowed.data.posts.map((item) => item.id)),
-  );
-  check('未知时间窗回退为全部', (await anon.call('/api/ranking?window=999')).data.window === 'all');
 
   console.log('\n▶ 头像');
   const memberName2 = `smoke_${unique}`;

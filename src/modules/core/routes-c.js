@@ -82,76 +82,6 @@ export function registerRoutesC(route) {
     ok(res_(ctx), result);
   });
 
-  /* ---------------- 排行榜 ---------------- */
-
-  route('GET', '/api/ranking', async (ctx) => {
-    const windowParam = ctx.query.get('window') ?? 'all';
-    const days = windowParam === '7' ? 7 : windowParam === '30' ? 30 : 0;
-    const limit = Math.min(50, Math.max(5, Number(ctx.query.get('limit') || 20) || 20));
-    const minPosts = Math.max(1, Number(ctx.query.get('minPosts') || 1) || 1);
-    const viewerId = ctx.user?.id ?? ANON;
-
-    const viewerIdForRank = ctx.user?.id ?? ANON;
-    const rankedRows = store.rankPosts({ days, limit, hideBlockedFor: viewerIdForRank });
-    // 一次批量取回浏览者相关的状态（是否已赞/已收藏/已转发），避免逐条查询
-    const viewerState = new Map(
-      store.listPostsByIds(rankedRows.map((row) => row.id), viewerId).map((row) => [
-        row.id,
-        { liked: Boolean(row.liked), bookmarked: Boolean(row.bookmarked), reposted: Boolean(row.reposted), myCoins: Number(row.my_coins ?? 0) },
-      ]),
-    );
-
-    const posts = rankedRows.map((row) => ({
-      id: row.id,
-      title: row.title,
-      excerpt: markdownToPlainText(row.content_head, 120),
-      board: { slug: row.board_slug, name: row.board_name, icon: row.board_icon },
-      author: shapeAuthor(row),
-      createdAt: row.created_at,
-      views: row.views,
-      pinned: Boolean(row.pinned),
-      replyCount: row.reply_count,
-      likeCount: row.like_count,
-      dislikeCount: row.dislike_count,
-      coinCount: row.coin_count,
-      bookmarkCount: row.bookmark_count,
-      repostCount: row.repost_count,
-      baseScore: Number(Number(row.base_score).toFixed(2)),
-      valueScore: Number(Number(row.value_score).toFixed(2)),
-      ...(viewerState.get(row.id) ?? { liked: false, bookmarked: false, reposted: false, myCoins: 0 }),
-    }));
-
-    const authors = store.rankAuthors({ days, limit, minPosts, hideBlockedFor: viewerIdForRank }).map((row, index) => ({
-      rank: index + 1,
-      user: {
-        id: row.id,
-        username: row.username,
-        displayName: row.display_name,
-        role: row.role,
-        bio: row.bio ?? '',
-        avatar: row.avatar ?? '',
-      },
-      postCount: Number(row.post_count),
-      totalValue: Number(Number(row.total_value).toFixed(2)),
-      avgValue: Number(Number(row.avg_value).toFixed(2)),
-      bestValue: Number(Number(row.best_value).toFixed(2)),
-      likesReceived: Number(row.likes_received),
-      dislikesReceived: Number(row.dislikes_received),
-      coinsReceived: Number(row.coins_received),
-      bookmarksReceived: Number(row.bookmarks_received),
-      repliesReceived: Number(row.replies_received),
-    }));
-
-    ok(res_(ctx), {
-      window: days === 0 ? 'all' : String(days),
-      days,
-      weights: store.valueWeights(),
-      posts,
-      authors,
-      totals: { posts: store.stats().posts, authors: authors.length },
-    });
-  });
-
   /* ---------------- 收藏 ---------------- */
   route('POST', '/api/posts/:id/bookmark', async (ctx) => {
     const user = requireUser(ctx);
@@ -373,8 +303,6 @@ export function registerRoutesC(route) {
           })
           .map(shapePostListRow);
 
-    const value = store.profileValue(row.id);
-
     ok(res_(ctx), {
       user: shapeProfile(row, {
         isMe,
@@ -387,14 +315,6 @@ export function registerRoutesC(route) {
       ...(isMe || viewerId === ANON
         ? {}
         : { messageAvailability: store.messageAvailability(viewerId, row) }),
-      value: {
-        totalValue: Number(value.totalValue.toFixed(2)),
-        avgValue: Number(value.avgValue.toFixed(2)),
-        bestValue: Number(value.bestValue.toFixed(2)),
-        postCount: value.postCount,
-        rank: store.authorValueRank(row.id),
-        weights: store.valueWeights(),
-      },
       repostCount: store.repostCountByUser(row.id),
       categories: store.listProfileCategories(row.id).map(shapeCategory),
       uncategorizedCount: store.uncategorizedCount(row.id),

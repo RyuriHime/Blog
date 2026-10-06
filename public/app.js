@@ -19,7 +19,6 @@ import * as AiEdit from './views/ai-edit.js';
 import * as Api from './core/api.js';
 import * as Auth from './views/auth.js';
 import * as Avatar from './core/avatar.js';
-import * as Checkin from './views/checkin.js';
 import * as Compose from './views/compose.js';
 import * as Dom from './core/dom.js';
 import * as Events from './core/events.js';
