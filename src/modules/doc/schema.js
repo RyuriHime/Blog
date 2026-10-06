@@ -399,8 +399,9 @@ CREATE TABLE IF NOT EXISTS doc_site_state (
  * 为什么不把 DDL 抄第二遍：两份真相必然分叉，改了其中一份忘了另一份，
  * 正是这类迁移 bug 的经典写法。宁可在这里正则摘一次。
  */
-export function docTableDdl(name) {
+export function docTableDdl(name, as = name) {
   const match = new RegExp(`CREATE TABLE IF NOT EXISTS ${name} \\([\\s\\S]*?\\n\\);`).exec(DOC_SCHEMA);
   if (!match) throw new Error(`DOC_SCHEMA 里没有 ${name} 这张表`);
-  return match[0];
+  // 第二参数：同一份 DDL 换个表名建表（重建表时必须先建成临时名字，**不能**改旧表的名字）。
+  return as === name ? match[0] : match[0].replace(`CREATE TABLE IF NOT EXISTS ${name} `, `CREATE TABLE IF NOT EXISTS ${as} `);
 }

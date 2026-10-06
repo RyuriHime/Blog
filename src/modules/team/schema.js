@@ -286,12 +286,14 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_team_join_requests_pending ON team_join_re
  * 为什么不把 DDL 抄第二遍：两份真相必然分叉，改了其中一份忘了另一份，
  * 正是这类迁移 bug 的经典写法。宁可在这里正则摘一次。
  *
+ * `as` 是给「重建时要先建一张临时表」用的：同一份 DDL 换个表名照样用
+ * （见 `migrate.js` 的 `ensureTeamJoinPolicy`）。不传就是原样。
+ *
  * 目前只有 `teams` 用到它：`join_policy` 的 CHECK 从 `('open','invite')` 变成
- * `('open','apply')` —— CHECK 改不了，只能按新 DDL 重建表再搬数据
- * （见 `migrate.js` 的 `ensureTeamJoinPolicy`）。
+ * `('open','apply')` —— CHECK 改不了，只能按新 DDL 重建表再搬数据。
  */
-export function teamTableDdl(name) {
+export function teamTableDdl(name, as = name) {
   const match = new RegExp(`CREATE TABLE IF NOT EXISTS ${name} \\([\\s\\S]*?\\n\\);`).exec(TEAM_SCHEMA);
   if (!match) throw new Error(`TEAM_SCHEMA 里没有 ${name} 这张表`);
-  return match[0];
+  return as === name ? match[0] : match[0].replace(`CREATE TABLE IF NOT EXISTS ${name} `, `CREATE TABLE IF NOT EXISTS ${as} `);
 }

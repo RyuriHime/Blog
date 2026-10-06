@@ -13,7 +13,7 @@
  * 那测的是种子数据，不是我的代码。
  */
 import { spawn } from 'node:child_process';
-import { mkdirSync, openSync, readdirSync, rmSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, openSync, readdirSync, rmSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { setTimeout as sleep } from 'node:timers/promises';
@@ -30,6 +30,17 @@ const LOG_FILE = join(ROOT, 'data', 'team-smoke-server.log');
 const PORT = Number(process.env.TEAM_SMOKE_PORT || 3444);
 const BASE = `http://127.0.0.1:${PORT}`;
 
+/**
+ * 「老库升级 / 坏库自愈」那一段用的三份临时库：
+ * 底板（项目自己建的当前形状）、上一版形状、已经坏掉的形状。
+ */
+const SCAFFOLD_DB = join(ROOT, 'data', 'team-smoke-scaffold.db');
+const LEGACY_DB = join(ROOT, 'data', 'team-smoke-legacy.db');
+const BROKEN_DB = join(ROOT, 'data', 'team-smoke-broken.db');
+
+/** 除了主服务器之外临时起的那些（那一段起三台，收尾时要一起杀掉）。 */
+const extraChildren = [];
+
 let passed = 0;
 const failures = [];
 function check(name, condition, detail = '') {
@@ -42,11 +53,11 @@ function check(name, condition, detail = '') {
   }
 }
 
-function createClient() {
+function createClient(base = BASE) {
   let cookie = '';
   return {
     async call(path, { method = 'GET', body, raw = false } = {}) {
-      const response = await fetch(BASE + path, {
+      const response = await fetch(base + path, {
         method,
         headers: {
           ...(body ? { 'Content-Type': 'application/json' } : {}),
@@ -73,11 +84,11 @@ function createClient() {
   };
 }
 
-async function waitForServer(timeoutMs = 20000) {
+async function waitForServer(base = BASE, timeoutMs = 20000) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     try {
-      const response = await fetch(`${BASE}/api/site`);
+      const response = await fetch(`${base}/api/site`);
       if (response.ok) return true;
     } catch {
       /* 还没起来 */
@@ -87,9 +98,45 @@ async function waitForServer(timeoutMs = 20000) {
   return false;
 }
 
-/** 注册一个全新账号，返回 `{client, user}`。 */
-async function signUp(username) {
-  const client = createClient();
+/**
+ * 另外起一台临时服务器（自己的库 + 自己的端口）。
+ *
+ * 「老库升级 / 坏库自愈」那一段要拿**项目自己建的库**当底板，所以先用它起一次；
+ * 也用它验「上一版形状的库」和「已经坏掉的库」启动之后是什么状态。
+ */
+function bootServer({ port, dbFile, logFile }) {
+  const fd = openSync(logFile, 'w');
+  const proc = spawn(process.execPath, [SERVER], {
+    env: {
+      ...process.env,
+      PORT: String(port),
+      DB_FILE: dbFile,
+      AVATAR_DIR,
+      NOTES_DIR,
+      TEAM_FILE_DIR,
+      QUIET: '1',
+      AI_API_KEY: '',
+    },
+    stdio: ['ignore', fd, fd],
+  });
+  extraChildren.push(proc);
+  return {
+    base: `http://127.0.0.1:${port}`,
+    ready: () => waitForServer(`http://127.0.0.1:${port}`),
+    async stop() {
+      try {
+        proc.kill();
+      } catch {
+        /* 忽略 */
+      }
+      await sleep(400);
+    },
+  };
+}
+
+/** 注册一个全新账号，返回 `{client, user}`。`base` 用来指向临时起的那些服务器。 */
+async function signUp(username, base = BASE) {
+  const client = createClient(base);
   const password = `${username}-pass1`;
   const result = await client.call('/api/auth/register', { method: 'POST', body: { username, password } });
   const me = await client.call('/api/auth/me');
@@ -120,12 +167,21 @@ const finish = async (code) => {
   } catch {
     /* 忽略 */
   }
-  await sleep(400);
-  for (const suffix of ['', '-wal', '-shm']) {
+  for (const proc of extraChildren) {
     try {
-      rmSync(DB_FILE + suffix, { force: true });
+      proc.kill();
     } catch {
       /* 忽略 */
+    }
+  }
+  await sleep(400);
+  for (const file of [DB_FILE, SCAFFOLD_DB, LEGACY_DB, BROKEN_DB]) {
+    for (const suffix of ['', '-wal', '-shm']) {
+      try {
+        rmSync(file + suffix, { force: true });
+      } catch {
+        /* 忽略 */
+      }
     }
   }
   rmSync(AVATAR_DIR, { recursive: true, force: true });
@@ -1102,6 +1158,284 @@ try {
   check('删掉的帖子返回 404', readDeleted.status === 404, String(readDeleted.status));
   const readDeletedAnon = await anon.call(`${teamPath}/posts/${postId}`);
   check('删掉的帖子对未登录也是 404（不会先报「请登录」）', readDeletedAnon.status === 404, String(readDeletedAnon.status));
+
+  /* ────────────────────────────────────────────────────────────────────────────
+   * 验收⑧：老库升级 / 已经坏掉的库自愈
+   *
+   * 起因（一次线上故障）：`ensureTeamJoinPolicy` 早先用「先把 teams 改名成 teams_old → 建新表 →
+   * 搬数据 → DROP teams_old」来重建 teams。SQLite ≥ 3.25 在默认设置下会把**别的表** DDL 里的
+   * `REFERENCES teams(id)` 顺手改写成 `REFERENCES "teams_old"(id)` —— 这个改写只看
+   * `PRAGMA legacy_alter_table`（默认 OFF），**与 `foreign_keys` 无关**，所以「关掉外键」挡不住它。
+   * 旧表一 DROP，六张子表就指向一个不存在的表：之后任何写入都报
+   * `no such table: main.teams_old`，用户看到的是「服务器异常」—— 凭团队号加入、团队发帖、
+   * 退出团队、群聊、文件柜、回复全挂。
+   *
+   * 这一段用**两套库**把它钉死：
+   *   场景 A：上一版形状的库（CHECK 还是 'invite'、没有 listed）—— 升级之后不能留下 teams_old，
+   *           老团队照旧能用（凭号加入 / 发帖 / 退队都是 200）；
+   *   场景 B：照老写法亲手弄坏的库 —— 一启动就要自愈回来，而且还能接着写。
+   * 两套库的底板都由**项目自己的代码**生成（先起一次临时服务器，它建出来的就是当前形状），
+   * 免得测试里再抄一份 DDL、抄歪了却照样跑绿。
+   * ──────────────────────────────────────────────────────────────────────────── */
+
+  // 上一版的 teams：没有 listed，CHECK 还写着 'invite'。
+  const LEGACY_TEAMS_DDL = `CREATE TABLE teams (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    slug            TEXT    NOT NULL UNIQUE,
+    name            TEXT    NOT NULL,
+    intro           TEXT    NOT NULL DEFAULT '',
+    owner_id        INTEGER NOT NULL REFERENCES users(id),
+    join_policy     TEXT    NOT NULL DEFAULT 'open' CHECK (join_policy IN ('open','invite')),
+    join_code       TEXT    NOT NULL DEFAULT '',
+    announcement    TEXT    NOT NULL DEFAULT '',
+    announcement_by INTEGER,
+    announcement_at INTEGER,
+    deleted         INTEGER NOT NULL DEFAULT 0,
+    created_at      INTEGER NOT NULL,
+    updated_at      INTEGER NOT NULL
+  )`;
+  const LEGACY_TEAMS_INDEXES = [
+    'CREATE INDEX IF NOT EXISTS idx_teams_time ON teams (created_at DESC, id DESC)',
+    'CREATE INDEX IF NOT EXISTS idx_teams_owner ON teams (owner_id)',
+  ];
+
+  /** 查这个库里还有哪些表的 DDL 提到 teams_old（这就是那次故障的指纹）。 */
+  const danglingTables = (db) =>
+    db
+      .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND sql LIKE '%teams_old%' ORDER BY name")
+      .all()
+      .map((item) => String(item.name));
+
+  for (const file of [SCAFFOLD_DB, LEGACY_DB, BROKEN_DB]) {
+    for (const suffix of ['', '-wal', '-shm']) rmSync(file + suffix, { force: true });
+  }
+
+  // 底板：让项目自己的代码建一次库，拿到「当前形状」。
+  const scaffold = bootServer({
+    port: PORT + 1,
+    dbFile: SCAFFOLD_DB,
+    logFile: join(ROOT, 'data', 'team-smoke-scaffold.log'),
+  });
+  const scaffoldReady = await scaffold.ready();
+  check('（底板）临时服务器起来了，拿到了当前形状的库', scaffoldReady);
+  await scaffold.stop();
+  let modernTeamsDdl = '';
+  let modernTeamsIndexes = [];
+  if (scaffoldReady) {
+    const db = new DatabaseSync(SCAFFOLD_DB);
+    db.exec('PRAGMA wal_checkpoint(TRUNCATE)');
+    modernTeamsDdl = String(
+      db.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'teams'").get()?.sql ?? '',
+    );
+    modernTeamsIndexes = db
+      .prepare("SELECT sql FROM sqlite_master WHERE type = 'index' AND tbl_name = 'teams' AND sql IS NOT NULL")
+      .all()
+      .map((item) => String(item.sql));
+    db.close();
+  }
+
+  // ── 场景 A：上一版形状的库 ────────────────────────────────────────────────
+  copyFileSync(SCAFFOLD_DB, LEGACY_DB);
+  {
+    const db = new DatabaseSync(LEGACY_DB);
+    const now = Date.now();
+    db.exec('PRAGMA foreign_keys = OFF');
+    db.exec('DROP TABLE teams');
+    db.exec(LEGACY_TEAMS_DDL);
+    for (const sql of LEGACY_TEAMS_INDEXES) db.exec(sql);
+    db.prepare(
+      `INSERT INTO teams (slug, name, intro, owner_id, join_policy, join_code, created_at, updated_at)
+       VALUES ('legacy-team', '上一版留下来的团队', '', 1, 'invite', '', ?, ?)`,
+    ).run(now, now);
+    const ddl = String(db.prepare("SELECT sql FROM sqlite_master WHERE name = 'teams'").get()?.sql ?? '');
+    check(
+      '场景 A（前置）：底板改成了上一版的样子（CHECK 是 invite、没有 listed）',
+      ddl.includes("'invite'") && !ddl.includes('listed'),
+    );
+    db.close();
+  }
+
+  const legacyServer = bootServer({
+    port: PORT + 2,
+    dbFile: LEGACY_DB,
+    logFile: join(ROOT, 'data', 'team-smoke-legacy.log'),
+  });
+  check('场景 A：上一版的库能直接启动（升级没抛错）', await legacyServer.ready());
+
+  {
+    const db = new DatabaseSync(LEGACY_DB, { readOnly: true });
+    const dangling = danglingTables(db);
+    check('场景 A：升级之后没有任何表还引用 teams_old', dangling.length === 0, dangling.join(', '));
+    const fk = db.prepare('PRAGMA foreign_key_check').all();
+    check('场景 A：升级之后 foreign_key_check 零违规', fk.length === 0, JSON.stringify(fk.slice(0, 3)));
+    const ddl = String(db.prepare("SELECT sql FROM sqlite_master WHERE name = 'teams'").get()?.sql ?? '');
+    check("场景 A：teams 的 CHECK 换成了 'apply'", ddl.includes("'apply'") && !ddl.includes("'invite'"));
+    const row = db.prepare("SELECT id, slug, join_policy, listed, join_code FROM teams WHERE slug = 'legacy-team'").get();
+    check('场景 A：老库里的 invite 团队被翻译成 apply（设置没丢）', row?.join_policy === 'apply', String(row?.join_policy));
+    check('场景 A：老团队在新库里默认出现在广场上（listed 拿默认值 1）', Number(row?.listed) === 1, String(row?.listed));
+    check(
+      '场景 A：老团队的团队号被回填成 6 位',
+      /^[0-9A-HJKMNP-TV-Z]{6}$/.test(String(row?.join_code)),
+      String(row?.join_code),
+    );
+    const indexNames = db
+      .prepare("SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'teams'")
+      .all()
+      .map((item) => String(item.name));
+    check(
+      '场景 A：teams 的三个索引都回来了（idx_teams_join_code / idx_teams_time / idx_teams_owner）',
+      ['idx_teams_join_code', 'idx_teams_time', 'idx_teams_owner'].every((name) => indexNames.includes(name)),
+      indexNames.join(', '),
+    );
+    db.close();
+  }
+
+  // 老团队照旧好用：凭团队号加入 → 发帖 → 退队，正是当初报 500 的那三件事。
+  const legacyCode = (() => {
+    const db = new DatabaseSync(LEGACY_DB, { readOnly: true });
+    const row = db.prepare("SELECT join_code FROM teams WHERE slug = 'legacy-team'").get();
+    db.close();
+    return String(row?.join_code ?? '');
+  })();
+  const legacyGuest = await signUp('legacyguest', legacyServer.base);
+  const legacyJoin = await legacyGuest.client.call('/api/teams/join-by-code', {
+    method: 'POST',
+    body: { code: legacyCode },
+  });
+  check(
+    '场景 A：凭团队号加入团队不再 500（200）',
+    legacyJoin.status === 200,
+    `${legacyJoin.status} ${JSON.stringify(legacyJoin.error ?? '')}`,
+  );
+  const legacyPost = await legacyGuest.client.call('/api/teams/legacy-team/posts', {
+    method: 'POST',
+    body: { title: '升级之后发的帖', content: '正文', scope: 'public' },
+  });
+  check(
+    '场景 A：升级之后还能往团队里发帖（200）',
+    legacyPost.status === 200,
+    `${legacyPost.status} ${JSON.stringify(legacyPost.error ?? '')}`,
+  );
+  const legacyLeave = await legacyGuest.client.call('/api/teams/legacy-team/leave', { method: 'POST' });
+  check(
+    '场景 A：退出团队不再 500（200）',
+    legacyLeave.status === 200,
+    `${legacyLeave.status} ${JSON.stringify(legacyLeave.error ?? '')}`,
+  );
+  {
+    const db = new DatabaseSync(LEGACY_DB, { readOnly: true });
+    const member = db
+      .prepare("SELECT COUNT(*) AS n FROM team_members WHERE user_id = ? AND team_id = (SELECT id FROM teams WHERE slug = 'legacy-team')")
+      .get(legacyGuest.user?.id);
+    check('场景 A：退出之后成员表里真的没有这一行了', Number(member?.n) === 0, String(member?.n));
+    db.close();
+  }
+
+  // 幂等：迁移每次启动都会跑，第二遍不能把库改坏。
+  await legacyServer.stop();
+  const legacyAgain = bootServer({
+    port: PORT + 2,
+    dbFile: LEGACY_DB,
+    logFile: join(ROOT, 'data', 'team-smoke-legacy.log'),
+  });
+  check('场景 A：同一个库再启动一次也没问题（迁移幂等）', await legacyAgain.ready());
+  {
+    const db = new DatabaseSync(LEGACY_DB, { readOnly: true });
+    const dangling = danglingTables(db);
+    check('场景 A：第二遍启动之后依然没有表引用 teams_old', dangling.length === 0, dangling.join(', '));
+    const teamsCount = Number(db.prepare("SELECT COUNT(*) AS n FROM teams WHERE slug = 'legacy-team'").get()?.n);
+    check('场景 A：第二遍启动不会把老团队弄丢或弄成两份', teamsCount === 1, String(teamsCount));
+    db.close();
+  }
+  await legacyAgain.stop();
+
+  // ── 场景 B：已经坏掉的库（照老写法重演一次那个 bug） ──────────────────────
+  copyFileSync(SCAFFOLD_DB, BROKEN_DB);
+  let brokenRepro = '';
+  {
+    const db = new DatabaseSync(BROKEN_DB);
+    const now = Date.now();
+    db.prepare(
+      `INSERT INTO teams (slug, name, intro, owner_id, join_policy, join_code, listed, created_at, updated_at)
+       VALUES ('broken-team', '坏库里的团队', '', 1, 'open', 'ABCDEF', 1, ?, ?)`,
+    ).run(now, now);
+    db.exec('PRAGMA foreign_keys = OFF');
+    db.exec('PRAGMA legacy_alter_table = OFF');
+    db.exec('BEGIN');
+    db.exec('ALTER TABLE teams RENAME TO teams_old');
+    db.exec(modernTeamsDdl);
+    db.exec('INSERT INTO teams SELECT * FROM teams_old');
+    db.exec('DROP TABLE teams_old');
+    for (const sql of modernTeamsIndexes) db.exec(sql);
+    db.exec('COMMIT');
+    // 复现完把外键重新打开：**只有开着外键**才会去解析父表名字，
+    // 当年生产上就是这么报的 `no such table: main.teams_old`（关着外键的话照样写得进去）。
+    db.exec('PRAGMA foreign_keys = ON');
+    const dangling = danglingTables(db);
+    check(
+      '场景 B（前置）：照老写法重演一遍，确实有表被改写成指向 teams_old',
+      dangling.length >= 6,
+      dangling.join(', '),
+    );
+    try {
+      db.prepare('INSERT INTO team_members (team_id, user_id, role, joined_at) VALUES (1, 1, ?, ?)').run(
+        'member',
+        now,
+      );
+      brokenRepro = '（居然插进去了，说明这次没重演成功）';
+    } catch (error) {
+      brokenRepro = String(error?.message ?? error);
+    }
+    check(
+      '场景 B（前置）：坏库里往 team_members 写会报 no such table: main.teams_old（就是当初那个 500）',
+      brokenRepro.includes('teams_old'),
+      brokenRepro,
+    );
+    db.close();
+  }
+
+  const brokenServer = bootServer({
+    port: PORT + 3,
+    dbFile: BROKEN_DB,
+    logFile: join(ROOT, 'data', 'team-smoke-broken.log'),
+  });
+  check('场景 B：已经坏掉的库一启动就自愈，服务器照常起来', await brokenServer.ready());
+  {
+    const db = new DatabaseSync(BROKEN_DB, { readOnly: true });
+    const dangling = danglingTables(db);
+    check('场景 B：自愈之后没有任何表还引用 teams_old', dangling.length === 0, dangling.join(', '));
+    const fk = db.prepare('PRAGMA foreign_key_check').all();
+    check('场景 B：自愈之后 foreign_key_check 零违规', fk.length === 0, JSON.stringify(fk.slice(0, 3)));
+    const row = db.prepare("SELECT slug, join_code FROM teams WHERE slug = 'broken-team'").get();
+    check(
+      '场景 B：坏库里的团队和它的团队号都还在（数据没丢）',
+      row?.slug === 'broken-team' && row?.join_code === 'ABCDEF',
+      JSON.stringify(row ?? null),
+    );
+    db.close();
+  }
+
+  const brokenOwner = await signUp('brokenowner', brokenServer.base);
+  const brokenTeam = await brokenOwner.client.call('/api/teams', {
+    method: 'POST',
+    body: { name: '自愈之后建的队', intro: '' },
+  });
+  check(
+    '场景 B：自愈之后能建队（POST /api/teams 不再 500）',
+    brokenTeam.status === 200,
+    `${brokenTeam.status} ${JSON.stringify(brokenTeam.error ?? '')}`,
+  );
+  const brokenSlug = String(brokenTeam.data?.team?.slug ?? '');
+  const brokenPost = await brokenOwner.client.call(`/api/teams/${brokenSlug}/posts`, {
+    method: 'POST',
+    body: { title: '自愈之后发的帖', content: '正文', scope: 'public' },
+  });
+  check(
+    '场景 B：自愈之后能往团队里发帖（200）',
+    brokenPost.status === 200,
+    `${brokenPost.status} ${JSON.stringify(brokenPost.error ?? '')}`,
+  );
+  await brokenServer.stop();
 
   const missing = await owner.client.call('/api/teams/99999999');
   check('不存在的团队返回 404', missing.status === 404 && missing.error?.code === 'team_not_found', String(missing.status));
