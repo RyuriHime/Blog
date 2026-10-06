@@ -914,7 +914,7 @@ try {
 
   /* ---------- 3.10.1 互动搬进积木页：两条新接口 ---------- */
   // 阅读页不再让读者「去帖子里互动」：它自己拿锚点帖（`/api/docs/:id/anchor`），
-  // 把点赞 / 投币 / 收藏 / AI 解读都画在积木页上；帖子页反过来用 `by-anchor` 挂横幅。
+  // 把点赞 / 收藏 / 转发 / AI 解读都画在积木页上；帖子页反过来用 `by-anchor` 挂横幅。
   // 这两条接口各自有一个容易写错的地方，所以钉在这里：
   //   ① `/anchor` 必须回**列表形状**（详情形状的 `content` 白拉一遍大正文）；
   //   ② 它**不能**像 `/api/posts/:id` 那样 `bumpViews` —— 看一遍积木不该涨帖子浏览量。
@@ -925,11 +925,11 @@ try {
     const shape = anchorView.data?.post ?? {};
     check(
       '互动条要的字段一个不少（少一个前端就少一个按钮）',
-      ['id', 'likeCount', 'dislikeCount', 'coinCount', 'bookmarkCount', 'repostCount', 'myCoins', 'liked', 'disliked', 'bookmarked', 'reposted', 'authorFollowed', 'author', 'coin'].every((key) => key in shape),
+      ['id', 'likeCount', 'dislikeCount', 'bookmarkCount', 'repostCount', 'liked', 'disliked', 'bookmarked', 'reposted', 'authorFollowed', 'author'].every((key) => key in shape),
       Object.keys(shape).join(','),
     );
     check('用的是列表形状：不带 content（阅读页的正文自己会渲染）', !('content' in shape) && !('contentHtml' in shape), Object.keys(shape).join(','));
-    check('coin 跟帖子详情一样按访客算', typeof shape.coin?.available === 'boolean' && Number.isInteger(shape.coin?.perPostLimit), JSON.stringify(shape.coin));
+    check('投币下线后不再回 coin / coinCount / myCoins', !('coin' in shape) && !('coinCount' in shape) && !('myCoins' in shape), Object.keys(shape).join(','));
 
     const viewsBefore = scalar('SELECT views FROM posts WHERE id = ?', anchorId)?.views ?? 0;
     await other.call(`/api/docs/${docId}/anchor`);

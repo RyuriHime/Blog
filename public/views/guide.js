@@ -275,9 +275,9 @@ export async function viewGuide() {
     <div class="card doc-panel doc-guide">
       <div class="card-head"><span class="card-title">7. 读者能做什么</span></div>
       <ul class="doc-guide-list">
-        <li>每篇底下都有<strong>点赞 / 踩 / 投币 / 收藏 / 转发</strong>，还有 <strong>AI 解读</strong>（自动讲这篇在说什么、难在哪）。</li>
+        <li>每篇底下都有<strong>点赞 / 踩 / 收藏 / 转发 / 关注作者</strong>，还有 <strong>AI 解读</strong>（自动讲这篇在说什么、难在哪）。</li>
         <li><strong>投票块是现成的</strong>：读者点一下就投，结果用百分比条显示出来，不看别人的票数只看比例。</li>
-        <li>这些都是按人算的：谁点的、投了多少币，页面按登录身份自己算，不会串。</li>
+        <li>这些都是按人算的：谁点过赞、谁收藏过，页面按登录身份自己算，不会串。</li>
       </ul>
       <div class="doc-hint">从帖子搬过来的老内容也一样：老帖子页面顶上会写「已经搬进积木了」，
         点过去就是这一套互动。</div>

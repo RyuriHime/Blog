@@ -128,7 +128,7 @@ function repostSectionHtml(post, reposters) {
  *
  * 帖子页现在是被弃用的入口：新东西都写进积木（`#/doc/:id`）。但旧链接、旧收藏、
  * 列表卡片点进来还是这条路，所以**不能把帖子页关掉**，只能在顶上挂一条横幅，
- * 把读者送到真正该去的地方 —— 积木页上的正文、点赞、投币、收藏和 AI 解读
+ * 把读者送到真正该去的地方 —— 积木页上的正文、点赞、收藏和 AI 解读
  * 就是从这里搬过去的（阅读页的互动条直接打在锚点行上）。
  */
 function movedNoteHtml(doc) {
@@ -136,7 +136,7 @@ function movedNoteHtml(doc) {
     <span class="doc-moved-icon">🧩</span>
     <div class="doc-moved-text">
       <strong>这一篇已经搬进积木了</strong>
-      <div class="hint">正文、点赞、投币、收藏和 AI 解读都在积木页上。这里留着的只是它的「影子」（旧链接还能点进来）。</div>
+      <div class="hint">正文、点赞、收藏和 AI 解读都在积木页上。这里留着的只是它的「影子」（旧链接还能点进来）。</div>
     </div>
     <a class="btn btn-sm btn-primary" href="#/doc/${esc(doc.id)}">去积木页 →</a>
   </div>`;

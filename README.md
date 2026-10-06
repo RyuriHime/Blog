@@ -445,7 +445,7 @@ forum/
 | POST | `/api/docs/:id/sandbox` | 开关沙箱，body `{ disabled }` | 站长/管理员 |
 | GET | `/api/docs/:id/polls` | 这篇文档里每个 `poll` 块的票数：`{ polls: { bN: { counts, total, voters, mine, multiple } } }`（0 票的块也有桶） | 读按 scope |
 | POST | `/api/docs/:id/blocks/:blockId/vote` | 投票，body `{ options: [...] }`（**提交完整选择集合**，不是增量）；再投即改票 | 登录 |
-| GET | `/api/docs/:id/anchor` | 这篇的**互动锚点帖**：`{ post }`（列表形状 + `coin` 可用性），还没同步出锚点就是 `{ post: null }`；**不涨浏览量**（阅读页的互动条用它，而不是去调 `/api/posts/:id`） | 按 scope |
+| GET | `/api/docs/:id/anchor` | 这篇的**互动锚点帖**：`{ post }`（帖子列表形状），还没同步出锚点就是 `{ post: null }`；**不涨浏览量**（阅读页的互动条用它，而不是去调 `/api/posts/:id`） | 按 scope |
 | GET | `/api/docs/by-anchor/:postId` | 反查：这条帖子是哪篇积木的影子行？`{ doc: { id, title, scope } }`，看不见就是 `{ doc: null }`（帖子页用它挂「已经搬进积木」横幅） | 按 scope |
 | GET | `/api/docs/meta/templates` | 模板清单 + `kinds` + `scopes` 枚举（唯一真相） | 公开 |
 | GET | `/api/docs/meta/block-types` | 块类型清单（内置 14 种 ∪ 库里注册的），含声明式 schema | 公开 |

@@ -269,13 +269,13 @@ function warningsHtml(warnings) {
 }
 
 /**
- * 互动区。赞 / 踩 / 投币 / 收藏 / 转发 / 关注 / AI 解读**就在积木页里**。
+ * 互动区。赞 / 踩 / 收藏 / 转发 / 关注 / AI 解读**就在积木页里**。
  *
  * 这些数据全都长在影子行（`posts` 那一行）上 —— 但那是存放位置，不是使用位置。
  * 积木才是正文的正式形态，帖子只是它的影子；让读者为了点个赞跳走是本末倒置。
  *
  * 具体那条互动条交给 `views/post.js` 的 `reactionBarHtml` 画：同一份实现、同一套事件
- * （`core/events.js` 里 reaction / coin / bookmark 都按 `data-id` 找帖子，这里给的就是
+ * （`core/events.js` 里 reaction / bookmark 都按 `data-id` 找帖子，这里给的就是
  * 影子行 id），所以积木页和帖子页的行为不会两边不一样。真正的数据由
  * `GET /api/docs/:id/anchor` 按当前访客读出来（见 `mountInteraction`）。
  */

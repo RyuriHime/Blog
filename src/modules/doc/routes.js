@@ -287,12 +287,12 @@ export function registerDocRoutes(ctx, { store }) {
   });
 
   /**
-   * 这篇积木的互动现状（赞 / 踩 / 投币 / 收藏 / 转发 / 关注 —— 阅读页那条互动条要的）。
+   * 这篇积木的互动现状（赞 / 踩 / 收藏 / 转发 / 关注 —— 阅读页那条互动条要的）。
    *
    * 为什么不塞进 `GET /api/docs/:id`：
    *   1. 这些字段长在**影子行**上，形状由 core 的 shape 说了算。借它的形状，
    *      比在 doc 里抄一份字段表、日后 core 加一个字段就漏一个强。
-   *   2. 它要按访客算（我赞过没有、我的币够不够），和文档本体（谁都能看的那部分）
+   *   2. 它要按访客算（我赞过没有），和文档本体（谁都能看的那部分）
    *      不是同一件事 —— 分开之后 `GET /api/docs/:id` 仍然可以随便缓存/预取。
    * 只读，**不 bumpViews**：翻积木不该涨影子行的浏览量。
    */
@@ -306,7 +306,7 @@ export function registerDocRoutes(ctx, { store }) {
       return;
     }
     // 用列表形状而不是详情形状：互动条只读得到这些字段，不带 content 省一半流量。
-    ok(reqCtx.res, { post: { ...ctx.shape.shapePostListRow(row), coin: ctx.shape.coinAvailability(row, viewer) } });
+    ok(reqCtx.res, { post: ctx.shape.shapePostListRow(row) });
   });
 
   add('DELETE', '/api/docs/:id', async (reqCtx) => {
