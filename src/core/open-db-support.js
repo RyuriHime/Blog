@@ -247,7 +247,13 @@ body { background: var(--bg); color: var(--fg); }
 /* 建表之后的迁移                                                     */
 /* ------------------------------------------------------------------ */
 
-function ensureColumn(db, table, column, definition) {
+/**
+ * 给已存在的表补一列（表里已经有这列就什么都不做）。
+ *
+ * 导出给模块自己的迁移用（`src/modules/team/migrate.js`）：模块的表归模块管，
+ * 但「查一下有没有、没有就 ALTER」这件事每个模块都写一遍没意义。
+ */
+export function ensureColumn(db, table, column, definition) {
   const columns = db.prepare(`PRAGMA table_info(${table})`).all();
   if (!columns.some((item) => item.name === column)) {
     db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
@@ -266,6 +272,8 @@ export function migrate(db) {
   ensureColumn(db, 'posts', 'hidden_at', 'INTEGER');
   ensureColumn(db, 'posts', 'hidden_by', 'INTEGER');
   ensureColumn(db, 'posts', 'hidden_reason', "TEXT NOT NULL DEFAULT ''");
+  // 团队公告的通知要能指回团队（前端据此跳到 #/team/<slug>）。
+  ensureColumn(db, 'notifications', 'team_id', 'INTEGER');
 
   const legacy = db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'likes'").get();
   if (legacy) {

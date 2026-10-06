@@ -37,6 +37,10 @@ const flag = (value) => Boolean(Number(value ?? 0));
  */
 export function shapeTeam(row, { viewer = null } = {}) {
   if (!row) return null;
+  const myRole = TEAM_ROLES.includes(row.my_role) ? row.my_role : null;
+  const joined = flag(row.joined);
+  const canManage = Boolean(myRole) && myRole !== 'member';
+  const announcement = String(row.announcement ?? '');
   return {
     id: row.id,
     slug: row.slug,
@@ -44,6 +48,35 @@ export function shapeTeam(row, { viewer = null } = {}) {
     intro: String(row.intro ?? ''),
     joinPolicy: row.join_policy === 'invite' ? 'invite' : 'open',
     joinPolicyLabel: row.join_policy === 'invite' ? '需要邀请' : '谁都能加入',
+    /**
+     * 团队号：**只给团队成员看**，非成员一律 null。
+     *
+     * 理由不是「藏起来好看」，是它**能进需要邀请的团队**（见 routes.js 的 join-by-code）——
+     * 给非成员看到等于把「需要邀请」这个设置当场作废。前端据此决定画不画那一行。
+     */
+    joinCode: joined || canManage ? String(row.join_code ?? '') || null : null,
+    /**
+     * 团队公告。`text` 为空串时整体给 null，前端只需判一次「有没有公告」，
+     * 而不用同时看 text 和 author 两个字段有没有值。
+     *
+     * **只有团队成员看得到**（跟 joinCode 同一道门）：公告是写给自己人看的，
+     * 里面可能有「周五开会」这类内部安排，不该挂在公开的团队主页上。
+     * 通知也只发给成员（见 routes.js 的 PUT announcement）。
+     */
+    announcement:
+      !(joined || canManage) || announcement === ''
+        ? null
+        : {
+            text: announcement,
+            editedAt: row.announcement_at ?? null,
+            author: row.announcement_by
+              ? {
+                  id: row.announcement_by,
+                  username: row.announcer_username ?? null,
+                  displayName: row.announcer_display || row.announcer_username || '（已注销）',
+                }
+              : null,
+          },
     owner: {
       id: row.owner_id,
       username: row.owner_username ?? null,
@@ -52,13 +85,14 @@ export function shapeTeam(row, { viewer = null } = {}) {
     },
     memberCount: Number(row.member_count) || 0,
     postCount: Number(row.post_count) || 0,
-    myRole: TEAM_ROLES.includes(row.my_role) ? row.my_role : null,
-    myRoleLabel: TEAM_ROLES.includes(row.my_role) ? ROLE_LABELS[row.my_role] : null,
-    canManage: TEAM_ROLES.includes(row.my_role) && row.my_role !== 'member',
-    joined: flag(row.joined),
+    myRole,
+    myRoleLabel: myRole ? ROLE_LABELS[myRole] : null,
+    canManage,
+    joined,
     // 「需要邀请」的团队对谁都显示「不能自己加入」—— 包括站长。
     // P4 里没有任何 staff 后门：能管理团队的只有团队成员表里的 owner / admin。
-    canJoin: Boolean(viewer) && !flag(row.joined) && row.join_policy !== 'invite',
+    // （凭团队号加入是另一条路：那条路不看 joinPolicy，见 routes.js。）
+    canJoin: Boolean(viewer) && !joined && row.join_policy !== 'invite',
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };

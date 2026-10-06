@@ -111,6 +111,8 @@ CREATE TABLE IF NOT EXISTS follows (
 CREATE INDEX IF NOT EXISTS idx_follows_followee ON follows(followee_id);
 
 -- 消息通知
+-- team_id 故意不写外键：teams 表由团队模块自己建，两边谁先建不确定（同一个道理见 feed_items.team_id）。
+-- 它只用来把「团队公告」这类通知指回具体团队，团队没了通知也就没人点得进去，留着无害。
 CREATE TABLE IF NOT EXISTS notifications (
   id         INTEGER PRIMARY KEY AUTOINCREMENT,
   user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -118,6 +120,7 @@ CREATE TABLE IF NOT EXISTS notifications (
   type       TEXT    NOT NULL,
   post_id    INTEGER REFERENCES posts(id) ON DELETE CASCADE,
   reply_id   INTEGER REFERENCES replies(id) ON DELETE CASCADE,
+  team_id    INTEGER,
   excerpt    TEXT    NOT NULL DEFAULT '',
   read_at    INTEGER,
   created_at INTEGER NOT NULL

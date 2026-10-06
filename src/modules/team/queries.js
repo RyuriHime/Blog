@@ -31,7 +31,9 @@ const BLOCKED_AUTHOR_SQL = `p.user_id NOT IN (
  */
 const TEAM_COLUMNS = `
       t.id, t.slug, t.name, t.intro, t.owner_id, t.join_policy, t.created_at, t.updated_at,
+      t.join_code, t.announcement, t.announcement_by, t.announcement_at,
       ou.username AS owner_username, ou.display_name AS owner_display, ou.avatar AS owner_avatar,
+      au.username AS announcer_username, au.display_name AS announcer_display,
       (SELECT COUNT(*) FROM team_members m WHERE m.team_id = t.id) AS member_count,
       (SELECT COUNT(*) FROM team_posts tp WHERE tp.team_id = t.id AND tp.deleted = 0) AS post_count,
       (SELECT m.role FROM team_members m WHERE m.team_id = t.id AND m.user_id = ?) AS my_role,
@@ -42,7 +44,8 @@ const teamColumnParams = (viewerId) => [viewerId, viewerId];
 
 const TEAM_FROM = `
     FROM teams t
-    JOIN users ou ON ou.id = t.owner_id`;
+    JOIN users ou ON ou.id = t.owner_id
+    LEFT JOIN users au ON au.id = t.announcement_by`;
 
 /**
  * 团队帖的列表/详情共用列。
@@ -212,7 +215,9 @@ export function createTeamQueries(db) {
       ).get();
     },
 
-    /** 按 slug 取，给 `#/team/<slug>` 这种可读地址用。 */
+    /**
+     * 按 slug 取，给 `#/team/<slug>` 这种可读地址用。
+     */
     teamBySlug(slug, viewerId = ANON) {
       return bind(
         `SELECT ${TEAM_COLUMNS}
@@ -222,16 +227,36 @@ export function createTeamQueries(db) {
       ).get();
     },
 
+    /**
+     * 按**团队号**取（凭号加入那条路）。
+     *
+     * 与 slug 不同：这里大小写与「抄错的 I / L / O」都由 `join-code.js` 在调用前折好，
+     * SQL 只认标准形状 —— 数据库里存的就永远是标准形状，比较是等值比较，走得上唯一索引。
+     */
+    teamByJoinCode(code, viewerId = ANON) {
+      return bind(
+        `SELECT ${TEAM_COLUMNS}
+    ${TEAM_FROM}
+    WHERE t.join_code = ? AND t.deleted = 0`,
+        [...teamColumnParams(viewerId), code],
+      ).get();
+    },
+
     /** slug 是否已被占用（软删掉的也算占用，否则 URL 会指向两个团队）。 */
     slugTaken(slug) {
       return Boolean(bind('SELECT 1 AS hit FROM teams WHERE slug = ?', [slug]).get());
     },
 
-    createTeam({ slug, name, intro = '', ownerId, joinPolicy = 'open', now = Date.now() }) {
+    /** 团队号是否已被占用（软删掉的也算 —— 号不该被回收给别人）。 */
+    joinCodeTaken(code) {
+      return Boolean(bind('SELECT 1 AS hit FROM teams WHERE join_code = ?', [code]).get());
+    },
+
+    createTeam({ slug, name, intro = '', ownerId, joinPolicy = 'open', joinCode = '', now = Date.now() }) {
       const result = bind(
-        `INSERT INTO teams (slug, name, intro, owner_id, join_policy, deleted, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, 0, ?, ?)`,
-        [slug, name, intro, ownerId, joinPolicy, now, now],
+        `INSERT INTO teams (slug, name, intro, owner_id, join_policy, join_code, deleted, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?)`,
+        [slug, name, intro, ownerId, joinPolicy, joinCode, now, now],
       ).run();
       return Number(result.lastInsertRowid);
     },
@@ -250,6 +275,25 @@ export function createTeamQueries(db) {
         now,
         id,
       ]).run();
+      return Number(result.changes) > 0;
+    },
+
+    /**
+     * 写团队公告（只有 owner / admin 能走到这里，判定在 `routes.js`）。
+     *
+     * `announcement` 传空串表示**撤下公告**：`announcement_by` / `announcement_at` 一起置空，
+     * 页面因此显示「还没有公告」而不是「某某某写的（空）」。这条由本函数保证，
+     * 不指望每个调用点都记得传 null。
+     */
+    setAnnouncement({ id, announcement, by = null, now = Date.now() }) {
+      const text = String(announcement ?? '');
+      const author = text === '' ? null : by;
+      const at = text === '' ? null : now;
+      const result = bind(
+        `UPDATE teams SET announcement = ?, announcement_by = ?, announcement_at = ?, updated_at = ?
+     WHERE id = ? AND deleted = 0`,
+        [text, author, at, now, id],
+      ).run();
       return Number(result.changes) > 0;
     },
 
@@ -277,6 +321,17 @@ export function createTeamQueries(db) {
     countMembers(teamId) {
       const row = bind('SELECT COUNT(*) AS n FROM team_members WHERE team_id = ?', [teamId]).get();
       return Number(row?.n) || 0;
+    },
+
+    /**
+     * 全队成员的 user_id（公告通知要发给他们）。
+     *
+     * 只回 id：公告通知的内容对谁都一样，没必要把每个人的昵称头像也查出来。
+     */
+    listMemberIds(teamId) {
+      return bind('SELECT user_id FROM team_members WHERE team_id = ?', [teamId])
+        .all()
+        .map((row) => Number(row.user_id));
     },
 
     /** 加入。已经有行就不动 —— 重复加入不该把角色从 admin 悄悄降成 member。 */

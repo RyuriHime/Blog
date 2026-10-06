@@ -10,6 +10,7 @@ import { HttpError, ensure, field, rateLimit } from '../../core/http.js';
 import { requireUser } from '../../core/guards.js';
 import { ANON } from '../../core/paths.js';
 import {
+  MAX_TEAM_ANNOUNCEMENT,
   MAX_TEAM_FILE_BYTES,
   MAX_TEAM_INTRO,
   MAX_TEAM_MESSAGE,
@@ -25,6 +26,7 @@ import {
   TEAM_ROLES,
   TEAM_SCOPES,
 } from './schema.js';
+import { pickJoinCode, readJoinCode } from './join-code.js';
 import { SCOPE_OPTIONS, shapeFile, shapeMember, shapeMessage, shapeTeam, shapeTeamPost } from './shape.js';
 import {
   attachmentHeaders,
@@ -215,6 +217,33 @@ export function registerTeamRoutes(ctx, { queries }) {
     });
   });
 
+  /**
+   * 凭团队号加入。
+   *
+   * ⚠️ 这条路**不看 `join_policy`**，这是故意的：「需要邀请」的团队本来就没有自助入口，
+   * 团队号就是那个入口 —— 管理员把号发给谁，就是把邀请发给了谁。
+   * 换句话说，`invite` 挡的是「随便逛到就能进」，不是「拿到暗号也不能进」。
+   *
+   * 限流是唯一的防线（32^6 ≈ 10.7 亿种，20 次 / 10 分钟 / 人，枚举不动），
+   * 所以号对不上就老实说 404 —— 说得越准，抄错号的人越容易自己发现。
+   */
+  add('POST', '/api/teams/join-by-code', async (reqCtx) => {
+    const user = requireUser(reqCtx);
+    rateLimit(`team:joincode:${user.id}`, 20, 10 * 60 * 1000);
+    const code = readJoinCode((reqCtx.body ?? {}).code);
+    const teamRow = queries.teamByJoinCode(code, user.id);
+    ensure(teamRow, 404, 'team_not_found', '没有这个团队号，检查一下有没有抄错');
+    // 已经在队里就当作成功：重复点「加入」不该报错，也不该把管理员降成成员
+    // （`addMember` 是 ON CONFLICT DO NOTHING，本来也不会改角色）。
+    if (!queries.memberOf(teamRow.id, user.id)) {
+      queries.addMember({ teamId: teamRow.id, userId: user.id, role: 'member' });
+    }
+    ok(reqCtx.res, {
+      team: shapeTeam(queries.teamById(teamRow.id, user.id), { viewer: user }),
+      joined: true,
+    });
+  });
+
   add('POST', '/api/teams', async (reqCtx) => {
     const user = requireUser(reqCtx);
     rateLimit(`team:create:${user.id}`, 5, 60 * 60 * 1000);
@@ -223,7 +252,10 @@ export function registerTeamRoutes(ctx, { queries }) {
     const intro = field(body.intro ?? '', { label: '团队简介', min: 0, max: MAX_TEAM_INTRO });
     const joinPolicy = readJoinPolicy(body.joinPolicy);
     const slug = pickSlug(queries, body.slug, name);
-    const id = queries.createTeam({ slug, name, intro, ownerId: user.id, joinPolicy });
+    // 团队号在建队时就定下来，之后不变（没有「换号」这个操作：号一旦发出去，
+    // 换掉就等于把已经拿到号的成员挡在门外）。
+    const joinCode = pickJoinCode(queries);
+    const id = queries.createTeam({ slug, name, intro, ownerId: user.id, joinPolicy, joinCode });
     queries.addMember({ teamId: id, userId: user.id, role: 'owner' });
     const row = queries.teamById(id, user.id);
     ok(reqCtx.res, { team: shapeTeam(row, { viewer: user }) });
@@ -262,6 +294,52 @@ export function registerTeamRoutes(ctx, { queries }) {
     );
     queries.softDeleteTeam(teamRow.id);
     ok(reqCtx.res, { deleted: true, id: teamRow.id });
+  });
+
+  /**
+   * 写团队公告（团长与管理员都能改）。
+   *
+   * 公告是**写给全队的**，所以保存成功之后给每个成员发一条通知 —— 这就是
+   * 「公告要特别用消息通知团队成员」的落点。四个决定记在这里：
+   *   1) 通知传 `dedupe: false`。core 的默认行为是「同一个人对同一个对象的同类未读只留一条」，
+   *      那是为了防点赞刷屏；公告恰恰相反 —— 改两次就该响两次，
+   *      否则第二次改的内容对没点开过通知的人来说等于没改。
+   *   2) 不发给自己：`createNotification` 本来就会跳过 `actorId === userId`，
+   *      写公告的管理员不需要被自己提醒。
+   *   3) 公告**清空**时不发通知：没有正文可看，发出去只会让人点进来看一片空白。
+   *      清空本身是合法操作（写错了想撤下来），照旧写库。
+   *   4) 走限流：每保存一次就是全队一人一条通知，放开手点能把成员的通知列表刷满。
+   */
+  add('PUT', '/api/teams/:id/announcement', async (reqCtx) => {
+    const teamRow = loadTeam(reqCtx, queries);
+    const user = requireTeamManager(reqCtx, queries, teamRow);
+    rateLimit(`team:notice:${teamRow.id}`, 10, 10 * 60 * 1000);
+    const body = reqCtx.body ?? {};
+    const announcement = field(body.announcement ?? '', {
+      label: '团队公告',
+      min: 0,
+      max: MAX_TEAM_ANNOUNCEMENT,
+    });
+    queries.setAnnouncement({ id: teamRow.id, announcement, by: user.id });
+
+    let notified = 0;
+    if (announcement !== '') {
+      for (const memberId of queries.listMemberIds(teamRow.id)) {
+        const created = store.createNotification({
+          userId: memberId,
+          actorId: user.id,
+          type: 'team_announcement',
+          teamId: teamRow.id,
+          excerpt: announcement.slice(0, 120),
+          dedupe: false,
+        });
+        if (created) notified += 1;
+      }
+    }
+    ok(reqCtx.res, {
+      team: shapeTeam(queries.teamById(teamRow.id, viewerIdOf(reqCtx.user)), { viewer: reqCtx.user }),
+      notified,
+    });
   });
 
   /* ── 成员 ───────────────────────────────────────────────────────── */

@@ -30,11 +30,12 @@
 // 少给一个后门最多是管理员看不到；多给一个就是一次不可逆的泄露，
 // 内容还会被搜索、被 AI 语料索引。宁严勿宽。
 import { schemas } from '../../core/schema.js';
+import { migrateTeamTables } from './migrate.js';
 import { createTeamQueries } from './queries.js';
 import { registerTeamRoutes } from './routes.js';
 import { TEAM_SCHEMA } from './schema.js';
 
-// 副作用：登记本模块的三张表（必须在开库之前，见文件头注释）。
+// 副作用：登记本模块的五张表（必须在开库之前，见文件头注释）。
 schemas.addScript(TEAM_SCHEMA, 'team');
 
 export default {
@@ -54,6 +55,10 @@ export default {
    */
   reads: ['users', 'follows', 'blocks'],
   install(ctx) {
+    // 先迁移再建 queries：`migrateTeamTables` 会给老库的 teams 补上 join_code /
+    // announcement* 四列（以及团队号的唯一索引），而 queries 的语句里就有这些列 ——
+    // 顺序反了，老库上第一条查询就会报「no such column」。
+    migrateTeamTables(ctx.db);
     const queries = createTeamQueries(ctx.db);
     registerTeamRoutes(ctx, { queries });
   },

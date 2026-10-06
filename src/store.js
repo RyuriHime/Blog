@@ -379,20 +379,22 @@ export function createStore(db) {
     blockedByMe: db.prepare('SELECT 1 AS hit FROM blocks WHERE blocker_id = ? AND blocked_id = ?'),
 
     insertNotification: db.prepare(
-      `INSERT INTO notifications (user_id, actor_id, type, post_id, reply_id, excerpt, read_at, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, NULL, ?)`,
+      `INSERT INTO notifications (user_id, actor_id, type, post_id, reply_id, team_id, excerpt, read_at, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?)`,
     ),
     hasUnreadNotification: db.prepare(
       `SELECT 1 AS hit FROM notifications
        WHERE user_id = ? AND actor_id IS ? AND type = ? AND post_id IS ? AND read_at IS NULL LIMIT 1`,
     ),
     listNotifications: db.prepare(
-      `SELECT n.id, n.type, n.post_id, n.reply_id, n.excerpt, n.read_at, n.created_at,
+      `SELECT n.id, n.type, n.post_id, n.reply_id, n.team_id, n.excerpt, n.read_at, n.created_at,
               a.id AS actor_id, a.username AS actor_username, a.display_name AS actor_display, a.role AS actor_role, a.avatar AS actor_avatar,
-              p.title AS post_title, p.deleted AS post_deleted
+              p.title AS post_title, p.deleted AS post_deleted,
+              t.slug AS team_slug, t.name AS team_name, t.deleted AS team_deleted
        FROM notifications n
        LEFT JOIN users a ON a.id = n.actor_id
        LEFT JOIN posts p ON p.id = n.post_id
+       LEFT JOIN teams t ON t.id = n.team_id
        WHERE n.user_id = ? AND (? = 0 OR n.read_at IS NULL)
        ORDER BY n.created_at DESC, n.id DESC
        LIMIT ? OFFSET ?`,
@@ -925,18 +927,30 @@ export function createStore(db) {
     /**
      * 写一条通知。规则：
      *  - 不给自己发通知；
-     *  - 同一个人对同一个对象的同类未读通知只保留一条（防止反复点赞刷屏）。
+     *  - 默认「同一个人对同一个对象的同类未读通知只保留一条」（防止反复点赞刷屏）；
+     *    团队公告这类「每一次都值得单独提醒」的场景传 dedupe: false。
+     *  - teamId 让通知能指回团队（前端据此跳到团队主页）。
      */
-    createNotification({ userId, actorId = null, type, postId = null, replyId = null, excerpt = '' }) {
+    createNotification({
+      userId,
+      actorId = null,
+      type,
+      postId = null,
+      replyId = null,
+      teamId = null,
+      excerpt = '',
+      dedupe = true,
+    }) {
       if (!userId) return null;
       if (actorId && actorId === userId) return null;
-      if (statements.hasUnreadNotification.get(userId, actorId, type, postId)) return null;
+      if (dedupe && statements.hasUnreadNotification.get(userId, actorId, type, postId)) return null;
       const info = statements.insertNotification.run(
         userId,
         actorId,
         type,
         postId,
         replyId,
+        teamId,
         String(excerpt ?? '').slice(0, 200),
         Date.now(),
       );

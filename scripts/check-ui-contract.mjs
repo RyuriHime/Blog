@@ -29,7 +29,7 @@ const PORT = Number(process.env.CONTRACT_PORT || 3412);
 const BASE = `http://127.0.0.1:${PORT}`;
 
 /** 不下降哨兵：接手的模块只允许加，不允许把这些数字改小。 */
-const MIN_CHECKS = Number(process.env.MIN_UI_CHECKS || 234);
+const MIN_CHECKS = Number(process.env.MIN_UI_CHECKS || 242);
 
 /**
  * 前端源码入口清单。搬家前这三份文件在 public/ 根目录；骨架会把它们拆进
@@ -274,6 +274,47 @@ check('文件柜与群聊各自独立限流，别把发帖和传文件算进同�
 check(
   '用户给的文件名会被削平（../../etc/passwd 只留最后一段），空名字有兜底',
   /sanitizeFileName/.test(serverJs) && /未命名文件/.test(serverJs),
+);
+
+/* 团队第三批（团队号 / 团队公告）的契约。
+ * 这批守的是「页面照渲染、路悄悄断了」的回归：
+ *  ① 「用团队号加入」只剩服务端有接口，页面上找不到那个框；
+ *  ② 团队号画给了非成员 —— 服务端那份规矩（只给成员）就白写了；
+ *  ③ 公告卡片或编辑入口没了：团长改不了公告，成员也收不到那条通知；
+ *  ④ 通知点不回团队页（`team_announcement` 没有跳转目标，只能干看着）；
+ *  ⑤ 公告通知没走 dedupe:false —— 同一份公告改两次只响一次，第二次等于没发。
+ */
+check(
+  '团队广场有「用团队号加入」的入口',
+  /data-team-action="join-by-code"/.test(appJs) && /data-team-field="code"/.test(appJs),
+);
+check(
+  '团队号只在成员这一侧渲染（非成员拿到 null 就不画那一行）',
+  /team\.joinCode/.test(appJs) && /data-team-code>/.test(appJs),
+);
+check(
+  '团队公告有卡片，团长 / 管理员能就地编辑',
+  /data-team-notice/.test(appJs) && /data-team-action="edit-announcement"/.test(appJs) && /data-team-action="save-announcement"/.test(appJs),
+);
+check(
+  '保存公告后按服务端数的收件人报「通知了几位成员」',
+  /data\.notified/.test(appJs) && /通知了/.test(appJs),
+);
+check(
+  '服务端：公告通知带 team_id 且走 dedupe:false（公告改两次就该响两次）',
+  /type: 'team_announcement'/.test(serverJs) && /dedupe: false/.test(serverJs) && /teamId: teamRow\.id/.test(serverJs),
+);
+check(
+  '服务端：公告与团队号同一道门 —— 只有成员 / 管理员拿得到',
+  /!\(joined \|\| canManage\) \|\| announcement === ''/.test(serverJs) && /joined \|\| canManage \?/.test(serverJs),
+);
+check(
+  '凭团队号加入不看 joinPolicy（团队号本身就是邀请），但照样限流',
+  /team:joincode:/.test(serverJs) && /join-by-code/.test(serverJs),
+);
+check(
+  '团队号 6 位、去掉 I/L/O/U 这些抄错念错的字符',
+  /TEAM_JOIN_CODE_LENGTH = 6/.test(serverJs) && /TEAM_JOIN_CODE_ALPHABET = '0123456789ABCDEFGHJKMNPQRSTVWXYZ'/.test(serverJs),
 );
 
 /* ---------- 1b. 背景主题契约 ---------- */

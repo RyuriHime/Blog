@@ -609,6 +609,148 @@ try {
   const missingMessage = await owner.client.call(`${teamPath}/messages/99999999`, { method: 'DELETE' });
   check('删一条不存在的消息 404 team_message_not_found', missingMessage.status === 404 && missingMessage.error?.code === 'team_message_not_found', String(missingMessage.status));
 
+  /* ── 团队号：凭号加入（老库补列 + 回填也要在真库路径上验一遍） ──── */
+  try {
+    const inspect = new DatabaseSync(DB_FILE, { readOnly: true });
+    const teamCols = inspect.prepare('PRAGMA table_info(teams)').all().map((column) => column.name);
+    check(
+      'teams 表添了 join_code / announcement / announcement_by / announcement_at 四列',
+      ['join_code', 'announcement', 'announcement_by', 'announcement_at'].every((name) => teamCols.includes(name)),
+      teamCols.join(','),
+    );
+    const indexes = inspect
+      .prepare("SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'teams'")
+      .all()
+      .map((row) => row.name);
+    check('团队号建了唯一索引（部分索引：空串不参与，老行才能先补列后补号）', indexes.includes('idx_teams_join_code'), indexes.join(','));
+    const notifCols = inspect.prepare('PRAGMA table_info(notifications)').all().map((column) => column.name);
+    check('notifications 表添了 team_id —— 通知能指回是哪个团队发的公告', notifCols.includes('team_id'), notifCols.join(','));
+    const codes = inspect
+      .prepare('SELECT join_code FROM teams WHERE deleted = 0')
+      .all()
+      .map((row) => row.join_code);
+    check(
+      '每个没解散的团队都有 6 位团队号，而且互不重复',
+      codes.length > 0 && codes.every((code) => /^[0-9A-Z]{6}$/.test(code)) && new Set(codes).size === codes.length,
+      codes.join(','),
+    );
+    inspect.close();
+  } catch (error) {
+    check('能读到团队号相关的表结构', false, error.message);
+  }
+
+  const ownerDetail = await owner.client.call(teamPath);
+  const joinCode = ownerDetail.data?.team?.joinCode;
+  check('团队成员能拿到团队号（6 位，字母加数字）', typeof joinCode === 'string' && /^[0-9A-Z]{6}$/.test(joinCode), String(joinCode));
+  check('团队号里没有 I / L / O / U —— 念错听错抄错都从这几个字符来', /^[0-9A-HJKMNP-TV-Z]{6}$/.test(String(joinCode)), String(joinCode));
+  check('团队号只给成员看：登录了但不是成员拿到 null', (await stranger.client.call(teamPath)).data?.team?.joinCode === null);
+  check('团队号只给成员看：未登录拿到的也是 null', (await anon.call(teamPath)).data?.team?.joinCode === null);
+
+  const shortCode = await guest.client.call('/api/teams/join-by-code', { method: 'POST', body: { code: 'abc' } });
+  check('团队号位数不对：400 bad_join_code', shortCode.status === 400 && shortCode.error?.code === 'bad_join_code', `${shortCode.status} ${shortCode.error?.code}`);
+  const emptyCode = await guest.client.call('/api/teams/join-by-code', { method: 'POST', body: {} });
+  check('不带团队号：400（不是 500）', emptyCode.status === 400, String(emptyCode.status));
+  const unknownCode = await guest.client.call('/api/teams/join-by-code', { method: 'POST', body: { code: 'ZZZZZZ' } });
+  check('抄错团队号：404 team_not_found', unknownCode.status === 404 && unknownCode.error?.code === 'team_not_found', `${unknownCode.status} ${unknownCode.error?.code}`);
+  const anonByCode = await anon.call('/api/teams/join-by-code', { method: 'POST', body: { code: joinCode } });
+  check('未登录凭号加入：401', anonByCode.status === 401, String(anonByCode.status));
+
+  // 抄号的人不讲究大小写、还可能顺手加个短横线：这些都该能进（服务端统一折叠）。
+  const messyCode = ` ${joinCode.slice(0, 3).toLowerCase()}-${joinCode.slice(3).toLowerCase()} `;
+  const byCode = await guest.client.call('/api/teams/join-by-code', { method: 'POST', body: { code: messyCode } });
+  check('凭团队号加入：大小写和短横线都不讲究', byCode.status === 200 && byCode.data?.team?.id === teamId, `${byCode.status} ${JSON.stringify(byCode.error ?? '')}`);
+  check('凭号加入之后角色是「成员」', byCode.data?.team?.myRole === 'member', String(byCode.data?.team?.myRole));
+  check('凭号加入之后就能看到团队号了', byCode.data?.team?.joinCode === joinCode, String(byCode.data?.team?.joinCode));
+  const byCodeAgain = await guest.client.call('/api/teams/join-by-code', { method: 'POST', body: { code: joinCode } });
+  check(
+    '重复凭号加入是幂等的（不报错也不多一个人）',
+    byCodeAgain.status === 200 && byCodeAgain.data?.team?.memberCount === byCode.data?.team?.memberCount,
+    `${byCodeAgain.data?.team?.memberCount}`,
+  );
+
+  // 团队号就是「需要邀请」那个团队缺的入口：数字对得上就进，不看 join_policy。
+  const closedDetail = await owner.client.call(invitePath);
+  const closedCode = closedDetail.data?.team?.joinCode;
+  check('「需要邀请」的团队一样有团队号', typeof closedCode === 'string' && closedCode.length === 6, String(closedCode));
+  const directJoinClosed = await mate.client.call(`${invitePath}/join`, { method: 'POST' });
+  check('需要邀请的团队，直接点「加入」仍然 403', directJoinClosed.status === 403, String(directJoinClosed.status));
+  const mateByCode = await mate.client.call('/api/teams/join-by-code', { method: 'POST', body: { code: closedCode } });
+  check(
+    '但拿团队号就能进 —— 号本身就是那个「邀请」',
+    mateByCode.status === 200 && mateByCode.data?.team?.joined === true,
+    `${mateByCode.status} ${JSON.stringify(mateByCode.error ?? '')}`,
+  );
+
+  /* ── 团队公告：谁能看、谁能写、谁能收到通知 ─────────────────────── */
+  const beforeNotice = await owner.client.call(teamPath);
+  check('还没写过公告时 announcement 是 null', beforeNotice.data?.team?.announcement === null, JSON.stringify(beforeNotice.data?.team?.announcement ?? null));
+  check('公告只给成员看：登录了但不是成员拿到 null', (await stranger.client.call(teamPath)).data?.team?.announcement === null);
+  check('公告只给成员看：未登录也拿不到', (await anon.call(teamPath)).data?.team?.announcement === null);
+
+  const memberWrites = await mate.client.call(`${teamPath}/announcement`, { method: 'PUT', body: { announcement: '普通成员写的公告' } });
+  check('普通成员写公告被拒 403', memberWrites.status === 403, String(memberWrites.status));
+  const strangerWrites = await stranger.client.call(`${teamPath}/announcement`, { method: 'PUT', body: { announcement: '路人写的公告' } });
+  check('非成员写公告被拒 403', strangerWrites.status === 403, String(strangerWrites.status));
+  const anonWrites = await anon.call(`${teamPath}/announcement`, { method: 'PUT', body: { announcement: '未登录写的公告' } });
+  check('未登录写公告：401', anonWrites.status === 401, String(anonWrites.status));
+  const tooLongNotice = await owner.client.call(`${teamPath}/announcement`, { method: 'PUT', body: { announcement: '啊'.repeat(2001) } });
+  check('公告超过 2000 字被拒 400', tooLongNotice.status === 400, String(tooLongNotice.status));
+
+  const memberTotalNow = beforeNotice.data?.memberTotal ?? 0;
+  const noticeText = '本周五 20:00 例会，主题是「团队号与公告」。';
+  const written = await owner.client.call(`${teamPath}/announcement`, { method: 'PUT', body: { announcement: noticeText } });
+  check('创建者能写公告，正文原样回来', written.status === 200 && written.data?.team?.announcement?.text === noticeText, JSON.stringify(written.error ?? written.body));
+  check(
+    '公告带作者与时间（前端要显示「谁写的、什么时候改的」）',
+    written.data?.team?.announcement?.author?.username === 'teamowner' && Number(written.data?.team?.announcement?.editedAt) > 0,
+    JSON.stringify(written.data?.team?.announcement ?? null),
+  );
+  check('写公告的人自己不算收件人（notified = 成员数 − 1）', written.data?.notified === memberTotalNow - 1, `${written.data?.notified} vs ${memberTotalNow - 1}`);
+
+  const inbox = await mate.client.call('/api/notifications?filter=unread&perPage=50');
+  const notices = (inbox.data?.items ?? []).filter((item) => item.type === 'team_announcement');
+  check('成员收到了团队公告通知', notices.length === 1, `收到 ${notices.length} 条`);
+  check('通知里带回团队（点一下能跳回团队页）', notices[0]?.team?.slug === team.slug && notices[0]?.team?.name === '测试小队', JSON.stringify(notices[0]?.team ?? null));
+  check('通知摘要里有公告正文的开头', String(notices[0]?.excerpt ?? '').includes('本周五 20:00 例会'), String(notices[0]?.excerpt));
+  check('通知里的 actor 是写公告的那个人', notices[0]?.actor?.username === 'teamowner', String(notices[0]?.actor?.username));
+  const writerInbox = await owner.client.call('/api/notifications?filter=unread&perPage=50');
+  check('写公告的人自己不会收到这条通知', !(writerInbox.data?.items ?? []).some((item) => item.type === 'team_announcement'));
+
+  const rewritten = await owner.client.call(`${teamPath}/announcement`, { method: 'PUT', body: { announcement: '改期到周六晚上了。' } });
+  check('公告可以改第二次', rewritten.status === 200 && rewritten.data?.team?.announcement?.text === '改期到周六晚上了。', JSON.stringify(rewritten.error ?? rewritten.body));
+  const inboxAgain = await mate.client.call('/api/notifications?filter=unread&perPage=50');
+  check(
+    '两条公告 = 两条未读（公告不做未读合并，改一次就要响一次）',
+    (inboxAgain.data?.items ?? []).filter((item) => item.type === 'team_announcement').length === 2,
+    JSON.stringify((inboxAgain.data?.items ?? []).filter((item) => item.type === 'team_announcement').length),
+  );
+
+  const cleared = await owner.client.call(`${teamPath}/announcement`, { method: 'PUT', body: { announcement: '' } });
+  check('清空公告：announcement 回到 null', cleared.status === 200 && cleared.data?.team?.announcement === null, JSON.stringify(cleared.data?.team?.announcement ?? null));
+  check('清空公告不发通知（没有正文可看）', cleared.data?.notified === 0, String(cleared.data?.notified));
+  const inboxCleared = await mate.client.call('/api/notifications?filter=unread&perPage=50');
+  check(
+    '清空之后也没有多出来的通知',
+    (inboxCleared.data?.items ?? []).filter((item) => item.type === 'team_announcement').length === 2,
+    String((inboxCleared.data?.items ?? []).filter((item) => item.type === 'team_announcement').length),
+  );
+
+  // 管理员和创建者一个权力口径：都能写公告（改角色只有创建者能做）。
+  const promoteMate = await owner.client.call(`${teamPath}/members/${mate.user.id}`, { method: 'PUT', body: { role: 'admin' } });
+  check('创建者把成员提成管理员', promoteMate.status === 200 && promoteMate.data?.member?.teamRole === 'admin', JSON.stringify(promoteMate.error ?? promoteMate.body));
+  const adminWrites = await mate.client.call(`${teamPath}/announcement`, { method: 'PUT', body: { announcement: '管理员也能发公告。' } });
+  check(
+    '管理员也能写公告（作者记成管理员自己）',
+    adminWrites.status === 200 && adminWrites.data?.team?.announcement?.author?.username === 'teammate',
+    JSON.stringify(adminWrites.error ?? adminWrites.body),
+  );
+  const ownerInbox = await owner.client.call('/api/notifications?filter=unread&perPage=50');
+  check(
+    '管理员写公告，创建者同样收到通知',
+    (ownerInbox.data?.items ?? []).some((item) => item.type === 'team_announcement' && item.actor?.username === 'teammate'),
+    JSON.stringify((ownerInbox.data?.items ?? []).map((item) => item.type)),
+  );
+
   /* ── 退出与解散 ─────────────────────────────────────────────────── */
   const left = await outsider.client.call(`${teamPath}/leave`, { method: 'POST' });
   check('普通成员能自己退出团队', left.status === 200, JSON.stringify(left.error ?? left.body));

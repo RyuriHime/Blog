@@ -42,10 +42,26 @@ const SCOPE_ICON = { public: '🌍', followers: '👥', team: '🎽', private: '
  */
 const teamState = {
   scopes: FALLBACK_SCOPES,
-  draft: { title: '', content: '', scope: 'team', name: '', intro: '', slug: '', joinPolicy: 'open', username: '', message: '' },
+  draft: {
+    title: '',
+    content: '',
+    scope: 'team',
+    name: '',
+    intro: '',
+    slug: '',
+    joinPolicy: 'open',
+    username: '',
+    message: '',
+    // 广场「用团队号加入」那个输入框，和团队公告的编辑框。
+    // ⚠️ 新加的 key 必须写在这里：下面的 input/change 委托只认 draft 里已有的键。
+    code: '',
+    announcement: '',
+  },
   editing: null,
   conflict: null,
   panel: null,
+  /** 团队公告的编辑态。true 时顶部那块画成可写的框。 */
+  noticeEditing: false,
   /** 当前团队主页的快照。局部重画（成员名单、文件柜、群聊）要用，免得整页重来把草稿冲掉。 */
   team: null,
   members: [],
@@ -136,6 +152,7 @@ function resetTransient() {
   teamState.editing = null;
   teamState.conflict = null;
   teamState.panel = null;
+  teamState.noticeEditing = false;
 }
 
 /* ── 团队列表 ──────────────────────────────────────────────────────── */
@@ -155,6 +172,25 @@ function teamCardHtml(team) {
       <span class="hint">${esc(team.joinPolicyLabel)}</span>
     </div>
   </article>`;
+}
+
+/**
+ * 广场顶上的「用团队号加入」。
+ *
+ * 团队号 = 6 位、只用念得出口也不会念错的字符（服务端连 I/L/O 抄错的写法都折叠）。
+ * 这里只管把用户敲的东西原样递过去，怎么认是服务端的事。
+ */
+function joinCodeHtml() {
+  if (!state.me) return '';
+  return `<div class="card team-join">
+    <div class="team-join-title">🔑 用团队号加入</div>
+    <p class="hint">问团队里的朋友要一个 6 位团队号（团队主页顶上就有）。写着「需要邀请」的团队也走这里 —— 团队号本身就是邀请。</p>
+    <div class="team-join-bar">
+      <input class="input team-join-input" data-team-field="code" maxlength="12" value="${esc(teamState.draft.code)}"
+        placeholder="比如 K7M2QP" autocomplete="off" spellcheck="false" aria-label="团队号" />
+      <button class="btn btn-primary" data-team-action="join-by-code">加入</button>
+    </div>
+  </div>`;
 }
 
 function createFormHtml() {
@@ -194,10 +230,14 @@ async function viewTeams(query) {
       <a class="team-tab ${mine ? '' : 'is-active'}" href="#/teams">全部团队</a>
       <a class="team-tab ${mine ? 'is-active' : ''}" href="#/teams?mine=1">我加入的</a>
     </div>
+    <div data-team-join></div>
     <div data-team-create></div>
     <div data-team-list>${loadingHtml()}</div>
     <div data-team-pager></div>
   </div>`;
+
+  const joinBox = $('[data-team-join]');
+  if (joinBox) joinBox.innerHTML = joinCodeHtml();
 
   const createBox = $('[data-team-create]');
   if (createBox) createBox.innerHTML = createFormHtml();
@@ -255,6 +295,45 @@ function memberChipHtml(member, team) {
   </div>`;
 }
 
+/**
+ * 团队公告。**只有成员看得到** —— 服务端就不给非成员这个字段（见 shape.js），
+ * 所以这里判「joined / canManage」是在跟自己对齐，不是在防守。
+ *
+ * 团长和管理员能在原地把它改成编辑态；保存后服务端会给每个成员发一条通知。
+ */
+function noticeHtml(team) {
+  if (!team.joined && !team.canManage) return '';
+  if (teamState.noticeEditing && team.canManage) {
+    return `<div class="team-notice is-editing" data-team-notice>
+      <div class="team-notice-head">
+        <span class="team-notice-title">📢 团队公告</span>
+        <span class="hint">保存之后，队里每个人都会收到一条通知。</span>
+      </div>
+      <textarea class="input team-notice-input" data-team-field="announcement" rows="4" maxlength="2000"
+        placeholder="比如：周五晚上八点，语音聊一下下个版本做啥">${esc(teamState.draft.announcement)}</textarea>
+      <div class="team-notice-bar">
+        <button class="btn btn-primary" data-team-action="save-announcement">保存公告</button>
+        <button class="btn" data-team-action="cancel-announcement">取消</button>
+      </div>
+    </div>`;
+  }
+  const body = team.announcement
+    ? `<div class="team-notice-body">${esc(team.announcement.text)}</div>
+       <div class="team-notice-meta">${esc(team.announcement.author?.displayName ?? '（已注销）')} 写于 ${team.announcement.editedAt ? Fmt.timeAgo(team.announcement.editedAt) : '刚刚'}</div>`
+    : `<div class="team-notice-body is-empty">还没有公告。${team.canManage ? '写一条，队里每个人都会收到通知。' : '等团长或管理员发话。'}</div>`;
+  const tools = team.canManage ? `<button class="btn btn-sm" data-team-action="edit-announcement">${team.announcement ? '改公告' : '写公告'}</button>` : '';
+  return `<div class="team-notice" data-team-notice>
+    <div class="team-notice-head"><span class="team-notice-title">📢 团队公告</span>${tools}</div>
+    ${body}
+  </div>`;
+}
+
+/** 只重画团队主页顶部那块（团队号 + 公告）。整页重画会把编辑到一半的字冲掉。 */
+function repaintNotice() {
+  const hero = $('[data-team-hero]');
+  if (hero && teamState.team) hero.innerHTML = teamHeroHtml(teamState.team, teamState.memberTotal);
+}
+
 function teamHeroHtml(team, memberTotal) {
   const buttons = [];
   if (team.canJoin) buttons.push(`<button class="btn btn-primary" data-team-action="join-team">加入团队</button>`);
@@ -288,6 +367,16 @@ function teamHeroHtml(team, memberTotal) {
       </div>`
     : '';
 
+  // 团队号只在成员这一侧有值（服务端给的）。给要进来的人念一下，比复制链接方便。
+  const code = team.joinCode
+    ? `<div class="team-code">
+        <span class="team-code-label">团队号</span>
+        <b class="team-code-value" data-team-code>${esc(team.joinCode)}</b>
+        <button class="btn btn-sm" data-team-action="copy-join-code" data-code="${esc(team.joinCode)}">复制</button>
+        <span class="hint">把这个号发给要拉进来的人，他们在团队广场就能加入。</span>
+      </div>`
+    : '';
+
   return `<div class="card team-hero">
     <div class="team-hero-head">
       <div class="team-hero-title">
@@ -304,6 +393,8 @@ function teamHeroHtml(team, memberTotal) {
       <span class="team-stat"><b class="team-stat-num">${esc(team.joinPolicyLabel)}</b><span class="team-stat-label">加入方式</span></span>
       <span class="team-stat"><b class="team-stat-num">${esc(team.owner.displayName)}</b><span class="team-stat-label">创建者</span></span>
     </div>
+    ${code}
+    ${noticeHtml(team)}
     ${settings}
     ${invite}
   </div>`;
@@ -838,6 +929,54 @@ async function handleAction(action, node) {
       await api(`/api/teams/${encodeURIComponent(slug)}/join`, { method: 'POST' });
       toast('已加入团队', 'success');
       await refreshTeam();
+    });
+  }
+  if (action === 'join-by-code') {
+    const code = String(teamState.draft.code || '').trim();
+    if (!code) return toast('先填团队号', 'error');
+    return withButtonBusy(node, async () => {
+      const data = await api('/api/teams/join-by-code', { method: 'POST', body: { code } });
+      teamState.draft = { ...teamState.draft, code: '' };
+      toast(`已加入「${data.team.name}」`, 'success');
+      // 直接进团队主页：加完还站在广场上，用户得自己再找一遍。
+      navigate(`/team/${data.team.slug}`);
+    });
+  }
+  if (action === 'copy-join-code') {
+    const code = String(node.dataset.code || '');
+    if (!code) return;
+    // navigator.clipboard 在非 https 的域名下、以及用户拒了权限时都会没有或者抛错。
+    // 复制失败不算失败：把号原样报出来，用户手抄一遍就行。
+    if (navigator.clipboard?.writeText) {
+      try {
+        await navigator.clipboard.writeText(code);
+        return toast('团队号已复制', 'success');
+      } catch {
+        /* 落到下面的兜底 */
+      }
+    }
+    return toast(`团队号是 ${code}，手动记一下`, 'success');
+  }
+  if (action === 'edit-announcement' || action === 'cancel-announcement') {
+    const editing = action === 'edit-announcement';
+    teamState.noticeEditing = editing;
+    // 进编辑态时把现有公告填进草稿；取消时也填一遍，免得下次打开还留着上次没保存的内容。
+    if (editing) teamState.draft = { ...teamState.draft, announcement: teamState.team?.announcement?.text ?? '' };
+    return repaintNotice();
+  }
+  if (action === 'save-announcement') {
+    const slug = currentSlug();
+    const announcement = String(teamState.draft.announcement || '');
+    return withButtonBusy(node, async () => {
+      const data = await api(`/api/teams/${encodeURIComponent(slug)}/announcement`, {
+        method: 'PUT',
+        body: { announcement },
+      });
+      teamState.team = data.team;
+      teamState.noticeEditing = false;
+      repaintNotice();
+      // notified 是服务端数出来的收件人数（写公告的人自己不算）。
+      toast(data.notified ? `公告保存了，通知了 ${Fmt.fmtNum(data.notified)} 位成员` : '公告保存了', 'success');
     });
   }
   if (action === 'leave-team') {

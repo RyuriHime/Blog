@@ -704,3 +704,114 @@
   display: flex;
   gap: 8px;
 }
+
+/* ================= 用团队号加入（团队广场） ================= */
+
+.team-join {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.team-join-title {
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.team-join-bar {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.team-join-input {
+  flex: 0 1 200px;
+  min-width: 140px;
+  font-family: var(--mono);
+  letter-spacing: 2px;
+  text-transform: uppercase;
+}
+
+/* ================= 团队号（团队主页头部） ================= */
+
+.team-code {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding: 8px 10px;
+  border: 1px dashed var(--border-soft);
+  border-radius: 8px;
+}
+
+.team-code-label {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.team-code-value {
+  font-family: var(--mono);
+  font-size: 16px;
+  font-weight: 700;
+  letter-spacing: 3px;
+  color: var(--accent);
+}
+
+/* ================= 团队公告 ================= */
+
+.team-notice {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px;
+  border: 1px solid var(--border-soft);
+  border-left: 3px solid var(--accent);
+  border-radius: 8px;
+}
+
+.team-notice-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.team-notice-title {
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.team-notice-body {
+  margin: 0;
+  font-size: 14px;
+  line-height: 1.7;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.team-notice-body.is-empty {
+  color: var(--muted);
+}
+
+/* 编辑态：框起来的是「正在写」，跟只读的那块一眼分得开。 */
+.team-notice.is-editing {
+  border-style: dashed;
+}
+
+.team-notice-meta {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.team-notice-input {
+  resize: vertical;
+  min-height: 84px;
+  line-height: 1.7;
+}
+
+.team-notice-bar {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}

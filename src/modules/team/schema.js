@@ -72,6 +72,21 @@ export const MAX_TEAM_MESSAGE = 1000;
 /** 群聊一次最多拉多少条（轮询用小值，进页面用大值）。 */
 export const TEAM_MESSAGE_PAGE_MAX = 100;
 
+/**
+ * 团队号（teamid）：6 位，用它就能加入团队，不用先找管理员拉人。
+ *
+ * 字母表是 Crockford Base32 的那一套：去掉了 I / L / O / U ——
+ * 前三个念出来会听错、抄下来会看错（1 和 l、0 和 O），U 去掉是为了不与脏话拼词。
+ * 用户手写输入时由 `join-code.js` 把 I / L 折成 1、O 折成 0，所以「抄错一位」大多能救回来。
+ *
+ * 32^6 ≈ 10.7 亿种，配合「查号」接口的限流（20 次 / 10 分钟 / 人）没法暴力枚举。
+ */
+export const TEAM_JOIN_CODE_LENGTH = 6;
+export const TEAM_JOIN_CODE_ALPHABET = '0123456789ABCDEFGHJKMNPQRSTVWXYZ';
+
+/** 团队公告的正文上限。公告会人手一条通知，所以别让它长到刷屏。 */
+export const MAX_TEAM_ANNOUNCEMENT = 2000;
+
 export const TEAM_SCHEMA = `
 -- 团队本体。slug 是给人看、给 URL 用的短名；name 是可以随时改的中文名。
 CREATE TABLE IF NOT EXISTS teams (
@@ -82,6 +97,17 @@ CREATE TABLE IF NOT EXISTS teams (
   -- 建队的人。与 team_members 里 role='owner' 的那一行始终一致（建队时同一个事务里写）。
   owner_id    INTEGER NOT NULL REFERENCES users(id),
   join_policy TEXT    NOT NULL DEFAULT 'open' CHECK (join_policy IN ('open','invite')),
+  -- 6 位团队号：凭它加入团队（见 join-code.js）。老库由 migrate.js 回填，所以有默认空串。
+  -- ⚠️ 它的唯一索引**不在这里建**：老库的 teams 表还没有这一列，
+  --    开库时执行建表脚本会先跑，那时建索引会报「no such column」。
+  --    索引跟着列一起放在 migrate.js 里建（列加完再建索引，顺序才是对的）。
+  join_code   TEXT    NOT NULL DEFAULT '',
+  -- 团队公告：团长与管理员能改，改完给全体成员发一条通知。
+  -- 空串 = 还没写过公告。announcement_by / _at 记住「谁在什么时候改的」，
+  -- 公告被清空时两列一起置空，不留「上一版的作者」这种会误导人的残渣。
+  announcement    TEXT    NOT NULL DEFAULT '',
+  announcement_by INTEGER REFERENCES users(id),
+  announcement_at INTEGER,
   deleted     INTEGER NOT NULL DEFAULT 0,
   created_at  INTEGER NOT NULL,
   updated_at  INTEGER NOT NULL

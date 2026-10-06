@@ -247,13 +247,40 @@ const TEAM_FIXTURE = {
   canManage: true,
   joined: true,
   canJoin: false,
+  // 团队号与公告只给成员看（服务端在 shape.js 里就拦掉了），站长视角两个都有。
+  joinCode: 'K7M2QP',
+  announcement: {
+    text: '周五晚上八点，聊一下下个版本做啥。',
+    editedAt: Date.now() - 1800000,
+    author: { id: 1, username: FIXTURE_USERNAME, displayName: '站长' },
+  },
   createdAt: Date.now() - 86400000,
   updatedAt: Date.now() - 3600000,
+};
+
+/**
+ * 非成员视角的同一个团队：`joinCode` 与 `announcement` 都是 null。
+ * 专门用来断言「页面上不会把团队号画给外人」—— 这正是服务端那道门的意义所在。
+ */
+const OUTSIDER_TEAM_FIXTURE = {
+  ...TEAM_FIXTURE,
+  slug: 'outsider-group',
+  name: '路过的团队',
+  myRole: null,
+  myRoleLabel: null,
+  canManage: false,
+  joined: false,
+  canJoin: true,
+  joinCode: null,
+  announcement: null,
 };
 
 const EXTRA = {
   '/api/markdown/preview': { html: '<p>ok</p>' },
   '/api/ai/site': { configured: false, ready: false },
+  // 非成员视角的团队主页：详情里没有团队号、也没有公告（服务端就不给）。
+  '/api/teams/outsider-group': { team: OUTSIDER_TEAM_FIXTURE, members: [], memberTotal: 0, scopes: SCOPES },
+  '/api/teams/outsider-group/posts': { items: [], page: 1, perPage: 20, total: 0, totalPages: 0, sort: 'new' },
   // 积木（doc 模块）的四个页面要用的接口。采集器还没采这几条 ——
   // 手工给一小份真形状，渲染得出来就够了；接口形状改了就跟着改这里。
   '/api/docs/meta/block-types': {
@@ -505,7 +532,21 @@ globalThis.fetch = async (url, options = {}) => {
   };
   let data;
   if (method === 'POST' && bare === '/api/teams') data = created;
-  else if (method === 'POST' && bare === '/api/teams/frontend-group/files') data = uploaded;
+  else if (method === 'POST' && bare === '/api/teams/join-by-code') data = { team: TEAM_FIXTURE, joined: true };
+  else if (method === 'PUT' && /^\/api\/teams\/[^/]+\/announcement$/.test(bare)) {
+    // 服务端回的是「更新后的团队 + 通知了几个人」，前端要靠这两个字段重画和报数。
+    data = {
+      team: {
+        ...TEAM_FIXTURE,
+        announcement: {
+          text: payload?.announcement ?? '',
+          editedAt: Date.now(),
+          author: { id: 1, username: FIXTURE_USERNAME, displayName: '站长' },
+        },
+      },
+      notified: 3,
+    };
+  } else if (method === 'POST' && bare === '/api/teams/frontend-group/files') data = uploaded;
   else if (method === 'POST' && bare === '/api/teams/frontend-group/messages') data = sent;
   else data = pickFixture(raw);
   if (data === undefined) unknownPaths.add(bare);
@@ -583,6 +624,8 @@ const CASES = [
   ['团队主页', 'team.js', 'viewTeam', ['frontend-group', new Map()]],
   ['团队·文件页签', 'team.js', 'viewTeam', ['frontend-group', new Map([['tab', 'files']])]],
   ['团队·群聊页签', 'team.js', 'viewTeam', ['frontend-group', new Map([['tab', 'chat']])]],
+  // 非成员视角：团队号与公告都是 null，页面上这两块必须整个不出现。
+  ['团队主页·非成员', 'team.js', 'viewTeam', ['outsider-group', new Map()]],
 ];
 
 let rendered = 0;
@@ -834,6 +877,108 @@ if (!state.theme) problems.push('state.theme 没被初始化');
   } catch (error) {
     problems.push(`团队文件柜/群聊交互测试自身崩了：${error?.stack || error}`);
     console.log('  ❌ 交互：文件能传、群聊能发、成员名单能展开');
+  }
+}
+
+/* ---- 交互：凭团队号加入 + 团队公告的编辑与保存 ----
+ *
+ * 为什么单独测这一条：
+ *  ① 「用团队号加入」是纯前端拼的请求（`POST /api/teams/join-by-code`）。渲染断言只证明那个框画出来了，
+ *     框里填了字、点下去到底发出了什么、有没有跳进团队页，只有真派发一次点击才知道；
+ *  ② 公告保存后前端要拿服务端回的 `notified` 报数、并且把编辑态收回去 —— 这两步断了，
+ *     用户会以为白写了（页面还停在编辑框里）；
+ *  ③ 非成员那一页上，团队号和公告必须**整个不出现**：服务端已经不给这两个字段了，
+ *     前端要是自己补一版，等于把「需要邀请」这个设置当场作废。
+ */
+{
+  try {
+    const team = await view('team.js');
+    const joinBox = registered('[data-team-join]');
+    const hero = registered('[data-team-hero]');
+
+    await team.viewTeams(new Map());
+    await settle();
+    if (!String(joinBox.innerHTML).includes('data-team-field="code"')) {
+      problems.push('团队广场上没有「用团队号加入」的输入框');
+    }
+
+    /* ① 抄一个团队号进去：大小写、短横线都不讲究，服务端会折叠（这里只验原样发出去） */
+    const codeInput = registered('[data-team-field="code"]');
+    codeInput.dataset.teamField = 'code';
+    // 委托读的是 `event.target.closest('[data-team-field]')`（不是 matches），dataset.teamField 才是字段名。
+    codeInput.closest = (selector) => (selector === '[data-team-field]' ? codeInput : null);
+    codeInput.value = 'k7m2qp';
+    dispatch(app, 'input', codeInput);
+
+    const joinNode = { dataset: { teamAction: 'join-by-code' }, disabled: false, matches: () => false };
+    joinNode.closest = (selector) => (selector === '[data-team-action]' ? joinNode : null);
+    REQUESTS.length = 0;
+    dispatch(app, 'click', joinNode);
+    await settle();
+    const joinReq = REQUESTS.find((item) => item.method === 'POST' && item.url.split('?')[0] === '/api/teams/join-by-code');
+    if (!joinReq) problems.push('点「加入」之后没有发出 POST /api/teams/join-by-code');
+    else if (joinReq.body?.code !== 'k7m2qp') {
+      problems.push(`凭团队号加入时发出去的号不对：${JSON.stringify(joinReq.body?.code)}（草稿没从输入框同步进 teamState.draft？）`);
+    }
+    if (!String(window.location.hash).replace(/^#/, '').startsWith('/team/')) {
+      problems.push(`凭团队号加入之后没有跳进团队页，现在停在 ${window.location.hash}`);
+    }
+
+    /* ② 站长视角：团队号与公告都在，改完公告要回到只读态并显示新正文 */
+    // 公告保存走的是 `currentSlug()`（从地址里现取 slug），所以地址得先真的落到这个团队上，
+    // 否则请求会打到上一场交互留下的那个 slug（这里踩过：打到了 new-team-1）。
+    window.location.hash = '#/team/frontend-group';
+    await team.viewTeam('frontend-group', new Map());
+    await settle();
+    if (!String(hero.innerHTML).includes('data-team-code')) problems.push('成员看团队主页时没有团队号那一行');
+    if (!String(hero.innerHTML).includes('K7M2QP')) problems.push('团队号没有真的画出来');
+    if (!String(hero.innerHTML).includes('data-team-notice')) problems.push('成员看团队主页时没有公告卡片');
+
+    const editNode = { dataset: { teamAction: 'edit-announcement' }, disabled: false, matches: () => false };
+    editNode.closest = (selector) => (selector === '[data-team-action]' ? editNode : null);
+    dispatch(app, 'click', editNode);
+    await settle();
+    if (!String(hero.innerHTML).includes('data-team-field="announcement"')) {
+      problems.push('点「改公告」之后没有出现编辑框（团长改不了公告）');
+    }
+
+    const noticeInput = registered('[data-team-field="announcement"]');
+    noticeInput.dataset.teamField = 'announcement';
+    noticeInput.closest = (selector) => (selector === '[data-team-field]' ? noticeInput : null);
+    noticeInput.value = '改期到周六晚上八点。';
+    dispatch(app, 'input', noticeInput);
+
+    const saveNode = { dataset: { teamAction: 'save-announcement' }, disabled: false, matches: () => false };
+    saveNode.closest = (selector) => (selector === '[data-team-action]' ? saveNode : null);
+    REQUESTS.length = 0;
+    dispatch(app, 'click', saveNode);
+    await settle();
+    const noticeReq = REQUESTS.find(
+      (item) => item.method === 'PUT' && item.url.split('?')[0] === '/api/teams/frontend-group/announcement',
+    );
+    if (!noticeReq) problems.push('点「保存公告」之后没有发出 PUT .../announcement');
+    else if (noticeReq.body?.announcement !== '改期到周六晚上八点。') {
+      problems.push(`公告正文发出去不对：${JSON.stringify(noticeReq.body?.announcement)}`);
+    }
+    if (String(hero.innerHTML).includes('data-team-field="announcement"')) {
+      problems.push('保存之后还停在编辑态（编辑框没收回去）');
+    }
+    if (!String(hero.innerHTML).includes('改期到周六晚上八点。')) {
+      problems.push('保存之后公告卡片上没显示新正文');
+    }
+
+    /* ③ 非成员视角：团队号与公告整块不出现 */
+    await team.viewTeam('outsider-group', new Map());
+    await settle();
+    const outsiderHero = String(hero.innerHTML);
+    if (outsiderHero.includes('data-team-code')) problems.push('非成员那一页上画出了团队号（等于把「需要邀请」作废）');
+    if (outsiderHero.includes('data-team-notice')) problems.push('非成员那一页上画出了公告卡片');
+    if (!outsiderHero.includes('加入团队')) problems.push('非成员那一页上反而没有「加入团队」按钮');
+
+    console.log(`  ${problems.length ? '❌' : '✅'} 交互：凭团队号加入会跳队，公告能改能存，非成员看不到号与公告`);
+  } catch (error) {
+    problems.push(`团队号 / 公告交互测试自身崩了：${error?.stack || error}`);
+    console.log('  ❌ 交互：凭团队号加入会跳队，公告能改能存，非成员看不到号与公告');
   }
 }
 

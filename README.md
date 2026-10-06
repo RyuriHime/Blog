@@ -17,12 +17,12 @@
 ├── 关注关系 ── 关注作者，首页「我关注的」只看 TA 们的帖子
 ├── 私信 ── ✉️ 互相关注不限量；单方面关注每天 1 条；未关注需先关注
 ├── 黑名单 ── 🚫 被拉黑者无法关注 / 私信 / 查看我的文章，双向内容互不可见
-├── 消息通知 ── 回复 / 点赞 / 踩 / 投币 / 转发 / 关注 / @提及 / 关注的人发新帖 / 管理操作
+├── 消息通知 ── 回复 / 点赞 / 踩 / 投币 / 转发 / 关注 / @提及 / 关注的人发新帖 / 管理操作 / 团队公告
 ├── 背景主题 ── 🎨 暗夜 / 极夜 / 明亮 / 暖阳 / 奶黄 / 森林 / 暮紫 + 跟随系统，选择记在本地
 ├── 个性头像 ── 🖼️ 12 个预设表情或上传图片（客户端压缩、服务端校验落盘）
 ├── 角色权限 ── 👑 站长（唯一，可任命管理员）/ 🛡️ 管理员 / 成员，三级权限
-├── 团队 ── 🎽 团队广场与团队主页：成员名单、团长任命管理员 / 踢人、成员协作编辑同一条帖子不互相覆盖
-├── 团队空间 ── 📁 文件柜（成员上传下载，单文件 4 MB，一律按附件下发）+ 🗨️ 群聊（5 秒增量拉取），未登录 401、非成员 403
+├── 团队 ── 🎽 团队广场与团队主页：成员名单、团长任命管理员 / 踢人、**6 位团队号凭号加入**、成员协作编辑同一条帖子不互相覆盖
+├── 团队空间 ── 📢 团队公告（团长 / 管理员可改，保存后全队各收一条通知）+ 📁 文件柜（成员上传下载，单文件 4 MB，一律按附件下发）+ 🗨️ 群聊（5 秒增量拉取），未登录 401、非成员 403
 ├── 内容管理 ── 管理团队可**隐藏**（可逆，访客 404）或**删除**任何文章，全程留痕
 ├── 检索导航 ── 全文搜索、最新/最新回复/最热三种排序、分页
 └── 管理后台 ── 数据看板、任命管理员、隐藏/删除文章、封禁用户、审计日志
@@ -187,9 +187,12 @@ HOST=0.0.0.0 node src/server.js       # 允许局域网内其它设备访问
 | 有人在正文 / 回复里 @你 | 被提及者 | `mention` |
 | 你关注的人发了新帖 | 关注者 | `following_post` |
 | 管理员删除你的帖子 | 作者 | `moderation` |
+| 团队公告发布 / 修改 | 该团队全体成员 | `team_announcement` |
 | 注册成功 | 本人 | `system` |
 
 两条防打扰规则：**不给自己发通知**；**同一个人对同一对象的同类未读通知只保留一条**。通知支持「只看未读」「全部标为已读」，点击即跳转并自动已读。
+
+> **团队公告是唯一的例外**：它不做未读合并（公告改一次就该响一次），点击跳回该团队主页。团队解散后这条通知不再跳转，退回发公告的人的主页。
 
 ### 背景主题 🎨
 
@@ -290,18 +293,21 @@ HOST=0.0.0.0 node src/server.js       # 允许局域网内其它设备访问
 
 ### 团队 🎽
 
-`#/teams` 是公开的团队广场（`?mine=1` 只看我加入的），`#/team/<slug>` 是团队主页。团队主页有三个页签：
+`#/teams` 是公开的团队广场（`?mine=1` 只看我加入的），`#/team/<slug>` 是团队主页。团队主页最上面是**团队公告**，下面有三个页签：
 
+- **📢 团队公告**：团长和管理员可以写 / 改（≤ 2000 字，提交空串就等于撤下）。保存之后**队里每个人各收一条通知**（写公告的人除外）—— 这是站里唯一不做未读合并的通知类型，公告改一次就响一次。公告**只有成员看得见**：团队主页本身公开，可公告里常有「周五开会」这类内部安排，不该挂在公开页面上，通知也只发给成员。
 - **💬 讨论**：团队帖。可见范围仍是全站那四档（公开 / 仅关注我的人 / 仅团队 / 仅自己），成员**一起编辑同一条帖子**：保存时带上 `version`，对不上就 409 让你选留哪一份，不会静默覆盖。
 - **📁 文件柜**：成员上传文件（单个 ≤ 4 MB）。文件名里的路径会被削平（`../../etc/passwd` 只会留下 `passwd`），下载一律按附件下发。上传者是本人或团队管理员才能删。
 - **🗨️ 群聊**：团队内的聊天记录，每 5 秒增量拉一次（`?after=<id>`）。消息 ≤ 1000 字，作者本人和团队管理员可以删。
+
+**每个团队都有一个 6 位团队号**，建队时自动生成。字母表去掉了 `I` / `L` / `O` / `U` —— 念错、听错、抄错基本都从这几个字符来（`1`/`l`/`I` 都当 `1`，`0`/`O` 都当 `0`）。在团队广场填上号就能加入，**不看有没有被邀请**：写着「需要邀请」的团队也走这里，号本身就是那封邀请函。号**只给成员看**（给外人就等于把「需要邀请」这个设置作废了）；抄成小写、带空格或短横线都不讲究，服务端统一折叠。
 
 **团队里的角色**（`team_members.role`，和全站三级角色是两套东西）：
 
 | 角色 | 怎么来的 | 能做什么 |
 | --- | --- | --- |
-| 🎽 **创建者 owner** | 建团队的人，全队唯一 | 改团队设置、**任命/撤销管理员**、踢人、删任何团队帖与文件、解散团队；**不能退出自己的团队**（只能解散） |
-| 🛡️ **管理员 admin** | 由创建者任命 | 拉人进「需要邀请」的团队、**踢人**、删任何团队帖与文件 |
+| 🎽 **创建者 owner** | 建团队的人，全队唯一 | 改团队设置、**任命/撤销管理员**、踢人、**写团队公告**、删任何团队帖与文件、解散团队；**不能退出自己的团队**（只能解散） |
+| 🛡️ **管理员 admin** | 由创建者任命 | 拉人进「需要邀请」的团队、**踢人**、**写团队公告**、删任何团队帖与文件 |
 | 成员 member | 加入或被拉进来 | 发帖、传/下文件、群聊 |
 
 站长在团队里**没有任何后门**（原因见 API 一节）。踢人是管理员就行，**改角色只有创建者能做** —— 服务端与前端按钮是同一口径。
@@ -397,8 +403,8 @@ forum/
 | `#/doc/:id/blocks` | 同一个编辑器的高级入口（默认落在积木模式）：块列表 + 当前块的 props 表单 |
 | `#/blocks` | 块类型表：12 种内置块类型的声明式 schema 速查、「怎么自己编一个块」的指南 + 注册自己的块类型（可带渲染模板） |
 | `#/wiki/:name` | Wiki 多页面：`[[双链]]` 的落点；左侧是分类边栏（页内筛选 + 新建页，作者多一个「改分类」），有这一页就渲染它，没有就给「建这一页」（`?create=1` 一步进编辑器） |
-| `#/teams` | 团队列表：公开团队广场，`?mine=1` 只看我加入的，`?page=` 翻页；未登录也能看 |
-| `#/team/:slug` | 团队主页：团队简介与成员、发帖框、帖子列表（按四档可见范围过滤）；成员在这里一起编辑同一条帖子。三个页签 `?tab=discuss`（默认）/ `?tab=files`（文件柜）/ `?tab=chat`（群聊）；`?page=` 翻帖子、`?fpage=` 翻文件 |
+| `#/teams` | 团队列表：公开团队广场，`?mine=1` 只看我加入的，`?page=` 翻页；未登录也能看。顶上是「🔑 用团队号加入」，填 6 位号直接进队（登录后才显示） |
+| `#/team/:slug` | 团队主页：最上面是**团队公告**（只有成员看得见）与团队号（点「复制」发给要拉的人）、团队简介与成员、发帖框、帖子列表（按四档可见范围过滤）；成员在这里一起编辑同一条帖子。三个页签 `?tab=discuss`（默认）/ `?tab=files`（文件柜）/ `?tab=chat`（群聊）；`?page=` 翻帖子、`?fpage=` 翻文件 |
 
 ---
 
@@ -441,7 +447,7 @@ forum/
 | POST | `/api/users/:id/follow` | 关注 / 取关 | 登录 |
 | GET | `/api/users/:username` | 个人主页：统计 + 分类 + 关注者/关注 + 文章（`?category=<id\|none>`） | 公开 |
 | GET | `/api/me/following` | 我的关注列表 + 计数 + 余额 | 登录 |
-| GET | `/api/notifications` | 通知列表，支持 `filter=unread` `page` `perPage` | 登录 |
+| GET | `/api/notifications` | 通知列表，支持 `filter=unread` `page` `perPage`（上限 50）。每行带 `post` / `actor` / `team`；`team_announcement` 的 `team` 用来跳回团队主页 | 登录 |
 | GET | `/api/notifications/summary` | 未读数（铃铛轮询用） | 登录 |
 | POST | `/api/notifications/:id/read` | 单条已读 | 登录 |
 | POST | `/api/notifications/read-all` | 全部已读 | 登录 |
@@ -489,12 +495,14 @@ forum/
 | POST | `/api/docs/wiki/:name` | 打开或**新建**一页 wiki（body `{ scope }`，默认 `public`）；返回 `created` 标记 | 登录 |
 | PUT | `/api/docs/:id/wiki` | 给一页 wiki 定分类与排序，body `{ category, sortOrder }`；回新的 `nav` | 作者/管理员 |
 | GET | `/api/teams` | 团队列表，支持 `mine=1`（我加入的）`page` `perPage`；未登录也能看 | 公开 |
-| POST | `/api/teams` | 建团队，body `{ name, slug?, intro?, joinPolicy? }`；中文名派生不出 slug 时自动生成 `team-xxxx` | 登录（每小时 5 个） |
-| GET | `/api/teams/:id` | 团队详情（`:id` 可以是数字 id 或 slug）：`{ team, members, memberTotal, scopes }` | 公开 |
+| POST | `/api/teams` | 建团队，body `{ name, slug?, intro?, joinPolicy? }`；中文名派生不出 slug 时自动生成 `team-xxxx`；**建好就带一个 6 位团队号，之后不会变** | 登录（每小时 5 个） |
+| GET | `/api/teams/:id` | 团队详情（`:id` 可以是数字 id 或 slug）：`{ team, members, memberTotal, scopes }`；`team.joinCode` 与 `team.announcement` **只对成员给值**，外人拿到 `null` | 公开 |
 | PUT | `/api/teams/:id` | 改名字 / 简介 / 加入方式 | 团队管理员 |
+| PUT | `/api/teams/:id/announcement` | 写 / 改团队公告，body `{ announcement }`（≤ 2000 字，空串 = 撤下）；正文非空时给全体成员各发一条 `team_announcement` 通知，返回 `{ team, notified }`（`notified` = 实际收到的人数） | 团队管理员（每 10 分钟 10 次） |
 | DELETE | `/api/teams/:id` | 解散团队（软删除） | **仅创建者** |
 | GET | `/api/teams/:id/members` | 成员列表（创建者 → 管理员 → 成员，同类按加入时间） | 公开 |
-| POST | `/api/teams/:id/join` | 加入团队；`join_policy='invite'` 的团队会 403 | 登录 |
+| POST | `/api/teams/join-by-code` | 凭 6 位团队号加入，body `{ code }`。**故意不看 `join_policy`**：号就是「需要邀请」团队的入口。号错 → 404 `team_not_found`，位数不对 → 400 `bad_join_code`；已经是成员就幂等返回 | 登录（每 10 分钟 20 次） |
+| POST | `/api/teams/:id/join` | 加入团队；`join_policy='invite'` 的团队会 403（走团队号那条路才能进） | 登录 |
 | POST | `/api/teams/:id/leave` | 退出团队；创建者不能退出（只能解散或转交） | 登录 |
 | POST | `/api/teams/:id/members` | 拉人进来，body `{ username, role? }` | 团队管理员 |
 | PUT | `/api/teams/:id/members/:userId` | 改成员角色（只能设 `admin` / `member`） | 仅创建者 |
@@ -524,6 +532,18 @@ forum/
 > 套进来只会让聊天记录出现空洞、文件柜莫名少东西 —— 是想过之后决定的，不是漏了。
 > 两条都只认 `team_members`：未登录 401，登录了但不是成员 403（团队主页本身公开，装 404 没意义，要守的是里面的东西）。
 > 下载一律按附件下发：即使有人传 `.html` / `.svg`，也不会在本站源里被当成页面渲染（存储型 XSS 的常见入口）。
+>
+> **团队号为什么只发给成员**：团队号能进「需要邀请」的团队，等于一张万能门票 ——
+> 泄露给外人，`join_policy='invite'` 这个设置就作废了。所以 `shapeTeam` 里它与公告同一道门：
+> `joined || canManage` 才给值，否则一律 `null`（连「有没有号」都看不出来）。
+> 凭号加入**不受 `join_policy` 限制**是故意的：号就是那封邀请函，再叠一层设置只会让人卡在门口。
+> 号用 `crypto.randomInt` 生成、建队时定死没有「换号」操作，配合部分唯一索引（`WHERE join_code <> ''`）
+> 与启动时的幂等回填 —— 老库的团队也能补上号，空串不参与唯一性，所以补列、补号、建索引的先后顺序不会打架。
+>
+> **公告为什么不合并通知**：其余通知都靠「同一 actor + 同一类型 + 同一对象 + 未读只留一条」防打扰，
+> 公告是**一次广播**，改一次就该响一次，所以 `createNotification` 为此多了一个 `dedupe: false`。
+> 清空公告（空串）不发通知 —— 没有正文可看，把人叫来只看一条「公告撤了」是打扰。
+> 写公告的人自己不算收件人（`createNotification` 本来就不给自己发），所以 `notified` = 成员数 − 1。
 
 ---
 
@@ -542,7 +562,9 @@ reactions(user_id, post_id, kind)        -- kind: like | dislike，联合主键�
 coins(user_id, post_id, amount)          -- 单帖累计上限 2，作者收币
 bookmarks(user_id, post_id, created_at)  -- 私密收藏
 follows(follower_id, followee_id, created_at)
-notifications(id, user_id, actor_id, type, post_id, reply_id, excerpt, read_at, created_at)
+notifications(id, user_id, actor_id, type, post_id, reply_id, team_id, excerpt, read_at, created_at)
+                                             -- team_id 只有团队公告用，指回是哪个队发的（故意不加外键：
+                                             -- teams 归团队模块自建，两边谁先建不确定，理由同 feed_items.team_id）
 checkins(id, user_id, day, reward, created_at)              -- 一天一行，(user_id, day) 唯一
 checkin_bonuses(user_id, week_start, amount, created_at)    -- 全勤奖账本，一周只发一次
 reposts(id, post_id, user_id, comment, created_at)          -- 转发，(user_id, post_id) 唯一
@@ -566,8 +588,13 @@ note_documents(user_id, note_name, document_id, created_at)
                     -- 笔记子系统 ⇄ documents 的接线表，(user_id, note_name) 唯一
 
 -- 团队（P4）：写在 src/modules/team/，不放进 src/core/open-db-support.js
-teams(id, slug, name, intro, owner_id, join_policy, deleted, created_at, updated_at)
+teams(id, slug, name, intro, owner_id, join_policy, join_code, announcement,
+      announcement_by, announcement_at, deleted, created_at, updated_at)
                     -- slug 唯一（团队地址，如 #/team/wenlan）；join_policy: open | invite
+                    -- join_code 是 6 位团队号：部分唯一索引 WHERE join_code <> ''（空串不参与唯一性，
+                    -- 老行才能先补列、再补号、最后建索引）；索引不写在核心建表脚本里，
+                    -- 因为老库执行那段 SQL 时这一列还不存在
+                    -- announcement 空串 = 没有公告；撤下时 announcement_by / announcement_at 一并置空
 team_members(team_id, user_id, role, joined_at)
                     -- 主键 (team_id, user_id)：一个人在一个团队只有一行
                     -- role: owner | admin | member，owner 唯一且不可退出
@@ -591,7 +618,7 @@ team_messages(id, team_id, user_id, content, deleted, created_at)
 - **余额只增不减**：每日刷新是 `coin_balance = MAX(coin_balance, 10)`，所以签到赚的币不会被第二天的刷新清空。
 - **评价互斥**：`reactions` 用 `(user_id, post_id)` 做主键，一个用户对一篇文章只可能有一行记录。
 - **投币/签到事务**：扣币、加币、记账包在 `BEGIN IMMEDIATE` 事务里，失败自动回滚。
-- **通知去重**：写通知前先查「同一 actor + 同一类型 + 同一对象 + 未读」是否存在，存在就跳过。
+- **通知去重**：写通知前先查「同一 actor + 同一类型 + 同一对象 + 未读」是否存在，存在就跳过。**团队公告是例外**（`createNotification({ dedupe: false })`）：一次广播要响一次是一次，改两回就该有两条未读。
 - **分类归属校验**：只能把文章放进自己的分类，服务端逐次校验，前端下拉框只是便利。
 - **积木的影子行**：每份文档在 `posts` 里留一条只做互动锚点的行（`anchor_post_id`），赞/踩/投币/收藏/通知/价值榜因此**零改动**复用；`hidden` 由文档 scope 决定，`public` 的文档还会把标题与纯文本摘要同步过去，所以旧列表与搜索照样能用它。代价（已知短板）：`hidden=1` 的影子行对非站长非作者是 404，所以 `followers` / `team` 可见的文档，**别人点不了赞**。
 - **降级永不白屏**：块类型没注册、`props_json` 坏了、props 不合法、`bind` 成环、沙箱 2 秒没 `ready` —— 一律渲染成 `doc-block-unknown` 占位并往响应的 `warnings[]` 里记一条，绝不抛异常。
@@ -635,13 +662,13 @@ team_messages(id, team_id, user_id, content, deleted, created_at)
 ```bash
 node scripts/check-golden.mjs      # ★ 行为金标准：96 条请求的状态码 + 响应结构，一条都不能变
 node scripts/check-skeleton.mjs    # ★ 骨架自检：模块能不能独立拆掉、薄入口有没有变胖
-node scripts/check-frontend.mjs    # ★ 前端渲染冒烟：32 个页面全部渲染一遍 + 团队的文件柜/群聊/成员名单交互 + 裸调用未定义名字的静态扫描
+node scripts/check-frontend.mjs    # ★ 前端渲染冒烟：33 个页面全部渲染一遍 + 团队的文件柜/群聊/成员名单/团队号/公告交互 + 裸调用未定义名字的静态扫描
 node scripts/smoke.mjs             # 后端端到端：253 项（临时独立库+端口，跑完自动清理）
 node scripts/smoke-ai.mjs          # AI 接口端到端：61 项
 node scripts/feed-smoke.mjs        # 动态流端到端：95 项
 node scripts/doc-smoke.mjs         # 积木（可编程帖子）端到端：392 项
-node scripts/team-smoke.mjs        # 团队端到端：145 项（可见范围 / 越权 / 版本冲突 / 文件柜 / 群聊）
-node scripts/check-ui-contract.mjs # 前端契约：CSS 类名 + API 字段 + 主题/头像/角色/私信结构（通过项数不下降哨兵：234）
+node scripts/team-smoke.mjs        # 团队端到端：187 项（可见范围 / 越权 / 版本冲突 / 文件柜 / 群聊 / 团队号 / 公告通知）
+node scripts/check-ui-contract.mjs # 前端契约：CSS 类名 + API 字段 + 主题/头像/角色/私信/团队号/公告结构（通过项数不下降哨兵：242）
 node scripts/check-encoding.mjs    # 源码编码体检：BOM / 乱码 / 关键中文内容
 node scripts/check-notes-ui.mjs    # 笔记 UI
 node scripts/notes-smoke.mjs       # 笔记接口
@@ -653,9 +680,9 @@ node scripts/capture-fixtures.mjs  # 重采前端冒烟用的假数据（改了�
 一次跑完（`npm test` 就是前 12 组）：
 
 ```
-check-encoding 183 文件 / 87 断言 · check-skeleton 47 项 · check-golden 96 项 0 差异
-check-frontend 30 个页面 + 31 个模块静态扫描 · smoke 253 · smoke-ai 61 · feed-smoke 95
-doc-smoke 392 · team-smoke 97 · check-ui-contract 219 · check-notes-ui 33 · notes-smoke 44
+check-encoding 188 文件 / 87 断言 · check-skeleton 47 项 · check-golden 96 项 0 差异
+check-frontend 33 个页面 + 31 个模块静态扫描 · smoke 253 · smoke-ai 61 · feed-smoke 95
+doc-smoke 392 · team-smoke 187 · check-ui-contract 242 · check-notes-ui 33 · notes-smoke 44
 ```
 
 > 知识网络图（`knowledge-pack/` + `#/graph` + `/api/knowledge/*`）已在 2026-10 整条链路删除：
@@ -724,7 +751,9 @@ Windows 上如果报文件被占用，说明服务或测试脚本还在跑，关
 响应统一走 `ctx.http.ok()`；**权限**用 `ctx.guards.requireUser/requireStaff/…`；**前端页面**加一个
 `public/views/x.js` 并在 `public/core/router.js` 的 if 链里接一行。
 不要 import 隔壁模块的文件（模块之间只通过 `ctx` 通信，`check-skeleton.mjs` 会抓）。
-新增通知类型只需调用 `store.createNotification()`，并在 `public/core/session.js` 的 `NOTIF_META` 里补一条文案。
+新增通知类型只需调用 `store.createNotification()`，并在 `public/views/notifications.js` 的 `NOTIF_META` 里补一条文案。
+（要「每条都响、不合并未读」就传 `dedupe: false`；要让通知能跳回某个团队，传 `teamId` 并把类型加进
+`public/views/notifications.js` 的 `notifTarget()`，团队公告就是照这个路子接的。）
 **改完务必跑 `node scripts/check-golden.mjs`** —— 它保证你没顺手改坏现有页面。
 
 ---
