@@ -63,11 +63,58 @@ export const AI_MAX_BLOCK_CHARS = 20000;
 /**
  * 审计目标字段的长度上限，免得日志被任意长字符串灌满。
  *
- * `targetType` 没有对应的常量了：它现在由服务端写死成 `document_block`，
+ * 单块操作的 `targetType` 没有对应的常量了：它由服务端写死成 `document_block`，
  * 客户端根本没有这个字段可填（以前能填 `not_a_real_thing`）。
  */
 export const AI_MAX_TARGET_ID = 200;
 export const AI_MAX_REASON = 500;
+
+/**
+ * 改稿的两种粒度（用户 2026-10 的需求：块太碎了，要么整篇、要么按小标题一节一节来）。
+ *
+ *   section  —— 一个小节（一个 heading 到下一个 heading 之前）
+ *   document —— 整篇
+ *
+ * `block` 作为 `/ops` 的历史取值仍然接受（旧前端、旧审计行），但不在这份清单里：
+ * 这是新草拟接口 `POST /api/ai-edit/draft-range` 认的粒度。
+ */
+export const AI_SCOPES = Object.freeze(['section', 'document']);
+
+/** 切小节的判据：P2 的哪个块类型算「标题」。抄自 `src/modules/doc/blocks/types.js`。 */
+export const AI_SECTION_HEADING_TYPE = 'heading';
+
+/**
+ * 一小节最多多少块 —— 抄 P2 `src/modules/doc/blocks/ops.js` 的 `MAX_OPS = 50`。
+ *
+ * 小节的落盘走的是 `POST /api/docs/:id/ops`，一批最多 50 条 replace，
+ * 所以一节超过 50 块就**不可能**一次应用完。与其让用户改完才发现只写进去一半，
+ * 不如在 `POST /api/ai-edit/sections` 的清单里就标 `tooLarge`、
+ * 在 `draft-range` 上直接 400 说清原因。
+ * `scripts/ai-smoke.mjs` 有一节拿 `src/modules/doc/blocks/ops.js` 的源文本比对这两个数。
+ */
+export const AI_MAX_SECTION_BLOCKS = 50;
+
+/**
+ * 一次送进模型的**整篇** Markdown 上限（字符数）。
+ *
+ * 提示词体积就是账单，整篇改写是这个模块里最贵的动作：超了就是 400 并如实说明
+ * （不静默截断 —— 截一半的 Markdown 交给模型重写，回来的东西等于把后半篇删了）。
+ */
+export const AI_MAX_RANGE_CHARS = 40000;
+
+/** `POST /api/ai-edit/sections` 的输入上限（纯切分，不调模型，所以宽松些）。 */
+export const AI_MAX_SECTION_INPUT = 200;
+
+/**
+ * range 类操作在审计里的 `target_type`。
+ *
+ * 与 `document_block` 并列，回滚时前端按 `restore` 的形状分支（块数组 / `{markdown}`），
+ * 不靠 targetType 猜 —— 但列表里要能一眼看出这次改的是整篇还是一节。
+ */
+export const AI_RANGE_TARGET_TYPES = Object.freeze({ section: 'doc_section', document: 'document' });
+
+/** 整篇改写时模型可以顺便改标题：`title` 字段的长度上限。 */
+export const AI_MAX_TITLE = 200;
 
 /**
  * P2（积木帖子的作者）内置的块类型 —— 就是 `document_blocks.type` 的合法取值。

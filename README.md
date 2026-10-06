@@ -680,7 +680,7 @@ node scripts/capture-fixtures.mjs  # 重采前端冒烟用的假数据（改了�
 一次跑完（`npm test` 就是前 12 组）：
 
 ```
-check-encoding 193 文件 / 87 断言 · check-skeleton 47 项 · check-golden 96 项 0 差异
+check-encoding 194 文件 / 87 断言 · check-skeleton 47 项 · check-golden 96 项 0 差异
 check-frontend 34 个页面 + 32 个模块静态扫描 · smoke 253 · smoke-ai 61 · feed-smoke 95
 doc-smoke 469 · team-smoke 190 · check-ui-contract 258 · check-notes-ui 33 · notes-smoke 44
 ```

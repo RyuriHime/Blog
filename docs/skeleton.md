@@ -237,7 +237,7 @@ scope = 'public' | 'followers' | 'team' | 'private'
 | `smoke-ai.mjs` | AI 接口端到端 | 61 项 |
 | `feed-smoke.mjs` / `doc-smoke.mjs` / `team-smoke.mjs` | 动态流 / 积木 / 团队的接口端到端 | 95 / 469 / 190 项 |
 | `check-ui-contract.mjs` | 前端类名 / API 字段 / 主题 / 头像 / 角色 / 私信 / 团队 / 剪贴板 / 公式结构 | 258 项 |
-| `check-encoding.mjs` | 编码体检（BOM / 乱码 / 关键中文片段） | 193 文件 / 87 断言 |
+| `check-encoding.mjs` | 编码体检（BOM / 乱码 / 关键中文片段） | 194 文件 / 87 断言 |
 | `check-notes-ui.mjs` | 笔记的前端结构 | 33 项 |
 | `notes-smoke.mjs` / `forum-ai/selftest.mjs` / `note-studio/tests/run.mjs` | 子系统 | 44 / 92 / — |
 | `note-agent/scripts/run-tests.mjs` | note-agent | CI 上跑（本机受限沙箱下 spawn 管道会 EPERM） |
