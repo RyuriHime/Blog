@@ -98,6 +98,8 @@ const REQUIRED_FILES = [
   'src/modules/ai/schema.js',
   'src/modules/ai/routes.js',
   'src/modules/ai/sections.js',
+  // 界面冒烟（P5，顶栏入口 + 右栏抽屉）：新增文件必须登记，否则它被搬走哨兵不会响。
+  'scripts/ui-smoke.mjs',
   // 可编程帖子（P2，积木）：后端模块、块引擎、沙箱、页面、样式与它自己的冒烟脚本。
   'src/modules/doc/schema.js',
   'src/modules/doc/queries.js',
@@ -248,6 +250,7 @@ const EXPECTED = [
   ['团队（P4）：团队列表', ['public/views/team.js']],
   ['86-team.css', ['public/css/86-team.css']],
   ['前端藏起来不叫权限', ['scripts/team-smoke.mjs']],
+  ['移开自动收回', ['scripts/ui-smoke.mjs']],
 ];
 
 function walk(target, files = []) {

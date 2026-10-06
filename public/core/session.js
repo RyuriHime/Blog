@@ -110,6 +110,126 @@ function checkinCardHtml() {
       </div>
     </div>`;
 }
+/* ------------------------------------------------------------------ */
+/* P5：右侧栏抽屉                                                      */
+/*   默认收起（右边缘只留一条把手，主内容区吃满整宽）                    */
+/*   鼠标移到把手/面板上滑出，移开自动收回                              */
+/*   面板左边缘可拖动改宽（200–520），记住设置，双击恢复默认              */
+/*   窄屏（≤900px）不做浮层：还原成静态侧栏，把手隐藏（触屏没有 hover）    */
+/* ------------------------------------------------------------------ */
+const SIDEBAR_MIN_WIDTH = 200;
+const SIDEBAR_MAX_WIDTH = 520;
+const SIDEBAR_DEFAULT_WIDTH = 306;
+// 沿用仓库现有的 forum: 前缀（见 core/preferences.js 的 THEME_STORAGE_KEY）
+const SIDEBAR_WIDTH_KEY = 'forum:sidebarWidth';
+/** 鼠标移开后延迟一点再收回：从把手挪到面板的缝隙里时不会抖一下。 */
+const SIDEBAR_HIDE_DELAY = 160;
+
+let sidebarDrawerBound = false;
+let sidebarHideTimer = 0;
+
+function sidebarWidthFromPrefs() {
+  const raw = Number(Prefs.readPreference(SIDEBAR_WIDTH_KEY, ''));
+  return Number.isFinite(raw) && raw > 0 ? raw : SIDEBAR_DEFAULT_WIDTH;
+}
+
+function clampSidebarWidth(width) {
+  return Math.min(SIDEBAR_MAX_WIDTH, Math.max(SIDEBAR_MIN_WIDTH, Math.round(width)));
+}
+
+function applySidebarWidth(width, { persist = false } = {}) {
+  const next = clampSidebarWidth(width);
+  state.sidebarWidth = next;
+  const style = ui.sidebar?.style;
+  if (style) {
+    if (typeof style.setProperty === 'function') style.setProperty('--sidebar-width', `${next}px`);
+    else style['--sidebar-width'] = `${next}px`;
+  }
+  if (persist) Prefs.writePreference(SIDEBAR_WIDTH_KEY, String(next));
+  return next;
+}
+
+function setSidebarOpen(open) {
+  state.sidebarOpen = Boolean(open);
+  if (typeof ui.sidebar?.classList?.toggle === 'function') ui.sidebar.classList.toggle('is-open', state.sidebarOpen);
+  // 用类选择器取：动态渲染出来的元素的 id 不能用 $('#…') 查 ——
+  // scripts/check-ui-contract.mjs 会把这类查询当成「index.html 里的挂载点」来校验。
+  const handle = ui.sidebar?.querySelector('.sidebar-handle');
+  if (handle) handle.setAttribute('aria-expanded', state.sidebarOpen ? 'true' : 'false');
+}
+
+/** 渲染完把状态贴回去（renderSidebar 会被重画，类名与宽度得重新应用）。 */
+function syncSidebarDrawer() {
+  applySidebarWidth(state.sidebarWidth ?? sidebarWidthFromPrefs());
+  setSidebarOpen(Boolean(state.sidebarOpen));
+}
+
+function initSidebarDrawer() {
+  if (sidebarDrawerBound || !ui.sidebar) return;
+  sidebarDrawerBound = true;
+
+  const cancelHide = () => {
+    if (sidebarHideTimer) {
+      clearTimeout(sidebarHideTimer);
+      sidebarHideTimer = 0;
+    }
+  };
+  const inside = (node) => (typeof ui.sidebar.contains === 'function' ? ui.sidebar.contains(node) : false);
+
+  // 悬停滑出 / 移开收回
+  ui.sidebar.addEventListener('mouseenter', () => {
+    cancelHide();
+    setSidebarOpen(true);
+  });
+  ui.sidebar.addEventListener('mouseleave', () => {
+    cancelHide();
+    sidebarHideTimer = setTimeout(() => setSidebarOpen(false), SIDEBAR_HIDE_DELAY);
+  });
+
+  // 键盘：Tab 聚焦进抽屉也滑出，焦点离开就收回
+  ui.sidebar.addEventListener('focusin', () => {
+    cancelHide();
+    setSidebarOpen(true);
+  });
+  ui.sidebar.addEventListener('focusout', (event) => {
+    const next = event.relatedTarget;
+    if (!next || !inside(next)) setSidebarOpen(false);
+  });
+
+  // 点把手：展开 / 收起（键盘与触屏都能用）
+  ui.sidebar.addEventListener('click', (event) => {
+    if (event.target?.closest?.('#sidebar-handle')) setSidebarOpen(!state.sidebarOpen);
+  });
+
+  // 拖面板左边缘改宽度
+  let drag = null;
+  const onMove = (event) => {
+    if (!drag) return;
+    // 往左拖 = 变宽
+    applySidebarWidth(drag.startWidth + (drag.startX - event.clientX));
+  };
+  const endDrag = () => {
+    if (!drag) return;
+    drag = null;
+    applySidebarWidth(state.sidebarWidth ?? SIDEBAR_DEFAULT_WIDTH, { persist: true });
+    document.removeEventListener('pointermove', onMove);
+    document.removeEventListener('pointerup', endDrag);
+  };
+  ui.sidebar.addEventListener('pointerdown', (event) => {
+    if (!event.target?.closest?.('#sidebar-resizer')) return;
+    event.preventDefault?.();
+    drag = { startX: event.clientX, startWidth: state.sidebarWidth ?? sidebarWidthFromPrefs() };
+    document.addEventListener('pointermove', onMove);
+    document.addEventListener('pointerup', endDrag);
+  });
+
+  // 双击拖拽带恢复默认宽度
+  ui.sidebar.addEventListener('dblclick', (event) => {
+    if (!event.target?.closest?.('#sidebar-resizer')) return;
+    applySidebarWidth(SIDEBAR_DEFAULT_WIDTH, { persist: true });
+  });
+}
+
 function renderSidebar() {
   // v2：侧栏的「📚 板块」已经下线（论坛形态不再存在），换成一个动态流的快捷入口。
   // 保留 `renderSidebar()` 这个无参签名，调用方不用改。
@@ -135,6 +255,19 @@ function renderSidebar() {
   const checkinCard = state.me ? checkinCardHtml() : '';
 
   ui.sidebar.innerHTML = `
+    <button
+      class="sidebar-handle"
+      id="sidebar-handle"
+      type="button"
+      aria-controls="sidebar-panel"
+      aria-expanded="false"
+      title="侧栏：鼠标移上来滑出（也可以点我）"
+    >
+      <span class="sidebar-handle-icon" aria-hidden="true">📚</span>
+      <span class="sidebar-handle-text">侧栏</span>
+    </button>
+    <div class="sidebar-panel" id="sidebar-panel">
+    <div class="sidebar-resizer" id="sidebar-resizer" title="拖动改宽度，双击恢复默认"></div>
     ${
       state.me
         ? ''
@@ -208,7 +341,10 @@ function renderSidebar() {
         · 代码用三个反引号包裹<br />
         · @某人 可以提醒 TA 来看
       </div>
+    </div>
     </div>`;
+  syncSidebarDrawer();
+  initSidebarDrawer();
 }
 async function loadSite() {
   try {
