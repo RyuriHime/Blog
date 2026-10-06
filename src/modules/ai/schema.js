@@ -60,11 +60,56 @@ export const AI_CONTENT_CAPABILITY = 'edit_content';
  */
 export const AI_MAX_BLOCK_CHARS = 20000;
 
-/** 审计目标字段的形状上限，免得日志被任意长字符串灌满。 */
-export const AI_MAX_TARGET_TYPE = 64;
+/**
+ * 审计目标字段的长度上限，免得日志被任意长字符串灌满。
+ *
+ * `targetType` 没有对应的常量了：它现在由服务端写死成 `document_block`，
+ * 客户端根本没有这个字段可填（以前能填 `not_a_real_thing`）。
+ */
 export const AI_MAX_TARGET_ID = 200;
 export const AI_MAX_REASON = 500;
-export const AI_TARGET_TYPE_PATTERN = /^[a-z][a-z0-9_]*$/;
+
+/**
+ * P2（积木帖子的作者）内置的块类型 —— 就是 `document_blocks.type` 的合法取值。
+ *
+ * 这里是**抄的一份**（出处 `src/modules/doc/blocks/types.js`）：骨架规范禁止 import
+ * 隔壁模块的文件，所以只能复制。复制会有漂移的风险，`scripts/ai-smoke.mjs` 第 19 节
+ * 拿 `GET /api/docs/meta/block-types` 跟这份逐项比对，P2 加了新类型就会红。
+ *
+ * 块的数据形状也是 P2 定的：`{ type: '<上面某个名字>', props: {…} }`。
+ * 我的审计日志里 `before_json` / `after_json` 存的就是这个形状，一个字都不翻译 ——
+ * 以前我用的是自造的 `{ blockType, content }`，模型照着发明了 `vote` 这种不存在的
+ * 类型，落盘时必然对不上。
+ */
+export const AI_BLOCK_TYPES = Object.freeze([
+  { name: 'heading', label: '标题' },
+  { name: 'paragraph', label: '正文' },
+  { name: 'list', label: '列表' },
+  { name: 'code', label: '代码' },
+  { name: 'table', label: '表格' },
+  { name: 'formula', label: '公式' },
+  { name: 'image', label: '图片' },
+  { name: 'quote', label: '引用' },
+  { name: 'poll', label: '投票' },
+  { name: 'wiki', label: '双链' },
+  { name: 'embed', label: '嵌入' },
+  { name: 'app', label: '小应用' },
+]);
+
+export const AI_BLOCK_TYPE_NAMES = Object.freeze(AI_BLOCK_TYPES.map((item) => item.name));
+
+/**
+ * 全站每日 AI 调用总上限的环境变量名。
+ *
+ * 单用户配额管不住**总额**：钱是按 key 算的，配额是按用户算的 ——
+ * 20 个人各用满 50 次/天，同一张账单上就是 1000 次，而这中间没有任何闸门，
+ * 管理员也看不到全站今天用了多少（FR-CAP-07「配额兼作成本控制」只到了个人一级）。
+ * 这个上限是**兜底**：0 或不配 = 不限（保持既有行为，不影响验收）。
+ */
+export const AI_BUDGET_ENV = 'AI_DAILY_TOTAL_LIMIT';
+
+/** 管理员用量面板里「谁用得最多」的条数。 */
+export const AI_USAGE_TOP_USERS = 10;
 
 /**
  * 建表 SQL。

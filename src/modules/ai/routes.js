@@ -11,7 +11,7 @@
 // **永远不交回宿主路由表**。所以任何注册在 `/api/ai/<子路径>` 的宿主路由都是不可达的。
 // `/api/ai-edit/` 不以 `/api/ai/` 开头，落回宿主路由表，能被正常分发。
 import { HttpError, ensure, rateLimit } from '../../core/http.js';
-import { requireUser } from '../../core/guards.js';
+import { requireUser, requireStaff } from '../../core/guards.js';
 import {
   AI_CAPABILITIES,
   AI_CAPABILITY_KEYS,
@@ -20,10 +20,12 @@ import {
   AI_BLOCKED_STATUS,
   AI_CONTENT_CAPABILITY,
   AI_MAX_BLOCK_CHARS,
-  AI_MAX_TARGET_TYPE,
   AI_MAX_TARGET_ID,
   AI_MAX_REASON,
-  AI_TARGET_TYPE_PATTERN,
+  AI_BLOCK_TYPES,
+  AI_BLOCK_TYPE_NAMES,
+  AI_BUDGET_ENV,
+  AI_USAGE_TOP_USERS,
 } from './schema.js';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -99,6 +101,96 @@ function guardCapability(db, userId, capability) {
     ensure(used < quota, 429, 'ai_rate_limited', `能力「${capability}」今日额度已用完（${used}/${quota}）`);
   }
   return grant;
+}
+
+/**
+ * 全站当天**计费**调用次数（所有用户加起来）。
+ * 口径与 `usedToday` 逐字一致：只数 `AI_QUOTA_ACTIONS`、且 `status <> 'blocked'`。
+ */
+function siteUsedToday(db, at) {
+  const placeholders = AI_QUOTA_ACTIONS.map(() => '?').join(', ');
+  const row = db
+    .prepare(
+      `SELECT COUNT(*) AS n FROM ai_op_logs
+        WHERE created_at >= ? AND action IN (${placeholders}) AND status <> ?`,
+    )
+    .get(startOfUtcDay(at), ...AI_QUOTA_ACTIONS, AI_BLOCKED_STATUS);
+  return Number(row?.n ?? 0);
+}
+
+/** 读全站每日上限：没配 / 空 / 0 / 非正数 都表示不限（返回 0，保持既有行为）。 */
+function readSiteBudget() {
+  const raw = process.env[AI_BUDGET_ENV];
+  if (raw == null || raw === '') return 0;
+  const limit = Number(raw);
+  return Number.isFinite(limit) && limit > 0 ? Math.floor(limit) : 0;
+}
+
+/**
+ * 全站兜底闸门。
+ *
+ * 只在**真会花钱或有副作用**的路径上调用（`/draft` 与 `/ops` 的落盘）；预览不调用 ——
+ * 预览既不调模型也不写盘，没有理由被全站预算挡住。
+ *
+ * 为什么需要：配额是按用户算的，钱是按 key 算的。20 个人各用满 50 次/天 = 同一张
+ * 账单上 1000 次，中间一个闸门都没有。这条是兜底，不是替代个人配额。
+ */
+function guardSiteBudget(db) {
+  const limit = readSiteBudget();
+  if (limit <= 0) return;
+  const used = siteUsedToday(db, Date.now());
+  ensure(
+    used < limit,
+    429,
+    'ai_rate_limited',
+    `全站今日 AI 调用已达上限（${used}/${limit}）：配额按用户算、账单按 key 算，` +
+      `这道闸门兜住「一把 key 被全站烧穿」。调整环境变量 ${AI_BUDGET_ENV} 可放行。`,
+  );
+}
+
+/**
+ * 检查一个块补丁的**形状** —— 就是 P2 `document_blocks` 的那一套 `{ type, props }`。
+ *
+ * 返回空串表示合法；否则返回一句话的毛病描述。**故意不在这里抛**：
+ * 用户传错形状该是 400 `bad_request`，模型吐错形状该是 502 `ai_bad_json`
+ * （既有代号，不新造同义词），同一个函数服务两种调用方。
+ */
+function blockPatchProblem(value) {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) return '必须是一个对象';
+  if (typeof value.type !== 'string' || !AI_BLOCK_TYPE_NAMES.includes(value.type)) {
+    return `type 必须是已知块类型之一（${AI_BLOCK_TYPE_NAMES.join(' / ')}），收到「${String(value.type)}」`;
+  }
+  // `props` 必须**显式给出**。这一版只做「整块替换」，不做「只改一半」的合并：
+  // 缺了 props，`cleanBlockPatch` 会补成 `{}`，写回文档时就是一次静默清空 ——
+  // 调用方要的是「改类型、别动 props」，拿到的是 props 被抹掉，而且审计里也看不出来。
+  // （P2 的 `updateBlock` 确实把 `props === undefined` 当成「保留原 props」，
+  // 见 `src/modules/doc/store.js` 的 `const nextProps = props === undefined ? ... : props;`。
+  // 我们**故意比它严**：这条路径记录的是「这一块改完之后长什么样」，只有全量值才有意义。）
+  if (
+    value.props === undefined ||
+    value.props === null ||
+    typeof value.props !== 'object' ||
+    Array.isArray(value.props)
+  ) {
+    return 'props 必须是对象（这一版只接受整块替换 { type, props }，不支持只改一半）';
+  }
+  return '';
+}
+
+/** 校验通过后取出干净的 `{ type, props }`：多余的键不入库。 */
+function cleanBlockPatch(value) {
+  return { type: value.type, props: value.props ?? {} };
+}
+
+/** 审计日志里的目标 id：`<documentId>:<blockId>`，回滚时能拆回来源。 */
+function composeTargetId(documentId, blockId) {
+  return `${String(documentId ?? '')}:${String(blockId ?? '')}`;
+}
+
+/** 把 `composeTargetId` 拼出来的字符串拆回去。 */
+function splitTargetId(targetId) {
+  const [documentId = '', blockId = ''] = String(targetId ?? '').split(':');
+  return { documentId, blockId };
 }
 
 function logOp(db, entry) {
@@ -319,29 +411,56 @@ export function registerAiRoutes(ctx) {
     guardCapability(db, user.id, capability);
 
     const after = body.after ?? null;
+    const afterProblem = blockPatchProblem(after);
     ensure(
-      after !== null && typeof after === 'object' && !Array.isArray(after),
+      !afterProblem,
       400,
       'bad_request',
-      'after 必须是一个对象（这一版只接受块级改动，不接受整篇重写）',
+      `after 不是合法的块（${afterProblem}）—— 这一版只接受块级改动 { type, props }，不接受整篇重写`,
     );
     const before = body.before ?? null;
+    if (before !== null) {
+      const beforeProblem = blockPatchProblem(before);
+      ensure(!beforeProblem, 400, 'bad_request', `before 不是合法的块（${beforeProblem}）`);
+    }
+    // 审计和返回里只能出现 `{ type, props }`：`after` / `before` 来自请求体，可能夹带
+    // 别的键（上一轮实测就存进过 `{"type":"poll","props":{…},"blockType":"vote","content":{…}}`
+    // —— 旧形状的键跟着新形状一起进了库）。`cleanBlockPatch` 只留 type / props。
+    const cleanAfter = cleanBlockPatch(after);
+    const cleanBefore = before === null ? null : cleanBlockPatch(before);
 
-    const targetType = String(body.targetType ?? 'document_block');
-    ensure(
-      targetType.length <= AI_MAX_TARGET_TYPE && AI_TARGET_TYPE_PATTERN.test(targetType),
-      400,
-      'bad_request',
-      `targetType 不合法（${AI_MAX_TARGET_TYPE} 个字符以内、以小写字母开头的小写标识符）`,
-    );
-    const targetId = String(body.targetId ?? '');
+    // 目标恒为「某个文档里的某一块」：`targetType` 由服务端写死，`targetId` 由服务端拼，
+    // 客户端塞不进任意字符串（以前 targetType 可以是 not_a_real_thing、
+    // targetId 能塞 5000 个字符）。
+    const targetType = 'document_block';
+    // `documentId` 是必填的：落盘记的是「哪一篇的哪一块」，缺了它目标栏就是 `:b7`，
+    // 回滚时写不回任何地方 —— 一条「已落盘」的审计却指不回文档，比不记还坏。
+    const rawDocumentId = body.documentId;
+    const documentId =
+      typeof rawDocumentId === 'number' && Number.isInteger(rawDocumentId) && rawDocumentId > 0
+        ? String(rawDocumentId)
+        : typeof rawDocumentId === 'string'
+          ? rawDocumentId.trim()
+          : '';
+    ensure(documentId !== '', 400, 'bad_request', 'documentId 不能为空 —— 落盘要记清楚改的是哪一篇文档');
+    // `targetId` 用 `:` 拼、回滚时按 `:` 拆，所以 id 里不能自带 `:`，否则拆出错的目标。
+    ensure(!documentId.includes(':'), 400, 'bad_request', 'documentId 里不能有冒号');
+    const blockId = String(body.blockId ?? '').trim();
+    ensure(blockId.length >= 1, 400, 'bad_request', 'blockId 不能为空');
+    ensure(!blockId.includes(':'), 400, 'bad_request', 'blockId 里不能有冒号');
+    const targetId = composeTargetId(documentId, blockId);
     ensure(
       targetId.length <= AI_MAX_TARGET_ID,
       400,
       'bad_request',
-      `targetId 太长（上限 ${AI_MAX_TARGET_ID} 个字符）`,
+      `documentId + blockId 太长（上限 ${AI_MAX_TARGET_ID} 个字符）`,
     );
     const reason = String(body.reason ?? '').slice(0, AI_MAX_REASON);
+
+    // 全站闸门排在**校验之后**：预算用光时，一个畸形的请求体（比如缺 props）应该拿到
+    // 400 告诉它请求写错了，而不是 429 让它以为「预算满了、等明天再来」。落盘才过闸门，
+    // 纯预览不花任何东西，不挡。
+    if (body.confirm === true) guardSiteBudget(db);
 
     if (body.confirm !== true) {
       const opId = logOp(db, {
@@ -352,13 +471,13 @@ export function registerAiRoutes(ctx) {
         targetId,
         status: 'preview',
         reason: reason || '等待用户确认',
-        before,
-        after,
+        before: cleanBefore,
+        after: cleanAfter,
       });
       return ctx.http.ok(reqCtx.res, {
         applied: false,
         opId,
-        preview: { targetType, targetId, before, after },
+        preview: { targetType, targetId, before: cleanBefore, after: cleanAfter },
         hint: '这是预览，没有落盘。确认后带 confirm: true 再提交一次。',
       });
     }
@@ -371,10 +490,23 @@ export function registerAiRoutes(ctx) {
       targetId,
       status: 'applied',
       reason,
-      before,
-      after,
+      before: cleanBefore,
+      after: cleanAfter,
     });
-    return ctx.http.ok(reqCtx.res, { applied: true, opId, targetType, targetId, before, after });
+    return ctx.http.ok(reqCtx.res, {
+      applied: true,
+      opId,
+      targetType,
+      targetId,
+      documentId,
+      blockId,
+      before: cleanBefore,
+      after: cleanAfter,
+      // 真正的写盘由调用方（前端拿这个 patch 去调 P2 的 PUT /api/docs/:id/blocks/:blockId）
+      // 完成：documents / document_blocks 归 P2，我只读。我这边的职责是
+      // 授权、审计和「改之前长什么样」。
+      writeTo: `/api/docs/${encodeURIComponent(documentId)}/blocks/${encodeURIComponent(blockId)}`,
+    });
   });
 
   // ── 7. 回滚（把旧值交回去，FR-CAP-05「能回滚」）───────────────────────
@@ -430,8 +562,10 @@ export function registerAiRoutes(ctx) {
   routes.add('POST', '/api/ai-edit/draft', async (reqCtx) => {
     const user = viewer(reqCtx);
     const body = reqCtx.body ?? {};
-    const capability = 'edit_content';
+    const capability = AI_CONTENT_CAPABILITY;
     guardCapability(db, user.id, capability);
+    // 真会发出去一次模型调用 —— 过全站闸门。
+    guardSiteBudget(db);
 
     // FR-AI-14：按用户限流，v1 是 10 次/分钟。
     rateLimit(`ai-edit:draft:${user.id}`, 10, 60 * 1000);
@@ -440,10 +574,18 @@ export function registerAiRoutes(ctx) {
     ensure(instruction.length >= 1, 400, 'bad_request', 'instruction 不能为空');
     ensure(instruction.length <= 2000, 400, 'bad_request', 'instruction 不能超过 2000 个字符');
 
+    // 当前块必须是 P2 的形状（`{ type, props }`），否则提示词给的例子和模型吐回来的
+    // 东西都对不上 —— 以前我用的是自造的 `{ blockType, content }`，模型照着发明了
+    // `vote` 这种根本不存在的块类型，落盘时必然写不进去。
+    const currentBlock = body.block ?? null;
+    const blockProblem = blockPatchProblem(currentBlock);
+    ensure(!blockProblem, 400, 'bad_request', `block 不是合法的块（${blockProblem}）`);
+    const cleanBlock = cleanBlockPatch(currentBlock);
+
     // 提示词体积就是账单。instruction 限了 2000 字，block 之前一个字都没限：
     // 实测 12 万字的块能撑出 352KB 的请求体（唯一约束是 core/http.js 的 512KB 上限），
     // 必然超出任何模型上下文，而钱照付。
-    const blockJson = JSON.stringify(body.block ?? null);
+    const blockJson = JSON.stringify(cleanBlock);
     ensure(
       blockJson.length <= AI_MAX_BLOCK_CHARS,
       400,
@@ -451,9 +593,12 @@ export function registerAiRoutes(ctx) {
       `block 太大（${blockJson.length} 字符，上限 ${AI_MAX_BLOCK_CHARS}）——只提交要改的那一块`,
     );
 
+    // 审计目标：`<documentId>:<blockId>`。两者都可以缺省（纯试写），但要能对上文档。
+    const targetId = composeTargetId(body.documentId, body.blockId);
+
     const apiKey = process.env.AI_API_KEY;
     if (!apiKey) {
-      logBlocked(db, user.id, capability, 'draft', body.blockId, 'ai_not_configured');
+      logBlocked(db, user.id, capability, 'draft', targetId, 'ai_not_configured');
       throw new HttpError(503, 'ai_not_configured', '没有配置 AI_API_KEY，无法调用模型');
     }
 
@@ -482,9 +627,17 @@ export function registerAiRoutes(ctx) {
           messages: [
             {
               role: 'system',
-              content:
-                '你是帖子块编辑器。只输出一个 JSON 对象，形如 {"blockType":"...","content":{...}}，' +
-                '不要输出解释文字或 Markdown 代码围栏。',
+              content: [
+                '你是博客「积木帖子」的块编辑器。用户给你当前这一块，以及一句改写要求。',
+                '你只改这一块，绝不重写整篇，也不要碰别的块。',
+                '只输出一个 JSON 对象，形状必须是 {"type":"<块类型>","props":{…}}，',
+                '不要输出解释文字，也不要 Markdown 代码围栏。',
+                `type 只能取这些名字之一：${AI_BLOCK_TYPES.map((item) => `${item.name}（${item.label}）`).join('、')}。`,
+                'props 是各类型自己的字段：正文 {"text":"…"}；标题 {"text":"…","level":1}；',
+                '代码 {"text":"…","lang":"…"}；引用 {"text":"…","source":"…"}；',
+                '投票 {"question":"…","options":["选项一","选项二"],"multiple":false}；图片 {"src":"…","alt":"…","text":"…"}。',
+                '用户没要求改的部分保持原样。',
+              ].join(''),
             },
             {
               role: 'user',
@@ -496,7 +649,7 @@ export function registerAiRoutes(ctx) {
       });
     } catch (error) {
       const aborted = error?.name === 'AbortError';
-      logBlocked(db, user.id, capability, 'draft', body.blockId, aborted ? 'ai_timeout' : 'ai_unreachable');
+      logBlocked(db, user.id, capability, 'draft', targetId, aborted ? 'ai_timeout' : 'ai_unreachable');
       throw new HttpError(
         aborted ? 504 : 502,
         aborted ? 'ai_timeout' : 'ai_unreachable',
@@ -507,15 +660,15 @@ export function registerAiRoutes(ctx) {
     }
 
     if (response.status === 401 || response.status === 403) {
-      logBlocked(db, user.id, capability, 'draft', body.blockId, 'ai_unauthorized');
+      logBlocked(db, user.id, capability, 'draft', targetId, 'ai_unauthorized');
       throw new HttpError(502, 'ai_unauthorized', '模型服务拒绝了这个 API key');
     }
     if (response.status === 429) {
-      logBlocked(db, user.id, capability, 'draft', body.blockId, 'ai_rate_limited');
+      logBlocked(db, user.id, capability, 'draft', targetId, 'ai_rate_limited');
       throw new HttpError(429, 'ai_rate_limited', '模型服务限流了，请稍后再试');
     }
     if (!response.ok) {
-      logBlocked(db, user.id, capability, 'draft', body.blockId, `ai_upstream_error ${response.status}`);
+      logBlocked(db, user.id, capability, 'draft', targetId, `ai_upstream_error ${response.status}`);
       throw new HttpError(502, 'ai_upstream_error', `模型服务返回 ${response.status}`);
     }
 
@@ -523,7 +676,7 @@ export function registerAiRoutes(ctx) {
     try {
       payload = await response.json();
     } catch {
-      logBlocked(db, user.id, capability, 'draft', body.blockId, 'ai_bad_json');
+      logBlocked(db, user.id, capability, 'draft', targetId, 'ai_bad_json');
       throw new HttpError(502, 'ai_bad_json', '模型返回的不是 JSON');
     }
 
@@ -532,22 +685,107 @@ export function registerAiRoutes(ctx) {
     try {
       patch = JSON.parse(content.replace(/```json/gi, '').replace(/```/g, '').trim());
     } catch {
-      logBlocked(db, user.id, capability, 'draft', body.blockId, 'ai_bad_json');
+      logBlocked(db, user.id, capability, 'draft', targetId, 'ai_bad_json');
       throw new HttpError(502, 'ai_bad_json', '模型没有返回合法的 JSON 改动');
     }
+
+    // 合法的 JSON ≠ 合法的块。模型完全可以吐回 `{"blockType":"vote","content":{…}}`
+    // 这种自造形状 —— 这时候落盘会直接失败，所以在这里就挡住。
+    // 用 `ai_bad_json`（既有代号）而不是新造一个，代号表见 docs/skeleton.md。
+    const patchProblem = blockPatchProblem(patch);
+    if (patchProblem) {
+      logBlocked(db, user.id, capability, 'draft', targetId, `ai_bad_json 块形状不对：${patchProblem}`);
+      throw new HttpError(502, 'ai_bad_json', `模型没有返回合法的块（${patchProblem}）`);
+    }
+    const cleanPatch = cleanBlockPatch(patch);
 
     const opId = logOp(db, {
       userId: user.id,
       capability,
       action: 'draft',
       targetType: 'document_block',
-      targetId: String(body.blockId ?? ''),
+      targetId,
       status: 'preview',
       reason: instruction.slice(0, 200),
-      before: body.block ?? null,
-      after: patch,
+      before: cleanBlock,
+      after: cleanPatch,
     });
 
-    return ctx.http.ok(reqCtx.res, { applied: false, opId, patch, model });
+    return ctx.http.ok(reqCtx.res, {
+      applied: false,
+      opId,
+      patch: cleanPatch,
+      before: cleanBlock,
+      targetType: 'document_block',
+      targetId,
+      ...splitTargetId(targetId),
+      model,
+    });
+  });
+
+  // ── 9. 全站用量 + 预算状态（仅管理团队）────────────────────────────────
+  //
+  // 补的是「配额按用户算、钱按 key 算」留下的那个洞：在这之前，全站今天调了多少次、
+  // 谁在用、有没有顶到上限，管理员一概看不见，唯一的全局约束就是账单本身。
+  //
+  // 口径：`billed` 只数 AI_QUOTA_ACTIONS 里**没失败**的行 —— 与用户额度、全站预算
+  // 逐字一致；`total` 是当天的全部日志行（含预览、授权、被挡掉的）。
+  //
+  // **没有 token 数**：这张表没存模型返回的 usage；`ctx.schema.add` 只有
+  // CREATE TABLE IF NOT EXISTS，没有加列的迁移通道（`src/core/table.js` 全文 87 行），
+  // 所以这里把「次数」当成本的代理指标，并在返回值里写清楚。
+  routes.add('GET', '/api/ai-edit/usage', (reqCtx) => {
+    requireStaff(reqCtx);
+    const at = Date.now();
+    const since = startOfUtcDay(at);
+    const placeholders = AI_QUOTA_ACTIONS.map(() => '?').join(', ');
+
+    const total = Number(
+      db.prepare('SELECT COUNT(*) AS n FROM ai_op_logs WHERE created_at >= ?').get(since)?.n ?? 0,
+    );
+    const billed = siteUsedToday(db, at);
+    const blocked = Number(
+      db
+        .prepare('SELECT COUNT(*) AS n FROM ai_op_logs WHERE created_at >= ? AND status = ?')
+        .get(since, AI_BLOCKED_STATUS)?.n ?? 0,
+    );
+    const byAction = db
+      .prepare('SELECT action, COUNT(*) AS n FROM ai_op_logs WHERE created_at >= ? GROUP BY action ORDER BY n DESC')
+      .all(since)
+      .map((row) => ({ action: row.action, count: Number(row.n) }));
+    const topUsers = db
+      .prepare(
+        `SELECT l.user_id AS userId, COALESCE(u.username, '') AS username, COUNT(*) AS n
+           FROM ai_op_logs l LEFT JOIN users u ON u.id = l.user_id
+          WHERE l.created_at >= ? AND l.action IN (${placeholders}) AND l.status <> ?
+          GROUP BY l.user_id ORDER BY n DESC LIMIT ?`,
+      )
+      .all(since, ...AI_QUOTA_ACTIONS, AI_BLOCKED_STATUS, AI_USAGE_TOP_USERS)
+      .map((row) => ({ userId: row.userId, username: row.username, count: Number(row.n) }));
+    const users = Number(
+      db
+        .prepare(
+          `SELECT COUNT(DISTINCT user_id) AS n FROM ai_op_logs
+            WHERE created_at >= ? AND action IN (${placeholders}) AND status <> ?`,
+        )
+        .get(since, ...AI_QUOTA_ACTIONS, AI_BLOCKED_STATUS)?.n ?? 0,
+    );
+    const allTime = Number(db.prepare('SELECT COUNT(*) AS n FROM ai_op_logs').get()?.n ?? 0);
+
+    const limit = readSiteBudget();
+    return ctx.http.ok(reqCtx.res, {
+      scope: 'site',
+      since,
+      today: { total, billed, blocked, users, byAction, topUsers },
+      allTime: { total: allTime },
+      budget: {
+        envKey: AI_BUDGET_ENV,
+        unlimited: limit <= 0,
+        limit,
+        used: billed,
+        remaining: limit <= 0 ? null : Math.max(limit - billed, 0),
+      },
+      note: '按调用次数统计；这张表没有存模型返回的 token 用量，所以没有金额。',
+    });
   });
 }

@@ -11,6 +11,11 @@
  * forum-ai 的挂载层把 `/api/ai/` 整段短路了（命中它的 14 条就自己答，
  * 没命中就直接 404 「 AI 接口不存在」，永远不交回宿主路由表）。
  * 最后两条用例专门把这个事实钉住，免得以后有人「顺手修回去」。
+ *
+ * ⚠️ 块的形状是 P2 定的 `{ type, props }`（12 种合法 type，见
+ * `src/modules/doc/blocks/types.js`）：**没有** `blockType` / `content` 那套旧形状，
+ * 也**没有** `vote` 这个类型（投票块的真名是 `poll`）。第 19 节拿两边的源文件
+ * 加 `GET /api/docs/meta/block-types` 把这份清单钉死，漂移就红。
  */
 import { spawn } from 'node:child_process';
 import { mkdirSync, openSync, readFileSync, rmSync } from 'node:fs';
@@ -18,6 +23,9 @@ import { createServer } from 'node:http';
 import { join, resolve } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
+// 第 19 节要用**运行时**那份白名单：真正决定 `blockPatchProblem` 放行谁的是它，
+// 而不是源文件里的数组字面量（两者之间隔着一个 `.map(...)`）。
+import { AI_BLOCK_TYPE_NAMES as AI_RUNTIME_TYPE_NAMES } from '../src/modules/ai/schema.js';
 
 const ROOT = resolve(fileURLToPath(new URL('.', import.meta.url)), '..');
 const SERVER = join(ROOT, 'src', 'server.js');
@@ -36,12 +44,57 @@ const KEYED_BASE = `http://127.0.0.1:${KEYED_PORT}`;
 const KEYED_DB_FILE = join(ROOT, 'data', 'ai-smoke-keyed.db');
 const KEYED_LOG_FILE = join(ROOT, 'data', 'ai-smoke-keyed-server.log');
 
+// 第 20 节用：一台配了全站每日预算的应用服务器（独立库 + 独立端口，别和上面两台撞）。
+const BUDGET_PORT = Number(process.env.AI_SMOKE_BUDGET_PORT || 3541);
+const BUDGET_BASE = `http://127.0.0.1:${BUDGET_PORT}`;
+const BUDGET_DB_FILE = join(ROOT, 'data', 'ai-smoke-budget.db');
+const BUDGET_LOG_FILE = join(ROOT, 'data', 'ai-smoke-budget-server.log');
+const BUDGET_LIMIT = 2;
+
 const ALL_CAPABILITIES = ['read_post', 'read_site', 'network', 'edit_content', 'site_tools', 'publish'];
+
+/** 整个测试反复用的两块：P2 的块形状就是 `{ type, props }`。 */
+const BLOCK_BEFORE = { type: 'paragraph', props: { text: '旧文案' } };
+const BLOCK_AFTER = { type: 'poll', props: { question: '选哪个？', options: ['A', 'B'] } };
+
+/* ---------- 第 18/19 节共用：直接从源文件里抓块类型清单 ---------- */
+//
+// 第 19 节是静态哨兵（AI 抄的那份清单 vs P2 的真相），第 18 节要用同一份清单
+// 核对提示词教给模型的形状，所以在这里一次性读出来。
+const P2_TYPES_SRC = readFileSync(join(ROOT, 'src', 'modules', 'doc', 'blocks', 'types.js'), 'utf8');
+const AI_SCHEMA_SRC = readFileSync(join(ROOT, 'src', 'modules', 'ai', 'schema.js'), 'utf8');
+
+/** `export const BUILTIN_TYPES = [ … ];` 里每个块的 `name`。 */
+function grabP2BlockTypeNames(src) {
+  const array = src.match(/export const BUILTIN_TYPES = \[([\s\S]*?)\n\];/);
+  return [...String(array?.[1] ?? '').matchAll(/\bname: '([a-z][a-z0-9_]*)'/g)].map((item) => item[1]);
+}
+
+/** `export const AI_BLOCK_TYPES = Object.freeze([ … ]);` 里每个块的 `name`。 */
+function grabAiBlockTypeNames(src) {
+  const array = src.match(/export const AI_BLOCK_TYPES = Object\.freeze\(\[([\s\S]*?)\n\]\);/);
+  return [...String(array?.[1] ?? '').matchAll(/\bname: '([a-z][a-z0-9_]*)'/g)].map((item) => item[1]);
+}
+
+const P2_BLOCK_TYPE_NAMES = grabP2BlockTypeNames(P2_TYPES_SRC);
+const AI_BLOCK_TYPE_NAMES = grabAiBlockTypeNames(AI_SCHEMA_SRC);
+
+/** 键序无关的深比较：审计里存的是 JSON，键序不该影响判定，多余键必须影响。 */
+function sameJson(left, right) {
+  const norm = (value) => {
+    if (Array.isArray(value)) return value.map(norm);
+    if (value && typeof value === 'object') {
+      return Object.fromEntries(Object.keys(value).sort().map((key) => [key, norm(value[key])]));
+    }
+    return value === undefined ? null : value;
+  };
+  return JSON.stringify(norm(left)) === JSON.stringify(norm(right));
+}
 
 let passed = 0;
 const failures = [];
 
-/** 第 18 节起的子进程（假模型 / 配了 key 的服务器），由 finish 统一收掉。 */
+/** 第 18 节起的子进程（假模型 / 配了 key 的服务器 / 配了预算的服务器），由 finish 统一收掉。 */
 const extraChildren = [];
 function check(name, condition, detail = '') {
   if (condition) {
@@ -121,7 +174,7 @@ const finish = async (code) => {
   } catch {
     /* 忽略 */
   }
-  // 第 18 节起的假模型和「配了 key」的服务器也要收干净，否则下次跑会撞端口。
+  // 第 18 / 20 节起的假模型和另外两台服务器也要收干净，否则下次跑会撞端口。
   for (const extra of extraChildren) {
     try {
       extra.kill();
@@ -130,7 +183,7 @@ const finish = async (code) => {
     }
   }
   await sleep(400);
-  for (const file of [DB_FILE, KEYED_DB_FILE]) {
+  for (const file of [DB_FILE, KEYED_DB_FILE, BUDGET_DB_FILE]) {
     for (const suffix of ['', '-wal', '-shm']) {
       try {
         rmSync(file + suffix, { force: true });
@@ -195,16 +248,18 @@ try {
   );
 
   /* ---------- 4. 没授权就用不了（服务端拦） ---------- */
+  //
+  // 这一节的 body 全部给**合法块形状**：403 必须来自能力门，而不是形状校验。
   const denied = await admin.call('/api/ai-edit/ops', {
     method: 'POST',
-    body: { capability: 'edit_content', after: { text: '改一下' }, confirm: true },
+    body: { documentId: 'doc-1', blockId: 'block-1', before: BLOCK_BEFORE, after: BLOCK_AFTER, confirm: true },
   });
   check('未授权时提交操作被拒 403', denied.status === 403, `实际 ${denied.status}`);
   check('拒绝代号是 forbidden', denied.error?.code === 'forbidden', String(denied.error?.code));
 
   const deniedDraft = await admin.call('/api/ai-edit/draft', {
     method: 'POST',
-    body: { instruction: '把这块改成投票' },
+    body: { blockId: 'block-1', block: { type: 'paragraph', props: { text: '原文' } }, instruction: '把这块改成投票' },
   });
   check('未授权时 AI 草拟也被拒 403（能力门先于配置门）', deniedDraft.status === 403, `实际 ${deniedDraft.status}`);
 
@@ -240,49 +295,36 @@ try {
   check('其余五项仍然关闭', capsAfter.data.capabilities.filter((item) => item.granted).length === 1);
 
   /* ---------- 7. 预览与落盘（FR-CAP-06：没确认不落盘） ---------- */
-  const preview = await admin.call('/api/ai-edit/ops', {
-    method: 'POST',
-    body: {
-      capability: 'edit_content',
-      targetType: 'document_block',
-      targetId: 'block-7',
-      before: { blockType: 'text', content: { text: '旧文案' } },
-      after: { blockType: 'vote', content: { options: ['A', 'B'] } },
-    },
-  });
+  const previewBody = {
+    documentId: 'doc-7',
+    blockId: 'block-7',
+    before: BLOCK_BEFORE,
+    after: BLOCK_AFTER,
+  };
+  const preview = await admin.call('/api/ai-edit/ops', { method: 'POST', body: previewBody });
   check('不带 confirm 时返回的是预览', preview.status === 200 && preview.data?.applied === false, JSON.stringify(preview.data));
-  check('预览回带了改动前后', preview.data?.preview?.before?.content?.text === '旧文案', JSON.stringify(preview.data?.preview));
+  check('预览回带了改动前后', preview.data?.preview?.before?.props?.text === '旧文案', JSON.stringify(preview.data?.preview));
   check('预览没有落盘（状态是 preview）', typeof preview.data?.opId === 'number', String(preview.data?.opId));
 
-  const applied = await admin.call('/api/ai-edit/ops', {
-    method: 'POST',
-    body: {
-      capability: 'edit_content',
-      targetType: 'document_block',
-      targetId: 'block-7',
-      before: { blockType: 'text', content: { text: '旧文案' } },
-      after: { blockType: 'vote', content: { options: ['A', 'B'] } },
-      confirm: true,
-    },
-  });
+  const applied = await admin.call('/api/ai-edit/ops', { method: 'POST', body: { ...previewBody, confirm: true } });
   check('带 confirm 时落盘', applied.status === 200 && applied.data?.applied === true, JSON.stringify(applied.data));
   const opId = applied.data?.opId;
   check('落盘返回了操作 id', Number.isInteger(opId), String(opId));
 
   const badAfter = await admin.call('/api/ai-edit/ops', {
     method: 'POST',
-    body: { capability: 'edit_content', after: ['整篇重写'], confirm: true },
+    body: { documentId: 'doc-7', blockId: 'block-7', after: ['整篇重写'], confirm: true },
   });
   check('after 不是对象时返回 400（只接受块级改动）', badAfter.status === 400, `实际 ${badAfter.status}`);
 
   /* ---------- 8. 审计日志 ---------- */
-  const ops = await admin.call('/api/ai-edit/ops');
+  const ops = await admin.call('/api/ai-edit/ops?limit=100');
   check('操作日志返回 200', ops.status === 200, `实际 ${ops.status}`);
   const logged = (ops.data?.ops ?? []).find((row) => row.id === opId);
   check('落盘的操作能在日志里查到', Boolean(logged), JSON.stringify(ops.data?.ops?.map((row) => row.id)));
-  check('日志里记着改动前的旧值', logged?.before?.content?.text === '旧文案', JSON.stringify(logged?.before));
-  check('日志里记着改动后的新值', logged?.after?.blockType === 'vote', JSON.stringify(logged?.after));
-  check('日志里记着目标块', logged?.targetId === 'block-7', String(logged?.targetId));
+  check('日志里记着改动前的旧值', logged?.before?.props?.text === '旧文案', JSON.stringify(logged?.before));
+  check('日志里记着改动后的新值', logged?.after?.type === 'poll', JSON.stringify(logged?.after));
+  check('日志里记着目标块', logged?.targetId === 'doc-7:block-7', String(logged?.targetId));
   check('被授权前的那条预览也在日志里', (ops.data.ops ?? []).some((row) => row.status === 'preview'));
 
   /* ---------- 9. 回滚 ---------- */
@@ -291,13 +333,13 @@ try {
 
   const rollback = await admin.call(`/api/ai-edit/ops/${opId}/rollback`, { method: 'POST' });
   check('回滚成功', rollback.status === 200 && rollback.data?.rolledBack === true, JSON.stringify(rollback.data));
-  check('回滚交回了改动前的旧值', rollback.data?.restore?.content?.text === '旧文案', JSON.stringify(rollback.data?.restore));
-  check('回滚交回了目标块', rollback.data?.targetId === 'block-7', String(rollback.data?.targetId));
+  check('回滚交回了改动前的旧值', rollback.data?.restore?.props?.text === '旧文案', JSON.stringify(rollback.data?.restore));
+  check('回滚交回了目标块', rollback.data?.targetId === 'doc-7:block-7', String(rollback.data?.targetId));
 
   const again = await admin.call(`/api/ai-edit/ops/${opId}/rollback`, { method: 'POST' });
   check('重复回滚返回 409', again.status === 409, `实际 ${again.status}`);
 
-  const opsAfter = await admin.call('/api/ai-edit/ops');
+  const opsAfter = await admin.call('/api/ai-edit/ops?limit=100');
   const rolled = (opsAfter.data?.ops ?? []).find((row) => row.id === opId);
   check('回滚后状态变成 rolled_back', rolled?.status === 'rolled_back', String(rolled?.status));
   check('回滚后不再可回滚', rolled?.canRollback === false, String(rolled?.canRollback));
@@ -316,10 +358,10 @@ try {
   check('可以给能力设每日配额（FR-CAP-04）', grantQuota.status === 200, JSON.stringify(grantQuota.error ?? null));
 
   const quotaBody = {
-    targetType: 'document_block',
-    targetId: 'quota-1',
-    before: { blockType: 'text' },
-    after: { blockType: 'vote' },
+    documentId: 'doc-quota',
+    blockId: 'quota-1',
+    before: BLOCK_BEFORE,
+    after: BLOCK_AFTER,
     confirm: true,
   };
   const firstUse = await admin.call('/api/ai-edit/ops', { method: 'POST', body: quotaBody });
@@ -338,7 +380,7 @@ try {
   /* ---------- 11. 未配置模型 → 503 ai_not_configured ---------- */
   const draft = await admin.call('/api/ai-edit/draft', {
     method: 'POST',
-    body: { blockId: 'block-7', instruction: '把这块改成投票' },
+    body: { blockId: 'block-7', block: { type: 'paragraph', props: { text: '原文' } }, instruction: '把这块改成投票' },
   });
   check('没配 AI_API_KEY 时返回 503（不是 500）', draft.status === 503, `实际 ${draft.status}`);
   check('错误代号是 ai_not_configured', draft.error?.code === 'ai_not_configured', String(draft.error?.code));
@@ -349,7 +391,7 @@ try {
 
   const afterRevoke = await admin.call('/api/ai-edit/ops', {
     method: 'POST',
-    body: { capability: 'edit_content', after: { text: '还想改' }, confirm: true },
+    body: { documentId: 'doc-1', blockId: 'block-7', after: BLOCK_AFTER, confirm: true },
   });
   check('收回后立刻用不了（403）', afterRevoke.status === 403, `实际 ${afterRevoke.status}`);
 
@@ -366,7 +408,7 @@ try {
 
   const aliceDenied = await alice.call('/api/ai-edit/ops', {
     method: 'POST',
-    body: { capability: 'edit_content', after: { text: '越权' }, confirm: true },
+    body: { documentId: 'doc-1', blockId: 'block-7', after: BLOCK_AFTER, confirm: true },
   });
   check('alice 没授权就改不了东西', aliceDenied.status === 403, `实际 ${aliceDenied.status}`);
 
@@ -488,10 +530,10 @@ try {
     method: 'POST',
     body: {
       capability: 'read_post',
-      targetType: 'document_block',
-      targetId: 'regress-1',
-      before: { blockType: 'text' },
-      after: { blockType: 'vote' },
+      documentId: 'doc-r1',
+      blockId: 'regress-1',
+      before: BLOCK_BEFORE,
+      after: BLOCK_AFTER,
       confirm: true,
     },
   });
@@ -512,29 +554,24 @@ try {
     method: 'POST',
     body: {
       action: 'grant',
-      targetType: 'document_block',
-      targetId: 'regress-2',
-      before: { blockType: 'text' },
-      after: { blockType: 'vote' },
+      documentId: 'doc-r2',
+      blockId: 'regress-2',
+      before: BLOCK_BEFORE,
+      after: BLOCK_AFTER,
       confirm: true,
     },
   });
   check('伪造的 action 字段不影响请求成功', forgedAction.status === 200, `实际 ${forgedAction.status}`);
-  const forgedRow = (await admin.call('/api/ai-edit/ops')).data?.ops?.find((row) => row.id === forgedAction.data?.opId);
+  const forgedRow = (await admin.call('/api/ai-edit/ops?limit=100')).data?.ops?.find((row) => row.id === forgedAction.data?.opId);
   check('审计里的 action 被写成 apply（不是客户端给的 grant）', forgedRow?.action === 'apply', String(forgedRow?.action));
 
   // —— 回滚的判据要和列表里的 canRollback 一致（原来列表说不可回滚、接口却回滚成功）
   const previewOnly = await admin.call('/api/ai-edit/ops', {
     method: 'POST',
-    body: {
-      targetType: 'document_block',
-      targetId: 'regress-3',
-      before: { blockType: 'text' },
-      after: { blockType: 'vote' },
-    },
+    body: { documentId: 'doc-r3', blockId: 'regress-3', before: BLOCK_BEFORE, after: BLOCK_AFTER },
   });
   check('不带 confirm 只产生预览', previewOnly.status === 200 && previewOnly.data?.applied === false, `实际 ${previewOnly.status}`);
-  const previewRow = (await admin.call('/api/ai-edit/ops')).data?.ops?.find((row) => row.id === previewOnly.data?.opId);
+  const previewRow = (await admin.call('/api/ai-edit/ops?limit=100')).data?.ops?.find((row) => row.id === previewOnly.data?.opId);
   check('预览在列表里标记为不可回滚', previewRow?.canRollback === false, String(previewRow?.canRollback));
   const rollbackPreview = await admin.call(`/api/ai-edit/ops/${previewOnly.data?.opId}/rollback`, { method: 'POST' });
   check('列表说不可回滚的操作，接口同样回滚不了（409）', rollbackPreview.status === 409, `实际 ${rollbackPreview.status}`);
@@ -543,13 +580,7 @@ try {
   //    收回授权后必须做不了（原来回滚端点完全没有能力门）
   const appliedRegress = await admin.call('/api/ai-edit/ops', {
     method: 'POST',
-    body: {
-      targetType: 'document_block',
-      targetId: 'regress-4',
-      before: { blockType: 'text' },
-      after: { blockType: 'vote' },
-      confirm: true,
-    },
+    body: { documentId: 'doc-r4', blockId: 'regress-4', before: BLOCK_BEFORE, after: BLOCK_AFTER, confirm: true },
   });
   const appliedId = appliedRegress.data?.opId;
   await admin.call('/api/ai-edit/grants/edit_content', { method: 'DELETE' });
@@ -559,7 +590,7 @@ try {
   // —— 收回授权那条审计必须记「收回前」的状态
   //    （原来是在 UPDATE 之后才读 before，存下来的是 revoked_at 已经非空的收回后状态；
   //     注意 readGrant 返回的是**原始行**，字段是 snake_case 的 revoked_at）
-  const revokeRow = (await admin.call('/api/ai-edit/ops')).data?.ops?.find(
+  const revokeRow = (await admin.call('/api/ai-edit/ops?limit=100')).data?.ops?.find(
     (row) => row.action === 'revoke' && row.capability === 'edit_content',
   );
   check(
@@ -581,12 +612,7 @@ try {
   const usedBeforePreview = await editContentUsed(admin);
   await admin.call('/api/ai-edit/ops', {
     method: 'POST',
-    body: {
-      targetType: 'document_block',
-      targetId: 'regress-5',
-      before: { blockType: 'text' },
-      after: { blockType: 'vote' },
-    },
+    body: { documentId: 'doc-r5', blockId: 'regress-5', before: BLOCK_BEFORE, after: BLOCK_AFTER },
   });
   const usedAfterPreview = await editContentUsed(admin);
   check(
@@ -600,7 +626,10 @@ try {
   //     那几条路径干脆什么都不记 —— 同一次调用，网络失败有痕、被服务商拒绝没痕）
   const usedBeforeBlocked = await editContentUsed(admin);
   for (let i = 0; i < 3; i += 1) {
-    await admin.call('/api/ai-edit/draft', { method: 'POST', body: { blockId: 'regress', instruction: '改一下' } });
+    await admin.call('/api/ai-edit/draft', {
+      method: 'POST',
+      body: { blockId: 'regress', block: { type: 'paragraph', props: { text: '原文' } }, instruction: '改一下' },
+    });
   }
   const usedAfterBlocked = await editContentUsed(admin);
   check(
@@ -608,7 +637,7 @@ try {
     usedAfterBlocked === usedBeforeBlocked,
     `${usedBeforeBlocked} → ${usedAfterBlocked}`,
   );
-  const blockedRow = (await admin.call('/api/ai-edit/ops')).data?.ops?.find(
+  const blockedRow = (await admin.call('/api/ai-edit/ops?limit=100')).data?.ops?.find(
     (row) => row.action === 'draft' && row.reason === 'ai_not_configured',
   );
   check('没配模型时仍然留下一条 blocked 审计', blockedRow?.status === 'blocked', JSON.stringify(blockedRow ?? null));
@@ -617,36 +646,155 @@ try {
   //    12 万字的块能撑出 352KB 的请求体）
   const tooBig = await admin.call('/api/ai-edit/draft', {
     method: 'POST',
-    body: { block: { blockType: 'text', content: { text: 'x'.repeat(40000) } }, instruction: '改一下' },
+    body: { block: { type: 'paragraph', props: { text: 'x'.repeat(40000) } }, instruction: '改一下' },
   });
   check('过大的 block 直接 400，不会发给模型', tooBig.status === 400, `实际 ${tooBig.status}`);
 
-  // —— 审计字段有形状和长度约束（原来 targetType 可以是任意字符串、targetId 不限长）
-  const badTarget = await admin.call('/api/ai-edit/ops', {
-    method: 'POST',
-    body: { targetType: 'not a real type!', targetId: 'x', after: { blockType: 'text' }, confirm: true },
-  });
-  check('非法的 targetType 返回 400', badTarget.status === 400, `实际 ${badTarget.status}`);
-
-  const longTarget = await admin.call('/api/ai-edit/ops', {
+  // —— 目标不再由客户端给：`targetType` 服务端写死、`targetId` 服务端拼成
+  //    `<documentId>:<blockId>`。以前 targetType 能填 `not a real type!`、
+  //    targetId 能塞 5000 个字符，日志被任意字符串灌满。
+  const forgedTarget = await admin.call('/api/ai-edit/ops', {
     method: 'POST',
     body: {
-      targetType: 'document_block',
-      targetId: 'y'.repeat(5000),
-      after: { blockType: 'text' },
+      targetType: 'not a real type!',
+      targetId: 'z'.repeat(500),
+      documentId: 'doc-t',
+      blockId: 'blk-t',
+      before: BLOCK_BEFORE,
+      after: BLOCK_AFTER,
       confirm: true,
     },
   });
-  check('超长的 targetId 返回 400', longTarget.status === 400, `实际 ${longTarget.status}`);
+  check('客户端伪造的 targetType / targetId 不影响落盘（200）', forgedTarget.status === 200, `实际 ${forgedTarget.status}`);
+  check(
+    '落盘返回里的 targetType 恒为 document_block',
+    forgedTarget.data?.targetType === 'document_block',
+    String(forgedTarget.data?.targetType),
+  );
+  check(
+    '落盘返回里的 targetId 恒为 "<documentId>:<blockId>"',
+    forgedTarget.data?.targetId === 'doc-t:blk-t',
+    String(forgedTarget.data?.targetId),
+  );
+  const forgedTargetRow = (await admin.call('/api/ai-edit/ops?limit=100')).data?.ops?.find(
+    (row) => row.id === forgedTarget.data?.opId,
+  );
+  check('审计里记的 targetId 也是服务端拼出来的那个', forgedTargetRow?.targetId === 'doc-t:blk-t', String(forgedTargetRow?.targetId));
+
+  // —— after / before 必须是合法块（`{type, props}`），documentId / blockId 都要给、
+  //    不能太长、不能自带冒号（targetId 是按 `:` 拼、回滚时按 `:` 拆的）。
+  //    这一组替代了原来「伪造 targetType / targetId」的两条：那两个字段现在客户端
+  //    根本传不了，可伪造的空间换成了「形状」和「目标 id」。
+  const badAfterType = await admin.call('/api/ai-edit/ops', {
+    method: 'POST',
+    body: { documentId: 'doc-v', blockId: 'blk-v', after: { type: 'vote', props: {} }, confirm: true },
+  });
+  check('after 的 type 不在 12 个里 → 400', badAfterType.status === 400, `实际 ${badAfterType.status}`);
+
+  // `{type:'poll'}` 有 type 没 props：poll 的 schema 里 question 是必填项，这种块
+  // 交给 P2 的 `PUT /api/docs/:id/blocks/:blockId` 是写不进去的，而这里已经会记下
+  // 一条 applied 审计（指着一块写不进去的改动）。所以「缺 props」不算合法块。
+  const badAfterProps = await admin.call('/api/ai-edit/ops', {
+    method: 'POST',
+    body: { documentId: 'doc-v', blockId: 'blk-v', after: { type: 'poll' }, confirm: true },
+  });
+  check('after 缺 props → 400', badAfterProps.status === 400, `实际 ${badAfterProps.status}`);
+
+  const badBefore = await admin.call('/api/ai-edit/ops', {
+    method: 'POST',
+    body: { documentId: 'doc-v', blockId: 'blk-v', before: { type: 'nope', props: {} }, after: BLOCK_AFTER, confirm: true },
+  });
+  check('before 形状不对 → 400', badBefore.status === 400, `实际 ${badBefore.status}`);
+
+  const missingBlockId = await admin.call('/api/ai-edit/ops', {
+    method: 'POST',
+    body: { documentId: 'doc-v', after: BLOCK_AFTER, confirm: true },
+  });
+  check('缺 blockId → 400', missingBlockId.status === 400, `实际 ${missingBlockId.status}`);
+
+  const emptyBlockId = await admin.call('/api/ai-edit/ops', {
+    method: 'POST',
+    body: { documentId: 'doc-v', blockId: '', after: BLOCK_AFTER, confirm: true },
+  });
+  check('blockId 是空串 → 400', emptyBlockId.status === 400, `实际 ${emptyBlockId.status}`);
+
+  const longBlockId = await admin.call('/api/ai-edit/ops', {
+    method: 'POST',
+    body: { documentId: 'doc-v', blockId: 'y'.repeat(5000), after: BLOCK_AFTER, confirm: true },
+  });
+  check('超长的 blockId → 400（拼出来的 targetId 超过长度上限）', longBlockId.status === 400, `实际 ${longBlockId.status}`);
+
+  // `documentId` 是必填的：审计记的是「哪一篇的哪一块」，缺了它目标栏会变成 `:blk`，
+  // 一条「已落盘」的记录却指不回任何文档，回滚也写不回去。
+  const missingDocumentId = await admin.call('/api/ai-edit/ops', {
+    method: 'POST',
+    body: { blockId: 'blk-v', after: BLOCK_AFTER, confirm: true },
+  });
+  check('缺 documentId → 400（否则审计指不回任何文档）', missingDocumentId.status === 400, `实际 ${missingDocumentId.status}`);
+
+  const emptyDocumentId = await admin.call('/api/ai-edit/ops', {
+    method: 'POST',
+    body: { documentId: '', blockId: 'blk-v', after: BLOCK_AFTER, confirm: true },
+  });
+  check('documentId 是空串 → 400', emptyDocumentId.status === 400, `实际 ${emptyDocumentId.status}`);
+
+  const blankDocumentId = await admin.call('/api/ai-edit/ops', {
+    method: 'POST',
+    body: { documentId: '   ', blockId: 'blk-v', after: BLOCK_AFTER, confirm: true },
+  });
+  check('documentId 只有空白 → 400', blankDocumentId.status === 400, `实际 ${blankDocumentId.status}`);
+
+  const zeroDocumentId = await admin.call('/api/ai-edit/ops', {
+    method: 'POST',
+    body: { documentId: 0, blockId: 'blk-v', after: BLOCK_AFTER, confirm: true },
+  });
+  check('documentId 是 0（既不是正整数也不是非空字符串）→ 400', zeroDocumentId.status === 400, `实际 ${zeroDocumentId.status}`);
+
+  const colonDocumentId = await admin.call('/api/ai-edit/ops', {
+    method: 'POST',
+    body: { documentId: 'doc:1', blockId: 'blk-v', after: BLOCK_AFTER, confirm: true },
+  });
+  check('documentId 含冒号 → 400（targetId 是按冒号拼、回滚时按冒号拆的）', colonDocumentId.status === 400, `实际 ${colonDocumentId.status}`);
+
+  const colonBlockId = await admin.call('/api/ai-edit/ops', {
+    method: 'POST',
+    body: { documentId: 'doc-v', blockId: 'blk:1', after: BLOCK_AFTER, confirm: true },
+  });
+  check('blockId 含冒号 → 400', colonBlockId.status === 400, `实际 ${colonBlockId.status}`);
+
+  const blankBlockId = await admin.call('/api/ai-edit/ops', {
+    method: 'POST',
+    body: { documentId: 'doc-v', blockId: '   ', after: BLOCK_AFTER, confirm: true },
+  });
+  check('blockId 只有空白 → 400（先 trim 再判空）', blankBlockId.status === 400, `实际 ${blankBlockId.status}`);
+
+  // 正整数形式的 documentId 也要能用：前端手上常常直接是文档主键。
+  const numericDocumentId = await admin.call('/api/ai-edit/ops', {
+    method: 'POST',
+    body: { documentId: 3, blockId: 'b7', after: BLOCK_AFTER, confirm: true },
+  });
+  check('documentId 是正整数时也能落盘', numericDocumentId.status === 200, `实际 ${numericDocumentId.status}`);
+  check(
+    '正整数 documentId 被规范化成字符串，targetId = <documentId>:<blockId>',
+    numericDocumentId.data?.documentId === '3' && numericDocumentId.data?.targetId === '3:b7',
+    JSON.stringify({ documentId: numericDocumentId.data?.documentId, targetId: numericDocumentId.data?.targetId }),
+  );
+  check(
+    '正整数 documentId 的 writeTo 形状',
+    numericDocumentId.data?.writeTo === '/api/docs/3/blocks/b7',
+    String(numericDocumentId.data?.writeTo),
+  );
 
   /* ---------- 18. 真打一次模型：成功路径 + 每一条失败路径 ---------- */
   //
   // 前面 17 节都跑在「故意不配 key」的服务器上，模型分支（成功解析、超时、上游拒绝、
-  // 坏 JSON）**一次都没被执行过**。这一节补上：起一个本地假模型（可切六种应答），
+  // 坏 JSON）**一次都没被执行过**。这一节补上：起一个本地假模型（可切七种应答），
   // 再起一台配了 AI_API_KEY 的应用服务器指向它，用真实 HTTP 走完整条链。
   //
   // 除了状态码和错误代号，这里还钉住「失败也要留痕」：以前上游 401/403/429/500
   // 与坏 JSON 全都不写审计 —— 同一次调用，网络失败有痕、被服务商拒绝没痕。
+  // 新增的一条是这次改造的核心价值：**合法的 JSON ≠ 合法的块**。模型完全可以吐回
+  // `{"type":"vote","props":{}}` 这种自造类型，落盘时才会炸，所以必须在这里挡住。
   let modelMode = 'ok';
   let lastRequestBody = null;
   let lastAuth = '';
@@ -672,9 +820,15 @@ try {
       if (modelMode === 'ratelimited') return send(429, { error: { message: 'slow down' } });
       if (modelMode === 'upstream') return send(500, { error: { message: 'boom' } });
       if (modelMode === 'badjson') return send(200, { choices: [{ message: { content: '这不是 JSON' } }] });
+      // 合法的 JSON，但块类型是模型自造的 `vote`（12 个合法 type 里没有它）。
+      if (modelMode === 'unknownType') {
+        return send(200, { choices: [{ message: { content: '{"type":"vote","props":{}}' } }] });
+      }
       // 故意套一层 ```json 围栏：模型经常这么干，代码里必须剥掉才能解析。
       return send(200, {
-        choices: [{ message: { content: '```json\n{"blockType":"vote","content":{"question":"选哪个？"}}\n```' } }],
+        choices: [
+          { message: { content: '```json\n{"type":"poll","props":{"question":"选哪个？","options":["A","B"]}}\n```' } },
+        ],
       });
     });
   });
@@ -714,15 +868,19 @@ try {
 
   const okDraft = await keyedAdmin.call('/api/ai-edit/draft', {
     method: 'POST',
-    body: { blockId: 'block-1', block: { blockType: 'text', content: { text: '原文' } }, instruction: '改成投票' },
+    body: { blockId: 'block-1', block: { type: 'paragraph', props: { text: '原文' } }, instruction: '改成投票' },
   });
   check(
     '上游正常时草拟成功，且仍然只是预览（不自动落盘）',
     okDraft.status === 200 && okDraft.data?.applied === false,
     `${okDraft.status} ${JSON.stringify(okDraft.error ?? null)}`,
   );
-  check('拿回来的是模型给的块改动', okDraft.data?.patch?.blockType === 'vote', JSON.stringify(okDraft.data?.patch ?? null));
-  check('带 ```json 围栏的应答也能解析', okDraft.data?.patch?.content?.question === '选哪个？', JSON.stringify(okDraft.data?.patch ?? null));
+  check('拿回来的是模型给的块改动', okDraft.data?.patch?.type === 'poll', JSON.stringify(okDraft.data?.patch ?? null));
+  check(
+    '带 ```json 围栏的应答也能解析',
+    okDraft.data?.patch?.props?.question === '选哪个？',
+    JSON.stringify(okDraft.data?.patch ?? null),
+  );
   check('模型名如实回填', okDraft.data?.model === 'stub-model', String(okDraft.data?.model));
 
   check('请求体带上了配置的 model', lastRequestBody?.model === 'stub-model', String(lastRequestBody?.model));
@@ -732,8 +890,14 @@ try {
     String(lastRequestBody?.messages?.[0]?.content ?? ''),
   );
   check(
+    'system 提示词教的是 {type, props} 形状',
+    String(lastRequestBody?.messages?.[0]?.content ?? '').includes('"type"') &&
+      String(lastRequestBody?.messages?.[0]?.content ?? '').includes('"props"'),
+    String(lastRequestBody?.messages?.[0]?.content ?? ''),
+  );
+  check(
     'user 消息里带着当前块',
-    String(lastRequestBody?.messages?.[1]?.content ?? '').includes('"blockType"'),
+    String(lastRequestBody?.messages?.[1]?.content ?? '').includes('"type"'),
     String(lastRequestBody?.messages?.[1]?.content ?? ''),
   );
   check(
@@ -743,7 +907,7 @@ try {
   );
   check('带上了 Authorization: Bearer <key>', lastAuth === 'Bearer stub-key', lastAuth);
 
-  const draftBody = { blockId: 'block-1', block: { blockType: 'text', content: { text: '原文' } }, instruction: '改' };
+  const draftBody = { blockId: 'block-1', block: { type: 'paragraph', props: { text: '原文' } }, instruction: '改' };
 
   modelMode = 'unauthorized';
   const unauthorized = await keyedAdmin.call('/api/ai-edit/draft', { method: 'POST', body: draftBody });
@@ -777,6 +941,16 @@ try {
     `${badjson.status} ${badjson.error?.code}`,
   );
 
+  // —— 这次改造的核心：合法 JSON 但块类型是编的（`vote`）也要挡住，
+  //    而不是等落盘的时候才炸，而且必须留痕。
+  modelMode = 'unknownType';
+  const unknownType = await keyedAdmin.call('/api/ai-edit/draft', { method: 'POST', body: draftBody });
+  check(
+    '模型返回不存在的块类型（vote）→ 502 ai_bad_json',
+    unknownType.status === 502 && unknownType.error?.code === 'ai_bad_json',
+    `${unknownType.status} ${unknownType.error?.code}`,
+  );
+
   modelMode = 'hang';
   const timedOut = await keyedAdmin.call('/api/ai-edit/draft', { method: 'POST', body: draftBody });
   check(
@@ -801,6 +975,330 @@ try {
       JSON.stringify(row ?? null),
     );
   }
+
+  const shapeRow = keyedOps.find((item) => item.action === 'draft' && String(item.reason ?? '').includes('块形状不对'));
+  check(
+    '模型编出不存在的块类型也留下了 blocked 审计，理由是「块形状不对」',
+    shapeRow?.status === 'blocked',
+    JSON.stringify(shapeRow ?? null),
+  );
+
+  /* ---------- 19. 块类型清单不许漂移（静态哨兵 + 行为级对拍） ---------- */
+  //
+  // `AI_BLOCK_TYPES` 是从 P2 的 `src/modules/doc/blocks/types.js` **抄的一份**
+  // （骨架规范禁止 import 隔壁模块的文件，所以只能复制）。抄来的东西会漂：
+  // P2 以后加/改块类型，我的提示词就会教模型输出错的东西，而错是静默的 ——
+  // 模型照着新名字吐，落盘时才炸。这一节让漂移在测试里立刻红，而不是等线上。
+  check('从 P2 的 types.js 抓到 12 个内置块类型名', P2_BLOCK_TYPE_NAMES.length === 12, JSON.stringify(P2_BLOCK_TYPE_NAMES));
+  check('从 AI 的 schema.js 抓到 12 个类型名', AI_BLOCK_TYPE_NAMES.length === 12, JSON.stringify(AI_BLOCK_TYPE_NAMES));
+  check(
+    '两边的块类型清单完全一致（名字与顺序都对齐）',
+    JSON.stringify(P2_BLOCK_TYPE_NAMES) === JSON.stringify(AI_BLOCK_TYPE_NAMES),
+    `P2=${JSON.stringify(P2_BLOCK_TYPE_NAMES)} AI=${JSON.stringify(AI_BLOCK_TYPE_NAMES)}`,
+  );
+  check(
+    '清单里没有 vote 这种编造的块类型（投票块的真名是 poll）',
+    !P2_BLOCK_TYPE_NAMES.includes('vote') && P2_BLOCK_TYPE_NAMES.includes('poll') && !AI_BLOCK_TYPE_NAMES.includes('vote'),
+    JSON.stringify(P2_BLOCK_TYPE_NAMES),
+  );
+
+  // 上面两条比的是**源文件里的数组字面量**。但 `blockPatchProblem` 放行的是从它派生出来的
+  // `AI_BLOCK_TYPE_NAMES`，中间隔着 `.map(item => item.name)`。派生那一步被改坏（多一个
+  // concat、少一个 filter）时字面量照样对得上，运行时的白名单却已经和 P2 不一致了 ——
+  // 只比字面量会漏掉这一整类漂移，所以再比一次**运行时导出的值**。
+  check(
+    '运行时导出的 AI_BLOCK_TYPE_NAMES 与源文件字面量一致（派生那一步没被改坏）',
+    JSON.stringify(AI_RUNTIME_TYPE_NAMES) === JSON.stringify(AI_BLOCK_TYPE_NAMES),
+    `运行时=${JSON.stringify(AI_RUNTIME_TYPE_NAMES)} 字面量=${JSON.stringify(AI_BLOCK_TYPE_NAMES)}`,
+  );
+  check(
+    '运行时导出的 AI_BLOCK_TYPE_NAMES 与 P2 的清单一致（白名单真的只放行这 12 个）',
+    JSON.stringify(AI_RUNTIME_TYPE_NAMES) === JSON.stringify(P2_BLOCK_TYPE_NAMES),
+    `运行时=${JSON.stringify(AI_RUNTIME_TYPE_NAMES)} P2=${JSON.stringify(P2_BLOCK_TYPE_NAMES)}`,
+  );
+
+  // 行为级对拍：清单的真实出口是 P2 的 `GET /api/docs/meta/block-types`。
+  // 它给的是「内置 ∪ 库里注册的」，所以只比 `builtin: true` 的那 12 个 ——
+  // 静默漂移的另一半是「接口加了类型、AI 的清单没跟上」。
+  const metaTypes = await admin.call('/api/docs/meta/block-types');
+  check('GET /api/docs/meta/block-types 返回 200', metaTypes.status === 200, `实际 ${metaTypes.status}`);
+  const metaBuiltinNames = (metaTypes.data?.types ?? []).filter((item) => item.builtin).map((item) => item.name);
+  check(
+    '接口给的内置类型清单和 AI 的清单逐项一致',
+    JSON.stringify(metaBuiltinNames) === JSON.stringify(AI_BLOCK_TYPE_NAMES),
+    `接口=${JSON.stringify(metaBuiltinNames)} AI=${JSON.stringify(AI_BLOCK_TYPE_NAMES)}`,
+  );
+
+  /* ---------- 20. 全站每日预算闸门（AI_DAILY_TOTAL_LIMIT） ---------- */
+
+  //
+  // 单用户配额管不住**总额**：钱是按 key 算的，配额是按用户算的。这一节起一台
+  // 独立库 + 独立端口的服务器，把全站上限设成 2，验证：
+  //   · 落盘（confirm:true）累计到上限就被 429 挡住，代号还是 ai_rate_limited；
+  //   · **预览不受影响**（预览既不调模型也不写盘，没有理由被预算挡住）；
+  //   · `/api/ai-edit/usage` 的 budget.used / limit / remaining 对得上。
+  for (const suffix of ['', '-wal', '-shm']) rmSync(BUDGET_DB_FILE + suffix, { force: true });
+  const budgetLogFd = openSync(BUDGET_LOG_FILE, 'w');
+  const budgetServer = spawn(process.execPath, [SERVER], {
+    env: {
+      ...process.env,
+      PORT: String(BUDGET_PORT),
+      DB_FILE: BUDGET_DB_FILE,
+      AVATAR_DIR,
+      NOTES_DIR,
+      QUIET: '1',
+      AI_API_KEY: '',
+      AI_DAILY_TOTAL_LIMIT: String(BUDGET_LIMIT),
+    },
+    stdio: ['ignore', budgetLogFd, budgetLogFd],
+  });
+  extraChildren.push(budgetServer);
+
+  check(
+    '配了全站预算的第三台服务器起来了',
+    await waitForServer(20000, BUDGET_BASE),
+    '看看 data/ai-smoke-budget-server.log',
+  );
+
+  const budgetAdmin = createClient(BUDGET_BASE);
+  const budgetLogin = await budgetAdmin.call('/api/auth/login', {
+    method: 'POST',
+    body: { username: 'admin', password: 'admin123' },
+  });
+  check('第三台服务器上管理员能登录（同一份种子数据）', budgetLogin.status === 200, JSON.stringify(budgetLogin.error ?? null));
+
+  const budgetGrant = await budgetAdmin.call('/api/ai-edit/grants', {
+    method: 'POST',
+    body: { capability: 'edit_content', confirm: true, dailyQuota: 0 },
+  });
+  check('第三台服务器上授权 edit_content 成功', budgetGrant.status === 200, JSON.stringify(budgetGrant.error ?? null));
+
+  const budgetBody = {
+    documentId: 'doc-budget',
+    blockId: 'block-budget',
+    before: BLOCK_BEFORE,
+    after: BLOCK_AFTER,
+    confirm: true,
+  };
+  const budgetFirst = await budgetAdmin.call('/api/ai-edit/ops', { method: 'POST', body: budgetBody });
+  check(
+    `预算内第 1 次落盘成功（1/${BUDGET_LIMIT}）`,
+    budgetFirst.status === 200 && budgetFirst.data?.applied === true,
+    `实际 ${budgetFirst.status}`,
+  );
+  const budgetSecond = await budgetAdmin.call('/api/ai-edit/ops', { method: 'POST', body: budgetBody });
+  check(
+    `预算内第 2 次落盘成功（${BUDGET_LIMIT}/${BUDGET_LIMIT}）`,
+    budgetSecond.status === 200 && budgetSecond.data?.applied === true,
+    `实际 ${budgetSecond.status}`,
+  );
+  const budgetThird = await budgetAdmin.call('/api/ai-edit/ops', { method: 'POST', body: budgetBody });
+  check('用满全站预算后继续落盘返回 429', budgetThird.status === 429, `实际 ${budgetThird.status}`);
+  check('超预算的错误代号是 ai_rate_limited', budgetThird.error?.code === 'ai_rate_limited', String(budgetThird.error?.code));
+
+  // 预览不花钱：预算用光之后预览仍然必须能出。
+  const budgetPreview = await budgetAdmin.call('/api/ai-edit/ops', {
+    method: 'POST',
+    body: {
+      documentId: 'doc-budget',
+      blockId: 'block-budget',
+      before: BLOCK_BEFORE,
+      after: BLOCK_AFTER,
+    },
+  });
+  check(
+    '预算用光之后预览仍然 200（预览不花钱，不该被预算挡住）',
+    budgetPreview.status === 200 && budgetPreview.data?.applied === false,
+    `实际 ${budgetPreview.status} ${JSON.stringify(budgetPreview.error ?? null)}`,
+  );
+
+  const budgetUsage = await budgetAdmin.call('/api/ai-edit/usage');
+  check('预算服务器上的用量面板返回 200', budgetUsage.status === 200, `实际 ${budgetUsage.status}`);
+  check(
+    'budget.limit 就是 AI_DAILY_TOTAL_LIMIT',
+    budgetUsage.data?.budget?.limit === BUDGET_LIMIT,
+    String(budgetUsage.data?.budget?.limit),
+  );
+  check(
+    'budget.used 等于已经计费的落盘次数',
+    budgetUsage.data?.budget?.used === BUDGET_LIMIT,
+    String(budgetUsage.data?.budget?.used),
+  );
+  check('budget.remaining 归零', budgetUsage.data?.budget?.remaining === 0, String(budgetUsage.data?.budget?.remaining));
+  check('配了上限时 unlimited 是 false', budgetUsage.data?.budget?.unlimited === false, String(budgetUsage.data?.budget?.unlimited));
+  check(
+    '预览没有被算进 today.billed',
+    budgetUsage.data?.today?.billed === BUDGET_LIMIT,
+    String(budgetUsage.data?.today?.billed),
+  );
+
+  /* ---------- 21. /api/ai-edit/usage 的权限与形状 ---------- */
+  //
+  // 全站用量只有管理团队能看：这是「谁在用这把 key」的账单视角。
+  // 口径要与用户额度、全站预算逐字一致（billed 只数 AI_QUOTA_ACTIONS 里没失败的行）。
+  const anonUsage = await createClient().call('/api/ai-edit/usage');
+  check('未登录看全站用量返回 401', anonUsage.status === 401, `实际 ${anonUsage.status}`);
+  check('未登录的错误代号是 unauthenticated', anonUsage.error?.code === 'unauthenticated', String(anonUsage.error?.code));
+
+  const aliceUsage = await alice.call('/api/ai-edit/usage');
+  check('普通用户 alice 看全站用量返回 403', aliceUsage.status === 403, `实际 ${aliceUsage.status}`);
+  check('普通用户的错误代号是 forbidden', aliceUsage.error?.code === 'forbidden', String(aliceUsage.error?.code));
+
+  // 先制造几次计费调用，再断言面板把它们算进去了。
+  await admin.call('/api/ai-edit/grants', {
+    method: 'POST',
+    body: { capability: 'edit_content', confirm: true, dailyQuota: 0 },
+  });
+  const usageOpsBody = {
+    documentId: 'doc-usage',
+    blockId: 'block-usage',
+    before: BLOCK_BEFORE,
+    after: BLOCK_AFTER,
+    confirm: true,
+  };
+  const usageAppliedOne = await admin.call('/api/ai-edit/ops', { method: 'POST', body: usageOpsBody });
+  const usageAppliedTwo = await admin.call('/api/ai-edit/ops', { method: 'POST', body: usageOpsBody });
+  check(
+    '制造计费调用：两次落盘都成功',
+    usageAppliedOne.status === 200 && usageAppliedTwo.status === 200,
+    `${usageAppliedOne.status} / ${usageAppliedTwo.status}`,
+  );
+
+  const usage = await admin.call('/api/ai-edit/usage');
+  check('管理员看全站用量返回 200', usage.status === 200, `实际 ${usage.status} ${JSON.stringify(usage.error ?? null)}`);
+  check('scope 是 site（全站口径，不是「我自己的」）', usage.data?.scope === 'site', String(usage.data?.scope));
+  check(
+    'budget.envKey 是 AI_DAILY_TOTAL_LIMIT',
+    usage.data?.budget?.envKey === 'AI_DAILY_TOTAL_LIMIT',
+    String(usage.data?.budget?.envKey),
+  );
+  check(
+    '没配全站上限时 unlimited=true 且 remaining=null',
+    usage.data?.budget?.unlimited === true && usage.data?.budget?.remaining === null,
+    JSON.stringify(usage.data?.budget ?? null),
+  );
+  const usageToday = usage.data?.today ?? {};
+  check(
+    'today 的计数字段是数字、列表字段是数组',
+    typeof usageToday.total === 'number' &&
+      typeof usageToday.billed === 'number' &&
+      typeof usageToday.blocked === 'number' &&
+      typeof usageToday.users === 'number' &&
+      Array.isArray(usageToday.byAction) &&
+      Array.isArray(usageToday.topUsers),
+    JSON.stringify(usageToday),
+  );
+  check('today.billed 大于 0（刚制造的落盘算进去了）', usageToday.billed > 0, String(usageToday.billed));
+  check(
+    'today.total 不小于 today.billed（total 是当天全部日志行）',
+    usageToday.total >= usageToday.billed,
+    `${usageToday.total} / ${usageToday.billed}`,
+  );
+  check(
+    'byAction 是 {action, count} 形状',
+    usageToday.byAction.every((item) => typeof item.action === 'string' && typeof item.count === 'number'),
+    JSON.stringify(usageToday.byAction),
+  );
+  check(
+    'topUsers 里有 admin，且次数大于 0',
+    usageToday.topUsers.some((item) => item.username === 'admin' && item.count > 0),
+    JSON.stringify(usageToday.topUsers),
+  );
+  check(
+    'note 说清了「只有次数、没有金额」',
+    typeof usage.data?.note === 'string' && usage.data.note.includes('token'),
+    String(usage.data?.note),
+  );
+
+  /* ---------- 22. 落盘契约：writeTo 与审计里的干净块 ---------- */
+  //
+  // `/ops` 自己**不改文档**（documents / document_blocks 归 P2），它只写审计，
+  // 并把「该往哪写」告诉前端。所以 `writeTo` 是这条接口和后端文档模块之间
+  // 唯一的接口约定，必须钉住它的真实形状（不是猜的）。
+  const contractBefore = { type: 'paragraph', props: { text: '旧文案' } };
+  const contractAfter = { type: 'poll', props: { question: '选哪个？', options: ['A', 'B'] } };
+  const contract = await admin.call('/api/ai-edit/ops', {
+    method: 'POST',
+    body: { documentId: 'doc-9', blockId: 'block-9', before: contractBefore, after: contractAfter, reason: '落盘契约', confirm: true },
+  });
+  check('带 documentId / blockId 落盘成功', contract.status === 200 && contract.data?.applied === true, JSON.stringify(contract.data));
+  check(
+    'writeTo 明确指向 P2 的块写接口',
+    contract.data?.writeTo === '/api/docs/doc-9/blocks/block-9',
+    String(contract.data?.writeTo),
+  );
+  check(
+    '返回里带上 documentId 与 blockId',
+    contract.data?.documentId === 'doc-9' && contract.data?.blockId === 'block-9',
+    JSON.stringify({ documentId: contract.data?.documentId, blockId: contract.data?.blockId }),
+  );
+  check('返回里的 targetType 是服务端写死的 document_block', contract.data?.targetType === 'document_block', String(contract.data?.targetType));
+  check('返回里的 targetId 是 <documentId>:<blockId>', contract.data?.targetId === 'doc-9:block-9', String(contract.data?.targetId));
+
+  // `writeTo` 里的 id 是 encodeURIComponent 过的（前端拿去 fetch 的是一整条路径），
+  // 而返回里的 `documentId` / `blockId` 是**原样**的 —— 前端应该直接读这两个字段，
+  // 不要去拆 targetId。空格 / 斜杠 / 非 ASCII 都要能编码。
+  const encodedWrite = await admin.call('/api/ai-edit/ops', {
+    method: 'POST',
+    body: { documentId: 'doc 9/甲', blockId: 'b 7', after: contractAfter, confirm: true },
+  });
+  check(
+    'writeTo 里的 id 经过 encodeURIComponent',
+    encodedWrite.data?.writeTo === '/api/docs/doc%209%2F%E7%94%B2/blocks/b%207',
+    String(encodedWrite.data?.writeTo),
+  );
+  check(
+    '返回的 documentId / blockId 是原样的，没有被编码',
+    encodedWrite.data?.documentId === 'doc 9/甲' && encodedWrite.data?.blockId === 'b 7',
+    JSON.stringify({ documentId: encodedWrite.data?.documentId, blockId: encodedWrite.data?.blockId }),
+  );
+  check(
+    'targetId 用的是原样的 id（按冒号拆得回来）',
+    encodedWrite.data?.targetId === 'doc 9/甲:b 7',
+    String(encodedWrite.data?.targetId),
+  );
+
+  const trimmedWrite = await admin.call('/api/ai-edit/ops', {
+    method: 'POST',
+    body: { documentId: '  doc-9  ', blockId: '  block-9  ', after: contractAfter, confirm: true },
+  });
+  check(
+    'documentId / blockId 两端的空白会被 trim 掉',
+    trimmedWrite.data?.documentId === 'doc-9' &&
+      trimmedWrite.data?.blockId === 'block-9' &&
+      trimmedWrite.data?.writeTo === '/api/docs/doc-9/blocks/block-9',
+    JSON.stringify({
+      documentId: trimmedWrite.data?.documentId,
+      blockId: trimmedWrite.data?.blockId,
+      writeTo: trimmedWrite.data?.writeTo,
+    }),
+  );
+
+  const contractRow = (await admin.call('/api/ai-edit/ops?limit=100')).data?.ops?.find((row) => row.id === contract.data?.opId);
+  check('审计里存着这条操作', Boolean(contractRow), JSON.stringify(contract.data?.opId));
+  check('审计里的 after 就是 {type, props} 本身', sameJson(contractRow?.after, contractAfter), JSON.stringify(contractRow?.after));
+  check('审计里的 before 同理', sameJson(contractRow?.before, contractBefore), JSON.stringify(contractRow?.before));
+
+  // 审计里的 before 会被 rollback 原样交回给 P2 写盘（restore），所以它必须是
+  // **干净的** {type, props}：混进 blockType / content 这类旧形状的键，回滚时就等于
+  // 往 P2 塞它不认识的东西。`/draft` 那条路径是清洗过再入库的，这里对齐它。
+  const dirty = await admin.call('/api/ai-edit/ops', {
+    method: 'POST',
+    body: {
+      documentId: 'doc-9',
+      blockId: 'block-10',
+      before: { type: 'paragraph', props: { text: '旧文案' }, blockType: 'text', content: { text: '旧文案' } },
+      after: { type: 'poll', props: { question: '选哪个？', options: ['A', 'B'] }, blockType: 'vote', content: { options: ['A', 'B'] } },
+      confirm: true,
+    },
+  });
+  check('带旧形状多余键的补丁仍然能落盘（形状校验只看 type / props）', dirty.status === 200, `实际 ${dirty.status}`);
+  const dirtyRow = (await admin.call('/api/ai-edit/ops?limit=100')).data?.ops?.find((row) => row.id === dirty.data?.opId);
+  check(
+    '审计里的 before / after 是剥掉多余键的干净 {type, props}',
+    sameJson(dirtyRow?.after, contractAfter) && sameJson(dirtyRow?.before, contractBefore),
+    `after=${JSON.stringify(dirtyRow?.after)} before=${JSON.stringify(dirtyRow?.before)}`,
+  );
 
   await finish(failures.length ? 1 : 0);
 } catch (error) {

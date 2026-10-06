@@ -1,4 +1,4 @@
-// AI 编辑台（P3）：能力授权 / 块级改写草稿 / 操作日志与回滚。
+// AI 编辑台（P3）：选文档 → 选块 → 改块 → 真的落盘 / 回滚，外加能力授权与全站用量。
 //
 // ⚠️ 前缀是 `ai-edit` 不是 `ai`。`/api/ai/` 整段被 forum-ai 的挂载层短路了
 // （forum-ai/src/mount.mjs:255 的 isAiPath + :330-344 的兜底 404），注册在那下面的
@@ -8,7 +8,13 @@
 // public/core/events.js 里那个中央 `data-action` 分发 —— 那个 switch 是
 // check-ui-contract.mjs 盯着的公共地带，谁都别往里塞自己的动作。
 //
-// 数据全部来自 P3 自己的模块（src/modules/ai/routes.js，八条路由）。
+// 数据来自两个模块：
+//   · src/modules/ai/routes.js   —— /api/ai-edit/*（能力、草拟、审计、回滚、用量）
+//   · src/modules/doc/routes.js  —— /api/docs*（文档与块，PUT 才是真写进库）
+//
+// ⚠️ 「块」的形状是 P2 的原生 `{ type, props }`，type 只能是 12 种内置类型之一
+// （heading/paragraph/list/code/table/formula/image/quote/poll/wiki/embed/app）。
+// 以前这里是 `{ blockType, content }`，服务端 blockPatchProblem() 会直接 400。
 
 import { $, emptyHtml, esc, loadingHtml, toast, ui } from '../core/dom.js';
 import { api, withButtonBusy } from '../core/api.js';
@@ -19,6 +25,27 @@ import * as Fmt from '../core/format.js';
 const RISK_LABEL = { low: '低风险', medium: '中风险', high: '高风险' };
 const QUOTA_HINT = '0 表示不限次数';
 const DEFAULT_INSTRUCTION = '把这块改成投票';
+const NO_TARGET_HINT = '先选一篇文档和一个块：不选就不知道改的是哪儿';
+
+/** 12 种内置块类型的中文名。块下拉里显示成 `b3 · 投票(poll) · 选哪个？` */
+const BLOCK_LABEL = {
+  heading: '标题',
+  paragraph: '段落',
+  list: '列表',
+  code: '代码',
+  table: '表格',
+  formula: '公式',
+  image: '图片',
+  quote: '引用',
+  poll: '投票',
+  wiki: '百科卡片',
+  embed: '嵌入',
+  app: '小应用',
+};
+
+/** 没选块时的占位内容，形状必须合法，否则草拟会被服务端 400 掉。 */
+const DEFAULT_BLOCK = { type: 'paragraph', props: { text: '把这句话改成投票。' } };
+const DEFAULT_BLOCK_TEXT = JSON.stringify(DEFAULT_BLOCK, null, 2);
 
 const aeState = {
   capabilities: [],
@@ -36,7 +63,25 @@ const aeState = {
    */
   instructionInput: '',
   blockInput: '',
+  /* ---- 目标：改哪一篇的哪一个块 ---- */
+  documents: [],
+  /** 'mine'（我的）| 'all'（全站）：下拉取空的降级开关 */
+  docScope: 'mine',
+  docDegraded: false,
+  docError: '',
+  documentId: '',
+  blocks: [],
+  blockId: '',
+  blocksLoading: false,
+  /* ---- 全站用量（管理员专属） ---- */
+  /** null=没拿到；>=400 时整个区块静默隐藏 */
+  usage: null,
+  usageStatus: 0,
+  usageError: '',
 };
+
+let loadToken = 0;
+let blockToken = 0;
 
 const chip = (text, kind = '') => `<span class="ai-chip ${kind}">${esc(text)}</span>`;
 
@@ -44,9 +89,116 @@ function riskKind(risk) {
   return risk === 'high' ? 'warn' : risk === 'medium' ? 'soft' : 'ok';
 }
 
+/* ---------- 目标：文档与块 ---------- */
+
+function docLabel(doc) {
+  const title = doc.title || '（无标题）';
+  const kind = doc.kindLabel || doc.kind || '文档';
+  return `${title} · ${kind}`;
+}
+
+function blockLabel(block) {
+  const name = BLOCK_LABEL[block.type] || block.type || '未知';
+  const props = block.props || {};
+  const digest = String(props.question ?? props.text ?? props.title ?? props.code ?? '').replace(/\s+/g, ' ').trim();
+  const short = digest.length > 24 ? `${digest.slice(0, 24)}…` : digest;
+  return `${block.blockId} · ${name}(${block.type})${short ? ` · ${short}` : ''}`;
+}
+
+function aeOptionHtml(value, label, selected) {
+  return `<option value="${esc(value)}"${selected ? ' selected' : ''}>${esc(label)}</option>`;
+}
+
+function findDocument(id) {
+  return aeState.documents.find((doc) => String(doc.id) === String(id)) || null;
+}
+
+function findBlock(id) {
+  return aeState.blocks.find((block) => String(block.blockId) === String(id)) || null;
+}
+
+function aeDocSelectHtml() {
+  const options = aeState.documents
+    .map((doc) => aeOptionHtml(doc.id, docLabel(doc), String(doc.id) === String(aeState.documentId)))
+    .join('');
+  const empty =
+    aeState.docScope === 'all'
+      ? '站内一篇积木文档都没有，先去 #/blocks 建一篇'
+      : '你名下还没有积木文档，去 #/blocks 建一篇，或点上面的「看全站」';
+  return `
+      <select class="ae-input ae-select" data-ae-doc aria-label="选择文档">
+        <option value="">— 选一篇文档 —</option>
+        ${options}
+        ${options ? '' : `<option value="" disabled>${esc(empty)}</option>`}
+      </select>`;
+}
+
+function aeBlockSelectHtml() {
+  // loadingHtml() 自带一层 .card，不要再套 .ae-placeholder（会双边框）。
+  if (aeState.blocksLoading) return loadingHtml();
+  if (!aeState.documentId) return '<div class="ae-placeholder">先选上面的文档，这里才会列出它的块。</div>';
+  if (!aeState.blocks.length) return '<div class="ae-placeholder">这篇文档还没有块，换个文档或者先去编辑页加一块。</div>';
+  const options = aeState.blocks
+    .map((block) => aeOptionHtml(block.blockId, blockLabel(block), String(block.blockId) === String(aeState.blockId)))
+    .join('');
+  return `
+      <select class="ae-input ae-select" data-ae-pick aria-label="选择块">
+        <option value="">— 选一个块 —</option>
+        ${options}
+      </select>`;
+}
+
+function aeTargetHtml() {
+  const doc = findDocument(aeState.documentId);
+  const block = findBlock(aeState.blockId);
+  const parts = [];
+  if (doc) parts.push(`文档「${doc.title || '（无标题）'}」#${doc.id}`);
+  if (block) parts.push(`块 ${block.blockId}（${BLOCK_LABEL[block.type] || block.type}）`);
+  const ready = Boolean(aeState.documentId && aeState.blockId);
+  return `
+    <section class="card">
+      <div class="card-head">
+        <h2>目标</h2>
+        <span class="ae-target-state">${ready ? '✅ 已锁定改动位置' : '未选定'}</span>
+      </div>
+      <div class="page-sub">
+        草拟、落盘、回滚都作用在这里选中的那一块上。
+        改完会先 <strong>PUT /api/docs/:id/blocks/:blockId</strong> 真写进文档，再记一条审计。
+      </div>
+      <div class="ae-target">
+        <div class="ae-field">
+          <label class="ae-field-label" for="ae-doc">文档</label>
+          ${aeDocSelectHtml()}
+          <div class="ae-field-hint">
+            ${
+              aeState.docScope === 'mine'
+                ? '只看自己的文档（<code>mine=1</code>）'
+                : '看全站文档（已从「我的文档」降级）'
+            }
+            <button class="btn btn-sm" type="button" data-ae-act="toggle-scope">${
+              aeState.docScope === 'mine' ? '看全站' : '只看我的'
+            }</button>
+          </div>
+        </div>
+        <div class="ae-field">
+          <label class="ae-field-label" for="ae-block-pick">块</label>
+          ${aeBlockSelectHtml()}
+          <div class="ae-field-hint">选中后块的 JSON 会填进下面的框，可以直接手改。</div>
+        </div>
+      </div>
+      <div class="ae-target-line">${
+        parts.length ? esc(parts.join(' → ')) : `<span class="ae-target-hint">${NO_TARGET_HINT}</span>`
+      }</div>
+      ${aeState.docError ? `<div class="ae-note">列表读不出来：${esc(aeState.docError)}</div>` : ''}
+      ${aeState.docDegraded ? '<div class="ae-note">你名下还没有文档，已经自动切成全站列表。</div>' : ''}
+    </section>`;
+}
+
+/* ---------- 顶部统计 ---------- */
+
 function aeHeadHtml() {
   const granted = aeState.capabilities.filter((item) => item.granted).length;
-  const used = aeState.capabilities.reduce((sum, item) => sum + item.usedToday, 0);
+  const used = aeState.capabilities.reduce((sum, item) => sum + (item.usedToday ?? 0), 0);
   return `
     <section class="card">
       <div class="card-head">
@@ -58,57 +210,119 @@ function aeHeadHtml() {
         每次使用都会留一条审计日志，改过的东西都能回滚。开关在服务端生效，不只是这一页藏个按钮。
       </div>
       <div class="ae-stats">
-        <span class="ae-stat"><strong class="ae-stat-num">${Fmt.fmtNum(granted)}/6</strong><span class="ae-stat-label">已授权能力</span></span>
-        <span class="ae-stat"><strong class="ae-stat-num">${Fmt.fmtNum(aeState.total)}</strong><span class="ae-stat-label">审计日志</span></span>
-        <span class="ae-stat"><strong class="ae-stat-num">${Fmt.fmtNum(used)}</strong><span class="ae-stat-label">今日已用</span></span>
+        <div class="ae-stat">
+          <div class="ae-stat-num">${granted}/6</div>
+          <div class="ae-stat-label">已授权能力</div>
+        </div>
+        <div class="ae-stat">
+          <div class="ae-stat-num">${aeState.total}</div>
+          <div class="ae-stat-label">审计日志</div>
+        </div>
+        <div class="ae-stat">
+          <div class="ae-stat-num">${used}</div>
+          <div class="ae-stat-label">今日已用</div>
+        </div>
       </div>
       ${
         aeState.configError
-          ? `<div class="ae-note">⚙️ ${esc(aeState.configError)}</div>`
+          ? `<div class="ae-note">${esc(aeState.configError)}</div>`
           : ''
       }
     </section>`;
 }
 
-function aeCapHtml(cap) {
-  const stateChip = cap.granted
-    ? chip('已授权', 'ok')
-    : chip('未授权', 'soft');
-  const quotaText = cap.dailyQuota > 0 ? `今日 ${cap.usedToday}/${cap.dailyQuota}` : `${QUOTA_HINT}`;
+/* ---------- 全站用量（管理员专属） ---------- */
+
+function aeUsageTopListHtml(today) {
+  const rows = (today.topUsers ?? []).slice(0, 5);
+  if (!rows.length) return '<div class="ae-usage-line">今天还没有人用过。</div>';
+  return `<div class="ae-usage-top">${rows
+    .map(
+      (row) =>
+        `<div class="ae-usage-user"><span class="ae-usage-name">${esc(row.username || `用户 ${row.userId}`)}</span><span class="ae-usage-count">${row.count ?? 0} 次</span></div>`,
+    )
+    .join('')}</div>`;
+}
+
+function aeUsageHtml() {
+  if (!aeState.usage) return '';
+  const today = aeState.usage.today ?? {};
+  const budget = aeState.usage.budget ?? {};
+  const allTime = aeState.usage.allTime ?? {};
+  const byAction = (today.byAction ?? []).map((row) => `${row.action} ${row.count}`).join(' · ');
+  const budgetText = budget.unlimited
+    ? '未设全站上限'
+    : `${budget.used ?? 0}/${budget.limit ?? 0}${budget.remaining === null || budget.remaining === undefined ? '' : `（还剩 ${budget.remaining}）`}`;
   return `
-    <div class="ae-cap${cap.granted ? ' is-on' : ''}">
+    <section class="card">
+      <div class="card-head">
+        <h2>全站用量</h2>
+        <span class="ae-target-state">仅管理员可见</span>
+      </div>
+      <div class="page-sub">按调用次数统计（这张表没存 token 用量，所以没有金额）。</div>
+      <div class="ae-usage">
+        <div class="ae-usage-grid">
+          <div class="ae-stat">
+            <div class="ae-stat-num">${today.total ?? 0}</div>
+            <div class="ae-stat-label">今日调用</div>
+          </div>
+          <div class="ae-stat">
+            <div class="ae-stat-num">${today.billed ?? 0}</div>
+            <div class="ae-stat-label">计费次数</div>
+          </div>
+          <div class="ae-stat">
+            <div class="ae-stat-num">${today.blocked ?? 0}</div>
+            <div class="ae-stat-label">被挡次数</div>
+          </div>
+          <div class="ae-stat">
+            <div class="ae-stat-num">${today.users ?? 0}</div>
+            <div class="ae-stat-label">涉及用户</div>
+          </div>
+        </div>
+        <div class="ae-usage-line">全站上限（${esc(budget.envKey || 'AI_DAILY_TOTAL_LIMIT')}）：<strong>${esc(budgetText)}</strong></div>
+        <div class="ae-usage-line">历史累计：${allTime.total ?? 0} 次${byAction ? ` · 今日动作：${esc(byAction)}` : ''}</div>
+        ${aeUsageTopListHtml(today)}
+      </div>
+      ${aeState.usageError ? `<div class="ae-note">用量面板读不到：${esc(aeState.usageError)}</div>` : ''}
+    </section>`;
+}
+
+/* ---------- 能力授权 ---------- */
+
+function aeCapHtml(cap) {
+  const on = Boolean(cap.granted);
+  return `
+    <div class="ae-cap${on ? ' is-on' : ''}" data-ae-cap="${esc(cap.key)}">
       <div class="ae-cap-top">
-        <span class="ae-cap-name">${esc(cap.label)}</span>
-        ${chip(RISK_LABEL[cap.risk] ?? cap.risk, riskKind(cap.risk))}
-        ${stateChip}
+        <span class="ae-cap-name">${esc(cap.label || cap.key)}</span>
+        ${chip(RISK_LABEL[cap.risk] || cap.risk || '未知', riskKind(cap.risk))}
+        ${on ? chip('已授权', 'ok') : chip('未授权', 'soft')}
       </div>
       <div class="ae-cap-body">
-        <code class="ae-cap-key">${esc(cap.key)}</code>
-        <span class="hint">${esc(quotaText)}</span>
-      </div>
-      <div class="ae-cap-meta">
-        <label class="ae-field">
-          <span class="ae-field-label">每日配额</span>
-          <input class="ae-quota" type="number" min="0" max="1000" step="1"
-                 value="${Number(cap.dailyQuota ?? 0)}" data-ae-quota="${esc(cap.key)}" />
-        </label>
-        ${
-          cap.highRisk
-            ? `<label class="ae-confirm">
-                 <input type="checkbox" data-ae-confirm="${esc(cap.key)}" />
-                 <span>我知道这是高风险能力</span>
-               </label>`
-            : ''
-        }
+        <div class="ae-cap-key">${esc(cap.key)}</div>
+        <div class="ae-cap-meta">
+          <span>今日已用 ${cap.usedToday ?? 0}</span>
+          <span>每日配额 ${cap.dailyQuota ?? 0}${on ? '' : `（${QUOTA_HINT}）`}</span>
+          ${cap.expiresAt ? `<span>到期 ${esc(Fmt.time(cap.expiresAt))}</span>` : '<span>长期有效</span>'}
+        </div>
       </div>
       <div class="ae-cap-actions">
-        <button class="btn btn-sm btn-primary" type="button" data-ae-act="grant" data-ae-cap="${esc(cap.key)}">授权</button>
+        <label class="ae-quota">配额
+          <input class="ae-input" type="number" min="0" max="1000" step="1"
+            value="${Number.isFinite(Number(cap.dailyQuota)) ? Number(cap.dailyQuota) : 0}"
+            data-ae-quota aria-label="每日配额">
+        </label>
         ${
-          cap.granted
-            ? `<button class="btn btn-sm btn-danger" type="button" data-ae-act="revoke" data-ae-cap="${esc(cap.key)}">收回</button>`
-            : ''
+          on
+            ? `<button class="btn btn-sm" type="button" data-ae-act="revoke" data-ae-cap="${esc(cap.key)}">收回</button>`
+            : `<button class="btn btn-sm btn-primary" type="button" data-ae-act="grant" data-ae-cap="${esc(cap.key)}">授权</button>`
         }
       </div>
+      ${
+        cap.highRisk
+          ? `<label class="ae-confirm"><input type="checkbox" data-ae-confirm> 这是高风险能力，我确认授权（服务端要求 confirm）</label>`
+          : ''
+      }
     </div>`;
 }
 
@@ -119,76 +333,80 @@ function aeCapsHtml() {
   return `
     <section class="card">
       <div class="card-head">
-        <span class="card-title">🎛 能力授权</span>
-        <span class="hint">高风险能力开启前要额外勾选确认</span>
+        <h2>能力开关</h2>
+        <span class="ae-target-state">默认全部关闭</span>
       </div>
       <div class="ae-grid">${aeState.capabilities.map(aeCapHtml).join('')}</div>
     </section>`;
 }
 
+/* ---------- 草稿与落盘 ---------- */
+
+function shortJson(value) {
+  try {
+    return JSON.stringify(value ?? null, null, 2);
+  } catch {
+    return '（无法序列化）';
+  }
+}
+
 function aeDraftHtml() {
   const draft = aeState.draft;
-  const preview = draft
-    ? `
-      <div class="ae-preview">
-        <div class="ae-preview-col">
-          <div class="ae-preview-title">改之前</div>
-          <pre class="ae-preview-code">${esc(JSON.stringify(draft.before ?? null, null, 2))}</pre>
-        </div>
-        <div class="ae-preview-col">
-          <div class="ae-preview-title">AI 想改成</div>
-          <pre class="ae-preview-code">${esc(JSON.stringify(draft.patch ?? null, null, 2))}</pre>
-        </div>
-      </div>
-      <div class="ae-cap-actions">
-        <button class="btn btn-sm btn-primary" type="button" data-ae-act="apply">确认并留档</button>
-        <button class="btn btn-sm btn-ghost" type="button" data-ae-act="discard">丢掉这份草稿</button>
-        <span class="hint">草稿只是预览（日志 #${Fmt.fmtNum(draft.opId)}，状态 preview）。确认后才会记成 applied 并可回滚。</span>
-      </div>`
-    : `<div class="hint">还没有草稿。填好当前块和改写要求，点「让 AI 草拟改动」。</div>`;
-
-  const restore = aeState.restore
-    ? `
-      <div class="ae-preview">
-        <div class="ae-preview-col">
-          <div class="ae-preview-title">回滚交回来的旧值</div>
-          <pre class="ae-preview-code">${esc(JSON.stringify(aeState.restore, null, 2))}</pre>
-        </div>
-      </div>
-      <div class="hint">真正写回积木块由 P2 的 <code>/api/docs/*</code> 完成 —— 那边才是 <code>document_blocks</code> 的拥有者。</div>`
-    : '';
-
+  const restore = aeState.restore;
+  const ready = Boolean(aeState.documentId && aeState.blockId);
+  const value = aeState.blockInput || DEFAULT_BLOCK_TEXT;
+  const instruction = aeState.instructionInput || DEFAULT_INSTRUCTION;
   return `
     <section class="card">
       <div class="card-head">
-        <span class="card-title">📝 按块改写</span>
-        <span class="hint">改的是<strong>一个块</strong>，不是整篇重写</span>
+        <h2>块内容与改写</h2>
+        <span class="ae-target-state">${ready ? '可落盘' : '先选目标'}</span>
       </div>
-      <div class="ae-field">
-        <span class="ae-field-label">当前块（JSON）</span>
-        <textarea class="ae-textarea" data-ae-block rows="5" spellcheck="false">${esc(
-          aeState.blockInput ||
-            JSON.stringify(
-              draft?.before ?? { blockType: 'paragraph', content: { text: '把这句话改成投票。' } },
-              null,
-              2,
-            ),
-        )}</textarea>
+      <div class="ae-target">
+        <div class="ae-field">
+          <label class="ae-field-label" for="ae-block">当前块 JSON（可手改）</label>
+          <textarea class="ae-input ae-textarea" rows="7" data-ae-block aria-label="当前块 JSON">${esc(value)}</textarea>
+        </div>
+        <div class="ae-field">
+          <label class="ae-field-label" for="ae-instr">改写要求</label>
+          <input class="ae-input" type="text" data-ae-instruction value="${esc(instruction)}" aria-label="改写要求">
+          <div class="ae-field-hint">${ready ? `改的是 ${esc(aeState.documentId)}:${esc(aeState.blockId)}` : NO_TARGET_HINT}</div>
+          <div class="ae-cap-actions">
+            <button class="btn btn-sm btn-primary" type="button" data-ae-act="draft"${ready ? '' : ' disabled'}>✨ 草拟改动</button>
+            <button class="btn btn-sm" type="button" data-ae-act="apply"${aeState.draft ? '' : ' disabled'}>💾 落盘到文档</button>
+            <button class="btn btn-sm" type="button" data-ae-act="discard"${aeState.draft ? '' : ' disabled'}>丢弃草稿</button>
+          </div>
+        </div>
       </div>
-      <div class="ae-field">
-        <span class="ae-field-label">改写要求</span>
-        <input class="ae-input" data-ae-instruction maxlength="2000"
-               placeholder="${esc(DEFAULT_INSTRUCTION)}"
-               value="${esc(aeState.instructionInput || draft?.instruction || '')}" />
-      </div>
-      <div class="ae-cap-actions">
-        <button class="btn btn-sm btn-primary" type="button" data-ae-act="draft">✨ 让 AI 草拟改动</button>
-        <span class="hint">需要先授权「修改内容」；模型调用按用户限流 10 次/分钟</span>
-      </div>
-      ${preview}
-      ${restore}
+      ${
+        draft
+          ? `<div class="ae-preview">
+              <div class="ae-preview-col">
+                <div class="ae-preview-title">改动前</div>
+                <pre class="ae-preview-code">${esc(shortJson(draft.before))}</pre>
+              </div>
+              <div class="ae-preview-col">
+                <div class="ae-preview-title">模型建议</div>
+                <pre class="ae-preview-code">${esc(shortJson(draft.patch))}</pre>
+              </div>
+            </div>
+            <div class="ae-note">草稿只在浏览器里。点「落盘到文档」才会先写文档、再记审计。</div>`
+          : ''
+      }
+      ${
+        restore
+          ? `<div class="ae-preview">
+              <div class="ae-preview-col">
+                <div class="ae-preview-title">回滚拿到的旧值</div>
+                <pre class="ae-preview-code">${esc(shortJson(restore))}</pre>
+              </div>
+            </div>`
+          : ''
+      }
     </section>`;
 }
+
+/* ---------- 审计日志 ---------- */
 
 function aeStatusKind(status) {
   if (status === 'applied') return 'ok';
@@ -197,249 +415,440 @@ function aeStatusKind(status) {
   return 'warn';
 }
 
-function aeOpsHtml() {
-  const rows = aeState.ops
-    .map(
-      (op) => `
-      <div class="ae-op">
-        <div class="ae-op-main">
-          <div class="ae-op-title">
-            <code>#${Fmt.fmtNum(op.id)}</code>
-            ${chip(op.action, 'soft')}
-            ${chip(op.status, aeStatusKind(op.status))}
-            <span class="hint">${esc(op.capability)}${op.targetId ? ` · 目标 ${esc(op.targetId)}` : ''}</span>
-          </div>
-          <div class="ae-op-meta">
-            ${Fmt.timeAgo(op.createdAt)}${op.reason ? ` · ${esc(op.reason)}` : ''}
-            ${op.rolledBackAt ? ` · ${Fmt.timeAgo(op.rolledBackAt)}已回滚` : ''}
-          </div>
-        </div>
-        <div class="ae-op-actions">
-          ${
-            op.canRollback
-              ? `<button class="btn btn-sm" type="button" data-ae-act="rollback" data-ae-id="${op.id}">↩ 回滚</button>`
-              : '<span class="hint">—</span>'
-          }
-        </div>
-      </div>`,
-    )
-    .join('');
+const STATUS_LABEL = { applied: '已落盘', preview: '仅预览', rolled_back: '已回滚' };
 
+function aeOpsHtml() {
+  if (!aeState.ops.length) {
+    return `<section class="card">${emptyHtml('🗂', '还没有操作记录', '用过草拟或落盘之后，这里会留一条带 before/after 的审计')}</section>`;
+  }
   return `
     <section class="card">
       <div class="card-head">
-        <span class="card-title">🧾 审计日志</span>
-        <span class="hint">最近 ${Fmt.fmtNum(aeState.ops.length)} 条 / 共 ${Fmt.fmtNum(aeState.total)} 条</span>
+        <h2>审计日志</h2>
+        <span class="ae-target-state">共 ${aeState.total} 条</span>
       </div>
-      ${
-        aeState.ops.length
-          ? `<div class="ae-ops">${rows}</div>`
-          : emptyHtml('🧾', '还没有 AI 操作记录', '授权、收回、草拟、落盘、回滚都会在这里留一行')
-      }
+      <div class="ae-ops">
+        ${aeState.ops
+          .map(
+            (op) => `
+          <div class="ae-op">
+            <div class="ae-op-main">
+              <div class="ae-op-title">
+                #${op.id} ${esc(op.action || 'edit')}
+                ${chip(STATUS_LABEL[op.status] || op.status || '未知', aeStatusKind(op.status))}
+                ${chip(op.capability || '', 'soft')}
+              </div>
+              <div class="ae-op-meta">
+                <span>${esc(op.targetId || '')}</span>
+                <span>${esc(Fmt.time(op.createdAt))}</span>
+                ${op.reason ? `<span>${esc(op.reason)}</span>` : ''}
+                ${op.rolledBackAt ? `<span>回滚于 ${esc(Fmt.time(op.rolledBackAt))}</span>` : ''}
+              </div>
+            </div>
+            <div class="ae-op-actions">
+              ${
+                op.canRollback
+                  ? `<button class="btn btn-sm" type="button" data-ae-act="rollback" data-ae-id="${esc(op.id)}">↩ 回滚</button>`
+                  : '<span class="ae-op-meta">不可回滚</span>'
+              }
+            </div>
+          </div>`,
+          )
+          .join('')}
+      </div>
     </section>`;
 }
 
 function aeRender() {
   ui.app.innerHTML =
-    `<div data-ae-root>` +
+    '<div data-ae-root>' +
     aeHeadHtml() +
-    aeCapsHtml() +
+    aeTargetHtml() +
     aeDraftHtml() +
+    aeCapsHtml() +
+    aeUsageHtml() +
     aeOpsHtml() +
-    `</div>`;
+    '</div>';
   aeBind();
 }
 
+/* ---------- 读数据 ---------- */
+
+async function aeLoadDocuments() {
+  const mine = aeState.docScope === 'mine';
+  let data = null;
+  try {
+    data = await api(`/api/docs?limit=50${mine ? '&mine=1' : ''}`);
+  } catch (error) {
+    aeState.docError = error.message;
+    aeState.documents = [];
+    return;
+  }
+  let documents = data?.documents ?? [];
+  // mine=1 是「我的」，对还没建过文档的人永远是空的 —— 与其让他看一个空下拉，
+  // 不如退化成全站列表（看清楚这一篇是谁的，再决定要不要改）。
+  if (mine && !documents.length) {
+    try {
+      const all = await api('/api/docs?limit=50');
+      documents = all?.documents ?? [];
+      aeState.docDegraded = documents.length > 0;
+      aeState.docScope = 'all';
+    } catch (error) {
+      aeState.docError = error.message;
+    }
+  }
+  aeState.documents = documents;
+  // 之前选中的文档这轮没出现在列表里（被删了 / 切了 scope），目标作废，别拿旧 id 去写。
+  if (aeState.documentId && !findDocument(aeState.documentId)) {
+    aeState.documentId = '';
+    aeState.blockId = '';
+    aeState.blocks = [];
+    aeState.draft = null;
+  }
+}
+
+async function aeLoadBlocks(documentId) {
+  const token = ++blockToken;
+  aeState.blocksLoading = true;
+  aeState.blocks = [];
+  aeState.blockId = '';
+  aeRender();
+  try {
+    const data = await api(`/api/docs/${encodeURIComponent(documentId)}`);
+    if (token !== blockToken) return; // 用户已经换了文档，这次结果作废
+    aeState.blocks = data?.blocks ?? [];
+    const first = aeState.blocks[0];
+    if (first) {
+      aeState.blockId = first.blockId;
+      aeState.blockInput = JSON.stringify({ type: first.type, props: first.props }, null, 2);
+    }
+    aeState.docError = '';
+  } catch (error) {
+    if (token !== blockToken) return;
+    aeState.docError = error.message;
+  } finally {
+    if (token === blockToken) {
+      aeState.blocksLoading = false;
+      aeRender();
+    }
+  }
+}
+
+/** 只动 usage，不重建能力/审计（它们各自有自己的失败提示）。 */
+async function aeLoadUsage() {
+  try {
+    const data = await api('/api/ai-edit/usage');
+    aeState.usage = data ?? {};
+    aeState.usageStatus = 200;
+    aeState.usageError = '';
+  } catch (error) {
+    aeState.usage = null;
+    aeState.usageStatus = error.status ?? 0;
+    // 非管理员（403）/ 未登录（401）静默隐藏整个区块 —— 这一区本来就不给他们看。
+    aeState.usageError = aeState.usageStatus === 200 ? error.message : '';
+  }
+}
+
 async function aeLoad() {
-  const [caps, ops] = await Promise.all([
-    api('/api/ai-edit/capabilities'),
-    api('/api/ai-edit/ops?limit=30'),
-  ]);
-  aeState.capabilities = caps.capabilities ?? [];
-  aeState.ops = ops.ops ?? [];
-  aeState.total = ops.total ?? aeState.ops.length;
-  aeState.configError = '';
+  const token = ++loadToken;
+  try {
+    const [caps, ops] = await Promise.all([
+      api('/api/ai-edit/capabilities'),
+      api('/api/ai-edit/ops?limit=30'),
+    ]);
+    if (token !== loadToken) return;
+    aeState.capabilities = caps?.capabilities ?? [];
+    aeState.ops = ops?.ops ?? [];
+    aeState.total = ops?.total ?? 0;
+    aeState.configError = '';
+  } catch (error) {
+    if (token !== loadToken) return;
+    if (error.code === 'ai_not_configured') {
+      aeState.configError = '服务器没配 AI_API_KEY，去配一下才能用草拟（落盘/回滚不受影响）。';
+    } else {
+      aeState.configError = error.message;
+    }
+  }
+  await aeLoadDocuments(); // 先拿文档列表，才能把上次选中的文档重新选中
+  if (token !== loadToken) return;
+  aeLoadUsage();
+  if (aeState.documentId) aeLoadBlocks(aeState.documentId);
+  else aeRender();
 }
 
 async function viewAiEdit() {
-  ui.app.innerHTML = loadingHtml();
   if (!state.me) {
-    // 未登录：跟学术笔记一样，记下想去的地方再跳登录。
     state.redirect = '/ai-edit';
     navigate('/login');
     return;
   }
-  try {
-    await aeLoad();
-  } catch (error) {
-    if (error.code === 'ai_not_configured') {
-      aeState.configError = 'AI 还没有配置，设置环境变量 AI_API_KEY 后才能调用模型（授权与审计不受影响）。';
-    }
-    ui.app.innerHTML = `<div class="card">${emptyHtml('🤖', 'AI 编辑台打不开', esc(error.message || '请稍后再试'))}</div>`;
-    return;
-  }
+  aeState.draft = null;
+  aeState.restore = null;
+  aeState.blockInput = '';
+  aeState.instructionInput = '';
+  aeState.docDegraded = false;
+  aeState.docError = '';
+  aeState.usageStatus = 0;
+  aeState.usageError = '';
+  ui.app.innerHTML = loadingHtml();
+  await aeLoad();
   aeRender();
 }
 
-/* ------------------------------------------------------------------ */
-/* 交互：全部就地绑定，不接中央 data-action 分发                        */
+/* ---------- 动作 ---------- */
+
+/** 按钮忙状态包装：转发给 core/api.js 的 withButtonBusy，只是名字短一点。 */
+function withBusy(button, task) {
+  return withButtonBusy(button, task);
+}
+
+/** 读「当前块」框里的 JSON，顺便把用户的原文记进 aeState.blockInput（重建 DOM 时要回填）。 */
+function readBlockInput() {
+  const raw = $('[data-ae-block]')?.value ?? '';
+  aeState.blockInput = raw;
+  let parsed = null;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return { block: null, problem: '上面那块 JSON 解析不了，先修一下格式' };
+  }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    return { block: null, problem: '块得是一个对象，形如 {"type":"paragraph","props":{…}}' };
+  }
+  if (!parsed.type || typeof parsed.props !== 'object' || parsed.props === null) {
+    return { block: null, problem: '块必须有 type，props 得是对象（形如 {"type":"paragraph","props":{"text":"…"}}）' };
+  }
+  return { block: { type: parsed.type, props: parsed.props }, problem: '' };
+}
+
+async function aeDraft(button) {
+  aeState.instructionInput = $('[data-ae-instruction]')?.value ?? '';
+  const instruction = aeState.instructionInput.trim() || DEFAULT_INSTRUCTION;
+  const { block, problem } = readBlockInput();
+  aeState.blockInput = $('[data-ae-block]')?.value ?? aeState.blockInput;
+  if (problem) {
+    toast(problem, 'warn');
+    return;
+  }
+  if (!aeState.documentId || !aeState.blockId) {
+    toast(NO_TARGET_HINT, 'warn');
+    return;
+  }
+  await withBusy(button, async () => {
+    try {
+      const data = await api('/api/ai-edit/draft', {
+        method: 'POST',
+        body: { block, instruction, documentId: aeState.documentId, blockId: aeState.blockId },
+      });
+      aeState.draft = data;
+      aeState.restore = null;
+      toast('草稿好了，先看再落盘', 'ok');
+    } catch (error) {
+      toast(
+        error.code === 'ai_not_configured'
+          ? '服务器没配 AI_API_KEY，去配一下才能用草拟'
+          : error.message,
+        'warn',
+      );
+    }
+    aeRender();
+  });
+}
+
+/**
+ * 落盘：**先写文档，后记审计**。
+ *
+ * 顺序为什么不能反：审计说的是「文档已经被改成这样了」，先记审计再写盘，
+ * 一旦写盘失败，日志里就躺着一条「已落盘」而文档根本没变 —— 之后照它回滚
+ * 反而会把别的改动覆盖掉。反过来写盘成功、审计失败只是少一条记录（下面会
+ * 明确 toast 出来），危害小得多。
+ */
+async function aeApply(button) {
+  const draft = aeState.draft;
+  if (!draft) return;
+  const documentId = draft.documentId || aeState.documentId;
+  const blockId = draft.blockId || aeState.blockId;
+  if (!documentId || !blockId) {
+    toast(NO_TARGET_HINT, 'warn');
+    return;
+  }
+  const after = { type: draft.patch?.type, props: draft.patch?.props ?? {} };
+  const before = draft.before ?? null;
+  await withBusy(button, async () => {
+    try {
+      await api(`/api/docs/${encodeURIComponent(documentId)}/blocks/${encodeURIComponent(blockId)}`, {
+        method: 'PUT',
+        body: after,
+      });
+    } catch (error) {
+      toast(`文档没写成：${error.message}`, 'warn');
+      return; // 文档没动，审计也不记，两边保持一致
+    }
+    try {
+      await api('/api/ai-edit/ops', {
+        method: 'POST',
+        body: { documentId, blockId, before, after, reason: aeState.instructionInput.trim(), confirm: true },
+      });
+    } catch (error) {
+      toast(`文档已改，但审计没记上：${error.message}`, 'warn');
+      aeState.draft = null;
+      await aeLoad();
+      return;
+    }
+    aeState.draft = null;
+    aeState.blockInput = JSON.stringify(after, null, 2);
+    toast('已写进文档，并记了一条审计（可回滚）', 'ok');
+    await aeLoad();
+  });
+}
+
+/**
+ * 回滚：**先 rollback，再 PUT 写回文档**。
+ *
+ * 为什么选这个顺序：rollback 接口在服务端是一条事务（校验 status=applied 之后
+ * 立刻 UPDATE rolled_back_at/status 再返回 restore）。先 PUT 再 rollback 的话，
+ * 写完盘万一 rollback 失败（能力被收回、已经被别人回滚过 → 403/409），文档已经
+ * 变了、审计却还写着 applied —— 用户以为没回滚，其实文档回滚了。
+ * 反过来失败只是「标记了回滚但文档没写回去」，提示里说清楚就行，用户可以重试。
+ */
+async function aeRollback(button, id) {
+  await withBusy(button, async () => {
+    let data = null;
+    try {
+      data = await api(`/api/ai-edit/ops/${encodeURIComponent(id)}/rollback`, { method: 'POST' });
+    } catch (error) {
+      toast(error.message, 'warn');
+      return;
+    }
+    aeState.restore = data?.restore ?? null;
+    // targetId 的格式是 "<documentId>:<blockId>"（服务端 composeTargetId），
+    // rollback 的返回里没有单独的 documentId/blockId，只能这样拆。
+    const targetId = String(data?.targetId ?? '');
+    const split = targetId.indexOf(':');
+    const documentId = data?.documentId ?? (split > 0 ? targetId.slice(0, split) : '');
+    const blockId = data?.blockId ?? (split > 0 ? targetId.slice(split + 1) : '');
+    if (documentId && blockId && data?.restore) {
+      try {
+        await api(`/api/docs/${encodeURIComponent(documentId)}/blocks/${encodeURIComponent(blockId)}`, {
+          method: 'PUT',
+          body: { type: data.restore.type, props: data.restore.props ?? {} },
+        });
+        toast('已标记回滚，文档也写回旧内容了', 'ok');
+      } catch (error) {
+        toast(`已标记回滚，但文档没写回去：${error.message}`, 'warn');
+      }
+    } else {
+      toast('已标记回滚（这条审计里没有可写回的块位置）', 'warn');
+    }
+    await aeLoad();
+  });
+}
 
 async function aeGrant(button, capability) {
+  const card = button.closest('[data-ae-cap]') ?? $('[data-ae-root]');
+  const quotaInput = card?.querySelector('[data-ae-quota]') ?? $('[data-ae-quota]');
+  const confirmInput = card?.querySelector('[data-ae-confirm]') ?? $('[data-ae-confirm]');
+  const dailyQuota = Math.max(0, Math.round(Number(quotaInput?.value ?? 0) || 0));
+  const body = { capability, dailyQuota };
   const cap = aeState.capabilities.find((item) => item.key === capability);
-  if (!cap) return;
-  const quotaInput = $(`[data-ae-quota="${capability}"]`);
-  const dailyQuota = Number(quotaInput?.value ?? 0);
-  if (!Number.isInteger(dailyQuota) || dailyQuota < 0 || dailyQuota > 1000) {
-    toast('每日配额要填 0~1000 的整数（0 表示不限次数）', 'error');
-    return;
-  }
-  const confirmBox = $(`[data-ae-confirm="${capability}"]`);
-  if (cap.highRisk && !confirmBox?.checked) {
-    toast(`「${cap.label}」是高风险能力，先勾选确认框`, 'error');
-    return;
-  }
-  await withButtonBusy(button, async () => {
-    try {
-      const body = { capability, dailyQuota };
-      if (cap.highRisk) body.confirm = true;
-      await api('/api/ai-edit/grants', { method: 'POST', body });
-      toast(`已授权「${cap.label}」`, 'success');
-      await aeLoad();
-      aeRender();
-    } catch (error) {
-      toast(error.message, 'error');
+  if (cap?.highRisk) {
+    if (!confirmInput?.checked) {
+      toast('这是高风险能力，先勾上确认再授权', 'warn');
+      return;
     }
+    body.confirm = true;
+  }
+  await withBusy(button, async () => {
+    try {
+      await api('/api/ai-edit/grants', { method: 'POST', body });
+      toast(`已授权 ${capability}`, 'ok');
+    } catch (error) {
+      toast(error.message, 'warn');
+    }
+    await aeLoad();
   });
 }
 
 async function aeRevoke(button, capability) {
-  await withButtonBusy(button, async () => {
+  await withBusy(button, async () => {
     try {
       await api(`/api/ai-edit/grants/${encodeURIComponent(capability)}`, { method: 'DELETE' });
-      toast('已收回，立即失效', 'success');
-      await aeLoad();
-      aeRender();
+      toast(`已收回 ${capability}`, 'ok');
     } catch (error) {
-      toast(error.message, 'error');
+      toast(error.message, 'warn');
     }
-  });
-}
-
-async function aeRollback(button, id) {
-  await withButtonBusy(button, async () => {
-    try {
-      const data = await api(`/api/ai-edit/ops/${id}/rollback`, { method: 'POST' });
-      aeState.restore = data.restore ?? null;
-      toast(`已回滚 #${id}，旧值已取回`, 'success');
-      await aeLoad();
-      aeRender();
-    } catch (error) {
-      toast(error.message, 'error');
-    }
-  });
-}
-
-async function aeDraft(button) {
-  const instruction = $('[data-ae-instruction]')?.value?.trim() ?? '';
-  if (!instruction) {
-    toast('先写一句改写要求', 'error');
-    return;
-  }
-  let block;
-  const rawBlock = $('[data-ae-block]')?.value ?? '';
-  try {
-    block = JSON.parse(rawBlock || 'null');
-  } catch {
-    toast('当前块不是合法的 JSON', 'error');
-    return;
-  }
-  // 请求之前先把输入留一份：失败分支会 aeRender() 重建 DOM，
-  // 不留的话用户刚敲的块 JSON 和改写要求会被抹成默认值。
-  aeState.instructionInput = instruction;
-  aeState.blockInput = rawBlock;
-  await withButtonBusy(button, async () => {
-    try {
-      const data = await api('/api/ai-edit/draft', {
-        method: 'POST',
-        body: { instruction, block, blockId: String(block?.id ?? '') },
-      });
-      aeState.draft = { opId: data.opId, patch: data.patch, before: block, instruction };
-      aeState.restore = null;
-      toast(`模型 ${data.model} 给了一版改动，先看看再决定`, 'success');
-      await aeLoad();
-      aeRender();
-    } catch (error) {
-      // 503 ai_not_configured / 504 ai_timeout / 502 ai_* 都会走到这里，
-      // 错误代号沿用既有清单，不新造（FR-AI-15）。
-      if (error.code === 'ai_not_configured') {
-        aeState.configError = 'AI 还没有配置，设置环境变量 AI_API_KEY 后才能调用模型（授权与审计不受影响）。';
-      }
-      toast(error.message, 'error');
-      aeRender();
-    }
-  });
-}
-
-async function aeApply(button) {
-  const draft = aeState.draft;
-  if (!draft) return;
-  await withButtonBusy(button, async () => {
-    try {
-      const data = await api('/api/ai-edit/ops', {
-        method: 'POST',
-        body: {
-          capability: 'edit_content',
-          targetType: 'document_block',
-          targetId: String(draft.before?.id ?? ''),
-          before: draft.before,
-          after: draft.patch,
-          reason: draft.instruction,
-          confirm: true,
-        },
-      });
-      aeState.draft = null;
-      // 这一版已经落盘了，改写要求清空；块留在框里，方便接着对同一块提下一步要求。
-      aeState.instructionInput = '';
-      toast(`已记成操作 #${data.opId}，可以回滚`, 'success');
-      await aeLoad();
-      aeRender();
-    } catch (error) {
-      toast(error.message, 'error');
-    }
+    await aeLoad();
   });
 }
 
 function aeDiscard() {
   aeState.draft = null;
   aeState.restore = null;
-  aeState.instructionInput = '';
-  aeState.blockInput = '';
+  toast('草稿丢了，文档没动', 'info');
   aeRender();
 }
 
+/* ---------- 事件绑定（就地，不挂 window） ---------- */
+
+function aeSyncTextarea() {
+  const area = $('[data-ae-block]');
+  if (area) aeState.blockInput = area.value;
+  const line = $('[data-ae-instruction]');
+  if (line) aeState.instructionInput = line.value;
+}
+
 function aeBind() {
-  // 控件一律用 data-ae-* 找，不用 id —— id 选择器会被 check-ui-contract.mjs 当成
-  // 「必须存在于 index.html 的挂载点」，而这一页的元素是运行时自己画出来的。
   const root = $('[data-ae-root]');
   if (!root) return;
   root.addEventListener('click', (event) => {
     const node = event.target.closest('[data-ae-act]');
     if (!node) return;
     const act = node.dataset.aeAct;
-    if (act === 'refresh') {
-      aeLoad().then(aeRender).catch((error) => toast(error.message, 'error'));
+    aeSyncTextarea();
+    if (act === 'refresh') withBusy(node, aeLoad).then(aeRender);
+    else if (act === 'grant') aeGrant(node, node.dataset.aeCap);
+    else if (act === 'revoke') aeRevoke(node, node.dataset.aeCap);
+    else if (act === 'rollback') aeRollback(node, node.dataset.aeId);
+    else if (act === 'draft') aeDraft(node);
+    else if (act === 'apply') aeApply(node);
+    else if (act === 'discard') aeDiscard();
+    else if (act === 'toggle-scope') {
+      aeState.docScope = aeState.docScope === 'mine' ? 'all' : 'mine';
+      aeState.docDegraded = false;
+      withBusy(node, aeLoadDocuments).then(() => {
+        aeState.documentId = '';
+        aeState.blockId = '';
+        aeState.blocks = [];
+        aeRender();
+      });
+    }
+  });
+  root.addEventListener('change', (event) => {
+    const target = event.target;
+    if (target.matches('[data-ae-doc]')) {
+      aeSyncTextarea();
+      aeState.documentId = target.value;
+      aeState.blockId = '';
+      aeState.blocks = [];
+      aeState.draft = null;
+      aeState.restore = null;
+      if (aeState.documentId) aeLoadBlocks(aeState.documentId);
+      else aeRender();
       return;
     }
-    if (act === 'grant') return void aeGrant(node, node.dataset.aeCap ?? '');
-    if (act === 'revoke') return void aeRevoke(node, node.dataset.aeCap ?? '');
-    if (act === 'rollback') return void aeRollback(node, Number(node.dataset.aeId));
-    if (act === 'draft') return void aeDraft(node);
-    if (act === 'apply') return void aeApply(node);
-    if (act === 'discard') return void aeDiscard();
+    if (target.matches('[data-ae-pick]')) {
+      aeSyncTextarea();
+      aeState.blockId = target.value;
+      const block = findBlock(aeState.blockId);
+      if (block) aeState.blockInput = JSON.stringify({ type: block.type, props: block.props }, null, 2);
+      aeState.draft = null;
+      aeState.restore = null;
+      aeRender();
+    }
   });
 }
 
-// ── 导出 ──────────────────────────────────────────────────────────────
 export { viewAiEdit };
 
 /* @hand-written */
+

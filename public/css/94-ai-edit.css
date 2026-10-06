@@ -37,6 +37,100 @@
   font-size: 13px;
 }
 
+/* 目标（选文档 → 选块） -------------------------------------------------- */
+.ae-target-state {
+  font-size: 12px;
+  color: var(--muted);
+}
+.ae-target {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 12px;
+  margin-bottom: 10px;
+}
+.ae-select {
+  cursor: pointer;
+}
+.ae-select:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+.ae-field-hint {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.ae-field-hint code {
+  font-family: var(--mono);
+  font-size: 11px;
+  padding: 1px 5px;
+  border-radius: 5px;
+  background: var(--code-bg);
+  color: var(--code-fg);
+}
+.ae-placeholder {
+  padding: 8px 10px;
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-soft);
+  color: var(--text-dim);
+  font-size: 13px;
+}
+.ae-target-line {
+  padding: 8px 10px;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-sm);
+  background: var(--bg-soft);
+  color: var(--text);
+  font-size: 13px;
+  word-break: break-word;
+}
+.ae-target-hint {
+  color: var(--muted);
+}
+
+/* 全站用量（管理员） ---------------------------------------------------- */
+.ae-usage {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.ae-usage-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 18px;
+}
+.ae-usage-line {
+  font-size: 13px;
+  color: var(--text-dim);
+}
+.ae-usage-top {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 13px;
+}
+.ae-usage-user {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 5px 10px;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-sm);
+  background: var(--bg-soft);
+}
+.ae-usage-name {
+  color: var(--text);
+}
+.ae-usage-count {
+  color: var(--muted);
+  font-size: 12px;
+}
+
 /* 能力授权 -------------------------------------------------------------- */
 .ae-grid {
   display: grid;
@@ -232,7 +326,8 @@
   .ae-stats {
     gap: 12px;
   }
-  .ae-grid {
+  .ae-grid,
+  .ae-target {
     grid-template-columns: 1fr;
   }
 }
