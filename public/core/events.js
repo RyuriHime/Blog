@@ -15,6 +15,10 @@ import * as Compose from '../views/compose.js';
 import * as Fmt from './format.js';
 import * as Message from '../views/messages.js';
 import * as Notif from '../views/notifications.js';
+// 公式排版复用站点原本那一套（离线 KaTeX，见 views/notes.js）。
+// 下面 `case 'preview'` 会把预览 HTML 塞进 DOM，而那个接口**从不排公式**，
+// 只把 `$…$` 原样吐出来 —— 少了这一句，「预览」里的公式就是一段源码。
+import { ntRenderMath } from '../views/notes.js';
 import * as Post from '../views/post.js';
 import * as Prefs from './preferences.js';
 import * as Router from './router.js';
@@ -474,6 +478,9 @@ document.addEventListener('click', async (event) => {
         }
         const { html } = await api('/api/markdown/preview', { method: 'POST', body: { content: textarea.value } });
         box.innerHTML = `<div class="md">${html || '<span class="hint">（空内容）</span>'}</div>`;
+        // 公式必须在 innerHTML 之后才排得出来 —— renderMathInElement 只认
+        // **已经在 DOM 里**的节点（跟 views/timeline.js、views/doc.js 同一个做法）。
+        ntRenderMath(box);
         box.hidden = false;
         actionNode.textContent = '收起预览';
         break;

@@ -29,7 +29,7 @@ const PORT = Number(process.env.CONTRACT_PORT || 3412);
 const BASE = `http://127.0.0.1:${PORT}`;
 
 /** 不下降哨兵：接手的模块只允许加，不允许把这些数字改小。 */
-const MIN_CHECKS = Number(process.env.MIN_UI_CHECKS || 249);
+const MIN_CHECKS = Number(process.env.MIN_UI_CHECKS || 258);
 
 /**
  * 前端源码入口清单。搬家前这三份文件在 public/ 根目录；骨架会把它们拆进
@@ -235,7 +235,8 @@ check(
  * 而 `navigator.clipboard` 带 `[SecureContext]`，在那种页面上是 undefined ——
  * 「复制」按钮点了什么也不会发生。偏偏本地开发跑在 localhost（属于安全上下文），
  * 所以这个洞在开发机上**永远复现不出来**，2026-10 线上实测才踩到。
- * 这四条把它钉住：只留 core/dom.js 一处碰剪贴板，且必须带 execCommand 兜底。
+ * 这六条把它钉住：只留 core/dom.js 一处碰剪贴板、必须带 execCommand 兜底、
+ * 且兜底也失败时还有「选中 + Ctrl+C」这条浏览器无条件放行的退路。
  */
 // 先剥掉注释再看：下面几个文件的注释里就写着 `navigator.clipboard` / `execCommand`
 // 这几个字（正是为了解释「为什么不能直接用」），不剥的话这几条会被自己的注释喂饱 ——
@@ -259,12 +260,66 @@ check(
   'copyText 用 execCommand 兜住明文 http（navigator.clipboard 在那里不存在）',
   /function copyText\(/.test(domCode) &&
     /document\.execCommand\('copy'\)/.test(domCode) &&
+    /return execCommandCopy\(value\)/.test(domCode) &&
     /export \{ copyText \}/.test(domCode),
+);
+check(
+  'selectText 是 Ctrl+C 保底（键盘触发的复制不检查用户手势）',
+  /function selectText\(/.test(domCode) && /export \{ selectText \}/.test(domCode),
 );
 check('团队号「复制」按钮走 copyText', /await copyText\(code\)/.test(appCode));
 check(
+  '团队号复制失败时退到「选中 + Ctrl+C」，不只丢一句提示',
+  /selectText\(\$\('\[data-team-code\]'\)\)/.test(appCode),
+);
+check(
   '帖子「复制链接」走 copyText',
   /await copyText\(shareUrl\)/.test(appCode) && !/navigator\.clipboard\.writeText\(shareUrl\)/.test(appCode),
+);
+
+/* 团队帖的 Markdown + LaTeX。
+ *
+ * 分工是这样的：服务端 `src/markdown.js` 只做 Markdown（`**粗**` → `<strong>`），
+ * **从不排公式** —— 它把 `$…$` / `$$…$$` 原样留在 HTML 里，
+ * 排版权归客户端的 `ntRenderMath`（离线 KaTeX，见 public/views/notes.js）。
+ * 这两件事各有各的漏法，而且**两种都不报错、只是页面不对**，所以分开守：
+ *  ① 正文没挂 `md` 类 —— HTML 完全正确，但标题 / 列表 / 代码块一条样式都吃不到，
+ *     看上去「像是没渲染」；
+ *  ② 渲染完忘了调 `ntRenderMath` —— 帖子里 `$E=mc^2$` 就是一段等宽源码。
+ *     这一条尤其阴：本地 localhost 跑起来一样不报错，只是公式不出来。
+ * 另外两条是「别长出第二份实现」：公式排版全站只有 views/notes.js 一处定义。
+ */
+const teamCode = codeOnly.get(join(publicDir, 'views', 'team.js')) ?? '';
+const notesCode = codeOnly.get(join(publicDir, 'views', 'notes.js')) ?? '';
+const eventsCode = codeOnly.get(join(publicDir, 'core', 'events.js')) ?? '';
+
+check(
+  '团队帖正文挂着 md 类（否则服务端渲染出的标题 / 列表 / 代码块全没样式）',
+  /class="team-post-body md"/.test(teamCode) && /class="team-conflict-latest md"/.test(teamCode),
+);
+check('团队页从 views/notes.js 借站点原本那套公式排版，不自己写一份', /import \{ ntRenderMath \} from '\.\/notes\.js';/.test(teamCode));
+check(
+  '团队帖渲染之后调了 ntRenderMath（列表首屏 + 单条局部重画，两处都要）',
+  (teamCode.match(/ntRenderMath\(/g) ?? []).length >= 2,
+  `实测 ${(teamCode.match(/ntRenderMath\(/g) ?? []).length} 处`,
+);
+check(
+  '公式排版全站只有一份实现：ntRenderMath 只在 views/notes.js 里定义',
+  /function ntRenderMath\(/.test(notesCode) &&
+    [...codeOnly.values()].filter((source) => /function ntRenderMath\(/.test(source)).length === 1,
+);
+check(
+  '团队帖输入框（发帖 / 编辑）都给了 Markdown 预览',
+  (teamCode.match(/data-team-action="preview"/g) ?? []).length >= 2 &&
+    (teamCode.match(/data-team-preview/g) ?? []).length >= 2,
+);
+check(
+  '团队帖预览走 /api/markdown/preview，并且预览盒里也排一次公式',
+  /api\('\/api\/markdown\/preview'/.test(teamCode) && /ntRenderMath\(box\)/.test(teamCode),
+);
+check(
+  '帖子回复 / 发帖的「预览」也排公式（core/events.js 的 case preview 同样只拿到 $…$ 原文）',
+  /import \{ ntRenderMath \} from '\.\.\/views\/notes\.js';/.test(eventsCode) && /ntRenderMath\(box\);/.test(eventsCode),
 );
 
 /* 团队第二批（成员管理 / 文件柜 / 群聊）的契约。

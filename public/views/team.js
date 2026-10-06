@@ -17,7 +17,7 @@
 //   5) 群聊的定时轮询由本模块自己负责停。core/api.js 的「页面代次」守卫是给
 //      「视图渲染期间发出的请求」准备的，而 setInterval 回调发起请求时 routeInFlight
 //      是 null —— 守卫压根不会拦它。所以每个渲染入口都先 stopChatPolling()。
-import { $, copyText, esc, emptyHtml, loadingHtml, toast, ui } from '../core/dom.js';
+import { $, copyText, esc, emptyHtml, loadingHtml, selectText, toast, ui } from '../core/dom.js';
 import { api, withButtonBusy } from '../core/api.js';
 import { apiErrorText, toastError } from '../core/errors.js';
 import { state } from '../core/state.js';
@@ -25,6 +25,11 @@ import { navigate, routeQuery } from '../core/router.js';
 import * as Avatar from '../core/avatar.js';
 import * as Fmt from '../core/format.js';
 import { paginationHtml } from '../core/widgets.js';
+// 公式排版复用站点原本那一套（离线 KaTeX，就在 /notes/vendor 下）。
+// 动态流、积木页用的都是它 —— 这里没有第二份数学渲染实现。
+// 服务端 renderMarkdown **从不排公式**，只把 `$…$` / `$$…$$` 原样吐出来，
+// 所以团队帖的正文必须在这儿补一次，否则 `$E=mc^2$` 就是一段等宽源码。
+import { ntRenderMath } from './notes.js';
 
 /** 兜底的四档可见范围：正常情况用服务端返回的 SCOPE_OPTIONS 覆盖它。 */
 const FALLBACK_SCOPES = [
@@ -453,11 +458,13 @@ function composerHtml(team) {
       <div class="hint">${team.joinPolicy === 'invite' ? '这个团队需要邀请才能加入，找管理员拉你进去。' : '加入这个团队之后就能在这里发帖了。'}</div>
     </div>`;
   }
-  return `<div class="card team-composer">
+  return `<div class="card team-composer" data-team-editor>
     <input class="input team-composer-title" data-team-field="title" maxlength="120" placeholder="标题" value="${esc(teamState.draft.title)}" />
-    <textarea class="input team-composer-body" data-team-field="content" rows="4" placeholder="写点什么给团队看…">${esc(teamState.draft.content)}</textarea>
+    <textarea class="input team-composer-body" data-team-field="content" rows="4" placeholder="写点什么给团队看…支持 Markdown 和 $LaTeX$">${esc(teamState.draft.content)}</textarea>
+    <div class="team-md-preview md" data-team-preview hidden></div>
     <div class="team-composer-bar">
       <select class="input team-scope-select" data-team-field="scope">${scopeOptionsHtml(teamState.draft.scope)}</select>
+      <button class="btn" type="button" data-team-action="preview">👁 预览</button>
       <button class="btn btn-primary" data-team-action="create-post">发到团队</button>
     </div>
   </div>`;
@@ -467,7 +474,7 @@ function conflictHtml(conflict) {
   return `<div class="team-conflict">
     <div class="team-conflict-title">⚠️ 有人在你之前改过了</div>
     <div class="hint">你看的是第 ${esc(String(conflict.mineVersion))} 版，现在已经到第 ${esc(String(conflict.latest.version))} 版。</div>
-    <div class="team-conflict-latest">${conflict.latest.contentHtml ?? ''}</div>
+    <div class="team-conflict-latest md">${conflict.latest.contentHtml ?? ''}</div>
     <div class="team-conflict-bar">
       <button class="btn btn-primary" data-team-action="take-latest" data-team-post="${conflict.postId}">看别人的新版</button>
       <button class="btn btn-danger" data-team-action="force-save" data-team-post="${conflict.postId}">仍然保存我的</button>
@@ -483,17 +490,19 @@ function teamPostHtml(post) {
     : '';
 
   const body = editing
-    ? `<div class="team-post-edit">
+    ? `<div class="team-post-edit" data-team-editor>
         <input class="input team-post-edit-title" data-team-field="title" maxlength="120" value="${esc(teamState.draft.title)}" />
-        <textarea class="input team-post-edit-body" data-team-field="content" rows="8">${esc(teamState.draft.content)}</textarea>
+        <textarea class="input team-post-edit-body" data-team-field="content" rows="8" placeholder="支持 Markdown 和 $LaTeX$">${esc(teamState.draft.content)}</textarea>
+        <div class="team-md-preview md" data-team-preview hidden></div>
         <div class="team-post-edit-bar">
           <select class="input team-scope-select" data-team-field="scope">${scopeOptionsHtml(teamState.draft.scope)}</select>
+          <button class="btn" type="button" data-team-action="preview">👁 预览</button>
           <button class="btn btn-primary" data-team-action="save-post" data-team-post="${post.id}">保存</button>
           <button class="btn" data-team-action="cancel-edit">取消</button>
         </div>
         ${conflict ? conflictHtml(conflict) : ''}
       </div>`
-    : `<div class="team-post-body">${post.contentHtml ?? ''}</div>`;
+    : `<div class="team-post-body md">${post.contentHtml ?? ''}</div>`;
 
   const tools = [];
   if (post.canEdit) tools.push(`<button class="team-mini" data-team-action="edit-post" data-team-post="${post.id}">编辑</button>`);
@@ -845,6 +854,10 @@ async function renderTeamPosts(team, query) {
       routeQuery(`/team/${team.slug}`, query, { page: target === 1 ? null : String(target) }),
     );
   }
+
+  // 公式排版必须在 innerHTML **之后** —— renderMathInElement 只处理已经在 DOM 里的节点。
+  // 服务端那个 renderMarkdown 从不排公式，它只把 `$…$` / `$$…$$` 原样留在 HTML 里。
+  ntRenderMath(box);
 }
 
 /** 局部重画一条帖子（不整页重画，免得把用户在别处写的东西抹掉）。 */
@@ -852,6 +865,8 @@ function repaintPost(post) {
   const node = $(`[data-team-post-card="${post.id}"]`);
   if (!node) return;
   node.outerHTML = teamPostHtml(post);
+  // ⚠️ 上面那句把 `node` 换掉了：旧引用当场变成游离节点，公式得挂到**新的**那张卡上。
+  ntRenderMath($(`[data-team-post-card="${post.id}"]`));
 }
 
 /* ── 事件 ──────────────────────────────────────────────────────────── */
@@ -875,9 +890,49 @@ function refreshTeam() {
   return viewTeams(currentQuery());
 }
 
+/** 预览按钮上的两句话。写成常量，是为了让「展开」和「收起」永远对得上。 */
+const PREVIEW_OPEN = '👁 预览';
+const PREVIEW_CLOSE = '👁 收起预览';
+
+/**
+ * 团队帖输入框（发帖 / 编辑）的 Markdown 预览。
+ *
+ * 走站点既有那条路：`POST /api/markdown/preview` —— 发帖框、积木页的预览也是它，
+ * 前端不自己拼一份 Markdown（那样两边迟早长得不一样）。
+ *
+ * 排版公式这一步**不能省**：那个接口只吐 `$…$` / `$$…$$` 原文，
+ * 排版权一直归客户端的 `ntRenderMath`（见文件头 import 那段注释）。
+ */
+async function togglePreview(node) {
+  const editor = node.closest('[data-team-editor]');
+  const textarea = editor?.querySelector('[data-team-field="content"]');
+  const box = editor?.querySelector('[data-team-preview]');
+  if (!editor || !textarea || !box) return;
+
+  if (!box.hidden) {
+    box.hidden = true;
+    node.textContent = PREVIEW_OPEN;
+    return;
+  }
+
+  const text = textarea.value ?? '';
+  if (text.trim() === '') {
+    box.innerHTML = '<span class="hint">还没写内容。</span>';
+  } else {
+    const { html } = await api('/api/markdown/preview', { method: 'POST', body: { content: text } });
+    box.innerHTML = html || '<span class="hint">（空内容）</span>';
+    ntRenderMath(box);
+  }
+  box.hidden = false;
+  node.textContent = PREVIEW_CLOSE;
+}
+
 async function handleAction(action, node) {
   const postId = Number(node.dataset.teamPost);
   const cached = postCache.get(postId);
+
+  // 预览不碰任何数据，放在最前面：它不需要 postId，也不该走后面那一串分支。
+  if (action === 'preview') return togglePreview(node);
 
   if (action === 'open-create') {
     // ⚠️ 这里**不能**写成「设好 panel 再调一次 viewTeams()」。
@@ -945,12 +1000,12 @@ async function handleAction(action, node) {
   if (action === 'copy-join-code') {
     const code = String(node.dataset.code || '');
     if (!code) return;
-    // 复制失败不算失败：把号原样报出来，用户手抄一遍就行。
-    // 别在这里直接调 navigator.clipboard —— 线上是明文 http，那个对象压根不存在，
-    // 兜底（execCommand）收在 core/dom.js 的 copyText 里。
-    return (await copyText(code))
-      ? toast('团队号已复制', 'success')
-      : toast(`团队号是 ${code}，手动记一下`, 'success');
+    if (await copyText(code)) return toast('团队号已复制', 'success');
+    // 两条脚本复制路径都被拦下了，退到「选中 + Ctrl+C」。
+    // 这一条浏览器无条件放行：键盘触发的复制不检查用户手势。
+    // 页面上的团队号本来就在旁边，选中它比让用户照着念一遍有用得多。
+    selectText($('[data-team-code]'));
+    return toast('已选中团队号，按 Ctrl+C 复制', 'success');
   }
   if (action === 'edit-announcement' || action === 'cancel-announcement') {
     const editing = action === 'edit-announcement';

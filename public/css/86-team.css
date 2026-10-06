@@ -339,6 +339,19 @@
   font-size: 13px;
 }
 
+/* Markdown 预览盒（发帖框和编辑框共用同一个类）。
+ * 排版跟动态流的 .composer-preview 对齐 —— 同一个东西在两处长得不一样最让人困惑。
+ * 里面的 `md` 类负责正文样式（标题 / 列表 / 代码块 / 公式），这里只管这个盒子本身。 */
+.team-md-preview {
+  margin-top: 4px;
+  padding: 10px 12px;
+  border: 1px dashed var(--border);
+  border-radius: 10px;
+  background: var(--panel-2);
+  max-height: 320px;
+  overflow: auto;
+}
+
 /* ================= 帖子 ================= */
 
 .team-post {
