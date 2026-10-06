@@ -1,0 +1,159 @@
+/* 25-start.css —— 起始页（#/start）：左半边公告，右半边三块入口。
+ *
+ * 结构见 public/views/start.js 的 viewStart()：
+ *   .start-page
+ *     ├─ .page-head（标题 + 一句话说明）
+ *     └─ .start-columns            ← 两栏：左公告 / 右三块
+ *          ├─ .card.start-announce ← 📢 站务公告（列表）
+ *          └─ .start-entries
+ *               └─ .card.start-entry ×3（动态 / 积木广场 / 团队）
+ *
+ * 整块可点靠「撑满」那一招：标题是链接，::after 把它铺满整张卡，
+ * 于是点卡片任何地方都等于点标题 —— 不用 JS，键盘也照样能 Tab 到。
+ *
+ * 本文件由 P5 新增；public/style.css 里加了一行 @import。
+ */
+
+.start-page {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.start-title {
+  font-size: 20px;
+  margin: 0 0 6px;
+}
+
+/* 左公告 / 右三块，各占一半；窄屏见 70-responsive.css 的 ≤900px 那档 */
+.start-columns {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 16px;
+  align-items: start;
+}
+
+/* ---------------- 左边：公告 ---------------- */
+
+.start-announce-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.start-announce-item {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 9px 10px;
+  border-radius: 9px;
+  color: var(--text-dim);
+}
+
+.start-announce-item:hover {
+  background: var(--panel-2);
+  color: var(--text);
+  text-decoration: none;
+}
+
+.start-announce-title {
+  font-size: 14px;
+  line-height: 1.6;
+}
+
+.start-announce-meta {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+/* ---------------- 右边：三块入口 ---------------- */
+
+.start-entries {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.start-entry {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  transition: border-color 0.15s;
+}
+
+.start-entry:hover {
+  border-color: var(--accent);
+}
+
+.start-entry-head {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+}
+
+.start-entry-icon {
+  font-size: 18px;
+  line-height: 1;
+}
+
+.start-entry-title {
+  font-size: 15.5px;
+  font-weight: 700;
+  color: var(--text);
+}
+
+/* 把标题的点击区铺满整张卡：整块可点，但只有一个链接可聚焦 */
+.start-entry-title::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: var(--radius);
+}
+
+.start-entry-desc {
+  margin: 0;
+  font-size: 13.4px;
+  color: var(--text-dim);
+  line-height: 1.7;
+}
+
+.start-entry-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.start-entry-list li {
+  display: flex;
+  gap: 10px;
+  align-items: baseline;
+  min-width: 0;
+  font-size: 13.2px;
+  color: var(--text-dim);
+}
+
+.start-entry-item {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.start-entry-time {
+  flex: 0 0 auto;
+  margin-left: auto;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.start-entry-go {
+  font-size: 13px;
+  color: var(--accent-fg);
+}
+
+
+/* @hand-written */

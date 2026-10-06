@@ -33,8 +33,9 @@ const TARGETS = ['src', 'public', 'scripts', 'forum-ai/src', 'note-agent/src', '
  * 这个数字存在的意义：前端文件被搬走却没同步检查脚本时，哨兵必须响。
  * 删掉签到功能时 `public/views/checkin.js` 整个文件被删，受检数从 195 落到 194：
  * 这是**故意的减一**，所以下限跟着降到 194；片段断言也同步删掉了签到 / 排行榜那几条。
+ * 起始页（P5：public/views/start.js、public/css/25-start.css）进来之后加回两个，实测 196，抬到 196。
  */
-const MIN_CHECKED = Number(process.env.MIN_CHECKED || 194);
+const MIN_CHECKED = Number(process.env.MIN_CHECKED || 196);
 
 /** 新布局里必须存在的关键文件。少一个就说明有人把文件搬走却没同步这份检查。 */
 const REQUIRED_FILES = [
@@ -102,6 +103,9 @@ const REQUIRED_FILES = [
   'src/modules/ai/sections.js',
   // 界面冒烟（P5，顶栏入口 + 右栏抽屉）：新增文件必须登记，否则它被搬走哨兵不会响。
   'scripts/ui-smoke.mjs',
+  // 起始页（P5）：新页面 + 它自己的样式分片。
+  'public/views/start.js',
+  'public/css/25-start.css',
   // 可编程帖子（P2，积木）：后端模块、块引擎、沙箱、页面、样式与它自己的冒烟脚本。
   'src/modules/doc/schema.js',
   'src/modules/doc/queries.js',
@@ -247,6 +251,7 @@ const EXPECTED = [
   ['86-team.css', ['public/css/86-team.css']],
   ['前端藏起来不叫权限', ['scripts/team-smoke.mjs']],
   ['移开自动收回', ['scripts/ui-smoke.mjs']],
+  ['左边是站务公告，右边三块分别是动态、积木广场和团队', ['public/views/start.js']],
 ];
 
 function walk(target, files = []) {

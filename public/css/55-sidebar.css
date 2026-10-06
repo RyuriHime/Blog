@@ -143,9 +143,30 @@
   line-height: 1;
 }
 
+/* 固定（钉住）时把手上的图标换成图钉 */
+.sidebar-handle-icon-pin {
+  display: none;
+  font-size: 15px;
+  line-height: 1;
+}
+
 .sidebar-handle-text {
   writing-mode: vertical-rl;
   letter-spacing: 2px;
+}
+
+/* 固定（钉住）：把手亮起来，提示"鼠标移开也不会收回" */
+.sidebar.is-pinned .sidebar-handle {
+  color: var(--text);
+  border-color: var(--accent);
+}
+
+.sidebar.is-pinned .sidebar-handle-icon {
+  display: none;
+}
+
+.sidebar.is-pinned .sidebar-handle-icon-pin {
+  display: block;
 }
 
 .sidebar-panel {

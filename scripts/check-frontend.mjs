@@ -903,6 +903,10 @@ const feedMod = () => import(pathToFileURL(join(ROOT, 'public', 'views', 'feed.j
 const view = (file) => import(pathToFileURL(join(ROOT, 'public', 'views', file)).href);
 
 const CASES = [
+  // P5 的起始页 `#/start`：未登录的人第一次落在 `#/` 会被转到这里（见 core/router.js）。
+  // 它拉四个现成接口（站务公告 / 动态 / 积木 / 团队），任何一个挂了都要照常出页面 ——
+  // 正好是「渲染会不会炸」这条检查最该盯的一页。
+  ['起始页', 'start.js', 'viewStart', []],
   // v2 首页 = 动态时间线
   ['动态首页', 'timeline.js', 'viewTimeline', [new Map()]],
   ['动态·我关注的', 'timeline.js', 'viewTimeline', [new URLSearchParams({ filter: 'following' })]],
