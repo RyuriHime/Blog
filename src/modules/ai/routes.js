@@ -12,7 +12,19 @@
 // `/api/ai-edit/` 不以 `/api/ai/` 开头，落回宿主路由表，能被正常分发。
 import { HttpError, ensure, rateLimit } from '../../core/http.js';
 import { requireUser } from '../../core/guards.js';
-import { AI_CAPABILITIES, AI_CAPABILITY_KEYS, AI_HIGH_RISK, AI_QUOTA_ACTIONS } from './schema.js';
+import {
+  AI_CAPABILITIES,
+  AI_CAPABILITY_KEYS,
+  AI_HIGH_RISK,
+  AI_QUOTA_ACTIONS,
+  AI_BLOCKED_STATUS,
+  AI_CONTENT_CAPABILITY,
+  AI_MAX_BLOCK_CHARS,
+  AI_MAX_TARGET_TYPE,
+  AI_MAX_TARGET_ID,
+  AI_MAX_REASON,
+  AI_TARGET_TYPE_PATTERN,
+} from './schema.js';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -43,16 +55,35 @@ function isGrantActive(grant, at) {
   return true;
 }
 
-/** 当天已用次数（授权/收回这类状态变更不占额度）。 */
+/**
+ * 当天已用次数（授权/收回这类状态变更不占额度）。
+ *
+ * `status <> 'blocked'`：被服务端自己挡下来的调用（没配 key、上游拒绝、连不上）
+ * 一行都不该从用户额度里扣 —— 用户一次模型都没用上。修之前 dailyQuota=3 时
+ * 四次「没配 key 的 503」就能把额度耗光。
+ */
 function usedToday(db, userId, capability, at) {
   const placeholders = AI_QUOTA_ACTIONS.map(() => '?').join(', ');
   const row = db
     .prepare(
       `SELECT COUNT(*) AS n FROM ai_op_logs
-        WHERE user_id = ? AND capability = ? AND created_at >= ? AND action IN (${placeholders})`,
+        WHERE user_id = ? AND capability = ? AND created_at >= ? AND action IN (${placeholders})
+          AND status <> ?`,
     )
-    .get(userId, capability, startOfUtcDay(at), ...AI_QUOTA_ACTIONS);
+    .get(userId, capability, startOfUtcDay(at), ...AI_QUOTA_ACTIONS, AI_BLOCKED_STATUS);
   return Number(row?.n ?? 0);
+}
+
+/** 只看授权在不在、过没过期，不看配额（回滚用：撤销不该被额度挡住）。 */
+function requireCapability(db, userId, capability) {
+  const grant = readGrant(db, userId, capability);
+  ensure(
+    isGrantActive(grant, Date.now()),
+    403,
+    'forbidden',
+    `未授权能力「${capability}」，请先在 /api/ai-edit/grants 授权`,
+  );
+  return grant;
 }
 
 /**
@@ -61,8 +92,7 @@ function usedToday(db, userId, capability, at) {
  */
 function guardCapability(db, userId, capability) {
   const at = Date.now();
-  const grant = readGrant(db, userId, capability);
-  ensure(isGrantActive(grant, at), 403, 'forbidden', `未授权能力「${capability}」，请先在 /api/ai-edit/grants 授权`);
+  const grant = requireCapability(db, userId, capability);
   const quota = Number(grant.daily_quota ?? 0);
   if (quota > 0) {
     const used = usedToday(db, userId, capability, at);
@@ -91,6 +121,25 @@ function logOp(db, entry) {
       Date.now(),
     );
   return Number(info.lastInsertRowid);
+}
+
+/**
+ * 被挡下来的调用也要留痕（`status='blocked'`，不计配额）。
+ *
+ * 以前只有「连不上 / 超时」这两条写日志，被上游 401/403/429/500 拒绝、以及模型
+ * 返回坏 JSON 的几条**什么都不记** —— 同一次调用，网络失败有痕、被服务商拒绝没痕，
+ * 审计就是缺的。
+ */
+function logBlocked(db, userId, capability, action, targetId, reason) {
+  logOp(db, {
+    userId,
+    capability,
+    action,
+    targetType: 'document_block',
+    targetId: String(targetId ?? ''),
+    status: AI_BLOCKED_STATUS,
+    reason,
+  });
 }
 
 function shapeOp(row) {
@@ -214,6 +263,10 @@ export function registerAiRoutes(ctx) {
     ensure(AI_CAPABILITY_KEYS.includes(capability), 400, 'bad_request', `未知能力「${capability}」`);
 
     const at = Date.now();
+    // `before` 必须在 UPDATE **之前**取：改完再读，拿到的是 revoked_at 已经非空的
+    // 「收回后」状态，审计里的「改前值」就成了假的。
+    const beforeGrant = readGrant(db, user.id, capability);
+
     const info = db
       .prepare(
         'UPDATE ai_capability_grants SET revoked_at = ? WHERE user_id = ? AND capability = ? AND revoked_at IS NULL',
@@ -227,7 +280,7 @@ export function registerAiRoutes(ctx) {
       action: 'revoke',
       status: 'applied',
       reason: '用户收回授权',
-      before: readGrant(db, user.id, capability),
+      before: beforeGrant,
     });
 
     return ctx.http.ok(reqCtx.res, { revoked: true, capability, revokedAt: at });
@@ -254,11 +307,15 @@ export function registerAiRoutes(ctx) {
   // 只回预览、状态记 `preview`；带了才写 `applied` 并留下 before/after。
   // 真正的写盘由 P2 的 /api/docs/* 完成（documents/document_blocks 归 P2，我只读），
   // 我这张表负责的是**授权、审计与回滚所需的旧值**。
+  //
+  // 能力恒为 `edit_content`、动作由 `confirm` 推导 —— **不看 body.capability / body.action**。
+  // 这两个字段以前是客户端说了算：只授权了低风险 `read_post` 的人，把 capability 填成
+  // `read_post` 就能让这条接口落盘一次内容改写；带上 `action: 'grant'` 还能把日志
+  // 伪造成一条授权记录。
   routes.add('POST', '/api/ai-edit/ops', (reqCtx) => {
     const user = viewer(reqCtx);
     const body = reqCtx.body ?? {};
-    const capability = String(body.capability ?? 'edit_content');
-    ensure(AI_CAPABILITY_KEYS.includes(capability), 400, 'bad_request', `未知能力「${capability}」`);
+    const capability = AI_CONTENT_CAPABILITY;
     guardCapability(db, user.id, capability);
 
     const after = body.after ?? null;
@@ -269,9 +326,22 @@ export function registerAiRoutes(ctx) {
       'after 必须是一个对象（这一版只接受块级改动，不接受整篇重写）',
     );
     const before = body.before ?? null;
+
     const targetType = String(body.targetType ?? 'document_block');
+    ensure(
+      targetType.length <= AI_MAX_TARGET_TYPE && AI_TARGET_TYPE_PATTERN.test(targetType),
+      400,
+      'bad_request',
+      `targetType 不合法（${AI_MAX_TARGET_TYPE} 个字符以内、以小写字母开头的小写标识符）`,
+    );
     const targetId = String(body.targetId ?? '');
-    const reason = String(body.reason ?? '').slice(0, 500);
+    ensure(
+      targetId.length <= AI_MAX_TARGET_ID,
+      400,
+      'bad_request',
+      `targetId 太长（上限 ${AI_MAX_TARGET_ID} 个字符）`,
+    );
+    const reason = String(body.reason ?? '').slice(0, AI_MAX_REASON);
 
     if (body.confirm !== true) {
       const opId = logOp(db, {
@@ -296,7 +366,7 @@ export function registerAiRoutes(ctx) {
     const opId = logOp(db, {
       userId: user.id,
       capability,
-      action: String(body.action ?? 'apply'),
+      action: 'apply',
       targetType,
       targetId,
       status: 'applied',
@@ -315,6 +385,15 @@ export function registerAiRoutes(ctx) {
 
     const row = db.prepare('SELECT * FROM ai_op_logs WHERE id = ? AND user_id = ?').get(id, user.id);
     ensure(row, 404, 'not_found', '找不到这条操作记录');
+
+    // 回滚交出去的 `restore` 是要写回 document_blocks 的旧值 —— 这本身就是一条写路径，
+    // 所以同样要过能力门：得还持有当初那次操作所用的能力。
+    // 只看授权、不看配额（撤销不该被当日额度挡住）。
+    // 放在 404 之后：回滚别人的操作仍然是 404，不泄漏这条记录存不存在。
+    requireCapability(db, user.id, row.capability);
+
+    // 判据必须和 shapeOp 的 canRollback 一致，否则会出现「列表说不能回滚、接口却回滚成功」。
+    ensure(row.status === 'applied', 409, 'conflict', '只有已经落盘（applied）的操作才能回滚');
     ensure(row.rolled_back_at == null, 409, 'conflict', '这条操作已经回滚过了');
     ensure(row.before_json != null, 409, 'conflict', '这条操作没有存旧值，无法回滚');
 
@@ -361,17 +440,20 @@ export function registerAiRoutes(ctx) {
     ensure(instruction.length >= 1, 400, 'bad_request', 'instruction 不能为空');
     ensure(instruction.length <= 2000, 400, 'bad_request', 'instruction 不能超过 2000 个字符');
 
+    // 提示词体积就是账单。instruction 限了 2000 字，block 之前一个字都没限：
+    // 实测 12 万字的块能撑出 352KB 的请求体（唯一约束是 core/http.js 的 512KB 上限），
+    // 必然超出任何模型上下文，而钱照付。
+    const blockJson = JSON.stringify(body.block ?? null);
+    ensure(
+      blockJson.length <= AI_MAX_BLOCK_CHARS,
+      400,
+      'bad_request',
+      `block 太大（${blockJson.length} 字符，上限 ${AI_MAX_BLOCK_CHARS}）——只提交要改的那一块`,
+    );
+
     const apiKey = process.env.AI_API_KEY;
     if (!apiKey) {
-      logOp(db, {
-        userId: user.id,
-        capability,
-        action: 'draft',
-        targetType: 'document_block',
-        targetId: String(body.blockId ?? ''),
-        status: 'blocked',
-        reason: 'ai_not_configured',
-      });
+      logBlocked(db, user.id, capability, 'draft', body.blockId, 'ai_not_configured');
       throw new HttpError(503, 'ai_not_configured', '没有配置 AI_API_KEY，无法调用模型');
     }
 
@@ -406,7 +488,7 @@ export function registerAiRoutes(ctx) {
             },
             {
               role: 'user',
-              content: `当前块（JSON）：${JSON.stringify(body.block ?? null)}\n改写要求：${instruction}`,
+              content: `当前块（JSON）：${blockJson}\n改写要求：${instruction}`,
             },
           ],
         }),
@@ -414,13 +496,7 @@ export function registerAiRoutes(ctx) {
       });
     } catch (error) {
       const aborted = error?.name === 'AbortError';
-      logOp(db, {
-        userId: user.id,
-        capability,
-        action: 'draft',
-        status: 'blocked',
-        reason: aborted ? 'ai_timeout' : 'ai_unreachable',
-      });
+      logBlocked(db, user.id, capability, 'draft', body.blockId, aborted ? 'ai_timeout' : 'ai_unreachable');
       throw new HttpError(
         aborted ? 504 : 502,
         aborted ? 'ai_timeout' : 'ai_unreachable',
@@ -431,12 +507,15 @@ export function registerAiRoutes(ctx) {
     }
 
     if (response.status === 401 || response.status === 403) {
+      logBlocked(db, user.id, capability, 'draft', body.blockId, 'ai_unauthorized');
       throw new HttpError(502, 'ai_unauthorized', '模型服务拒绝了这个 API key');
     }
     if (response.status === 429) {
+      logBlocked(db, user.id, capability, 'draft', body.blockId, 'ai_rate_limited');
       throw new HttpError(429, 'ai_rate_limited', '模型服务限流了，请稍后再试');
     }
     if (!response.ok) {
+      logBlocked(db, user.id, capability, 'draft', body.blockId, `ai_upstream_error ${response.status}`);
       throw new HttpError(502, 'ai_upstream_error', `模型服务返回 ${response.status}`);
     }
 
@@ -444,6 +523,7 @@ export function registerAiRoutes(ctx) {
     try {
       payload = await response.json();
     } catch {
+      logBlocked(db, user.id, capability, 'draft', body.blockId, 'ai_bad_json');
       throw new HttpError(502, 'ai_bad_json', '模型返回的不是 JSON');
     }
 
@@ -452,6 +532,7 @@ export function registerAiRoutes(ctx) {
     try {
       patch = JSON.parse(content.replace(/```json/gi, '').replace(/```/g, '').trim());
     } catch {
+      logBlocked(db, user.id, capability, 'draft', body.blockId, 'ai_bad_json');
       throw new HttpError(502, 'ai_bad_json', '模型没有返回合法的 JSON 改动');
     }
 

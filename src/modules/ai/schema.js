@@ -32,8 +32,39 @@ export const AI_HIGH_RISK = Object.freeze(['edit_content', 'publish']);
 /** 审计日志里的动作名。授权/收回也算状态变更，一并留痕。 */
 export const AI_ACTIONS = Object.freeze(['read', 'draft', 'preview', 'apply', 'publish', 'tool', 'grant', 'revoke']);
 
-/** 计入每日配额的 action（授权/收回本身不占额度）。 */
-export const AI_QUOTA_ACTIONS = Object.freeze(['read', 'draft', 'preview', 'apply', 'publish', 'tool']);
+/**
+ * 计入每日配额的 action。
+ *
+ * `preview` **不在**这里：预览只是往本地日志写一行，既没落盘也没有模型调用，
+ * 不该花掉「今天还能用几次」的额度 —— 否则用户每多看一眼就少一次真正的调用。
+ * 授权 / 收回同样不占额度。
+ *
+ * 另外 `usedToday` 只数**没失败**的行（`status <> 'blocked'`）：
+ * 请求根本没发出去（没配 key）或被上游拒绝时，不该扣用户的额度。
+ */
+export const AI_QUOTA_ACTIONS = Object.freeze(['read', 'draft', 'apply', 'publish', 'tool']);
+
+/** 失败 / 根本没发出去的调用在日志里的状态，不计配额。 */
+export const AI_BLOCKED_STATUS = 'blocked';
+
+/**
+ * `/api/ai-edit/ops` 只处理**块级内容改动**，所以能力恒为 `edit_content`、
+ * 动作由 `confirm` 推导，客户端传什么都不改这两项 ——
+ * 否则只授权了低风险 `read_post` 的人就能拿它落盘一次内容改写。
+ */
+export const AI_CONTENT_CAPABILITY = 'edit_content';
+
+/**
+ * 单个块的字符上限。提示词体积直接等于账单：一个 12 万字的块能撑出 352KB 的请求体，
+ * 必然超出任何模型上下文，钱照付（见 routes.js 的 /draft）。
+ */
+export const AI_MAX_BLOCK_CHARS = 20000;
+
+/** 审计目标字段的形状上限，免得日志被任意长字符串灌满。 */
+export const AI_MAX_TARGET_TYPE = 64;
+export const AI_MAX_TARGET_ID = 200;
+export const AI_MAX_REASON = 500;
+export const AI_TARGET_TYPE_PATTERN = /^[a-z][a-z0-9_]*$/;
 
 /**
  * 建表 SQL。

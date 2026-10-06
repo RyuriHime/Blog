@@ -29,6 +29,13 @@ const aeState = {
   /** 回滚交回来的旧值，展示用 */
   restore: null,
   configError: '',
+  /**
+   * 两个输入框的备份。aeRender() 是整体重建 DOM：重建时只能拿 draft 回填，
+   * 而 draft 为 null 时就会退回默认值 —— 于是「草拟失败」会把用户刚敲进去的
+   * 块 JSON 和改写要求整个抹掉。发起请求前先存一份，重建时优先用它。
+   */
+  instructionInput: '',
+  blockInput: '',
 };
 
 const chip = (text, kind = '') => `<span class="ai-chip ${kind}">${esc(text)}</span>`;
@@ -160,13 +167,19 @@ function aeDraftHtml() {
       <div class="ae-field">
         <span class="ae-field-label">当前块（JSON）</span>
         <textarea class="ae-textarea" data-ae-block rows="5" spellcheck="false">${esc(
-          JSON.stringify(draft?.before ?? { blockType: 'paragraph', content: { text: '把这句话改成投票。' } }, null, 2),
+          aeState.blockInput ||
+            JSON.stringify(
+              draft?.before ?? { blockType: 'paragraph', content: { text: '把这句话改成投票。' } },
+              null,
+              2,
+            ),
         )}</textarea>
       </div>
       <div class="ae-field">
         <span class="ae-field-label">改写要求</span>
         <input class="ae-input" data-ae-instruction maxlength="2000"
-               placeholder="${esc(DEFAULT_INSTRUCTION)}" value="${esc(draft?.instruction ?? '')}" />
+               placeholder="${esc(DEFAULT_INSTRUCTION)}"
+               value="${esc(aeState.instructionInput || draft?.instruction || '')}" />
       </div>
       <div class="ae-cap-actions">
         <button class="btn btn-sm btn-primary" type="button" data-ae-act="draft">✨ 让 AI 草拟改动</button>
@@ -333,12 +346,17 @@ async function aeDraft(button) {
     return;
   }
   let block;
+  const rawBlock = $('[data-ae-block]')?.value ?? '';
   try {
-    block = JSON.parse($('[data-ae-block]')?.value ?? 'null');
+    block = JSON.parse(rawBlock || 'null');
   } catch {
     toast('当前块不是合法的 JSON', 'error');
     return;
   }
+  // 请求之前先把输入留一份：失败分支会 aeRender() 重建 DOM，
+  // 不留的话用户刚敲的块 JSON 和改写要求会被抹成默认值。
+  aeState.instructionInput = instruction;
+  aeState.blockInput = rawBlock;
   await withButtonBusy(button, async () => {
     try {
       const data = await api('/api/ai-edit/draft', {
@@ -380,6 +398,8 @@ async function aeApply(button) {
         },
       });
       aeState.draft = null;
+      // 这一版已经落盘了，改写要求清空；块留在框里，方便接着对同一块提下一步要求。
+      aeState.instructionInput = '';
       toast(`已记成操作 #${data.opId}，可以回滚`, 'success');
       await aeLoad();
       aeRender();
@@ -392,6 +412,8 @@ async function aeApply(button) {
 function aeDiscard() {
   aeState.draft = null;
   aeState.restore = null;
+  aeState.instructionInput = '';
+  aeState.blockInput = '';
   aeRender();
 }
 

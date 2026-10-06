@@ -14,6 +14,7 @@
  */
 import { spawn } from 'node:child_process';
 import { mkdirSync, openSync, readFileSync, rmSync } from 'node:fs';
+import { createServer } from 'node:http';
 import { join, resolve } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
@@ -27,10 +28,21 @@ const LOG_FILE = join(ROOT, 'data', 'ai-smoke-server.log');
 const PORT = Number(process.env.AI_SMOKE_PORT || 3423);
 const BASE = `http://127.0.0.1:${PORT}`;
 
+// 第 18 节用：一台「配了 key」的应用服务器 + 一个本地假模型。
+const MODEL_PORT = Number(process.env.AI_SMOKE_MODEL_PORT || 3433);
+const MODEL_BASE = `http://127.0.0.1:${MODEL_PORT}/v1`;
+const KEYED_PORT = Number(process.env.AI_SMOKE_KEYED_PORT || 3434);
+const KEYED_BASE = `http://127.0.0.1:${KEYED_PORT}`;
+const KEYED_DB_FILE = join(ROOT, 'data', 'ai-smoke-keyed.db');
+const KEYED_LOG_FILE = join(ROOT, 'data', 'ai-smoke-keyed-server.log');
+
 const ALL_CAPABILITIES = ['read_post', 'read_site', 'network', 'edit_content', 'site_tools', 'publish'];
 
 let passed = 0;
 const failures = [];
+
+/** 第 18 节起的子进程（假模型 / 配了 key 的服务器），由 finish 统一收掉。 */
+const extraChildren = [];
 function check(name, condition, detail = '') {
   if (condition) {
     passed += 1;
@@ -41,11 +53,11 @@ function check(name, condition, detail = '') {
   }
 }
 
-function createClient() {
+function createClient(base = BASE) {
   let cookie = '';
   return {
     async call(path, { method = 'GET', body } = {}) {
-      const response = await fetch(BASE + path, {
+      const response = await fetch(base + path, {
         method,
         headers: {
           ...(body ? { 'Content-Type': 'application/json' } : {}),
@@ -64,11 +76,18 @@ function createClient() {
   };
 }
 
-async function waitForServer(timeoutMs = 20000) {
+/** 读回某个用户今天已经用掉的 edit_content 次数（-1 表示没读到，用来把断言钉死）。 */
+async function editContentUsed(client) {
+  const caps = await client.call('/api/ai-edit/capabilities');
+  const item = (caps.data?.capabilities ?? []).find((row) => row.key === 'edit_content');
+  return item?.usedToday ?? -1;
+}
+
+async function waitForServer(timeoutMs = 20000, base = BASE) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     try {
-      const response = await fetch(`${BASE}/api/site`);
+      const response = await fetch(`${base}/api/site`);
       if (response.ok) return true;
     } catch {
       /* 还没起来 */
@@ -102,12 +121,22 @@ const finish = async (code) => {
   } catch {
     /* 忽略 */
   }
-  await sleep(400);
-  for (const suffix of ['', '-wal', '-shm']) {
+  // 第 18 节起的假模型和「配了 key」的服务器也要收干净，否则下次跑会撞端口。
+  for (const extra of extraChildren) {
     try {
-      rmSync(DB_FILE + suffix, { force: true });
+      extra.kill();
     } catch {
       /* 忽略 */
+    }
+  }
+  await sleep(400);
+  for (const file of [DB_FILE, KEYED_DB_FILE]) {
+    for (const suffix of ['', '-wal', '-shm']) {
+      try {
+        rmSync(file + suffix, { force: true });
+      } catch {
+        /* 忽略 */
+      }
     }
   }
   console.log('');
@@ -274,24 +303,37 @@ try {
   check('回滚后不再可回滚', rolled?.canRollback === false, String(rolled?.canRollback));
 
   /* ---------- 10. 每日配额 ---------- */
+  //
+  // `/ops` 用哪项能力现在由服务端固定成 edit_content（不接受客户端传值，见第 17 节），
+  // 所以配额只能设在 edit_content 上；而 admin 今天已经有过若干次 edit_content 调用，
+  // 用量要算进历史记录，于是按「当前用量 + 1」设配额，再验证第 2 次就超限。
+  const usedEdit = await editContentUsed(admin);
+
   const grantQuota = await admin.call('/api/ai-edit/grants', {
     method: 'POST',
-    body: { capability: 'read_post', dailyQuota: 1 },
+    body: { capability: 'edit_content', confirm: true, dailyQuota: usedEdit + 1 },
   });
   check('可以给能力设每日配额（FR-CAP-04）', grantQuota.status === 200, JSON.stringify(grantQuota.error ?? null));
 
-  const firstUse = await admin.call('/api/ai-edit/ops', {
-    method: 'POST',
-    body: { capability: 'read_post', targetType: 'post', targetId: '1', after: { read: true }, confirm: true },
-  });
+  const quotaBody = {
+    targetType: 'document_block',
+    targetId: 'quota-1',
+    before: { blockType: 'text' },
+    after: { blockType: 'vote' },
+    confirm: true,
+  };
+  const firstUse = await admin.call('/api/ai-edit/ops', { method: 'POST', body: quotaBody });
   check('配额内第一次调用成功', firstUse.status === 200, `实际 ${firstUse.status}`);
 
-  const secondUse = await admin.call('/api/ai-edit/ops', {
-    method: 'POST',
-    body: { capability: 'read_post', targetType: 'post', targetId: '1', after: { read: true }, confirm: true },
-  });
+  const secondUse = await admin.call('/api/ai-edit/ops', { method: 'POST', body: quotaBody });
   check('超配额返回 429', secondUse.status === 429, `实际 ${secondUse.status}`);
   check('超配额的错误代号是 ai_rate_limited', secondUse.error?.code === 'ai_rate_limited', String(secondUse.error?.code));
+
+  // 恢复成不限次数，否则后面每一节都会被 429 挡住。
+  await admin.call('/api/ai-edit/grants', {
+    method: 'POST',
+    body: { capability: 'edit_content', confirm: true, dailyQuota: 0 },
+  });
 
   /* ---------- 11. 未配置模型 → 503 ai_not_configured ---------- */
   const draft = await admin.call('/api/ai-edit/draft', {
@@ -396,6 +438,14 @@ try {
     `实际 ${routerEntry.status}`,
   );
 
+  // 静态哨兵：aeRender() 是整体重建 DOM，只能拿草稿回填。草拟失败时 draft 是 null，
+  // 没有这两个备份字段，用户刚敲的块 JSON 和改写要求就会被抹成默认值 —— 这条钉住备份机制本身。
+  check(
+    '视图里留着输入备份（草拟失败时不抹掉用户敲的内容）',
+    pageJsText.includes('instructionInput') && pageJsText.includes('blockInput'),
+    'aeState 的 instructionInput / blockInput 不见了',
+  );
+
   /* ---------- 16. 和 forum-ai 必须是同一套模型默认值 ---------- */
   //
   // 同一个项目里 `AI_BASE_URL` / `AI_MODEL` 只能有一个默认值。两边不一致时，
@@ -423,6 +473,334 @@ try {
     myModel === forumModel,
     `我=${myModel} forum-ai=${forumModel}`,
   );
+
+  /* ---------- 17. 对抗性调试的回归用例 ---------- */
+  //
+  // 这一节钉的是用探针实测出来的越权与审计缺陷。每一条都对应一个「改之前确实是错的」
+  // 的具体行为，改回去就会红。改动本身都记在 src/modules/ai/routes.js 的注释里。
+
+  // —— 用哪项能力由服务端决定，不接受客户端传值
+  //    （原来是客户端说自己是啥就是啥：只授权了 read_post 这种低风险·读能力的人，
+  //     把 capability 填成 read_post 就能落盘一次内容改写。所以这里必须用一个
+  //     「有 read_post、没有 edit_content」的用户来打，否则旧代码也能过、钉不住。）
+  await alice.call('/api/ai-edit/grants', { method: 'POST', body: { capability: 'read_post' } });
+  const forgedCap = await alice.call('/api/ai-edit/ops', {
+    method: 'POST',
+    body: {
+      capability: 'read_post',
+      targetType: 'document_block',
+      targetId: 'regress-1',
+      before: { blockType: 'text' },
+      after: { blockType: 'vote' },
+      confirm: true,
+    },
+  });
+  check(
+    '只授权了 read_post 的用户，伪造 capability=read_post 也改不动（403）',
+    forgedCap.status === 403,
+    `实际 ${forgedCap.status}`,
+  );
+
+  await admin.call('/api/ai-edit/grants', {
+    method: 'POST',
+    body: { capability: 'edit_content', confirm: true, dailyQuota: 0 },
+  });
+
+  // —— 审计里的 action 由服务端按「有没有 confirm」判定，不接受客户端传值
+  //    （原来带 action:'grant' 提交一次内容改写，日志就记成 grant）
+  const forgedAction = await admin.call('/api/ai-edit/ops', {
+    method: 'POST',
+    body: {
+      action: 'grant',
+      targetType: 'document_block',
+      targetId: 'regress-2',
+      before: { blockType: 'text' },
+      after: { blockType: 'vote' },
+      confirm: true,
+    },
+  });
+  check('伪造的 action 字段不影响请求成功', forgedAction.status === 200, `实际 ${forgedAction.status}`);
+  const forgedRow = (await admin.call('/api/ai-edit/ops')).data?.ops?.find((row) => row.id === forgedAction.data?.opId);
+  check('审计里的 action 被写成 apply（不是客户端给的 grant）', forgedRow?.action === 'apply', String(forgedRow?.action));
+
+  // —— 回滚的判据要和列表里的 canRollback 一致（原来列表说不可回滚、接口却回滚成功）
+  const previewOnly = await admin.call('/api/ai-edit/ops', {
+    method: 'POST',
+    body: {
+      targetType: 'document_block',
+      targetId: 'regress-3',
+      before: { blockType: 'text' },
+      after: { blockType: 'vote' },
+    },
+  });
+  check('不带 confirm 只产生预览', previewOnly.status === 200 && previewOnly.data?.applied === false, `实际 ${previewOnly.status}`);
+  const previewRow = (await admin.call('/api/ai-edit/ops')).data?.ops?.find((row) => row.id === previewOnly.data?.opId);
+  check('预览在列表里标记为不可回滚', previewRow?.canRollback === false, String(previewRow?.canRollback));
+  const rollbackPreview = await admin.call(`/api/ai-edit/ops/${previewOnly.data?.opId}/rollback`, { method: 'POST' });
+  check('列表说不可回滚的操作，接口同样回滚不了（409）', rollbackPreview.status === 409, `实际 ${rollbackPreview.status}`);
+
+  // —— 回滚交出去的 restore 是要写回 document_blocks 的旧值，它本身就是一条写路径，
+  //    收回授权后必须做不了（原来回滚端点完全没有能力门）
+  const appliedRegress = await admin.call('/api/ai-edit/ops', {
+    method: 'POST',
+    body: {
+      targetType: 'document_block',
+      targetId: 'regress-4',
+      before: { blockType: 'text' },
+      after: { blockType: 'vote' },
+      confirm: true,
+    },
+  });
+  const appliedId = appliedRegress.data?.opId;
+  await admin.call('/api/ai-edit/grants/edit_content', { method: 'DELETE' });
+  const rollbackRevoked = await admin.call(`/api/ai-edit/ops/${appliedId}/rollback`, { method: 'POST' });
+  check('收回 edit_content 之后连回滚都做不了（403）', rollbackRevoked.status === 403, `实际 ${rollbackRevoked.status}`);
+
+  // —— 收回授权那条审计必须记「收回前」的状态
+  //    （原来是在 UPDATE 之后才读 before，存下来的是 revoked_at 已经非空的收回后状态；
+  //     注意 readGrant 返回的是**原始行**，字段是 snake_case 的 revoked_at）
+  const revokeRow = (await admin.call('/api/ai-edit/ops')).data?.ops?.find(
+    (row) => row.action === 'revoke' && row.capability === 'edit_content',
+  );
+  check(
+    '收回授权的审计里确实存了「收回前」那一行',
+    revokeRow?.before != null,
+    JSON.stringify(revokeRow?.before ?? null),
+  );
+  check(
+    '收回前那一行的 revoked_at 是空的（不是收回后的状态）',
+    revokeRow?.before != null && revokeRow.before.revoked_at == null,
+    JSON.stringify(revokeRow?.before ?? null),
+  );
+
+  // —— 预览不该吃配额（原来两次预览就能把当日额度耗光，真正落盘那次被 429 挡住）
+  await admin.call('/api/ai-edit/grants', {
+    method: 'POST',
+    body: { capability: 'edit_content', confirm: true, dailyQuota: 0 },
+  });
+  const usedBeforePreview = await editContentUsed(admin);
+  await admin.call('/api/ai-edit/ops', {
+    method: 'POST',
+    body: {
+      targetType: 'document_block',
+      targetId: 'regress-5',
+      before: { blockType: 'text' },
+      after: { blockType: 'vote' },
+    },
+  });
+  const usedAfterPreview = await editContentUsed(admin);
+  check(
+    '预览不计入每日用量',
+    usedAfterPreview === usedBeforePreview,
+    `${usedBeforePreview} → ${usedAfterPreview}`,
+  );
+
+  // —— 没发出去的调用不扣额度，但必须留痕
+  //    （原来 503 也写一条 draft 日志而 draft 计配额；同时上游 401/403/429/500 与坏 JSON
+  //     那几条路径干脆什么都不记 —— 同一次调用，网络失败有痕、被服务商拒绝没痕）
+  const usedBeforeBlocked = await editContentUsed(admin);
+  for (let i = 0; i < 3; i += 1) {
+    await admin.call('/api/ai-edit/draft', { method: 'POST', body: { blockId: 'regress', instruction: '改一下' } });
+  }
+  const usedAfterBlocked = await editContentUsed(admin);
+  check(
+    '没配模型时的 503 不扣每日用量',
+    usedAfterBlocked === usedBeforeBlocked,
+    `${usedBeforeBlocked} → ${usedAfterBlocked}`,
+  );
+  const blockedRow = (await admin.call('/api/ai-edit/ops')).data?.ops?.find(
+    (row) => row.action === 'draft' && row.reason === 'ai_not_configured',
+  );
+  check('没配模型时仍然留下一条 blocked 审计', blockedRow?.status === 'blocked', JSON.stringify(blockedRow ?? null));
+
+  // —— 提示词体积有上限（原来 instruction 限了 2000 字，block 一个字都没限，
+  //    12 万字的块能撑出 352KB 的请求体）
+  const tooBig = await admin.call('/api/ai-edit/draft', {
+    method: 'POST',
+    body: { block: { blockType: 'text', content: { text: 'x'.repeat(40000) } }, instruction: '改一下' },
+  });
+  check('过大的 block 直接 400，不会发给模型', tooBig.status === 400, `实际 ${tooBig.status}`);
+
+  // —— 审计字段有形状和长度约束（原来 targetType 可以是任意字符串、targetId 不限长）
+  const badTarget = await admin.call('/api/ai-edit/ops', {
+    method: 'POST',
+    body: { targetType: 'not a real type!', targetId: 'x', after: { blockType: 'text' }, confirm: true },
+  });
+  check('非法的 targetType 返回 400', badTarget.status === 400, `实际 ${badTarget.status}`);
+
+  const longTarget = await admin.call('/api/ai-edit/ops', {
+    method: 'POST',
+    body: {
+      targetType: 'document_block',
+      targetId: 'y'.repeat(5000),
+      after: { blockType: 'text' },
+      confirm: true,
+    },
+  });
+  check('超长的 targetId 返回 400', longTarget.status === 400, `实际 ${longTarget.status}`);
+
+  /* ---------- 18. 真打一次模型：成功路径 + 每一条失败路径 ---------- */
+  //
+  // 前面 17 节都跑在「故意不配 key」的服务器上，模型分支（成功解析、超时、上游拒绝、
+  // 坏 JSON）**一次都没被执行过**。这一节补上：起一个本地假模型（可切六种应答），
+  // 再起一台配了 AI_API_KEY 的应用服务器指向它，用真实 HTTP 走完整条链。
+  //
+  // 除了状态码和错误代号，这里还钉住「失败也要留痕」：以前上游 401/403/429/500
+  // 与坏 JSON 全都不写审计 —— 同一次调用，网络失败有痕、被服务商拒绝没痕。
+  let modelMode = 'ok';
+  let lastRequestBody = null;
+  let lastAuth = '';
+
+  const stub = createServer((req, res) => {
+    let raw = '';
+    req.on('data', (chunk) => {
+      raw += chunk;
+    });
+    req.on('end', () => {
+      lastAuth = String(req.headers.authorization ?? '');
+      try {
+        lastRequestBody = JSON.parse(raw);
+      } catch {
+        lastRequestBody = null;
+      }
+      const send = (status, payload) => {
+        res.writeHead(status, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(payload));
+      };
+      if (modelMode === 'hang') return; // 故意不回，用来触发 504
+      if (modelMode === 'unauthorized') return send(401, { error: { message: 'bad key' } });
+      if (modelMode === 'ratelimited') return send(429, { error: { message: 'slow down' } });
+      if (modelMode === 'upstream') return send(500, { error: { message: 'boom' } });
+      if (modelMode === 'badjson') return send(200, { choices: [{ message: { content: '这不是 JSON' } }] });
+      // 故意套一层 ```json 围栏：模型经常这么干，代码里必须剥掉才能解析。
+      return send(200, {
+        choices: [{ message: { content: '```json\n{"blockType":"vote","content":{"question":"选哪个？"}}\n```' } }],
+      });
+    });
+  });
+  await new Promise((done) => stub.listen(MODEL_PORT, '127.0.0.1', done));
+
+  for (const suffix of ['', '-wal', '-shm']) rmSync(KEYED_DB_FILE + suffix, { force: true });
+  const keyedLogFd = openSync(KEYED_LOG_FILE, 'w');
+  const keyed = spawn(process.execPath, [SERVER], {
+    env: {
+      ...process.env,
+      PORT: String(KEYED_PORT),
+      DB_FILE: KEYED_DB_FILE,
+      AVATAR_DIR,
+      NOTES_DIR,
+      QUIET: '1',
+      AI_API_KEY: 'stub-key',
+      AI_BASE_URL: MODEL_BASE,
+      AI_MODEL: 'stub-model',
+      AI_TIMEOUT_MS: '1500', // 「hang」那条不用干等 180 秒
+    },
+    stdio: ['ignore', keyedLogFd, keyedLogFd],
+  });
+  extraChildren.push(keyed, { kill: () => stub.close() });
+
+  check('配了 key 的第二台服务器起来了', await waitForServer(20000, KEYED_BASE), '看看 data/ai-smoke-keyed-server.log');
+
+  const keyedAdmin = createClient(KEYED_BASE);
+  const keyedLogin = await keyedAdmin.call('/api/auth/login', {
+    method: 'POST',
+    body: { username: 'admin', password: 'admin123' },
+  });
+  check('第二台服务器上管理员也能登录（同一份种子数据）', keyedLogin.status === 200, JSON.stringify(keyedLogin.error ?? null));
+  await keyedAdmin.call('/api/ai-edit/grants', {
+    method: 'POST',
+    body: { capability: 'edit_content', confirm: true, dailyQuota: 0 },
+  });
+
+  const okDraft = await keyedAdmin.call('/api/ai-edit/draft', {
+    method: 'POST',
+    body: { blockId: 'block-1', block: { blockType: 'text', content: { text: '原文' } }, instruction: '改成投票' },
+  });
+  check(
+    '上游正常时草拟成功，且仍然只是预览（不自动落盘）',
+    okDraft.status === 200 && okDraft.data?.applied === false,
+    `${okDraft.status} ${JSON.stringify(okDraft.error ?? null)}`,
+  );
+  check('拿回来的是模型给的块改动', okDraft.data?.patch?.blockType === 'vote', JSON.stringify(okDraft.data?.patch ?? null));
+  check('带 ```json 围栏的应答也能解析', okDraft.data?.patch?.content?.question === '选哪个？', JSON.stringify(okDraft.data?.patch ?? null));
+  check('模型名如实回填', okDraft.data?.model === 'stub-model', String(okDraft.data?.model));
+
+  check('请求体带上了配置的 model', lastRequestBody?.model === 'stub-model', String(lastRequestBody?.model));
+  check(
+    'system 提示词要求只输出一个 JSON 对象',
+    String(lastRequestBody?.messages?.[0]?.content ?? '').includes('JSON'),
+    String(lastRequestBody?.messages?.[0]?.content ?? ''),
+  );
+  check(
+    'user 消息里带着当前块',
+    String(lastRequestBody?.messages?.[1]?.content ?? '').includes('"blockType"'),
+    String(lastRequestBody?.messages?.[1]?.content ?? ''),
+  );
+  check(
+    'user 消息里带着改写要求',
+    String(lastRequestBody?.messages?.[1]?.content ?? '').includes('改成投票'),
+    String(lastRequestBody?.messages?.[1]?.content ?? ''),
+  );
+  check('带上了 Authorization: Bearer <key>', lastAuth === 'Bearer stub-key', lastAuth);
+
+  const draftBody = { blockId: 'block-1', block: { blockType: 'text', content: { text: '原文' } }, instruction: '改' };
+
+  modelMode = 'unauthorized';
+  const unauthorized = await keyedAdmin.call('/api/ai-edit/draft', { method: 'POST', body: draftBody });
+  check(
+    '上游 401 → 502 ai_unauthorized',
+    unauthorized.status === 502 && unauthorized.error?.code === 'ai_unauthorized',
+    `${unauthorized.status} ${unauthorized.error?.code}`,
+  );
+
+  modelMode = 'ratelimited';
+  const ratelimited = await keyedAdmin.call('/api/ai-edit/draft', { method: 'POST', body: draftBody });
+  check(
+    '上游 429 → 429 ai_rate_limited',
+    ratelimited.status === 429 && ratelimited.error?.code === 'ai_rate_limited',
+    `${ratelimited.status} ${ratelimited.error?.code}`,
+  );
+
+  modelMode = 'upstream';
+  const upstream = await keyedAdmin.call('/api/ai-edit/draft', { method: 'POST', body: draftBody });
+  check(
+    '上游 500 → 502 ai_upstream_error',
+    upstream.status === 502 && upstream.error?.code === 'ai_upstream_error',
+    `${upstream.status} ${upstream.error?.code}`,
+  );
+
+  modelMode = 'badjson';
+  const badjson = await keyedAdmin.call('/api/ai-edit/draft', { method: 'POST', body: draftBody });
+  check(
+    '模型返回非 JSON → 502 ai_bad_json',
+    badjson.status === 502 && badjson.error?.code === 'ai_bad_json',
+    `${badjson.status} ${badjson.error?.code}`,
+  );
+
+  modelMode = 'hang';
+  const timedOut = await keyedAdmin.call('/api/ai-edit/draft', { method: 'POST', body: draftBody });
+  check(
+    '上游不回应 → 504 ai_timeout',
+    timedOut.status === 504 && timedOut.error?.code === 'ai_timeout',
+    `${timedOut.status} ${timedOut.error?.code}`,
+  );
+  modelMode = 'ok';
+
+  const keyedOps = (await keyedAdmin.call('/api/ai-edit/ops?limit=100')).data?.ops ?? [];
+  for (const [reason, label] of [
+    ['ai_unauthorized', '上游拒绝 key'],
+    ['ai_rate_limited', '上游限流'],
+    ['ai_upstream_error', '上游 5xx'],
+    ['ai_bad_json', '模型返回非 JSON'],
+    ['ai_timeout', '上游超时'],
+  ]) {
+    const row = keyedOps.find((item) => item.action === 'draft' && String(item.reason ?? '').includes(reason));
+    check(
+      `失败路径「${label}」留下了 blocked 审计（不计配额）`,
+      row?.status === 'blocked',
+      JSON.stringify(row ?? null),
+    );
+  }
 
   await finish(failures.length ? 1 : 0);
 } catch (error) {
