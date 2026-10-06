@@ -13,6 +13,7 @@ import {
   MAX_TEAM_ANNOUNCEMENT,
   MAX_TEAM_FILE_BYTES,
   MAX_TEAM_INTRO,
+  MAX_TEAM_JOIN_MESSAGE,
   MAX_TEAM_MESSAGE,
   MAX_TEAM_NAME,
   MAX_TEAM_POST_CONTENT,
@@ -22,13 +23,24 @@ import {
   TEAM_FILE_BODY_LIMIT,
   TEAM_FILE_PAGE_MAX,
   TEAM_JOIN_POLICIES,
+  TEAM_JOIN_REQUEST_PAGE_MAX,
+  TEAM_JOIN_REQUEST_STATUSES,
   TEAM_MESSAGE_PAGE_MAX,
   TEAM_PAGE_MAX,
   TEAM_ROLES,
   TEAM_SCOPES,
 } from './schema.js';
 import { pickJoinCode, readJoinCode } from './join-code.js';
-import { SCOPE_OPTIONS, shapeFile, shapeMember, shapeMessage, shapeTeam, shapeTeamPost, shapeTeamReply } from './shape.js';
+import {
+  SCOPE_OPTIONS,
+  shapeFile,
+  shapeJoinRequest,
+  shapeMember,
+  shapeMessage,
+  shapeTeam,
+  shapeTeamPost,
+  shapeTeamReply,
+} from './shape.js';
 import {
   attachmentHeaders,
   extensionOf,
@@ -55,8 +67,38 @@ function readScope(value, fallback = 'team') {
 function readJoinPolicy(value, fallback = 'open') {
   if (value == null || value === '') return fallback;
   const policy = String(value);
-  ensure(TEAM_JOIN_POLICIES.includes(policy), 400, 'bad_join_policy', '加入方式只能是：谁都能加入 / 需要邀请');
+  ensure(TEAM_JOIN_POLICIES.includes(policy), 400, 'bad_join_policy', '加入方式只能是：谁都能加入 / 需要申请');
   return policy;
+}
+
+/**
+ * 「要不要出现在广场上」这类开关。只认真真假假的几种写法（表单送来的都是字符串），
+ * 别的一律 400 —— 悄悄把 `'maybe'` 当 false 会让设置页显示的和库里的不是一回事。
+ */
+function readFlag(value, label = '这个选项') {
+  const text = String(value ?? '').trim().toLowerCase();
+  ensure(['1', '0', 'true', 'false', ''].includes(text), 400, 'bad_flag', `${label}只能是「是」或「否」`);
+  return text === '1' || text === 'true';
+}
+
+/** 申请列表的状态筛选（默认只看待审）。 */
+function readRequestStatus(query) {
+  const raw = String(query.get('status') ?? 'pending');
+  const status = raw === '' ? 'pending' : raw;
+  ensure(
+    status === 'all' || TEAM_JOIN_REQUEST_STATUSES.includes(status),
+    400,
+    'bad_status',
+    '申请状态只能是：待审 / 已批准 / 已拒绝 / 全部',
+  );
+  return status;
+}
+
+/** 申请列表分页（与帖子、文件分开：这一页只在管理面板里出现，条目轻）。 */
+function readRequestPage(query) {
+  const page = Math.max(1, Number(query.get('page')) || 1);
+  const perPage = Math.min(TEAM_JOIN_REQUEST_PAGE_MAX, Math.max(1, Number(query.get('perPage')) || 20));
+  return { page, perPage, offset: (page - 1) * perPage };
 }
 
 function readPage(query) {
@@ -221,9 +263,10 @@ export function registerTeamRoutes(ctx, { queries }) {
   /**
    * 凭团队号加入。
    *
-   * ⚠️ 这条路**不看 `join_policy`**，这是故意的：「需要邀请」的团队本来就没有自助入口，
-   * 团队号就是那个入口 —— 管理员把号发给谁，就是把邀请发给了谁。
-   * 换句话说，`invite` 挡的是「随便逛到就能进」，不是「拿到暗号也不能进」。
+   * ⚠️ 这条路**不看 `join_policy`**，这是故意的：团队号**本身就是邀请**。
+   * 管理员（或任何成员）把号发给谁，就是把邀请发给了谁。
+   * 换句话说，`apply` 挡的是「在广场上逛到就能进」，不是「拿到号也不能进」——
+   * 否则「复制团队号」这个功能就没有意义了。
    *
    * 限流是唯一的防线（32^6 ≈ 10.7 亿种，20 次 / 10 分钟 / 人，枚举不动），
    * 所以号对不上就老实说 404 —— 说得越准，抄错号的人越容易自己发现。
@@ -273,14 +316,34 @@ export function registerTeamRoutes(ctx, { queries }) {
     });
   });
 
+  /**
+   * 改团队设置。
+   *
+   * 两条权限线，别把它们合成一条：
+   *   - 团队名 / 简介 / 加入方式 → 团长**与管理员**（`requireTeamManager`）。
+   *     「要不要申请才能进」是日常运营，管理员该能改。
+   *   - 要不要出现在团队广场 → **只有创建者**（`owner_id`）。
+   *     这是把团队从公众视野里拿掉的决定，不是日常运营 —— 与「解散团队」
+   *     同一条线（解散也只有创建者能做）。
+   */
   add('PUT', '/api/teams/:id', async (reqCtx) => {
     const teamRow = loadTeam(reqCtx, queries);
-    requireTeamManager(reqCtx, queries, teamRow);
+    const user = requireTeamManager(reqCtx, queries, teamRow);
     const body = reqCtx.body ?? {};
+    const touchesListed = body.listed != null && body.listed !== '';
+    ensure(
+      !touchesListed || Number(teamRow.owner_id) === user.id,
+      403,
+      'forbidden',
+      '只有团队创建者可以决定团队要不要出现在团队广场上',
+    );
     const name = field(body.name ?? teamRow.name, { label: '团队名', min: 2, max: MAX_TEAM_NAME });
     const intro = field(body.intro ?? teamRow.intro, { label: '团队简介', min: 0, max: MAX_TEAM_INTRO });
     const joinPolicy = readJoinPolicy(body.joinPolicy, teamRow.join_policy);
     queries.updateTeam({ id: teamRow.id, name, intro, joinPolicy });
+    if (touchesListed) {
+      queries.setTeamListed({ id: teamRow.id, listed: readFlag(body.listed, '「出现在团队广场」') });
+    }
     ok(reqCtx.res, { team: shapeTeam(queries.teamById(teamRow.id, viewerIdOf(reqCtx.user)), { viewer: reqCtx.user }) });
   });
 
@@ -351,21 +414,76 @@ export function registerTeamRoutes(ctx, { queries }) {
     ok(reqCtx.res, { items: members, total: members.length });
   });
 
+  /**
+   * 加入团队。走哪条路由 `join_policy` 决定：
+   *
+   *   open  → 直接进（幂等：已经在里面就照成功返回）
+   *   apply → 递一条申请，等团长 / 管理员批准；**重复递是幂等的** ——
+   *           已经挂着一条待审申请就把那条原样还回去，既不报错、也不堆出两条
+   *
+   * ⚠️ 真正的判定在这里，不在前端：`shapeTeam` 的 `canJoin` / `canApply` 只是画按钮用的。
+   * 凭团队号加入是**另一条路**（`POST /api/teams/join-by-code`，不看 `join_policy`）：
+   * 号本身就是邀请，见那条路由上面的注释。
+   */
   add('POST', '/api/teams/:id/join', async (reqCtx) => {
     const teamRow = loadTeam(reqCtx, queries);
     const user = requireUser(reqCtx);
     rateLimit(`team:join:${user.id}`, 30, 10 * 60 * 1000);
+    const fresh = () => shapeTeam(queries.teamById(teamRow.id, user.id), { viewer: user });
+
     const existing = queries.memberOf(teamRow.id, user.id);
-    if (!existing) {
-      ensure(
-        teamRow.join_policy !== 'invite',
-        403,
-        'forbidden',
-        '这个团队需要邀请才能加入，找管理员拉你进去',
-      );
-      queries.addMember({ teamId: teamRow.id, userId: user.id, role: 'member' });
+    if (existing) {
+      ok(reqCtx.res, { team: fresh(), joined: true, requested: false });
+      return;
     }
-    ok(reqCtx.res, { team: shapeTeam(queries.teamById(teamRow.id, user.id), { viewer: user }) });
+
+    if (teamRow.join_policy !== 'apply') {
+      queries.addMember({ teamId: teamRow.id, userId: user.id, role: 'member' });
+      ok(reqCtx.res, { team: fresh(), joined: true, requested: false });
+      return;
+    }
+
+    const mine = queries.myJoinRequest({ teamId: teamRow.id, userId: user.id });
+    if (mine && mine.status === 'pending') {
+      ok(reqCtx.res, {
+        team: fresh(),
+        joined: false,
+        requested: true,
+        request: shapeJoinRequest(mine, { viewer: user }),
+      });
+      return;
+    }
+
+    const message = field((reqCtx.body ?? {}).message ?? '', {
+      label: '申请理由',
+      min: 0,
+      max: MAX_TEAM_JOIN_MESSAGE,
+    });
+    const requestId = queries.createJoinRequest({ teamId: teamRow.id, userId: user.id, message });
+
+    // 通知全体管理员（owner + admin）。走 core 默认的去重：同一个人反复递申请，
+    // 每位管理员那里只留一条未读 —— 这跟公告要 `dedupe: false` 正好相反，
+    // 公告是有新内容，申请只是同一个人又点了一次。
+    let notified = 0;
+    for (const member of queries.listMembers(teamRow.id)) {
+      if (member.team_role === 'member') continue;
+      const created = store.createNotification({
+        userId: member.user_id,
+        actorId: user.id,
+        type: 'team_join_request',
+        teamId: teamRow.id,
+        excerpt: message,
+      });
+      if (created) notified += 1;
+    }
+
+    ok(reqCtx.res, {
+      team: fresh(),
+      joined: false,
+      requested: true,
+      request: shapeJoinRequest(queries.joinRequestById({ id: requestId, teamId: teamRow.id }), { viewer: user }),
+      notified,
+    });
   });
 
   add('POST', '/api/teams/:id/leave', async (reqCtx) => {
@@ -383,19 +501,106 @@ export function registerTeamRoutes(ctx, { queries }) {
     ok(reqCtx.res, { left: true, teamId: teamRow.id });
   });
 
-  add('POST', '/api/teams/:id/members', async (reqCtx) => {
+  /* ── 加入申请（审核） ───────────────────────────────────────────── */
+
+  /**
+   * 待审的加入申请（**只有团长与管理员能看**）。
+   *
+   * `?status=pending|approved|rejected|all`，默认只看待审 —— 管理面板要的就是
+   * 「现在有几个人在门口等着」。批过的那些留在库里当记录，想看再点「全部」。
+   */
+  add('GET', '/api/teams/:id/join-requests', async (reqCtx) => {
     const teamRow = loadTeam(reqCtx, queries);
     requireTeamManager(reqCtx, queries, teamRow);
-    rateLimit(`team:invite:${teamRow.id}`, 60, 10 * 60 * 1000);
-    const body = reqCtx.body ?? {};
-    const username = field(body.username ?? '', { label: '用户名', min: 1, max: 40 });
-    const target = store.userByUsername(username);
-    ensure(target, 404, 'user_not_found', '没有这个用户');
-    const role = body.role == null || body.role === '' ? 'member' : String(body.role);
-    ensure(role === 'member' || role === 'admin', 400, 'bad_role', '只能设为「管理员」或「成员」');
-    queries.addMember({ teamId: teamRow.id, userId: target.id, role });
-    const fresh = queries.listMembers(teamRow.id).find((row) => row.user_id === target.id);
-    ok(reqCtx.res, { member: shapeMember(fresh), team: shapeTeam(queries.teamById(teamRow.id, viewerIdOf(reqCtx.user)), { viewer: reqCtx.user }) });
+    const status = readRequestStatus(reqCtx.query);
+    const { page, perPage, offset } = readRequestPage(reqCtx.query);
+    const total = queries.countJoinRequests({ teamId: teamRow.id, status });
+    const rows = queries.listJoinRequests({ teamId: teamRow.id, status, limit: perPage, offset });
+    ok(reqCtx.res, {
+      items: rows.map((row) => shapeJoinRequest(row, { viewer: reqCtx.user })),
+      page,
+      perPage,
+      total,
+      totalPages: Math.max(1, Math.ceil(total / perPage)),
+      status,
+      pendingTotal: queries.countJoinRequests({ teamId: teamRow.id, status: 'pending' }),
+    });
+  });
+
+  /**
+   * 批准 / 拒绝一条申请（团长与管理员）。
+   *
+   * 批准 = 写进 `team_members` + 把申请标成 approved + 通知申请人。
+   * 两件事必须都做：只改状态不加人，申请人会一直卡在「等待审核」；
+   * 只加人不改状态，他下次来还看到一条待审的申请。
+   *
+   * `decideJoinRequest` 里带了 `AND status = 'pending'`：两个管理员同时点「批准」，
+   * 只有一个人能改到这一行，另一个拿到 400「这条申请已经处理过了」——
+   * 不会重复发通知、也不会重复加入。
+   */
+  add('PUT', '/api/teams/:id/join-requests/:requestId', async (reqCtx) => {
+    const teamRow = loadTeam(reqCtx, queries);
+    const user = requireTeamManager(reqCtx, queries, teamRow);
+    const requestId = readId(reqCtx.params.requestId, '申请');
+    const request = queries.joinRequestById({ id: requestId, teamId: teamRow.id });
+    ensure(request, 404, 'join_request_not_found', '这条申请不存在');
+
+    const action = String((reqCtx.body ?? {}).action ?? '');
+    ensure(action === 'approve' || action === 'reject', 400, 'bad_action', '只能「批准」或「拒绝」');
+    const nextStatus = action === 'approve' ? 'approved' : 'rejected';
+    const changed = queries.decideJoinRequest({ id: requestId, status: nextStatus, decidedBy: user.id });
+    ensure(changed, 400, 'join_request_decided', '这条申请已经处理过了');
+
+    let member = null;
+    if (nextStatus === 'approved') {
+      queries.addMember({ teamId: teamRow.id, userId: request.user_id, role: 'member' });
+      const fresh = queries.listMembers(teamRow.id).find((row) => Number(row.user_id) === Number(request.user_id));
+      member = shapeMember(fresh);
+    }
+
+    // 通知申请人。`actorId` 是审批的人，通知卡片上就是「某某 通过了你的加入申请」。
+    store.createNotification({
+      userId: request.user_id,
+      actorId: user.id,
+      type: nextStatus === 'approved' ? 'team_join_approved' : 'team_join_rejected',
+      teamId: teamRow.id,
+      excerpt: `「${teamRow.name}」`,
+    });
+
+    ok(reqCtx.res, {
+      request: shapeJoinRequest(queries.joinRequestById({ id: requestId, teamId: teamRow.id }), { viewer: user }),
+      member,
+      team: shapeTeam(queries.teamById(teamRow.id, viewerIdOf(reqCtx.user)), { viewer: reqCtx.user }),
+    });
+  });
+
+  /**
+   * 撤回 / 清掉一条申请。
+   *
+   * 两种人能用：**申请人自己**（改主意了，撤回 = 没申请过，直接删行）与
+   * **团长 / 管理员**（把一条明显的垃圾申请清掉）。两边的判定都在下面：
+   * 申请人只能删自己那条，管理员能删本团队任意一条 —— 别把这条写成
+   * 「只要是管理员就能删任何团队的申请」，所以查询里带上了 `teamId`。
+   */
+  add('DELETE', '/api/teams/:id/join-requests/:requestId', async (reqCtx) => {
+    const teamRow = loadTeam(reqCtx, queries);
+    const user = requireUser(reqCtx);
+    const requestId = readId(reqCtx.params.requestId, '申请');
+    const request = queries.joinRequestById({ id: requestId, teamId: teamRow.id });
+    ensure(request, 404, 'join_request_not_found', '这条申请不存在');
+    const isMine = Number(request.user_id) === user.id;
+    ensure(
+      isMine || isTeamManager(queries, teamRow.id, user.id),
+      403,
+      'forbidden',
+      '只有申请人本人或团队管理员能撤销这条申请',
+    );
+    queries.deleteJoinRequest(requestId);
+    ok(reqCtx.res, {
+      removed: true,
+      id: requestId,
+      team: shapeTeam(queries.teamById(teamRow.id, viewerIdOf(reqCtx.user)), { viewer: reqCtx.user }),
+    });
   });
 
   add('PUT', '/api/teams/:id/members/:userId', async (reqCtx) => {

@@ -264,6 +264,13 @@ const TEAM_FIXTURE = {
   canManage: true,
   joined: true,
   canJoin: false,
+  canApply: false,
+  // 「申请加入」那几个字段：站长自己是创建者，没有申请要递，也看不到自己的申请记录；
+  // 待审条数只在管理员视角才有值（服务端对非管理员一律给 0）。
+  myRequest: null,
+  pendingRequestCount: 0,
+  // 「藏在团队广场外面」这个开关：默认是出现在广场上。
+  listed: true,
   // 团队号与公告只给成员看（服务端在 shape.js 里就拦掉了），站长视角两个都有。
   joinCode: 'K7M2QP',
   announcement: {
@@ -288,9 +295,71 @@ const OUTSIDER_TEAM_FIXTURE = {
   canManage: false,
   joined: false,
   canJoin: true,
+  canApply: false,
   joinCode: null,
   announcement: null,
 };
+
+/**
+ * 「需要申请」的团队（`joinPolicy: 'apply'`），路人视角：不能直接进，只能递申请。
+ *
+ * 这一份夹具专门守着「申请加入」这条线 —— 少画一个「申请加入」按钮，路人就再也进不来了。
+ */
+const APPLY_TEAM_FIXTURE = {
+  ...OUTSIDER_TEAM_FIXTURE,
+  slug: 'apply-group',
+  name: '要审核的团队',
+  joinPolicy: 'apply',
+  joinPolicyLabel: '需要申请',
+  canJoin: false,
+  canApply: true,
+};
+
+/** 同一个人递完申请之后的样子：申请记录挂着，按钮变成「撤回申请」，不能再递第二次。 */
+const PENDING_TEAM_FIXTURE = {
+  ...APPLY_TEAM_FIXTURE,
+  slug: 'pending-group',
+  name: '等审核的团队',
+  canApply: false,
+  myRequest: { id: 7, status: 'pending', createdAt: Date.now() - 600000 },
+};
+
+/**
+ * 待审申请列表（`GET /api/teams/<slug>/join-requests` 的 items）。
+ *
+ * 两条都用得上：一条带了理由、一条没写 —— 空理由那一条在页面上会画成「（没写理由）」，
+ * 少了这个分支，用户会以为界面坏了。
+ */
+const TEAM_JOIN_REQUEST_FIXTURES = [
+  {
+    id: 41,
+    teamId: 1,
+    status: 'pending',
+    statusLabel: '等待审核',
+    message: '我想进来看看，写过两年 Vue。',
+    user: { id: 9, username: 'newcomer', displayName: '新来的', avatar: null },
+    decidedAt: null,
+    decidedBy: null,
+    createdAt: Date.now() - 900000,
+    updatedAt: Date.now() - 900000,
+    mine: false,
+    canDecide: true,
+  },
+  {
+    id: 40,
+    teamId: 1,
+    status: 'pending',
+    statusLabel: '等待审核',
+    message: '',
+    user: { id: 10, username: 'quiet', displayName: '闷葫芦', avatar: null },
+    decidedAt: null,
+    decidedBy: null,
+    createdAt: Date.now() - 1800000,
+    updatedAt: Date.now() - 1800000,
+    mine: false,
+    canDecide: true,
+  },
+];
 
 /**
  * 团队帖详情页与列表页共用的一条帖子。
@@ -353,6 +422,23 @@ const EXTRA = {
   // 非成员视角的团队主页：详情里没有团队号、也没有公告（服务端就不给）。
   '/api/teams/outsider-group': { team: OUTSIDER_TEAM_FIXTURE, members: [], memberTotal: 0, scopes: SCOPES },
   '/api/teams/outsider-group/posts': { items: [], page: 1, perPage: 20, total: 0, totalPages: 0, sort: 'new' },
+  // 「需要申请」的团队：路人只能递申请，不能直接进。这两个 slug 是申请那条线上的哨兵。
+  '/api/teams/apply-group': { team: APPLY_TEAM_FIXTURE, members: [], memberTotal: 0, scopes: SCOPES },
+  '/api/teams/apply-group/posts': { items: [], page: 1, perPage: 20, total: 0, totalPages: 0, sort: 'new' },
+  // 已经递过申请、还在等审核：按钮要变成「撤回申请」，不能让他再递一次。
+  '/api/teams/pending-group': { team: PENDING_TEAM_FIXTURE, members: [], memberTotal: 0, scopes: SCOPES },
+  '/api/teams/pending-group/posts': { items: [], page: 1, perPage: 20, total: 0, totalPages: 0, sort: 'new' },
+  // 管理员打开「加入申请」面板时拉的那份待审列表。路径比 `/api/teams/frontend-group`
+  // 长，但 pickFixture 是精确比对，两条互不干扰。
+  '/api/teams/frontend-group/join-requests': {
+    items: TEAM_JOIN_REQUEST_FIXTURES,
+    page: 1,
+    perPage: 20,
+    total: TEAM_JOIN_REQUEST_FIXTURES.length,
+    totalPages: 1,
+    status: 'pending',
+    pendingTotal: TEAM_JOIN_REQUEST_FIXTURES.length,
+  },
   // 团队帖详情 `#/team/<slug>/post/<id>`：一条帖子 + 它下面的回复。
   // 这两条的路径要写在 `/posts` 那一条**后面**（pickFixture 取最后一个匹配）。
   '/api/teams/frontend-group/posts/1': { post: TEAM_POST_FIXTURE },
@@ -705,6 +791,60 @@ globalThis.fetch = async (url, options = {}) => {
     };
   } else if (method === 'DELETE' && /^\/api\/teams\/[^/]+\/posts\/\d+\/replies\/\d+$/.test(bare)) {
     data = { deleted: true, id: 11, replyCount: 1 };
+  } else if (method === 'POST' && /^\/api\/teams\/[^/]+\/join$/.test(bare)) {
+    // 递申请：服务端回 requested=true（不是 joined），前端据此换一句话，并重画整页。
+    data = {
+      team: APPLY_TEAM_FIXTURE,
+      joined: false,
+      requested: true,
+      request: {
+        id: 42,
+        teamId: 1,
+        status: 'pending',
+        statusLabel: '等待审核',
+        message: payload?.message ?? '',
+        user: { id: 1, username: FIXTURE_USERNAME, displayName: '站长', avatar: null },
+        decidedAt: null,
+        decidedBy: null,
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+        mine: true,
+        canDecide: false,
+      },
+    };
+  } else if (method === 'PUT' && /^\/api\/teams\/[^/]+\/join-requests\/\d+$/.test(bare)) {
+    data = {
+      request: {
+        ...TEAM_JOIN_REQUEST_FIXTURES[0],
+        status: payload?.action === 'reject' ? 'rejected' : 'approved',
+        statusLabel: payload?.action === 'reject' ? '已拒绝' : '已批准',
+        decidedAt: Date.now(),
+        decidedBy: { id: 1, username: FIXTURE_USERNAME, displayName: '站长' },
+        canDecide: false,
+      },
+      member: {
+        id: 9,
+        user: { id: 9, username: 'newcomer', displayName: '新来的', avatar: null },
+        teamRole: 'member',
+        teamRoleLabel: '成员',
+        joinedAt: Date.now(),
+      },
+      team: { ...TEAM_FIXTURE, memberCount: 2, pendingRequestCount: 1 },
+    };
+  } else if (method === 'DELETE' && /^\/api\/teams\/[^/]+\/join-requests\/\d+$/.test(bare)) {
+    data = { removed: true, id: 41, team: { ...TEAM_FIXTURE, pendingRequestCount: 1 } };
+  } else if (method === 'PUT' && /^\/api\/teams\/[^/]+$/.test(bare)) {
+    // 保存团队设置：服务端回更新后的团队（`listed` 也在这里被写回去）。
+    data = {
+      team: {
+        ...TEAM_FIXTURE,
+        name: payload?.name ?? TEAM_FIXTURE.name,
+        intro: payload?.intro ?? TEAM_FIXTURE.intro,
+        joinPolicy: payload?.joinPolicy === 'apply' ? 'apply' : 'open',
+        joinPolicyLabel: payload?.joinPolicy === 'apply' ? '需要申请' : '谁都能加入',
+        listed: payload?.listed !== '0',
+      },
+    };
   } else if (method === 'POST' && bare === '/api/teams/frontend-group/files') data = uploaded;
   else if (method === 'POST' && bare === '/api/teams/frontend-group/messages') data = sent;
   else data = pickFixture(raw);
@@ -789,6 +929,10 @@ const CASES = [
   ['团队·群聊页签', 'team.js', 'viewTeam', ['frontend-group', new Map([['tab', 'chat']])]],
   // 非成员视角：团队号与公告都是 null，页面上这两块必须整个不出现。
   ['团队主页·非成员', 'team.js', 'viewTeam', ['outsider-group', new Map()]],
+  // 「需要申请」的团队：路人的按钮是「申请加入」不是「加入团队」。
+  ['团队主页·要申请', 'team.js', 'viewTeam', ['apply-group', new Map()]],
+  // 已经递过申请、还在等审核：按钮变成「撤回申请」。
+  ['团队主页·等审核', 'team.js', 'viewTeam', ['pending-group', new Map()]],
   // 团队帖详情 `#/team/<slug>/post/<id>`：点标题进去看的那一页（帖子 + 回复串 + 回复框）。
   ['团队帖详情', 'team.js', 'viewTeamPost', ['frontend-group', 1, new Map()]],
   // 非成员进公开帖：帖子看得见，回复框要变成「加入之后才能回复」。
@@ -1338,6 +1482,141 @@ if (!state.theme) problems.push('state.theme 没被初始化');
   } catch (error) {
     problems.push(`团队帖详情 / 回复交互测试自身崩了：${error?.stack || error}`);
     console.log('  ❌ 交互：帖子点得进详情、回复发得出删得掉、团队号在非安全上下文也能复制');
+  }
+}
+
+/* ---- 交互：路人递申请 → 管理员批申请 → 创建者把团队藏起来 ----
+ *
+ * 这一段自带 try/catch 的理由和上面那段一样：脚本装了 uncaughtException 处理器，
+ * 顶层 await 之后抛出来的异常会被吞掉，整个脚本会以 exit 0 静悄悄地过去。
+ */
+{
+  try {
+    const team = await view('team.js');
+    const hero = registered('[data-team-hero]');
+    const click = (dataset) => {
+      const node = { dataset, disabled: false, matches: () => false };
+      node.closest = (selector) => (selector === '[data-team-action]' ? node : null);
+      dispatch(app, 'click', node);
+      return node;
+    };
+    let html = '';
+
+    /* ① 路人看「需要申请」的团队：给的是「申请加入」，不是直接进 */
+    window.location.hash = '#/team/apply-group';
+    await team.viewTeam('apply-group', new Map());
+    html = String(hero.innerHTML);
+    if (!html.includes('data-team-action="apply-team"')) {
+      problems.push('「需要申请」的团队在路人眼里没有「申请加入」按钮');
+    }
+    if (html.includes('data-team-action="join-team"')) {
+      problems.push('「需要申请」的团队居然直接给了「加入团队」——申请那道门形同虚设');
+    }
+
+    click({ teamAction: 'apply-team' });
+    await settle();
+    html = String(hero.innerHTML);
+    if (!html.includes('data-team-field="applyMessage"')) problems.push('点「申请加入」之后没有出现填理由的框');
+
+    const applyBox = registered('[data-team-field="applyMessage"]');
+    applyBox.dataset.teamField = 'applyMessage';
+    // 委托读的是 `event.target.closest('[data-team-field]')`（不是 matches），下同。
+    applyBox.closest = (selector) => (selector === '[data-team-field]' ? applyBox : null);
+    applyBox.value = '我在做前端，想找人一起看看代码。';
+    dispatch(app, 'input', applyBox);
+    REQUESTS.length = 0;
+    click({ teamAction: 'submit-apply' });
+    await settle();
+    const applyReq = REQUESTS.find(
+      (item) => item.method === 'POST' && item.url.split('?')[0] === '/api/teams/apply-group/join',
+    );
+    if (!applyReq) problems.push('点「递申请」没有发出 POST …/apply-group/join');
+    else if (applyReq.body?.message !== '我在做前端，想找人一起看看代码。') {
+      problems.push(`申请理由发出去不对：${JSON.stringify(applyReq.body?.message)}（applyMessage 没同步进草稿？）`);
+    }
+
+    /* ② 已经递过申请的人：看得到「审核中」，能把申请收回来 */
+    window.location.hash = '#/team/pending-group';
+    await team.viewTeam('pending-group', new Map());
+    html = String(hero.innerHTML);
+    if (!html.includes('data-team-request-pending')) problems.push('递过申请的人在团队页上看不到「申请审核中」');
+    if (html.includes('data-team-action="apply-team"')) {
+      problems.push('还在等审核，页面上却又画着「申请加入」——点一下就会递出第二条');
+    }
+    REQUESTS.length = 0;
+    click({ teamAction: 'withdraw-request' });
+    await settle();
+    if (!REQUESTS.some((item) => item.method === 'DELETE' && item.url.split('?')[0] === '/api/teams/pending-group/join-requests/7')) {
+      problems.push('点「撤回申请」没有发出 DELETE …/join-requests/7');
+    }
+
+    /* ③ 管理员审申请：面板拉待审列表 → 切页签 → 批准 */
+    window.location.hash = '#/team/frontend-group';
+    await team.viewTeam('frontend-group', new Map());
+    click({ teamAction: 'toggle-requests' });
+    await settle();
+    // 视图是往 `[data-team-requests]` 这个空盒子里写 innerHTML 的
+    //（`[data-team-requests-list]` 只是盒子里那张卡片，假 DOM 不会去解析 innerHTML）。
+    const list = registered('[data-team-requests]');
+    html = String(list.innerHTML);
+    if (!html.includes('data-team-request-card')) problems.push('打开「加入申请」面板之后没有画出待审列表');
+    if (!html.includes('新来的')) problems.push('待审列表里没有画出申请人');
+    if (!html.includes('（没写理由）')) problems.push('申请没写理由时没有画成「（没写理由）」');
+    const approveButtons = (html.match(/data-team-action="approve-request"/g) ?? []).length;
+    if (approveButtons !== 2) problems.push(`待审两条却画了 ${approveButtons} 个「批准加入」按钮`);
+
+    REQUESTS.length = 0;
+    click({ teamAction: 'requests-status', status: 'rejected' });
+    await settle();
+    if (!REQUESTS.some((item) => item.method === 'GET' && item.url.includes('/join-requests?status=rejected'))) {
+      problems.push('切「已拒绝」页签没有带上 status=rejected 重拉列表');
+    }
+
+    const approveNode = { dataset: { teamAction: 'approve-request', teamRequest: '41' }, disabled: false, matches: () => false };
+    approveNode.closest = (selector) => (selector === '[data-team-action]' ? approveNode : null);
+    REQUESTS.length = 0;
+    dispatch(app, 'click', approveNode);
+    await settle();
+    const approveReq = REQUESTS.find(
+      (item) => item.method === 'PUT' && item.url.split('?')[0] === '/api/teams/frontend-group/join-requests/41',
+    );
+    if (!approveReq) problems.push('点「批准加入」没有发出 PUT …/join-requests/41');
+    else if (approveReq.body?.action !== 'approve') {
+      problems.push(`批准请求的动作不对：${JSON.stringify(approveReq.body)}（应该是 { action: 'approve' }）`);
+    }
+
+    /* ④ 创建者在设置里把团队从广场藏起来 */
+    click({ teamAction: 'toggle-settings' });
+    await settle();
+    html = String(hero.innerHTML);
+    if (!html.includes('data-team-field="listed"')) {
+      problems.push('创建者打开团队设置之后看不到「出现在团队广场」那个开关');
+    }
+    const listedField = registered('[data-team-field="listed"]');
+    listedField.dataset.teamField = 'listed';
+    listedField.closest = (selector) => (selector === '[data-team-field]' ? listedField : null);
+    listedField.value = '0';
+    dispatch(app, 'input', listedField);
+
+    const saveNode = { dataset: { teamAction: 'save-settings' }, disabled: false, matches: () => false };
+    saveNode.closest = (selector) => (selector === '[data-team-action]' ? saveNode : null);
+    REQUESTS.length = 0;
+    dispatch(app, 'click', saveNode);
+    await settle();
+    const settingsReq = REQUESTS.find(
+      (item) => item.method === 'PUT' && item.url.split('?')[0] === '/api/teams/frontend-group',
+    );
+    if (!settingsReq) problems.push('点「保存设置」没有发出 PUT /api/teams/frontend-group');
+    else if (settingsReq.body?.listed !== '0') {
+      problems.push(`隐藏开关没送出去：listed=${JSON.stringify(settingsReq.body?.listed)}（teamListedValue 读的是草稿）`);
+    } else if (!settingsReq.body?.name) {
+      problems.push('保存设置时把团队名送成了空串 —— 只想点一下保存，结果名字被改没');
+    }
+
+    console.log(`  ${problems.length ? '❌' : '✅'} 交互：路人递申请、管理员批申请、创建者能把团队藏起来`);
+  } catch (error) {
+    problems.push(`团队申请 / 审核交互测试自身崩了：${error?.stack || error}`);
+    console.log('  ❌ 交互：路人递申请、管理员批申请、创建者能把团队藏起来');
   }
 }
 

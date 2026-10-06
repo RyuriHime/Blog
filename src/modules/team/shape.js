@@ -5,7 +5,7 @@
 // 形状有第二份实现，就会有「列表有某个字段、详情没有」这类时好时坏的 bug。
 import { renderMarkdown } from '../../markdown.js';
 import { formatBytes } from './storage.js';
-import { TEAM_SCOPES, TEAM_ROLES } from './schema.js';
+import { TEAM_JOIN_REQUEST_STATUSES, TEAM_SCOPES, TEAM_ROLES } from './schema.js';
 
 /** 可见范围的中文名。与 P1（动态）、P2（积木）用同一套说法。 */
 const SCOPE_LABELS = {
@@ -41,18 +41,30 @@ export function shapeTeam(row, { viewer = null } = {}) {
   const joined = flag(row.joined);
   const canManage = Boolean(myRole) && myRole !== 'member';
   const announcement = String(row.announcement ?? '');
+  const joinPolicy = row.join_policy === 'apply' ? 'apply' : 'open';
+  // 我的最近一条申请（没有就是 null）。待审时前端画「等待审核」而不是「申请加入」。
+  const myRequest =
+    row.my_request_id == null
+      ? null
+      : {
+          id: Number(row.my_request_id),
+          status: row.my_request_status === 'approved' ? 'approved' : row.my_request_status === 'rejected' ? 'rejected' : 'pending',
+          createdAt: row.my_request_at ?? null,
+        };
+  const requestPending = myRequest?.status === 'pending';
   return {
     id: row.id,
     slug: row.slug,
     name: String(row.name ?? ''),
     intro: String(row.intro ?? ''),
-    joinPolicy: row.join_policy === 'invite' ? 'invite' : 'open',
-    joinPolicyLabel: row.join_policy === 'invite' ? '需要邀请' : '谁都能加入',
+    joinPolicy,
+    joinPolicyLabel: joinPolicy === 'apply' ? '需要申请' : '谁都能加入',
     /**
      * 团队号：**只给团队成员看**，非成员一律 null。
      *
-     * 理由不是「藏起来好看」，是它**能进需要邀请的团队**（见 routes.js 的 join-by-code）——
-     * 给非成员看到等于把「需要邀请」这个设置当场作废。前端据此决定画不画那一行。
+     * 理由不是「藏起来好看」，是它**本身就是邀请**（见 routes.js 的 join-by-code：
+     * 那条路不看 join_policy，号对得上就直接进）—— 给非成员看到，
+     * 等于把「需要申请」这个设置当场作废。前端据此决定画不画那一行。
      */
     joinCode: joined || canManage ? String(row.join_code ?? '') || null : null,
     /**
@@ -89,12 +101,73 @@ export function shapeTeam(row, { viewer = null } = {}) {
     myRoleLabel: myRole ? ROLE_LABELS[myRole] : null,
     canManage,
     joined,
-    // 「需要邀请」的团队对谁都显示「不能自己加入」—— 包括站长。
-    // P4 里没有任何 staff 后门：能管理团队的只有团队成员表里的 owner / admin。
-    // （凭团队号加入是另一条路：那条路不看 joinPolicy，见 routes.js。）
-    canJoin: Boolean(viewer) && !joined && row.join_policy !== 'invite',
+    /**
+     * 广场上要不要列这个团队（只有创建者能改，见 routes.js 的 PUT）。
+     * 前端据它画那个下拉框 —— **藏起来不等于进不去**，主页与团队号照旧能用。
+     */
+    listed: flag(row.listed ?? 1),
+    /**
+     * 「谁都能加入」的团队：登录了、还没在里面 → 一个按钮直接进。
+     * 需要申请的团队不许走这条（`canJoin` 为 false，改看 `canApply`）——
+     * 两条路必须互斥，否则「需要申请」就是个摆设。
+     *
+     * ⚠️ 这两个字段都只是界面提示。真正的判定在 routes.js 的 `POST /api/teams/:id/join`：
+     * 它每次都会重新读一遍 `join_policy`，前端改一个字节也绕不过去。
+     * P4 里没有任何 staff 后门：能管理团队的只有团队成员表里的 owner / admin。
+     */
+    canJoin: Boolean(viewer) && !joined && joinPolicy === 'open',
+    /**
+     * 需要申请的团队：登录了、还没在里面、且**没有挂着一条待审申请** → 画「申请加入」。
+     * 被拒之后仍然为 true（可以再申请一次）：历史只是记录，不该变成永久封禁。
+     */
+    canApply: Boolean(viewer) && !joined && joinPolicy === 'apply' && !requestPending,
+    /** 我最近一条申请（没有就是 null）。前端靠它区分「没申请过 / 等待审核 / 被拒绝」。 */
+    myRequest,
+    /**
+     * 待审申请数：**只给管理员**，广场卡片上的小红点用它。
+     * 对其他人给 0 而不是真数字：不是隐私上的顾虑，而是别人拿这个数字没用，
+     * 给出去只会让前端出现「路人看到 3 条待审」这种莫名其妙的界面。
+     */
+    pendingRequestCount: canManage ? Number(row.pending_request_count) || 0 : 0,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
+  };
+}
+
+/**
+ * 一条加入申请的对外形状。
+ *
+ * `canDecide` 与团队里别的 `canXxx` 一样只是界面提示（服务端每次重判）：
+ * 只有 `pending` 的申请能批，批过的再点一次只会拿到 400。
+ */
+export function shapeJoinRequest(row, { viewer = null } = {}) {
+  if (!row) return null;
+  const status = TEAM_JOIN_REQUEST_STATUSES.includes(row.status) ? row.status : 'pending';
+  const mine = Boolean(viewer) && Number(row.user_id) === Number(viewer.id);
+  return {
+    id: row.id,
+    teamId: row.team_id,
+    status,
+    statusLabel: status === 'approved' ? '已批准' : status === 'rejected' ? '已拒绝' : '等待审核',
+    message: String(row.message ?? ''),
+    user: {
+      id: row.user_id,
+      username: row.username ?? null,
+      displayName: row.display_name || row.username || '（已注销）',
+      avatar: row.avatar ?? null,
+    },
+    decidedAt: row.decided_at ?? null,
+    decidedBy: row.decided_by
+      ? {
+          id: row.decided_by,
+          username: row.decider_username ?? null,
+          displayName: row.decider_display || row.decider_username || '（已注销）',
+        }
+      : null,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    mine,
+    canDecide: status === 'pending',
   };
 }
 

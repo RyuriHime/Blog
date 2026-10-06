@@ -1,8 +1,9 @@
 // 团队（P4）的数据表。
 //
-// 六张表全是新增的，不动 v1 / core 的任何一张表 —— 迁移是纯加法，线上老数据一个字都不用改。
+// 七张表全是新增的，不动 v1 / core 的任何一张表 —— 迁移是纯加法，线上老数据一个字都不用改。
 // 老库开库时这几条 `CREATE TABLE IF NOT EXISTS` 会照跑一遍：新加的 `team_replies`
-// 因此在任何老库上都是自动建出来的，migrate.js 只管「老表补列」那种改不动的情况。
+// 与 `team_join_requests` 因此在任何老库上都是自动建出来的，migrate.js 只管
+// 「老表补列」与「老表改约束（只能重建）」这两种改不动的情况。
 //
 // 建表顺序 = 别的模块 import 这个文件时登记的顺序；`addScript` 会按「括号深度为 0 的分号」
 // 切开逐条登记，索引语句照旧执行但不进表名册（否则索引名会被当成表名，归属检查会误报）。
@@ -35,8 +36,19 @@ export const TEAM_SCOPES = ['public', 'followers', 'team', 'private'];
 /** 团队成员角色。`owner` 是建队的人且**唯一**（转让要显式接口，不允许两个 owner）。 */
 export const TEAM_ROLES = ['owner', 'admin', 'member'];
 
-/** 加入方式：`open` 谁都能自己加入；`invite` 只能由 owner / admin 拉人。 */
-export const TEAM_JOIN_POLICIES = ['open', 'invite'];
+/**
+ * 加入方式：`open` 谁都能自己加入；`apply` 要先递一条申请，团长与管理员批准了才算加入。
+ *
+ * ⚠️ 这两档是冻结枚举，改它必须同步三处：`teams.join_policy` 的 CHECK、
+ * `migrate.js` 里那条重建表（老库是先有 `invite` 才有 `apply` 的），以及前端
+ * `public/views/team.js` 的两处下拉框。
+ *
+ * 「邀请」不再是一个**设置**：它变成了团队号（见 `TEAM_JOIN_CODE_LENGTH` 那段）——
+ * 号本身就是邀请，管理员把号发给谁就是邀请了谁。原来的 `invite` 档只能靠
+ * 「拉人接口」把人塞进来，那条路已经删掉了（团长与管理员不该能凭一个用户名
+ * 就把人拽进团队，当事人连知都不知道）。
+ */
+export const TEAM_JOIN_POLICIES = ['open', 'apply'];
 
 /** 字段长度上限。与前端 `public/views/team.js` 里的 maxlength 必须一致。 */
 export const MAX_TEAM_NAME = 40;
@@ -92,6 +104,15 @@ export const TEAM_JOIN_CODE_ALPHABET = '0123456789ABCDEFGHJKMNPQRSTVWXYZ';
 /** 团队公告的正文上限。公告会人手一条通知，所以别让它长到刷屏。 */
 export const MAX_TEAM_ANNOUNCEMENT = 2000;
 
+/** 加入申请里那句「想加入的理由」的上限。 */
+export const MAX_TEAM_JOIN_MESSAGE = 200;
+
+/** 一条加入申请的三档状态。走完 `approved` / `rejected` 就不再回头。 */
+export const TEAM_JOIN_REQUEST_STATUSES = ['pending', 'approved', 'rejected'];
+
+/** 管理面板一次最多列出多少条申请。 */
+export const TEAM_JOIN_REQUEST_PAGE_MAX = 50;
+
 export const TEAM_SCHEMA = `
 -- 团队本体。slug 是给人看、给 URL 用的短名；name 是可以随时改的中文名。
 CREATE TABLE IF NOT EXISTS teams (
@@ -101,7 +122,13 @@ CREATE TABLE IF NOT EXISTS teams (
   intro       TEXT    NOT NULL DEFAULT '',
   -- 建队的人。与 team_members 里 role='owner' 的那一行始终一致（建队时同一个事务里写）。
   owner_id    INTEGER NOT NULL REFERENCES users(id),
-  join_policy TEXT    NOT NULL DEFAULT 'open' CHECK (join_policy IN ('open','invite')),
+  join_policy TEXT    NOT NULL DEFAULT 'open' CHECK (join_policy IN ('open','apply')),
+  -- 要不要出现在「团队广场」的列表里。1 = 出现（默认），0 = 藏起来。
+  --
+  -- 藏起来 ≠ 不能进：团队主页、团队号、帖子链接照旧能用，只是不在广场上被陌生人逛到。
+  -- 这就是「不公开的团队」该有的样子 —— 隐私要在**被发现**这一层解决，
+  -- 而不是把入口一并砍掉（否则群里发个链接给自己人都进不来）。
+  listed      INTEGER NOT NULL DEFAULT 1,
   -- 6 位团队号：凭它加入团队（见 join-code.js）。老库由 migrate.js 回填，所以有默认空串。
   -- ⚠️ 它的唯一索引**不在这里建**：老库的 teams 表还没有这一列，
   --    开库时执行建表脚本会先跑，那时建索引会报「no such column」。
@@ -218,4 +245,53 @@ CREATE TABLE IF NOT EXISTS team_messages (
 -- 群聊永远是「按团队取一段、按时间排」；轮询只问 id 更大的那些，所以索引带 id DESC。
 CREATE INDEX IF NOT EXISTS idx_team_messages_team ON team_messages (team_id, id DESC);
 CREATE INDEX IF NOT EXISTS idx_team_messages_user ON team_messages (user_id, id DESC);
+
+-- 加入申请。
+--
+-- 团队的「加入方式」设成 apply 之后，想进来的人先在这里递一条申请，
+-- 团长与管理员批准（PUT /api/teams/:id/join-requests/:requestId）了才写进 team_members。
+-- 原来的做法是管理员拿一个用户名把人**直接拽进来**（那条路已经删了）——
+-- 被拉的人连知都不知道，也没有拒绝的机会。
+--
+-- status 只在这三档之间走：pending → approved / rejected，走完不再回头。
+-- 被拒之后还想进，就再递一条**新**的（历史留着当记录，也免得「改一下申请」把审核记录改没了）。
+-- 唯一的部分索引保证同一个人对同一个团队最多只挂一条**待审**申请：
+-- 重复点「申请加入」不该堆出一排一样的申请给管理员。
+--
+-- message 是申请人自己写的一句话理由（可以为空）：审核的人得有点上下文，
+-- 只有一个用户名的话，除非本来就认识，否则没法判断。
+CREATE TABLE IF NOT EXISTS team_join_requests (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  team_id    INTEGER NOT NULL REFERENCES teams(id),
+  user_id    INTEGER NOT NULL REFERENCES users(id),
+  message    TEXT    NOT NULL DEFAULT '',
+  status     TEXT    NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','approved','rejected')),
+  -- 谁批的、什么时候批的。还没处理时两列都是空 —— 与公告的 announcement_by/_at 同一个套路。
+  decided_by INTEGER REFERENCES users(id),
+  decided_at INTEGER,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+-- 管理面板每次展开都要问「这个团队有哪些待审申请」，所以 (team_id, status) 一起进索引。
+CREATE INDEX IF NOT EXISTS idx_team_join_requests_team ON team_join_requests (team_id, status, created_at DESC, id DESC);
+-- 「我对这个团队的申请现在什么状态」团队主页要问，按人查。
+CREATE INDEX IF NOT EXISTS idx_team_join_requests_user ON team_join_requests (user_id, team_id, id DESC);
+-- 同一个人对同一个团队最多一条待审申请（被拒之后再申请是合法的：那时旧的那条已经不是 pending）。
+CREATE UNIQUE INDEX IF NOT EXISTS idx_team_join_requests_pending ON team_join_requests (team_id, user_id) WHERE status = 'pending';
 `;
+
+/**
+ * 从 `TEAM_SCHEMA` 里摘出某张表的 CREATE 语句（迁移要**重建**表时用同一份 DDL）。
+ *
+ * 为什么不把 DDL 抄第二遍：两份真相必然分叉，改了其中一份忘了另一份，
+ * 正是这类迁移 bug 的经典写法。宁可在这里正则摘一次。
+ *
+ * 目前只有 `teams` 用到它：`join_policy` 的 CHECK 从 `('open','invite')` 变成
+ * `('open','apply')` —— CHECK 改不了，只能按新 DDL 重建表再搬数据
+ * （见 `migrate.js` 的 `ensureTeamJoinPolicy`）。
+ */
+export function teamTableDdl(name) {
+  const match = new RegExp(`CREATE TABLE IF NOT EXISTS ${name} \\([\\s\\S]*?\\n\\);`).exec(TEAM_SCHEMA);
+  if (!match) throw new Error(`TEAM_SCHEMA 里没有 ${name} 这张表`);
+  return match[0];
+}

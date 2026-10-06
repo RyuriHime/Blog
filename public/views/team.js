@@ -56,7 +56,8 @@ const teamState = {
     intro: '',
     slug: '',
     joinPolicy: 'open',
-    username: '',
+    // 「要不要出现在团队广场」只有创建者能改，值是 '1' / '0'（表单送出来的都是字符串）。
+    listed: '',
     message: '',
     // 广场「用团队号加入」那个输入框，和团队公告的编辑框。
     // ⚠️ 新加的 key 必须写在这里：下面的 input/change 委托只认 draft 里已有的键。
@@ -64,6 +65,8 @@ const teamState = {
     announcement: '',
     // 帖子详情页的回复框（同上：不加在这里，敲的字永远进不了状态）。
     reply: '',
+    // 申请加入时写的那一小段理由（「需要申请」的团队才有这一栏）。
+    applyMessage: '',
   },
   editing: null,
   conflict: null,
@@ -76,6 +79,9 @@ const teamState = {
   memberTotal: 0,
   membersExpanded: false,
   membersAll: [],
+  /** 加入申请那块的快照与筛选（管理面板展开时才有值）。 */
+  requests: [],
+  requestsStatus: 'pending',
   filesData: null,
   maxFileBytes: 0,
 };
@@ -167,6 +173,11 @@ function resetTransient() {
 
 function teamCardHtml(team) {
   const role = team.myRoleLabel ? `<span class="team-card-role">${esc(team.myRoleLabel)}</span>` : '';
+  // 隐藏的团队（没勾「出现在团队广场」）只会出现在成员自己的「我加入的」里。
+  // 给一个标记说明为什么别处看不到它 —— 否则用户会以为广场坏了。
+  const hidden = team.listed === false
+    ? `<span class="team-card-hidden" title="这个团队没有显示在团队广场上，只有成员和拿到团队号的人找得到">🙈 已隐藏</span>`
+    : '';
   return `<article class="card team-card">
     <div class="team-card-head">
       <a class="team-card-name" href="#/team/${encodeURIComponent(team.slug)}">${esc(team.name)}</a>
@@ -178,6 +189,7 @@ function teamCardHtml(team) {
       <span class="hint">${Fmt.fmtNum(team.memberCount)} 名成员</span>
       <span class="hint">${Fmt.fmtNum(team.postCount)} 篇帖子</span>
       <span class="hint">${esc(team.joinPolicyLabel)}</span>
+      ${hidden}
     </div>
   </article>`;
 }
@@ -187,12 +199,14 @@ function teamCardHtml(team) {
  *
  * 团队号 = 6 位、只用念得出口也不会念错的字符（服务端连 I/L/O 抄错的写法都折叠）。
  * 这里只管把用户敲的东西原样递过去，怎么认是服务端的事。
+ *
+ * ⚠️ 这条路**不看**「需不需要申请」：团队号本身就是邀请，见服务端那条路由的注释。
  */
 function joinCodeHtml() {
   if (!state.me) return '';
   return `<div class="card team-join">
     <div class="team-join-title">🔑 用团队号加入</div>
-    <p class="hint">问团队里的朋友要一个 6 位团队号（团队主页顶上就有）。写着「需要邀请」的团队也走这里 —— 团队号本身就是邀请。</p>
+    <p class="hint">问团队里的朋友要一个 6 位团队号（团队主页顶上就有）。写着「需要申请」的团队也走这里 —— 团队号本身就是邀请。</p>
     <div class="team-join-bar">
       <input class="input team-join-input" data-team-field="code" maxlength="12" value="${esc(teamState.draft.code)}"
         placeholder="比如 K7M2QP" autocomplete="off" spellcheck="false" aria-label="团队号" />
@@ -217,7 +231,7 @@ function createFormHtml() {
     <label class="team-field"><span class="team-field-label">谁能加入</span>
       <select class="input" data-team-field="joinPolicy">
         <option value="open" ${teamState.draft.joinPolicy === 'open' ? 'selected' : ''}>谁都能加入</option>
-        <option value="invite" ${teamState.draft.joinPolicy === 'invite' ? 'selected' : ''}>需要邀请</option>
+        <option value="apply" ${teamState.draft.joinPolicy === 'apply' ? 'selected' : ''}>需要申请（团长和管理员审核）</option>
       </select></label>
     <div class="team-form-bar">
       <button class="btn btn-primary" data-team-action="create-team">建好了</button>
@@ -342,12 +356,46 @@ function repaintNotice() {
   if (hero && teamState.team) hero.innerHTML = teamHeroHtml(teamState.team, teamState.memberTotal);
 }
 
+/** 设置面板里「出现在团队广场」那个下拉框当前该选哪个：用户改过就用他改的，没改过跟服务端。 */
+function teamListedValue(team) {
+  if (teamState.draft.listed === '0' || teamState.draft.listed === '1') return teamState.draft.listed;
+  return team.listed === false ? '0' : '1';
+}
+
 function teamHeroHtml(team, memberTotal) {
   const buttons = [];
+  const request = team.myRequest ?? null;
+  const pending = request?.status === 'pending';
+  // 「加入」和「申请」是两条路，走哪条由服务端算好的 canJoin / canApply 决定（两者互斥）。
+  // 被拒之后再点一次，按钮上就写「再申请一次」—— 动作一模一样，只是把话说明白。
   if (team.canJoin) buttons.push(`<button class="btn btn-primary" data-team-action="join-team">加入团队</button>`);
-  else if (team.joined && team.myRole !== 'owner') buttons.push(`<button class="btn" data-team-action="leave-team">退出团队</button>`);
-  if (team.canManage) buttons.push(`<button class="btn" data-team-action="toggle-settings">团队设置</button>`);
+  else if (team.canApply) {
+    const label = request?.status === 'rejected' ? '再申请一次' : '申请加入';
+    buttons.push(`<button class="btn btn-primary" data-team-action="apply-team">${label}</button>`);
+  }
+  if (pending) {
+    buttons.push('<span class="team-pending" data-team-request-pending>⏳ 申请审核中</span>');
+    buttons.push('<button class="btn btn-sm" data-team-action="withdraw-request">撤回申请</button>');
+  }
+  if (team.joined && team.myRole !== 'owner') buttons.push(`<button class="btn" data-team-action="leave-team">退出团队</button>`);
+  if (team.canManage) {
+    const count = Number(team.pendingRequestCount) || 0;
+    const badge = count > 0 ? ` <b class="team-requests-badge">${Fmt.fmtNum(count)}</b>` : '';
+    buttons.push(`<button class="btn" data-team-action="toggle-requests">📨 加入申请${badge}</button>`);
+    buttons.push(`<button class="btn" data-team-action="toggle-settings">团队设置</button>`);
+  }
   if (team.myRole === 'owner') buttons.push(`<button class="btn btn-danger" data-team-action="disband-team">解散团队</button>`);
+
+  // 「要不要出现在广场上」只有创建者能改，所以这一段只画给创建者；
+  // 管理员带着 listed 去请求会拿到 403（服务端那一条 ensure 就是干这个的）。
+  const listedField = team.myRole === 'owner'
+    ? `<label class="team-field"><span class="team-field-label">出现在团队广场</span>
+        <select class="input" data-team-field="listed">
+          <option value="1" ${teamListedValue(team) === '1' ? 'selected' : ''}>显示在广场上</option>
+          <option value="0" ${teamListedValue(team) === '0' ? 'selected' : ''}>不显示（只有成员和拿到团队号的人找得到）</option>
+        </select>
+        <span class="hint">藏起来之后团队主页、团队号和帖子链接照旧能用，只是广场上不再列出来。</span></label>`
+    : '';
 
   const settings = teamState.panel === 'settings' && team.canManage
     ? `<div class="card team-form">
@@ -358,9 +406,10 @@ function teamHeroHtml(team, memberTotal) {
           <textarea class="input" data-team-field="intro" rows="2" maxlength="300">${esc(teamState.draft.intro || team.intro)}</textarea></label>
         <label class="team-field"><span class="team-field-label">谁能加入</span>
           <select class="input" data-team-field="joinPolicy">
-            <option value="open" ${team.joinPolicy === 'open' ? 'selected' : ''}>谁都能加入</option>
-            <option value="invite" ${team.joinPolicy === 'invite' ? 'selected' : ''}>需要邀请</option>
+            <option value="open" ${teamState.draft.joinPolicy === 'open' ? 'selected' : ''}>谁都能加入</option>
+            <option value="apply" ${teamState.draft.joinPolicy === 'apply' ? 'selected' : ''}>需要申请（团长和管理员审核）</option>
           </select></label>
+        ${listedField}
         <div class="team-form-bar">
           <button class="btn btn-primary" data-team-action="save-settings">保存设置</button>
           <button class="btn" data-team-action="close-panel">取消</button>
@@ -368,10 +417,17 @@ function teamHeroHtml(team, memberTotal) {
       </div>`
     : '';
 
-  const invite = team.canManage
-    ? `<div class="team-invite">
-        <input class="input team-invite-input" data-team-field="username" placeholder="输入用户名，把人拉进来" value="${esc(teamState.draft.username)}" />
-        <button class="btn" data-team-action="invite-member">拉进团队</button>
+  // 申请加入的这一步：先写一句理由（可留空）再递，递出去之后顶部会变成「⏳ 申请审核中」。
+  const applyPanel = teamState.panel === 'apply' && team.canApply
+    ? `<div class="card team-apply" data-team-apply>
+        <div class="team-form-title">申请加入「${esc(team.name)}」</div>
+        <label class="team-field"><span class="team-field-label">说一句为什么想加入（可以留空）</span>
+          <textarea class="input" data-team-field="applyMessage" rows="3" maxlength="200"
+            placeholder="比如：我在做前端，想找人一起看看代码">${esc(teamState.draft.applyMessage)}</textarea></label>
+        <div class="team-form-bar">
+          <button class="btn btn-primary" data-team-action="submit-apply">递申请</button>
+          <button class="btn" data-team-action="cancel-apply">取消</button>
+        </div>
       </div>`
     : '';
 
@@ -404,8 +460,86 @@ function teamHeroHtml(team, memberTotal) {
     ${code}
     ${noticeHtml(team)}
     ${settings}
-    ${invite}
+    ${applyPanel}
   </div>`;
+}
+
+/**
+ * 加入申请（只有团长与管理员看得到这一块）。
+ *
+ * 三条状态页签是**客户端筛选**：`?status=` 递给服务端，服务端只回那一档 ——
+ * 不在这儿把全部申请拉回来自己过滤（申请可能很多，而「待审」是唯一天天要看的）。
+ */
+function joinRequestsHtml(team, data) {
+  const items = Array.isArray(data.items) ? data.items : [];
+  const status = String(data.status ?? 'pending');
+  const tabs = [
+    ['pending', `待审 ${Fmt.fmtNum(Number(data.pendingTotal) || 0)}`],
+    ['approved', '已批准'],
+    ['rejected', '已拒绝'],
+    ['all', '全部'],
+  ]
+    .map(([value, label]) =>
+      `<a class="team-tab ${value === status ? 'is-active' : ''}" href="#" data-team-action="requests-status" data-status="${value}">${label}</a>`,
+    )
+    .join('');
+
+  const rows = items.length
+    ? items
+        .map((item) => {
+          const tools = item.canDecide
+            ? `<div class="team-request-bar">
+                 <button class="btn btn-sm btn-primary" data-team-action="approve-request" data-team-request="${item.id}">批准加入</button>
+                 <button class="btn btn-sm" data-team-action="reject-request" data-team-request="${item.id}">拒绝</button>
+               </div>`
+            : `<div class="team-request-bar">
+                 <span class="team-request-status">${esc(item.statusLabel)}</span>
+                 <button class="team-mini" data-team-action="drop-request" data-team-request="${item.id}">清掉这条记录</button>
+               </div>`;
+          return `<div class="team-request" data-team-request-card="${item.id}">
+            <div class="team-request-head">
+              ${Avatar.avatarHtml(item.user, 'avatar-sm')}
+              <a class="team-request-name" href="#/u/${encodeURIComponent(item.user.username)}">${esc(item.user.displayName)}</a>
+              <span class="hint">${Fmt.timeAgo(item.createdAt)}</span>
+            </div>
+            ${item.message ? `<div class="team-request-message">${esc(item.message)}</div>` : '<div class="team-request-message is-empty">（没写理由）</div>'}
+            ${tools}
+          </div>`;
+        })
+        .join('')
+    : `<div class="team-request-empty"><span class="hint">${status === 'pending' ? '现在没有人等着进来。' : '这一档里还没有申请。'}</span></div>`;
+
+  return `<div class="card team-requests" data-team-requests-list>
+    <div class="team-requests-head">
+      <span class="team-requests-title">📨 加入申请</span>
+      <span class="hint">这一档共 ${Fmt.fmtNum(Number(data.total) || 0)} 条</span>
+      <button class="team-mini" data-team-action="toggle-requests">收起</button>
+    </div>
+    <div class="team-tabs team-requests-tabs">${tabs}</div>
+    ${rows}
+  </div>`;
+}
+
+/** 拉一次申请列表并画出来。只有管理面板开着、且当前用户能管这个团队时才动手。 */
+async function renderJoinRequests(team) {
+  const box = $('[data-team-requests]');
+  if (!box || !team || !team.canManage || teamState.panel !== 'requests') return;
+  box.innerHTML = loadingHtml();
+  let data;
+  try {
+    data = await api(
+      `/api/teams/${encodeURIComponent(team.slug)}/join-requests?status=${encodeURIComponent(teamState.requestsStatus)}`,
+    );
+  } catch (error) {
+    if (error?.aborted) return;
+    const text = apiErrorText(error);
+    if (!text) return;
+    box.innerHTML = `<div class="card">${emptyHtml('😵', esc(text))}</div>`;
+    return;
+  }
+  teamState.requests = Array.isArray(data.items) ? data.items : [];
+  const live = $('[data-team-requests]');
+  if (live) live.innerHTML = joinRequestsHtml(team, data);
 }
 
 function membersHtml(members, memberTotal, team, expanded = false) {
@@ -457,8 +591,17 @@ function composerHtml(team) {
     </div>`;
   }
   if (!team.joined) {
+    // 三种「进不来」的处境说法不一样：正等审核 / 被拒了（可以再来）/ 从没申请过。
+    const status = team.myRequest?.status;
+    const hint = status === 'pending'
+      ? '你的申请还在等团长或者管理员审核，通过之后就能在这里发帖了。'
+      : status === 'rejected'
+        ? '上次的申请被拒绝了，可以再申请一次。'
+        : team.joinPolicy === 'apply'
+          ? '这个团队需要申请才能加入：点右上角的「申请加入」，等团长或管理员批准。'
+          : '加入这个团队之后就能在这里发帖了。';
     return `<div class="card team-composer team-composer-guest">
-      <div class="hint">${team.joinPolicy === 'invite' ? '这个团队需要邀请才能加入，找管理员拉你进去。' : '加入这个团队之后就能在这里发帖了。'}</div>
+      <div class="hint">${esc(hint)}</div>
     </div>`;
   }
   return `<div class="card team-composer" data-team-editor>
@@ -774,6 +917,8 @@ async function viewTeam(handle, query) {
     teamState.handle = key;
     teamState.membersExpanded = false;
     teamState.membersAll = [];
+    teamState.requests = [];
+    teamState.requestsStatus = 'pending';
     teamState.filesData = null;
     chatState.slug = '';
     chatState.latestId = 0;
@@ -786,6 +931,7 @@ async function viewTeam(handle, query) {
   ui.app.innerHTML = `<div class="team-page">
     <div class="team-crumb"><a href="#/teams">← 所有团队</a></div>
     <div data-team-hero>${loadingHtml()}</div>
+    <div data-team-requests></div>
     <div data-team-members></div>
     <div data-team-tabs></div>
     <div data-team-composer></div>
@@ -826,8 +972,17 @@ async function viewTeam(handle, query) {
   teamState.members = members;
   teamState.memberTotal = memberTotal;
   heroBox.innerHTML = teamHeroHtml(team, memberTotal);
+
+  // 设置面板的草稿跟着服务端的最新值走。
+  // 草稿是模块级的、跨团队还留着上一个团队的值，而设置面板**显示**的是服务端值、
+  // 提交的却是草稿 —— 不同步的话「打开设置 → 直接点保存」会把加入方式悄悄写回 open。
+  teamState.draft.joinPolicy = team.joinPolicy === 'apply' ? 'apply' : 'open';
+  teamState.draft.listed = team.listed === false ? '0' : '1';
+
   repaintMembers();
   if (teamState.membersExpanded) await reloadMembers(team);
+  // 管理面板开着就顺手把申请列表拉回来（在页签判断之前：它在页签外面，哪个页签都显示）。
+  if (teamState.panel === 'requests') await renderJoinRequests(team);
   const tabsBox = $('[data-team-tabs]');
   if (tabsBox) tabsBox.innerHTML = teamTabsHtml(team, tab, query);
 
@@ -945,9 +1100,14 @@ function replyFormHtml(team, postId) {
     </div>`;
   }
   if (!team.joined) {
-    const hint = team.joinPolicy === 'invite'
-      ? '这个团队需要邀请才能加入，加入之后才能回复。'
-      : '加入这个团队之后就能回复了。';
+    const status = team.myRequest?.status;
+    const hint = status === 'pending'
+      ? '你的申请还在等审核，通过之后就能回复了。'
+      : status === 'rejected'
+        ? '上次的申请被拒绝了，可以再申请一次。'
+        : team.joinPolicy === 'apply'
+          ? '这个团队需要申请才能加入，加入之后才能回复。'
+          : '加入这个团队之后就能回复了。';
     return `<div class="card team-reply-form team-reply-form-guest">
       <div class="hint">${esc(hint)}</div>
     </div>`;
@@ -1175,22 +1335,93 @@ async function handleAction(action, node) {
   }
   if (action === 'save-settings') {
     const slug = currentSlug();
+    const team = teamState.team ?? {};
     return withButtonBusy(node, async () => {
       const draft = teamState.draft;
       await api(`/api/teams/${encodeURIComponent(slug)}`, {
         method: 'PUT',
-        body: { name: draft.name, intro: draft.intro, joinPolicy: draft.joinPolicy },
+        body: {
+          // 没改过的字段要把服务端原来的值送回去：只送草稿的话，空串会被当成
+          // 「把团队名改成空」直接 400，而用户只是点了一下保存。
+          name: draft.name || team.name,
+          intro: draft.intro || team.intro,
+          joinPolicy: draft.joinPolicy,
+          // 「出现在团队广场」只有创建者能改，不是创建者就别带这个字段（带了会 403）。
+          ...(team.myRole === 'owner' ? { listed: teamListedValue(team) } : {}),
+        },
       });
       teamState.panel = null;
       toast('团队设置已保存', 'success');
       await refreshTeam();
     });
   }
-  if (action === 'join-team') {
+  if (action === 'join-team' || action === 'submit-apply') {
     const slug = currentSlug();
+    const applying = action === 'submit-apply';
+    const message = applying ? String(teamState.draft.applyMessage || '').trim() : '';
     return withButtonBusy(node, async () => {
-      await api(`/api/teams/${encodeURIComponent(slug)}/join`, { method: 'POST' });
-      toast('已加入团队', 'success');
+      const data = await api(`/api/teams/${encodeURIComponent(slug)}/join`, {
+        method: 'POST',
+        body: message ? { message } : {},
+      });
+      // 服务端说 requested 就是「递了申请」而不是「进去了」——两种情况话不一样。
+      if (data?.requested) {
+        teamState.draft.applyMessage = '';
+        teamState.panel = null;
+        toast('申请递上去了，等团长或者管理员批准', 'success');
+      } else {
+        toast('已加入团队', 'success');
+      }
+      await refreshTeam();
+    });
+  }
+  if (action === 'apply-team') {
+    teamState.panel = 'apply';
+    return refreshTeam();
+  }
+  if (action === 'cancel-apply') {
+    teamState.panel = null;
+    return refreshTeam();
+  }
+  if (action === 'withdraw-request') {
+    const slug = currentSlug();
+    const requestId = Number(teamState.team?.myRequest?.id);
+    if (!requestId) return toast('没有正在审核的申请', 'error');
+    if (!window.confirm('撤回之后想加入得重新申请一次。确定吗？')) return;
+    return withButtonBusy(node, async () => {
+      await api(`/api/teams/${encodeURIComponent(slug)}/join-requests/${requestId}`, { method: 'DELETE' });
+      toast('申请已经撤回', 'success');
+      await refreshTeam();
+    });
+  }
+  if (action === 'toggle-requests') {
+    teamState.panel = teamState.panel === 'requests' ? null : 'requests';
+    return refreshTeam();
+  }
+  if (action === 'requests-status') {
+    teamState.requestsStatus = String(node.dataset.status || 'pending');
+    return renderJoinRequests(teamState.team);
+  }
+  if (action === 'approve-request' || action === 'reject-request') {
+    const slug = currentSlug();
+    const requestId = Number(node.dataset.teamRequest);
+    return withButtonBusy(node, async () => {
+      await api(`/api/teams/${encodeURIComponent(slug)}/join-requests/${requestId}`, {
+        method: 'PUT',
+        body: { action: action === 'approve-request' ? 'approve' : 'reject' },
+      });
+      toast(action === 'approve-request' ? '已经批准，他/她现在是成员了' : '已经拒绝', 'success');
+      // 整页刷一次：成员数、待审角标、名单都跟着变。
+      await refreshTeam();
+    });
+  }
+  if (action === 'drop-request') {
+    const slug = currentSlug();
+    const requestId = Number(node.dataset.teamRequest);
+    if (!window.confirm('这条记录会被删掉（不影响已经批过的成员身份）。确定吗？')) return;
+    return withButtonBusy(node, async () => {
+      await api(`/api/teams/${encodeURIComponent(slug)}/join-requests/${requestId}`, { method: 'DELETE' });
+      toast('记录已经清掉', 'success');
       await refreshTeam();
     });
   }
@@ -1285,17 +1516,6 @@ async function handleAction(action, node) {
       await api(`/api/teams/${encodeURIComponent(slug)}`, { method: 'DELETE' });
       toast('团队已解散', 'success');
       navigate('/teams');
-    });
-  }
-  if (action === 'invite-member') {
-    const slug = currentSlug();
-    const username = String(teamState.draft.username || '').trim();
-    if (!username) return toast('先填个用户名', 'error');
-    return withButtonBusy(node, async () => {
-      await api(`/api/teams/${encodeURIComponent(slug)}/members`, { method: 'POST', body: { username } });
-      teamState.draft.username = '';
-      toast(`已经把 ${username} 拉进来了`, 'success');
-      await refreshTeam();
     });
   }
   if (action === 'promote-member' || action === 'demote-member') {

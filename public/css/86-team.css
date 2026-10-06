@@ -291,15 +291,35 @@
   color: var(--danger-fg);
 }
 
-.team-invite {
-  display: flex;
-  gap: 8px;
-  flex-wrap: wrap;
+/* 「⏳ 申请审核中」小标牌：递过申请还没批的人，头顶上挂这个。 */
+.team-pending {
+  padding: 4px 10px;
+  border: 1px dashed var(--border-soft);
+  border-radius: 999px;
+  font-size: 13px;
+  color: var(--muted);
 }
 
-.team-invite-input {
-  flex: 1 1 200px;
-  min-width: 160px;
+/* 管理按钮上那个待审条数。 */
+.team-requests-badge {
+  display: inline-block;
+  min-width: 18px;
+  padding: 0 5px;
+  border-radius: 999px;
+  background: var(--danger);
+  color: var(--danger-fg);
+  font-size: 12px;
+  font-weight: 700;
+  text-align: center;
+}
+
+/* 「🙈 已隐藏」：没出现在广场上的团队，在自己「我加入的」那张卡片上标一下。 */
+.team-card-hidden {
+  padding: 2px 8px;
+  border: 1px solid var(--border-soft);
+  border-radius: 999px;
+  font-size: 12px;
+  color: var(--muted);
 }
 
 /* ================= 发帖框 ================= */
@@ -951,4 +971,88 @@
   justify-content: space-between;
   gap: 8px;
   flex-wrap: wrap;
+}
+
+/* ================= 申请加入 / 审核申请 ================= */
+
+/* 递申请那张卡（「需要申请」的团队，点右上角「申请加入」才出现）。 */
+.team-apply {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  border-style: dashed;
+}
+
+/* 管理面板里那一整块申请列表。 */
+.team-requests {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.team-requests-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.team-requests-title {
+  font-weight: 700;
+}
+
+/* 四条状态页签复用 .team-tabs / .team-tab 的样子，只把下边距收一收。 */
+.team-requests-tabs {
+  margin-bottom: 0;
+}
+
+.team-request {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 12px;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-sm);
+  background: var(--bg-soft);
+}
+
+.team-request-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.team-request-name {
+  font-weight: 600;
+  color: var(--text);
+}
+
+.team-request-status {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.team-request-message {
+  padding: 8px 10px;
+  border-left: 3px solid var(--accent-soft);
+  border-radius: 4px;
+  color: var(--text-dim);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.team-request-message.is-empty {
+  color: var(--muted);
+}
+
+.team-request-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.team-request-empty {
+  padding: 6px 2px;
 }

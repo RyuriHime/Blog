@@ -29,7 +29,7 @@ const PORT = Number(process.env.CONTRACT_PORT || 3412);
 const BASE = `http://127.0.0.1:${PORT}`;
 
 /** 不下降哨兵：接手的模块只允许加，不允许把这些数字改小。 */
-const MIN_CHECKS = Number(process.env.MIN_UI_CHECKS || 274);
+const MIN_CHECKS = Number(process.env.MIN_UI_CHECKS || 292);
 
 /**
  * 前端源码入口清单。搬家前这三份文件在 public/ 根目录；骨架会把它们拆进
@@ -510,6 +510,94 @@ check(
   '回复翻页走地址栏的 rpage 参数',
   /params\.get\('rpage'\)/.test(appJs) &&
     /`\/team\/\$\{slug\}\/post\/\$\{postId\}`, params, \{ rpage:/.test(appJs),
+);
+
+/* 团队第五批（申请加入 + 审核 + 隐藏）的契约。
+ * 这批守的是四件事：
+ *  ① 「拉进团队」这条路拆干净了 —— 团长凭一个用户名就能把人拽进来，当事人连知都不知道；
+ *     现在要进来只有两条路：团队号（本身就是邀请），或者在广场上递申请等人批；
+ *  ② 申请式团队（`joinPolicy: 'apply'`）在路人眼里只能是「申请加入」，绝不能出现「加入团队」；
+ *  ③ 审批面板要能拉待审名单、切档、批准 / 拒绝，而且两个管理员同时点只有一个能成；
+ *  ④ 「要不要出现在广场上」只有创建者能改，藏起来也只是「不被发现」——
+ *     团队主页、团队号、帖子链接照旧能用。
+ */
+check(
+  '「拉进团队」拆干净了：前端没有邀请框，后端也不再认那个 POST',
+  !/invite-member|team-invite/.test(appJs) &&
+    /add\('GET', '\/api\/teams\/:id\/members'/.test(serverJs) &&
+    !/add\('POST', '\/api\/teams\/:id\/members'/.test(serverJs),
+);
+check(
+  '加入方式只剩两档：谁都能加入 / 需要申请（`invite` 这个档位连下拉框都不该有）',
+  /TEAM_JOIN_POLICIES = \['open', 'apply'\]/.test(serverJs) && !/value="invite"/.test(appJs),
+);
+check(
+  '老库里的 invite 在重建表时翻成 apply —— 语义一样（都得有人批），不是直接删数据',
+  /CASE WHEN join_policy = 'invite' THEN 'apply' ELSE join_policy END/.test(serverJs),
+);
+check(
+  'team_join_requests 有主且被 owns 认领（没人认领 check-skeleton 会红）',
+  /'team_join_requests'/.test(serverJs),
+);
+check(
+  '同一人对同一团队最多一条待审申请 —— 靠部分唯一索引，不靠应用层判重',
+  /idx_team_join_requests_pending/.test(serverJs) && /WHERE status = 'pending'/.test(serverJs),
+);
+check(
+  'canJoin 与 canApply 互斥：开放团队给「加入」，申请式团队给「申请」',
+  /canJoin: Boolean\(viewer\) && !joined && joinPolicy === 'open'/.test(serverJs) &&
+    /canApply: Boolean\(viewer\) && !joined && joinPolicy === 'apply' && !requestPending/.test(serverJs),
+);
+check(
+  '待审条数只算给管理员（给成员看等于把别人的申请理由摆到大街上）',
+  /pendingRequestCount: canManage \?/.test(serverJs),
+);
+check(
+  '「要不要出现在广场上」只有创建者能改，管理员带着这个字段来就是 403',
+  /只有团队创建者可以决定团队要不要出现在团队广场上/.test(serverJs) &&
+    /listed\s+INTEGER NOT NULL DEFAULT 1/.test(serverJs),
+);
+check(
+  '隐藏团队只是从广场里拿掉：自己加入的团队与直接点链接进来的照旧能看',
+  /t\.listed = 1 OR EXISTS/.test(serverJs),
+);
+check(
+  '路人看到的是「申请加入」，填一句理由再递（理由可以留空）',
+  /data-team-action="apply-team"/.test(appJs) && /data-team-field="applyMessage"/.test(appJs),
+);
+check(
+  '申请理由最长 200 字，服务端自己也会拦一道',
+  /MAX_TEAM_JOIN_MESSAGE = 200/.test(serverJs),
+);
+check(
+  '递过申请的人看到「⏳ 申请审核中」并能撤回，而且不会再画一个「申请加入」出来',
+  /data-team-action="withdraw-request"/.test(appJs) && /data-team-request-pending/.test(appJs),
+);
+check(
+  '管理员有审批面板：批准 / 拒绝按钮各自带申请 id',
+  /data-team-action="approve-request"/.test(appJs) &&
+    /data-team-action="reject-request"/.test(appJs) &&
+    /data-team-request="\$\{item\.id\}"/.test(appJs),
+);
+check(
+  '两个管理员同时点「批准」只有一个能成（UPDATE … WHERE status = \'pending\'）',
+  /join_request_decided/.test(serverJs),
+);
+check(
+  '「出现在团队广场」那个开关只画给创建者',
+  /team\.myRole === 'owner'[\s\S]{0,400}data-team-field="listed"/.test(appJs),
+);
+check(
+  '申请、批准、拒绝三种通知类型都在（不然用户只能干等着）',
+  /team_join_request/.test(serverJs) && /team_join_approved/.test(serverJs) && /team_join_rejected/.test(serverJs),
+);
+check(
+  '团队广场上的卡片会把隐藏团队标出来 —— 自己看得到，别人看不到',
+  /team-card-hidden/.test(appJs),
+);
+check(
+  '申请通知走去重（同一个人反复递只有一条未读），与公告的 dedupe:false 相反',
+  /type: 'team_join_request'/.test(serverJs) && !/type: 'team_join_request'[\s\S]{0,200}dedupe: false/.test(serverJs),
 );
 
 /* ---------- 1b. 背景主题契约 ---------- */

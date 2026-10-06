@@ -429,79 +429,246 @@ try {
     JSON.stringify((anonListNow.data?.items ?? []).map((item) => item.id)),
   );
 
-  /* ── 需要邀请的团队 ─────────────────────────────────────────────── */
-  const inviteTeam = await owner.client.call('/api/teams', {
+  /* ── 需要申请的团队：递申请 → 审核 → 进 / 不进 ─────────────────── */
+  const applyTeam = await owner.client.call('/api/teams', {
     method: 'POST',
-    body: { name: 'closed-squad', intro: '需要邀请', joinPolicy: 'invite' },
+    body: { name: 'closed-squad', intro: '需要申请', joinPolicy: 'apply' },
   });
-  const inviteId = inviteTeam.data?.team?.id;
-  check('能建一个「需要邀请」的团队', inviteTeam.status === 200 && inviteTeam.data?.team?.joinPolicy === 'invite');
-  const invitePath = `/api/teams/${inviteId}`;
+  const applyId = applyTeam.data?.team?.id;
+  check('能建一个「需要申请」的团队', applyTeam.status === 200 && applyTeam.data?.team?.joinPolicy === 'apply', String(applyTeam.data?.team?.joinPolicy));
+  check('「需要申请」的团队，加入方式标签就是「需要申请」', applyTeam.data?.team?.joinPolicyLabel === '需要申请', String(applyTeam.data?.team?.joinPolicyLabel));
+  const applyPath = `/api/teams/${applyId}`;
 
-  const tryJoin = await stranger.client.call(`${invitePath}/join`, { method: 'POST' });
-  check('需要邀请的团队不能自己加入（403）', tryJoin.status === 403, String(tryJoin.status));
+  const outsiderView = await stranger.client.call(applyPath);
+  check(
+    '「需要申请」的团队，路人看到的是「可以申请」而不是「能直接加入」',
+    outsiderView.data?.team?.canApply === true && outsiderView.data?.team?.canJoin === false,
+    JSON.stringify({ canApply: outsiderView.data?.team?.canApply, canJoin: outsiderView.data?.team?.canJoin }),
+  );
 
-  const invited = await owner.client.call(`${invitePath}/members`, {
-    method: 'POST',
-    body: { username: 'teamstranger' },
-  });
-  check('管理员能把人拉进团队', invited.status === 200, JSON.stringify(invited.error ?? invited.body));
-  check('拉进来的默认角色是「成员」', invited.data?.member?.teamRole === 'member', String(invited.data?.member?.teamRole));
-  const inviteList = await owner.client.call(`${invitePath}/posts`);
-  check('拉进来之后成员数变成 2', inviteList.status === 200 && (await owner.client.call(`${invitePath}/members`)).data?.total === 2);
+  const applyJoin = await stranger.client.call(`${applyPath}/join`, { method: 'POST', body: { message: '想进来一起做前端。' } });
+  check(
+    '「需要申请」的团队点「加入」只会递上一条申请（不是直接进）',
+    applyJoin.status === 200 && applyJoin.data?.requested === true && applyJoin.data?.joined === false,
+    JSON.stringify(applyJoin.error ?? applyJoin.body),
+  );
+  check(
+    '申请里带着自己写的理由，状态是「等待审核」',
+    applyJoin.data?.request?.status === 'pending' && applyJoin.data?.request?.message === '想进来一起做前端。',
+    JSON.stringify(applyJoin.data?.request ?? null),
+  );
+  const applyMembers = await owner.client.call(`${applyPath}/members`);
+  check('递了申请也还没进团队（成员数不变）', applyMembers.data?.total === 1, String(applyMembers.data?.total));
 
-  const notManager = await stranger.client.call(`${invitePath}/members`, {
-    method: 'POST',
-    body: { username: 'teamfan' },
-  });
-  check('普通成员拉不了人（403）', notManager.status === 403, String(notManager.status));
+  const myPendingView = await stranger.client.call(applyPath);
+  check(
+    '申请人自己看得到「审核中」，而且不能再点一次申请',
+    myPendingView.data?.team?.myRequest?.status === 'pending' && myPendingView.data?.team?.canApply === false && myPendingView.data?.team?.canJoin === false,
+    JSON.stringify(myPendingView.data?.team?.myRequest ?? null),
+  );
 
-  const noUser = await owner.client.call(`${invitePath}/members`, {
-    method: 'POST',
-    body: { username: '根本没有这个人' },
-  });
-  check('拉一个不存在的用户返回 404', noUser.status === 404 && noUser.error?.code === 'user_not_found', String(noUser.status));
+  const applyAgain = await stranger.client.call(`${applyPath}/join`, { method: 'POST', body: { message: '再点一次' } });
+  check(
+    '重复点「申请加入」不会堆出第二条（还回来的就是那条待审）',
+    applyAgain.status === 200 && applyAgain.data?.request?.id === applyJoin.data?.request?.id,
+    JSON.stringify(applyAgain.error ?? applyAgain.body),
+  );
+
+  const applyPendingList = await owner.client.call(`${applyPath}/join-requests`);
+  check('待审列表里就一条', applyPendingList.status === 200 && applyPendingList.data?.total === 1, JSON.stringify(applyPendingList.error ?? applyPendingList.body));
+  check('待审那条带着申请人的用户名和理由', applyPendingList.data?.items?.[0]?.user?.username === 'teamstranger' && applyPendingList.data?.items?.[0]?.message === '想进来一起做前端。', JSON.stringify(applyPendingList.data?.items?.[0] ?? null));
+  check('待审那条写着「等待审核」并且可以处理', applyPendingList.data?.items?.[0]?.statusLabel === '等待审核' && applyPendingList.data?.items?.[0]?.canDecide === true, JSON.stringify(applyPendingList.data?.items?.[0] ?? null));
+  check('管理员视角里这条不是「我的申请」', applyPendingList.data?.items?.[0]?.mine === false, String(applyPendingList.data?.items?.[0]?.mine));
+  check('团队详情里带着「待审几条」给管理按钮画角标', applyPendingList.data?.pendingTotal === 1, String(applyPendingList.data?.pendingTotal));
+
+  const applyStrangerList = await stranger.client.call(`${applyPath}/join-requests`);
+  check('不是管理员的人看不了审批列表（403）', applyStrangerList.status === 403, String(applyStrangerList.status));
+  const applyAnonList = await anon.call(`${applyPath}/join-requests`);
+  check('未登录看审批列表：401', applyAnonList.status === 401, String(applyAnonList.status));
+
+  const applyLegacyPull = await owner.client.call(`${applyPath}/members`, { method: 'POST', body: { username: 'teamfan' } });
+  check(
+    '「拉进团队」那条接口已经删掉了（这个地址现在只认 GET，POST 直接 405）',
+    applyLegacyPull.status === 405 || applyLegacyPull.status === 404,
+    String(applyLegacyPull.status),
+  );
+  const afterLegacyPull = await owner.client.call(`${applyPath}/members`);
+  check('拉人那条路删掉之后，管理员也不能凭空把人塞进来（成员数没变）', afterLegacyPull.data?.total === 1, String(afterLegacyPull.data?.total));
+
+  const applyBadAction = await owner.client.call(`${applyPath}/join-requests/${applyJoin.data?.request?.id}`, { method: 'PUT', body: { action: '也许吧' } });
+  check('审核只能「批准」或「拒绝」（400）', applyBadAction.status === 400 && applyBadAction.error?.code === 'bad_action', String(applyBadAction.status));
+
+  const applyRejected = await owner.client.call(`${applyPath}/join-requests/${applyJoin.data?.request?.id}`, { method: 'PUT', body: { action: 'reject' } });
+  check('管理员能拒绝申请', applyRejected.status === 200 && applyRejected.data?.request?.status === 'rejected', JSON.stringify(applyRejected.error ?? applyRejected.body));
+  const applyMembersAfterReject = await owner.client.call(`${applyPath}/members`);
+  check('拒绝之后人当然没进来（成员数还是 1）', applyMembersAfterReject.data?.total === 1, String(applyMembersAfterReject.data?.total));
+  const applyRejectedAgain = await owner.client.call(`${applyPath}/join-requests/${applyJoin.data?.request?.id}`, { method: 'PUT', body: { action: 'reject' } });
+  check('处理过的申请不能再处理一次（400）', applyRejectedAgain.status === 400 && applyRejectedAgain.error?.code === 'join_request_decided', String(applyRejectedAgain.status));
+
+  const myRejectedView = await stranger.client.call(applyPath);
+  check(
+    '被拒之后申请人看到「已拒绝」，而且可以再申请一次',
+    myRejectedView.data?.team?.myRequest?.status === 'rejected' && myRejectedView.data?.team?.canApply === true,
+    JSON.stringify(myRejectedView.data?.team?.myRequest ?? null),
+  );
+
+  const applySecond = await stranger.client.call(`${applyPath}/join`, { method: 'POST', body: { message: '再试一次。' } });
+  check(
+    '被拒之后能再递一条新的申请',
+    applySecond.status === 200 && applySecond.data?.request?.id !== applyJoin.data?.request?.id && applySecond.data?.request?.status === 'pending',
+    JSON.stringify(applySecond.error ?? applySecond.body),
+  );
+  const applyAllList = await owner.client.call(`${applyPath}/join-requests?status=all`);
+  check('「全部」那一档里两条都在（被拒的历史留着当记录）', applyAllList.data?.total === 2 && applyAllList.data?.pendingTotal === 1, `${applyAllList.data?.total}/${applyAllList.data?.pendingTotal}`);
+
+  const applyWithdraw = await stranger.client.call(`${applyPath}/join-requests/${applySecond.data?.request?.id}`, { method: 'DELETE' });
+  check('申请人能自己撤回申请', applyWithdraw.status === 200 && applyWithdraw.data?.removed === true, JSON.stringify(applyWithdraw.error ?? applyWithdraw.body));
+  const applyPendingAfterWithdraw = await owner.client.call(`${applyPath}/join-requests`);
+  check('撤回之后待审列表空了', applyPendingAfterWithdraw.data?.total === 0, String(applyPendingAfterWithdraw.data?.total));
+  const applyWithdrawOther = await outsider.client.call(`${applyPath}/join-requests/${applyJoin.data?.request?.id}`, { method: 'DELETE' });
+  check('既不是申请人也不是管理员的人撤不了别人的申请（403）', applyWithdrawOther.status === 403, String(applyWithdrawOther.status));
+
+  const applyThird = await stranger.client.call(`${applyPath}/join`, { method: 'POST', body: { message: '这次一定。' } });
+  const applyApproved = await owner.client.call(`${applyPath}/join-requests/${applyThird.data?.request?.id}`, { method: 'PUT', body: { action: 'approve' } });
+  check(
+    '管理员批准之后申请人真的成了成员',
+    applyApproved.status === 200 && applyApproved.data?.request?.status === 'approved' && applyApproved.data?.member?.teamRole === 'member',
+    JSON.stringify(applyApproved.error ?? applyApproved.body),
+  );
+  const applyMembersAfterApprove = await owner.client.call(`${applyPath}/members`);
+  check('批准之后成员数变成 2', applyMembersAfterApprove.data?.total === 2, String(applyMembersAfterApprove.data?.total));
+  const joinedView = await stranger.client.call(applyPath);
+  check(
+    '批准之后申请人视角 joined=true、不再有「可以申请」',
+    joinedView.data?.team?.joined === true && joinedView.data?.team?.canApply === false,
+    JSON.stringify({ joined: joinedView.data?.team?.joined, canApply: joinedView.data?.team?.canApply }),
+  );
+
+  /* ── 申请与审核都要发通知（不然另一边永远不知道） ───────────────── */
+  const ownerApplyInbox = await owner.client.call('/api/notifications?filter=unread&perPage=50');
+  const requestNotices = (ownerApplyInbox.data?.items ?? []).filter((item) => item.type === 'team_join_request');
+  check('有人递申请，团长那边立刻有通知', requestNotices.length === 1 && requestNotices[0]?.actor?.username === 'teamstranger', `收到 ${requestNotices.length} 条：${JSON.stringify(requestNotices.map((item) => item.actor?.username))}`);
+  check(
+    '申请通知里带回团队，点一下能跳回团队页',
+    requestNotices.every((item) => item.team?.slug === applyTeam.data?.team?.slug),
+    JSON.stringify(requestNotices.map((item) => item.team ?? null)),
+  );
+  check(
+    '同一个人反复递申请只留一条未读（申请走去重，和公告相反）',
+    requestNotices.filter((item) => item.actor?.username === 'teamstranger').length === 1,
+    JSON.stringify(requestNotices.map((item) => item.actor?.username)),
+  );
+
+  const strangerApplyInbox = await stranger.client.call('/api/notifications?filter=unread&perPage=50');
+  const myApplyNotices = (strangerApplyInbox.data?.items ?? []).filter(
+    (item) => item.type === 'team_join_approved' || item.type === 'team_join_rejected',
+  );
+  check(
+    '申请人「被拒绝」和「被批准」两条通知都收到了',
+    myApplyNotices.some((item) => item.type === 'team_join_rejected') && myApplyNotices.some((item) => item.type === 'team_join_approved'),
+    JSON.stringify(myApplyNotices.map((item) => item.type)),
+  );
+  check(
+    '审批通知里的 actor 是审批的人（创建者）',
+    myApplyNotices.every((item) => item.actor?.username === 'teamowner'),
+    JSON.stringify(myApplyNotices.map((item) => item.actor?.username)),
+  );
+
 
   /* ── 角色与团队设置 ─────────────────────────────────────────────── */
-  const promote = await owner.client.call(`${invitePath}/members/${stranger.user.id}`, {
+  const promote = await owner.client.call(`${applyPath}/members/${stranger.user.id}`, {
     method: 'PUT',
     body: { role: 'admin' },
   });
   check('创建者能把成员提成管理员', promote.status === 200 && promote.data?.member?.teamRole === 'admin', JSON.stringify(promote.error ?? promote.body));
 
-  const promotedInvite = await stranger.client.call(`${invitePath}/members`, {
-    method: 'POST',
-    body: { username: 'teamfan' },
+  // 管理员的权力现在是「审申请」：让 mate 递一条，由刚提上来的 stranger 批。
+  const mateApply = await mate.client.call(`${applyPath}/join`, { method: 'POST', body: { message: '管理员帮忙看看我这条。' } });
+  const adminDecides = await stranger.client.call(`${applyPath}/join-requests/${mateApply.data?.request?.id}`, {
+    method: 'PUT',
+    body: { action: 'approve' },
   });
-  check('提成管理员之后就能拉人了', promotedInvite.status === 200, JSON.stringify(promotedInvite.error ?? promotedInvite.body));
+  check(
+    '提成管理员之后也能批申请（批准别人进来）',
+    adminDecides.status === 200 && adminDecides.data?.request?.status === 'approved',
+    JSON.stringify(adminDecides.error ?? adminDecides.body),
+  );
 
-  const promoteToOwner = await owner.client.call(`${invitePath}/members/${stranger.user.id}`, {
+  const adminApplyInbox = await stranger.client.call('/api/notifications?filter=unread&perPage=50');
+  check(
+    '申请通知是发给全体管理者的（管理员也收到，不只团长）',
+    (adminApplyInbox.data?.items ?? []).some((item) => item.type === 'team_join_request' && item.actor?.username === 'teammate'),
+    JSON.stringify((adminApplyInbox.data?.items ?? []).filter((item) => item.type === 'team_join_request').map((item) => item.actor?.username)),
+  );
+  const ownerApplyInboxTwo = await owner.client.call('/api/notifications?filter=unread&perPage=50');
+  check(
+    '第二个人递申请，团长那边又多一条（去重按人算，不同的人各留一条）',
+    (ownerApplyInboxTwo.data?.items ?? []).filter((item) => item.type === 'team_join_request').length === 2,
+    JSON.stringify((ownerApplyInboxTwo.data?.items ?? []).filter((item) => item.type === 'team_join_request').map((item) => item.actor?.username)),
+  );
+
+  const adminHides = await stranger.client.call(applyPath, { method: 'PUT', body: { listed: '0' } });
+  check(
+    '管理员也藏不了团队 —— 要不要出现在广场只有创建者能决定（403）',
+    adminHides.status === 403 && adminHides.error?.code === 'forbidden',
+    `${adminHides.status} ${JSON.stringify(adminHides.error ?? '')}`,
+  );
+
+  const promoteToOwner = await owner.client.call(`${applyPath}/members/${stranger.user.id}`, {
     method: 'PUT',
     body: { role: 'owner' },
   });
   check('不允许把别人也设成创建者', promoteToOwner.status === 400, String(promoteToOwner.status));
 
-  const demote = await owner.client.call(`${invitePath}/members/${stranger.user.id}`, {
+  const demote = await owner.client.call(`${applyPath}/members/${stranger.user.id}`, {
     method: 'PUT',
     body: { role: 'member' },
   });
   check('创建者能把管理员降回成员', demote.status === 200 && demote.data?.member?.teamRole === 'member');
 
-  const byStranger = await stranger.client.call(invitePath, {
+  const byStranger = await stranger.client.call(applyPath, {
     method: 'PUT',
     body: { name: '普通成员改的队名' },
   });
   check('普通成员改不了团队设置（403）', byStranger.status === 403, String(byStranger.status));
 
-  const renamed = await owner.client.call(invitePath, { method: 'PUT', body: { name: '改过名的团队' } });
+  const renamed = await owner.client.call(applyPath, { method: 'PUT', body: { name: '改过名的团队' } });
   check('创建者能改团队设置', renamed.status === 200 && renamed.data?.team?.name === '改过名的团队', JSON.stringify(renamed.error ?? renamed.body));
 
-  const ownerLeave = await owner.client.call(`${invitePath}/leave`, { method: 'POST' });
+  /* ── 要不要出现在团队广场（listed） ─────────────────────────────── */
+  check('新团队默认出现在广场上', renamed.data?.team?.listed === true, String(renamed.data?.team?.listed));
+  const badFlag = await owner.client.call(applyPath, { method: 'PUT', body: { listed: '也许' } });
+  check('「出现在广场」只能是是或否（400）', badFlag.status === 400 && badFlag.error?.code === 'bad_flag', String(badFlag.status));
+
+  const hidden = await owner.client.call(applyPath, { method: 'PUT', body: { listed: '0' } });
+  check('创建者能把团队从广场藏起来', hidden.status === 200 && hidden.data?.team?.listed === false, JSON.stringify(hidden.error ?? hidden.body));
+  const hiddenSquareAnon = await anon.call('/api/teams');
+  check(
+    '藏起来之后未登录的人在广场上找不到它',
+    !(hiddenSquareAnon.data?.items ?? []).some((item) => item.id === applyId),
+    JSON.stringify((hiddenSquareAnon.data?.items ?? []).map((item) => item.id)),
+  );
+  const hiddenSquareMember = await stranger.client.call('/api/teams');
+  check(
+    '但已加入的成员在广场上仍然看得到自己这个藏起来的团队',
+    (hiddenSquareMember.data?.items ?? []).some((item) => item.id === applyId),
+    JSON.stringify((hiddenSquareMember.data?.items ?? []).map((item) => item.id)),
+  );
+  const hiddenDetail = await anon.call(applyPath);
+  check(
+    '藏起来只是不在广场露面，团队主页本身照旧打得开',
+    hiddenDetail.status === 200 && hiddenDetail.data?.team?.listed === false,
+    String(hiddenDetail.status),
+  );
+  const listedBack = await owner.client.call(applyPath, { method: 'PUT', body: { listed: '1' } });
+  check('也能再把它放回广场', listedBack.status === 200 && listedBack.data?.team?.listed === true, JSON.stringify(listedBack.error ?? listedBack.body));
+
+  const ownerLeave = await owner.client.call(`${applyPath}/leave`, { method: 'POST' });
   check('创建者不能退出自己的团队（400）', ownerLeave.status === 400, String(ownerLeave.status));
 
-  const kicked = await owner.client.call(`${invitePath}/members/${stranger.user.id}`, { method: 'DELETE' });
+  const kicked = await owner.client.call(`${applyPath}/members/${stranger.user.id}`, { method: 'DELETE' });
   check('管理员能把成员移出团队', kicked.status === 200, JSON.stringify(kicked.error ?? kicked.body));
-  const kickOwner = await owner.client.call(`${invitePath}/members/${owner.user.id}`, { method: 'DELETE' });
+  const kickOwner = await owner.client.call(`${applyPath}/members/${owner.user.id}`, { method: 'DELETE' });
   check('不能把创建者移出团队（400）', kickOwner.status === 400, String(kickOwner.status));
 
   /* ── 纯数字地址：曾经会被当成 id，查不到就报「也许它已经解散了」 ── */
@@ -690,17 +857,21 @@ try {
     `${byCodeAgain.data?.team?.memberCount}`,
   );
 
-  // 团队号就是「需要邀请」那个团队缺的入口：数字对得上就进，不看 join_policy。
-  const closedDetail = await owner.client.call(invitePath);
+  // 团队号是「需要申请」那个团队的另一条入口：数字对得上就直接进，完全不看 join_policy。
+  const closedDetail = await owner.client.call(applyPath);
   const closedCode = closedDetail.data?.team?.joinCode;
-  check('「需要邀请」的团队一样有团队号', typeof closedCode === 'string' && closedCode.length === 6, String(closedCode));
-  const directJoinClosed = await mate.client.call(`${invitePath}/join`, { method: 'POST' });
-  check('需要邀请的团队，直接点「加入」仍然 403', directJoinClosed.status === 403, String(directJoinClosed.status));
-  const mateByCode = await mate.client.call('/api/teams/join-by-code', { method: 'POST', body: { code: closedCode } });
+  check('「需要申请」的团队一样有团队号', typeof closedCode === 'string' && closedCode.length === 6, String(closedCode));
+  const directJoinClosed = await guest.client.call(`${applyPath}/join`, { method: 'POST', body: { message: '路过想进。' } });
   check(
-    '但拿团队号就能进 —— 号本身就是那个「邀请」',
-    mateByCode.status === 200 && mateByCode.data?.team?.joined === true,
-    `${mateByCode.status} ${JSON.stringify(mateByCode.error ?? '')}`,
+    '需要申请的团队，点「加入」只是递申请（200 requested，人没进去）',
+    directJoinClosed.status === 200 && directJoinClosed.data?.requested === true && directJoinClosed.data?.joined === false,
+    JSON.stringify(directJoinClosed.error ?? directJoinClosed.body),
+  );
+  const guestByCode = await guest.client.call('/api/teams/join-by-code', { method: 'POST', body: { code: closedCode } });
+  check(
+    '但拿团队号就直接进了 —— 号本身就是那个「邀请」，不看申请那一档',
+    guestByCode.status === 200 && guestByCode.data?.team?.joined === true,
+    `${guestByCode.status} ${JSON.stringify(guestByCode.error ?? '')}`,
   );
 
   /* ── 团队公告：谁能看、谁能写、谁能收到通知 ─────────────────────── */
@@ -893,12 +1064,12 @@ try {
   const notOwnerDelete = await mate.client.call(teamPath, { method: 'DELETE' });
   check('不是创建者不能解散团队（403）', notOwnerDelete.status === 403, String(notOwnerDelete.status));
 
-  const deleted = await owner.client.call(invitePath, { method: 'DELETE' });
+  const deleted = await owner.client.call(applyPath, { method: 'DELETE' });
   check('创建者能解散团队', deleted.status === 200, JSON.stringify(deleted.error ?? deleted.body));
-  const gone = await owner.client.call(invitePath);
+  const gone = await owner.client.call(applyPath);
   check('解散之后团队详情返回 404', gone.status === 404, String(gone.status));
   const goneList = await anon.call('/api/teams');
-  check('解散的团队不再出现在公开列表里', !(goneList.data?.items ?? []).some((item) => item.id === inviteId));
+  check('解散的团队不再出现在公开列表里', !(goneList.data?.items ?? []).some((item) => item.id === applyId));
 
   const deletedPost = `DELETE /api/teams/${teamId}/posts/${postId}`;
   const removePost = await owner.client.call(`${teamPath}/posts/${postId}`, { method: 'DELETE' });
