@@ -66,6 +66,31 @@ function bootstrapScript() {
     '    value: function (value) { send({ type: "value", value: value }); },',
     '    resize: measure',
     '  };',
+    '  // `onInit` 有两种写法：`Sandbox.onInit(fn)` 与 `Sandbox.onInit = fn`。',
+    '  // 两种都要接住，更要紧的是**init 消息可能比用户脚本先到**：bootstrap 在 <head> 里',
+    '  // 一跑完就发 ready，宿主立刻回 init，而用户的 <script> 还在 <body> 里等着被解析。',
+    '  // 所以先把 init 载荷存下来，等 onInit 挂上再交付；否则用户的初始化代码永远不被调用',
+    '  //（现象很安静：不报错，但票数、初始数据一直空着，看起来像「功能挂了」）。',
+    '  var onInitHandler = null;',
+    '  var pendingInit = null;',
+    '  function runInit() {',
+    '    if (!pendingInit || typeof onInitHandler !== "function") return;',
+    '    var payload = pendingInit;',
+    '    pendingInit = null;',
+    '    try { onInitHandler(payload.props, payload.inputs); } catch (error) {}',
+    '  }',
+    '  function registerInit(handler) {',
+    '    onInitHandler = handler;',
+    '    runInit();',
+    '  }',
+    '  api.onInit = registerInit;',
+    '  try {',
+    '    Object.defineProperty(api, "onInit", {',
+    '      configurable: true,',
+    '      get: function () { return registerInit; },',
+    '      set: function (handler) { registerInit(handler); },',
+    '    });',
+    '  } catch (error) { /* 认不得 defineProperty 就只支持调用式写法 */ }',
     '  // ── 上面是原始能力；下面是「写起来像一门语言」的那层 ──',
     '  // 每一次调用仍然是一次能力申请，所以服务端那份审计记得住「哪个块读了什么」。',
     '  // api.doc()     这篇文档的元信息 { id, title, kind, author, updatedAt }',
@@ -77,6 +102,22 @@ function bootstrapScript() {
     '    return api.request("doc-blocks").then(function (r) { return (r && r.blocks) || []; });',
     '  };',
     '  api.viewer = function () { return api.request("viewer"); };',
+    '  // api.render 脚本画块：list() / canWrite() / put(id, type, props, scope) / remove(id, scope)',
+    '  // 它写的是**派生层**（doc_script_blocks），不动正文；作者可以「采纳为真块」把它们固化下来。',
+    '  api.render = {',
+    '    list: function (scope) {',
+    '      return api.request("blocks.derived", { op: "list", scope: scope }).then(function (r) { return (r && r.blocks) || []; });',
+    '    },',
+    '    canWrite: function (scope) {',
+    '      return api.request("blocks.derived", { op: "list", scope: scope }).then(function (r) { return Boolean(r && r.canWrite); });',
+    '    },',
+    '    put: function (id, type, props, scope) {',
+    '      return api.request("blocks.derived", { op: "put", blockId: id, type: type, props: props, scope: scope });',
+    '    },',
+    '    remove: function (id, scope) {',
+    '      return api.request("blocks.derived", { op: "delete", blockId: id, scope: scope });',
+    '    }',
+    '  };',
     '  api.state = {',
     '    get: function (scope) {',
     '      return api.request("state", { op: "get", scope: scope }).then(function (r) { return r ? r.value : null; });',
@@ -92,7 +133,8 @@ function bootstrapScript() {
     '    if (data.type === "init") {',
     '      api.props = data.props || {};',
     '      api.inputs = data.inputs || {};',
-    '      if (typeof api.onInit === "function") { try { api.onInit(api.props, api.inputs); } catch (error) {} }',
+    '      pendingInit = { props: api.props, inputs: api.inputs };',
+    '      runInit();',
     '      measure();',
     '      return;',
     '    }',
@@ -178,13 +220,16 @@ export function sandboxInner(props, block, options = {}) {
 /**
  * 这个块类型是不是沙箱块（要跑用户代码）。
  *
- * 内置的 `app` 算；用户注册的类型只要声明了 `renderer_kind: 'sandbox'` 也算 ——
+ * 内置的 `app` 与 `script` 都算；用户注册的类型只要声明了 `renderer_kind: 'sandbox'` 也算 ——
  * 否则「注册沙箱块」就只是一句空话：注册得出来，渲染时是一个空 div。
  * 参数既收类型名（字符串）也收类型定义（注册表里的对象）。
  */
 export function isSandboxType(type) {
-  if (type && typeof type === 'object') return type.name === 'app' || type.renderer_kind === 'sandbox';
-  return String(type ?? '') === 'app';
+  if (type && typeof type === 'object') {
+    return type.name === 'app' || type.name === 'script' || type.renderer_kind === 'sandbox';
+  }
+  const name = String(type ?? '');
+  return name === 'app' || name === 'script';
 }
 
 /** 宿主接受的消息类型（前端 `public/core/sandbox.js` 用同一份清单）。 */

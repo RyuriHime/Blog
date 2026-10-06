@@ -220,7 +220,7 @@ const EXPECTED = [
   ['笔记与个人主页的接线', ['src/modules/doc/routes.js']],
   ['沙箱已被管理员禁用', ['src/modules/doc/sandbox.js']],
   ['块类型注册表', ['src/modules/doc/blocks/registry.js']],
-  ['6 个内置模板', ['src/modules/doc/templates.js']],
+  ['8 个内置模板', ['src/modules/doc/templates.js']],
   ['积木广场', ['public/views/doc.js']],
   ['块类型表', ['public/views/doc.js']],
   ['这个积木还没写代码', ['src/modules/doc/sandbox.js']],

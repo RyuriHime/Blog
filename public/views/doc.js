@@ -26,7 +26,7 @@ import { attachSandbox, unmountSandboxes } from '../core/sandbox.js';
 import { ntRenderMath } from './notes.js';
 
 /** 元数据只拉一次：块类型表 / 模板表 / 两个枚举，整个会话里不会变。 */
-const docState = { types: [], templates: [], kinds: [], scopes: [], editor: null, viewing: null };
+const docState = { types: [], templates: [], kinds: [], scopes: [], editor: null, viewing: null, stationId: 0 };
 
 /** Markdown 模式的两件外挂的生命周期手柄（防抖句柄 + AI 抽屉实例）。 */
 let mdPreviewTimer = null;
@@ -87,48 +87,20 @@ function docCardHtml(doc) {
 }
 
 /**
- * 「新建一篇」的面板。
+ * 「新建一篇」= **一次点击就落到 Markdown 编辑区**。
  *
- * 做成三步 + **模板卡片**（不是下拉框）：下拉框只能看到模板名，
- * 而大多数人第一次建积木帖时的问题恰恰是「不知道这些模板有什么区别」——
- * 模板自带一句 `description`，摊开来才算把话说完。
- * 选中的键写进 `name="template"` 的隐藏框，所以 `formValues()` 照旧读得到。
+ * 以前这里要先摊一个表单（标题 / 形态 / 范围），再摊一墙模板卡片 ——
+ * 结果是「一个字都还没写，先做三道选择题」。现在直接建一篇标题叫「未命名」的，
+ * 建完立刻跳进编辑器：标题在编辑页顶部改，可见范围也在那儿改，
+ * 想换形态、想写脚本、想套模板都在编辑页里切。
  */
-function newDocPanelHtml() {
-  const pick = (key, title, description, on) => `<button type="button" class="doc-tpl-pick${on ? ' is-on' : ''}"
-    data-doc-action="pick-template" data-template="${esc(key)}">
-    <b>${esc(title)}</b><span>${esc(description)}</span>
-  </button>`;
-  return `<form class="doc-new doc-wizard" data-doc-form="create" hidden>
-    <ol class="doc-steps">
-      <li><span class="doc-step-no">1</span>起个标题</li>
-      <li><span class="doc-step-no">2</span>挑一个起点</li>
-      <li><span class="doc-step-no">3</span>创建，进编辑器继续填</li>
-    </ol>
-    <label class="doc-field"><span class="doc-field-label">标题</span>
-      <input class="doc-input" name="title" maxlength="120" placeholder="给这篇起个名字">
-    </label>
-    <div class="doc-new-row">
-      <label class="doc-field"><span class="doc-field-label">形态</span>
-        <select class="doc-input doc-select" name="kind">${optionsHtml(docState.kinds, 'post')}</select>
-      </label>
-      <label class="doc-field"><span class="doc-field-label">谁可以看</span>
-        <select class="doc-input doc-select" name="scope">${scopeOptionsHtml('public')}</select>
-      </label>
-    </div>
-    <div class="doc-field"><span class="doc-field-label">起点</span>
-      <div class="doc-tpl-picks">
-        ${pick('', '空白（不用模板）', '给自己一个正文块，其余全手写。', true)}
-        ${docState.templates.map((item) => pick(item.key, item.title, item.description ?? '', false)).join('')}
-      </div>
-      <input type="hidden" name="template" value="">
-      <span class="doc-hint">模板只是「一段预先写好的块」，套上之后每一块都还能改、能删、能挪 —— 不是锁定格式。</span>
-    </div>
-    <div class="doc-actions">
-      <button class="btn btn-sm btn-primary" type="submit">创建并开始编辑</button>
-      <button class="btn btn-sm btn-ghost" type="button" data-doc-action="new-cancel">取消</button>
-    </div>
-  </form>`;
+async function newDocAndEdit() {
+  const created = await api('/api/docs', {
+    method: 'POST',
+    body: { title: '未命名', kind: 'post', scope: 'public', template: '' },
+  });
+  toast('建好了，开始写吧');
+  return navigate(`/doc/${created.doc.id}/edit`);
 }
 
 /** 积木广场：`#/docs?kind=&mine=1&q=`。 */
@@ -161,10 +133,10 @@ async function viewDocs(query = new URLSearchParams()) {
         <button class="btn btn-sm btn-primary" type="submit">筛选</button>
       </form>
       <div class="doc-actions">
-        ${state.me ? '<button class="btn btn-sm" type="button" data-doc-action="new">新建一篇</button>' : '<a class="btn btn-sm" href="#/login">登录后可以新建</a>'}
+        ${state.me ? '<button class="btn btn-sm" type="button" data-doc-action="new">＋ 新建一篇</button>' : '<a class="btn btn-sm" href="#/login">登录后可以新建</a>'}
+        <a class="btn btn-sm" href="#/wiki">⧉ Wiki 站</a>
         <a class="btn btn-sm btn-ghost" href="#/blocks">块类型表</a>
       </div>
-      ${state.me ? newDocPanelHtml() : ''}
     </div>
     ${
       documents.length
@@ -230,6 +202,10 @@ function leaveDocPage() {
   }
   mdNotesPanel = null;
   unmountSandboxes();
+  // wiki 站是三栏（左树 / 中正文 / 右目录），再叠上论坛自己的 306px 侧栏
+  //（每日签到、我的账户、热榜）正文就只剩三百来像素 —— 所以站页面挂 `body.doc-wide`
+  // 把侧栏让开（规则见 41-doc.css；换页时由 router 统一摘掉）。
+  document.body.classList.remove('doc-wide');
   ui.app.innerHTML = loadingHtml();
 }
 
@@ -238,16 +214,46 @@ function leaveDocPage() {
  * 块数据从**服务端返回的 `blocks`** 里取，不从 DOM 里反推 ——
  * props 是 `init` 消息要送的东西，DOM 里只剩一份转义过的 HTML。
  */
-function mountSandboxes(data) {
+function mountSandboxes(data, root = ui.app, onDerivedChange = scheduleDerivedReload) {
   const blocks = new Map((data.blocks ?? []).map((block) => [block.blockId, block]));
   const documentId = data.doc?.id;
-  const frames = typeof ui.app.querySelectorAll === 'function'
-    ? ui.app.querySelectorAll('iframe.doc-app-frame')
+  const frames = typeof root.querySelectorAll === 'function'
+    ? root.querySelectorAll('iframe.doc-app-frame')
     : [];
   for (const frame of frames) {
     const block = blocks.get(frame.dataset?.docBlock ?? '');
-    attachSandbox(frame, block, { documentId });
+    attachSandbox(frame, block, { documentId, onDerivedChange });
   }
+}
+
+/** 上一次渲染出来的正文 HTML 与文档 id（脚本产出后判断要不要重画）。 */
+let lastRenderedHtml = '';
+let lastRenderedId = null;
+let derivedReloadTimer = 0;
+
+/**
+ * 脚本往派生层写了东西（`blocks.derived` 的 put / delete）→ 重新拉一次这篇文档。
+ *
+ * 250ms 防抖：一个脚本循环里连写十块，只该重画一次。
+ * 重画之前必须 `unmountSandboxes()` —— 旧 iframe 会被 innerHTML 丢掉，
+ * 而它们的看门狗还挂在 registry 里（见 core/sandbox.js 的注释）。
+ */
+function scheduleDerivedReload() {
+  if (derivedReloadTimer) clearTimeout(derivedReloadTimer);
+  derivedReloadTimer = setTimeout(async () => {
+    derivedReloadTimer = 0;
+    const id = docState.viewing;
+    if (!id) return;
+    try {
+      const fresh = await api(`/api/docs/${id}`);
+      if (docState.viewing !== id) return;
+      if (lastRenderedId === id && String(fresh?.html ?? '') === lastRenderedHtml) return;
+      unmountSandboxes();
+      renderDoc(fresh);
+    } catch (error) {
+      console.warn('[doc] 脚本产出刷新失败：', error);
+    }
+  }, 250);
 }
 
 /**
@@ -324,6 +330,181 @@ function mountWikiNav() {
     if (nothing && nothing.hidden !== undefined) nothing.hidden = needle ? visible > 0 : true;
   });
 }
+
+/* ------------------------------------------------------------------ */
+/* Wiki 站（§6：一个帖子一个 wiki）                                    */
+/* ------------------------------------------------------------------ */
+
+/**
+ * 左栏：站名 + 站内搜索 + 页面树。
+ *
+ * 树是**服务端铺好的一根线**（`wiki.pages`，前序遍历 + `depth`），前端只画缩进 ——
+ * 谁是谁的子页是数据，不是样式，前端再算一遍就会有两份真相。
+ */
+function stationTreeHtml(wiki) {
+  const station = wiki?.station ?? {};
+  const pages = wiki?.pages ?? [];
+  const current = Number(wiki?.current) || 0;
+  const items = pages
+    .map((page) => {
+      const depth = Math.min(Math.max(Number(page.depth) || 0, 0), 6);
+      const icon = page.icon ? `<span class="doc-wiki-tree-icon">${esc(page.icon)}</span>` : '';
+      return `<a class="doc-wiki-nav-link doc-wiki-tree-link${page.id === current ? ' is-current' : ''}"`
+        + ` data-depth="${depth}" data-wiki-title="${esc(page.title)}" data-wiki-page="${page.id}"`
+        + ` href="#/wiki/${encodeURIComponent(station.title ?? '')}/${encodeURIComponent(page.title)}">${icon}${esc(page.title)}</a>`;
+    })
+    .join('');
+  const tools = [];
+  if (station.canEdit) {
+    tools.push(
+      `<input class="doc-input" type="text" data-wiki-new-name placeholder="新页面标题" aria-label="新页面标题">`,
+      `<button class="btn btn-sm" type="button" data-doc-action="wiki-new">＋ 新建页面</button>`,
+    );
+  }
+  return `<aside class="doc-wiki-nav doc-wiki-side">
+    <div class="doc-wiki-nav-head"><a href="#/wiki" class="doc-wiki-nav-back">⧉ Wiki 站</a><span class="hint">${pages.length} 页</span></div>
+    <div class="doc-wiki-station-name">${esc(station.title ?? '')}</div>
+    <input class="doc-input doc-wiki-search" type="search" data-wiki-search placeholder="站内搜索…" aria-label="站内搜索">
+    <div class="doc-wiki-tree" data-wiki-tree>${
+      items || '<div class="doc-wiki-nav-empty">这个站还没有页。</div>'
+    }</div>
+    <div class="doc-wiki-nav-hidden" data-wiki-nothing hidden>没有匹配的页面。</div>
+    ${tools.length ? `<div class="doc-wiki-nav-tools">${tools.join('')}</div>` : ''}
+  </aside>`;
+}
+
+/** 右栏：目录（标题块）。锚点用稳定块 id（`h-<blockId>`），服务端算好给的。 */
+function stationTocHtml(toc) {
+  const list = Array.isArray(toc) ? toc : [];
+  if (list.length === 0) return '';
+  const links = list
+    .map((item) => {
+      const level = Math.min(Math.max(Number(item.level) || 1, 1), 6);
+      return `<a class="doc-wiki-toc-link" data-toc-anchor="h-${esc(item.blockId)}" data-level="${level}" href="#">${esc(item.text)}</a>`;
+    })
+    .join('');
+  return `<aside class="doc-wiki-toc"><div class="doc-wiki-toc-head">本页目录</div>${links}</aside>`;
+}
+
+/** 底部「上一页 / 下一页」：树中线上的邻居，边界就整块不画。 */
+function stationPagerHtml(wiki) {
+  const prev = wiki?.prev;
+  const next = wiki?.next;
+  if (!prev && !next) return '';
+  const station = wiki?.station ?? {};
+  const link = (page, dir) => (page
+    ? `<a class="doc-wiki-pager-link ${dir === 'prev' ? 'doc-wiki-pager-prev' : 'doc-wiki-pager-next'}" href="#/wiki/${encodeURIComponent(station.title ?? '')}/${encodeURIComponent(page.title)}">
+        <span class="doc-wiki-pager-label">${dir === 'prev' ? '← 上一页' : '下一页 →'}</span>
+        <span class="doc-wiki-pager-title">${esc(page.icon ? `${page.icon} ` : '')}${esc(page.title)}</span>
+      </a>`
+    : '<span class="doc-wiki-pager-hole"></span>');
+  return `<nav class="doc-wiki-pager">${link(prev, 'prev')}${link(next, 'next')}</nav>`;
+}
+
+/** 三栏外壳：左树 / 中正文 / 右目录，正文底下接上一页下一页。 */
+function stationShellHtml(inner, wiki, toc) {
+  return `<div class="doc-wiki-layout doc-wiki-station">
+    ${stationTreeHtml(wiki)}
+    <div class="doc-wiki-main">${inner}${stationPagerHtml(wiki)}</div>
+    ${stationTocHtml(toc)}
+  </div>`;
+}
+
+/**
+ * 站里的交互：站内搜索、目录跳转、滚动高亮。
+ *
+ * 搜索**真的走服务端**（`/api/docs/wiki/station/:id/search`，标题 + 原文两个 LIKE）：
+ * 只在已经拿到的那棵树里过滤，翻不到正文里的字，那就不叫站内搜索。
+ */
+function mountStationTools(wiki) {
+  const stationId = Number(wiki?.station?.id) || 0;
+  docState.stationId = stationId;
+  const tree = $('[data-wiki-tree]');
+  const original = tree ? tree.innerHTML : '';
+  // 目录：点一下滚到那个标题。**不能**用 `href="#h-b3"` —— hash 是路由，
+  // 改 hash 会触发一次路由跳转（`#h-b3` 会被当成一个页面名）。
+  const tocLinks = typeof ui.app.querySelectorAll === 'function' ? ui.app.querySelectorAll('[data-toc-anchor]') : [];
+  for (const link of tocLinks) {
+    if (typeof link.addEventListener !== 'function') continue;
+    link.addEventListener('click', (event) => {
+      event.preventDefault();
+      const target = document.getElementById?.(link.dataset?.tocAnchor ?? '');
+      target?.scrollIntoView?.({ behavior: 'smooth', block: 'start' });
+    });
+  }
+  const search = $('[data-wiki-search]');
+  if (!search || typeof search.addEventListener !== 'function' || !tree) return;
+  let timer = null;
+  let alive = true;
+  search.addEventListener('input', () => {
+    const q = String(search.value ?? '').trim();
+    if (timer) clearTimeout(timer);
+    if (q === '') {
+      tree.innerHTML = original;
+      return;
+    }
+    timer = setTimeout(async () => {
+      try {
+        const found = await api(`/api/docs/wiki/station/${stationId}/search?q=${encodeURIComponent(q)}`);
+        if (!alive) return;
+        const results = found?.results ?? [];
+        tree.innerHTML = results.length
+          ? results
+            .map((item) => `<a class="doc-wiki-nav-link doc-wiki-search-hit" data-wiki-page="${item.id}" href="#/doc/${item.id}">
+                <span class="doc-wiki-search-title">${esc(item.title)}</span>
+                <span class="doc-wiki-search-excerpt">${esc(item.excerpt ?? '')}</span>
+              </a>`)
+            .join('')
+          : '<div class="doc-wiki-nav-empty">没有搜到。</div>';
+      } catch (error) {
+        console.warn('[doc] 站内搜索失败：', error);
+      }
+    }, 220);
+  });
+}
+
+/** `#/wiki`：所有看得见的站。 */
+async function viewWikiIndex() {
+  leaveDocPage();
+  await loadMeta();
+  docState.viewing = null;
+  docState.editor = null;
+  const data = await api('/api/docs/wiki/stations');
+  const stations = data?.stations ?? [];
+  const cards = stations
+    .map(
+      (station) => `<a class="card doc-station-card" href="#/wiki/${encodeURIComponent(station.title)}">
+        <div class="doc-station-title">⧉ ${esc(station.title)}</div>
+        <div class="doc-station-meta">${esc(station.username || '—')} · ${Number(station.pages) || 0} 页</div>
+      </a>`,
+    )
+    .join('');
+  ui.app.innerHTML = `<div class="card doc-panel">
+    <div class="card-head"><span class="card-title">⧉ Wiki 站</span><span class="hint">一个帖子一个 wiki</span></div>
+    <div class="doc-station-list">${cards || '<div class="doc-hint">还没有 wiki 站。</div>'}</div>
+    <div class="doc-station-new">
+      ${
+        state.me
+          ? `<input class="doc-wiki-search" data-wiki-station-name maxlength="80" placeholder="新站的名字，例如「算法笔记」">
+      <button class="btn" data-doc-action="wiki-new-station" type="button">＋ 新建一个 wiki</button>`
+          : '<a class="btn btn-sm" href="#/login">登录后可以建站</a>'
+      }
+    </div>
+    <div class="doc-hint">站里的页是独立文档，用 <code>[[双链]]</code> 互相链；站本身就是一个普通帖子。</div>
+  </div>`;
+}
+
+/** `#/wiki` 上那个「＋ 新建一个 wiki」：建完直接开站（站首页就是你说的那篇帖子）。 */
+async function newStationFromInput() {
+  const input = $('[data-wiki-station-name]');
+  const title = (input?.value ?? '').trim() || 'Wiki';
+  const created = await api('/api/docs/wiki/stations', { method: 'POST', body: { title, scope: 'public' } });
+  const row = created?.doc ?? {};
+  toast('站建好了，往里加页就行');
+  return navigate(`/wiki/${encodeURIComponent(row.title ?? title)}`);
+}
+
+
 
 /* ------------------------------------------------------------------ */
 /* 投票                                                                */
@@ -444,6 +625,10 @@ function renderDoc(data) {
   const author = doc.author ?? {};
   const abilities = data.abilities ?? {};
   const warnings = data.warnings ?? [];
+  // 脚本写完派生块之后要重画正文，靠这个指纹判断「真的改出东西了没有」——
+  // 没变就不重画，免得 iframe 里的脚本被反复重建（脚本重跑又会写一次）。
+  lastRenderedHtml = String(data.html ?? '');
+  lastRenderedId = doc.id ?? null;
   const article = `
     <article class="doc-page">
       <header class="card doc-header">
@@ -466,12 +651,19 @@ function renderDoc(data) {
       <div class="card doc-revisions" data-doc-revisions hidden></div>
     </article>`;
   // wiki 页多一条分类边栏。用后端给的 `nav` 判断，不在前端猜「这算不算 wiki」。
-  ui.app.innerHTML = data.nav
-    ? `<div class="doc-wiki-layout">${wikiNavHtml(data.nav, doc)}<div class="doc-wiki-main">${article}</div></div>`
-    : article;
+  if (data.wiki) {
+    // 站里的页：三栏（左树 / 中正文 / 右目录）。整站页面让开论坛侧栏换取宽度。
+    document.body.classList.add('doc-wide');
+    ui.app.innerHTML = stationShellHtml(article, data.wiki, data.toc);
+  } else if (data.nav) {
+    ui.app.innerHTML = `<div class="doc-wiki-layout">${wikiNavHtml(data.nav, doc)}<div class="doc-wiki-main">${article}</div></div>`;
+  } else {
+    ui.app.innerHTML = article;
+  }
   ensureDelegate();
   mountSandboxes(data);
-  if (data.nav) mountWikiNav();
+  if (data.wiki) mountStationTools(data.wiki);
+  else if (data.nav) mountWikiNav();
   loadPolls(doc.id).catch((error) => console.warn('[doc] 票数加载失败：', error));
   // 公式渲染必须在 innerHTML 之后 —— renderMathInElement 只处理**已经在 DOM 里**的节点
   // （论坛那边同样如此，见 views/timeline.js 的同名注释）。块里的 `$…$` 才不是一行源码。
@@ -501,8 +693,29 @@ async function viewDoc(id) {
 async function viewWiki(name, query = new URLSearchParams()) {
   leaveDocPage();
   await loadMeta();
-  const title = String(name ?? '').trim();
-  const found = await api(`/api/docs/wiki/${encodeURIComponent(title)}`);
+  const raw = String(name ?? '').trim();
+  // 1) 整串是不是一个**站**的名字？是就开站（`#/wiki/<站>`）。站先判 —— 站名和页名
+  //    撞车时以站为准，因为「站」才是这个 wiki 的入口。
+  const asStation = await api(`/api/docs/wiki/station?title=${encodeURIComponent(raw)}`);
+  if (asStation?.found) {
+    if (asStation.doc) return renderDoc(asStation.doc);
+    return renderMissingWikiPage(raw, asStation);
+  }
+  // 2) `#/wiki/<站>/<页>`：按**第一个** `/` 切一刀再试。只切一刀是因为页名里
+  //    本来就可能有 `/`（`[[某某/某某]]`），切多了就会去开一个不存在的页。
+  const slash = raw.indexOf('/');
+  if (slash > 0) {
+    const stationTitle = raw.slice(0, slash).trim();
+    const pageTitle = raw.slice(slash + 1).trim();
+    const hit = await api(`/api/docs/wiki/station?title=${encodeURIComponent(stationTitle)}&page=${encodeURIComponent(pageTitle)}`);
+    if (hit?.found) {
+      if (hit.doc) return renderDoc(hit.doc);
+      return renderMissingWikiPage(pageTitle, hit);
+    }
+  }
+  // 3) 老语义：按页名找（`[[双链]]` 的落点）。页已经被收编进站的话，它的
+  //    `present()` 里自带 `wiki`，到这儿照样是三栏。
+  const found = await api(`/api/docs/wiki/${encodeURIComponent(raw)}`);
   if (found?.found && found.doc) {
     docState.viewing = found.doc.id;
     docState.editor = null;
@@ -511,24 +724,37 @@ async function viewWiki(name, query = new URLSearchParams()) {
   }
   docState.viewing = null;
   docState.editor = null;
-  // 页面不存在时边栏照给：wiki 的意义就是「从目录里换个地方继续看」，
-  // 停在一页空白上就没法走了（`found:false` 的响应里也带 `nav`）。
-  ui.app.innerHTML = `<div class="doc-wiki-layout">${wikiNavHtml(found?.nav, null)}<div class="doc-wiki-main">
-    <div class="card doc-panel">
+  renderMissingWikiPage(raw, null, found?.nav);
+  if (query.get('create') === '1' && state.me) {
+    // 从双链点进来的「建这一页」就一步到位：直接落进编辑器，不用再点一次。
+    await openWikiPage(raw);
+  }
+}
+
+/**
+ * 「这一页还不存在」。
+ *
+ * 站里有这棵树就照给（wiki 的意义就是「从目录里换个地方继续看」，停在一页空白上就没法走了）；
+ * 没有站信息（老的双链落点）就退回老的分类边栏 `nav`。
+ */
+function renderMissingWikiPage(title, station = null, nav = null) {
+  const body = `<div class="card doc-panel">
       <div class="card-head"><span class="card-title">⧉ ${esc(title || '（空标题）')}</span><span class="hint">Wiki 页面</span></div>
       <div class="doc-hint">这一页还不存在。${state.me ? `建好之后它就是一页空白的 wiki，别的页面用 [[${esc(title)}]] 就能链过来。` : '登录之后可以把它建出来。'}</div>
       <div class="doc-actions">
         ${state.me ? `<button class="btn btn-sm btn-primary" type="button" data-doc-action="wiki-open" data-wiki-name="${esc(title)}">建这一页</button>` : '<a class="btn btn-sm" href="#/login">去登录</a>'}
         <a class="btn btn-sm" href="#/docs">回积木帖</a>
       </div>
-    </div>
-  </div></div>`;
-  ensureDelegate();
-  mountWikiNav();
-  if (query.get('create') === '1' && state.me) {
-    // 从双链点进来的「建这一页」就一步到位：直接落进编辑器，不用再点一次。
-    await openWikiPage(title);
+    </div>`;
+  if (station) {
+    document.body.classList.add('doc-wide');
+    ui.app.innerHTML = stationShellHtml(body, { ...station, current: 0, prev: null, next: null }, []);
+  } else {
+    ui.app.innerHTML = `<div class="doc-wiki-layout">${wikiNavHtml(nav, null)}<div class="doc-wiki-main">${body}</div></div>`;
   }
+  ensureDelegate();
+  if (station) mountStationTools(station);
+  else mountWikiNav();
 }
 
 /** 建（或打开）一页 wiki 然后进编辑器 —— 已经有了就只是打开。 */
@@ -536,6 +762,13 @@ async function openWikiPage(name) {
   const title = String(name ?? '').trim();
   if (!title) return;
   const page = await api(`/api/docs/wiki/${encodeURIComponent(title)}`, { method: 'POST', body: { scope: 'public' } });
+  toast(page.created ? '这一页建好了，开始写吧' : '这一页已经有了，直接打开');
+  return navigate(`/doc/${page.doc.id}/edit`);
+}
+
+/** 在指定站里建页（`＋ 新建页面` 走这条）—— 建完自动挂在站的目录上，然后进编辑器。 */
+async function createStationPageIn(stationId, title) {
+  const page = await api(`/api/docs/wiki/station/${stationId}/pages`, { method: 'POST', body: { title } });
   toast(page.created ? '这一页建好了，开始写吧' : '这一页已经有了，直接打开');
   return navigate(`/doc/${page.doc.id}/edit`);
 }
@@ -600,14 +833,214 @@ function blocksEditorHtml(blocks) {
     </div>`;
 }
 
-function markdownEditorHtml(markdown) {
+/**
+ * 源码模式 —— 这一轮的主编辑面（§5.1）。
+ *
+ * 一整篇就是一段文本：正文是 Markdown，积木是 ` ```doc:类型 ` 的围栏，
+ * 脚本块是 ` ```doc:script ` 后面直接跟 JS 原文。右边是**真的渲染**：
+ * 走 `POST /api/docs/:id/preview`，解析 + `renderBlocks`，不落库，
+ * 所以 `app` / `script` 块的 iframe 在里面真的会跑起来。
+ *
+ * 为什么不做 CodeMirror：仓库的规矩是「零依赖、无构建」，而沙箱化的环境里
+ * 没有网络、拉不到 vendor。一个 `textarea` + 服务端预览已经能写脚本、能看结果。
+ */
+function sourceEditorHtml(source) {
+  // `name="content"` 与 Markdown 模式同款：AI 抽屉的 textarea 适配器按它找人。
+  return `<div class="card doc-panel">
+    <div class="card-head">
+      <span class="card-title">⚡ 源码模式</span>
+      <span class="hint">整篇就是这段文本；右边实时预览，脚本会真的跑起来</span>
+    </div>
+    <div class="doc-md-grid">
+      <div class="doc-md-edit" data-doc-editor-host>
+        <textarea class="doc-input doc-textarea doc-md" name="content" data-doc-source rows="26" spellcheck="false">${esc(source ?? '')}</textarea>
+      </div>
+      <div class="doc-md-side">
+        <div class="doc-md-preview" data-doc-preview><div class="md"><div class="hint">右边跟着打字实时更新。</div></div></div>
+        <div id="docNotesMount" class="notes-mount"></div>
+      </div>
+    </div>
+    <div class="doc-actions">
+      <button class="btn btn-sm btn-primary" type="button" data-doc-action="src-save">保存源码</button>
+      <button class="btn btn-sm btn-ghost" type="button" data-doc-action="src-reload">重新拉取</button>
+      <span class="doc-hint" data-doc-src-status></span>
+    </div>
+    <div class="doc-hint">
+      正文直接写 Markdown（标题 / 段落 / 列表 / 表格 / 代码围栏 / $$公式$$ / 图片 / [[双链]]）；
+      积木写成一段 \`\`\`doc:poll 这样的围栏，块体是它的属性 JSON；
+      \`\`\`doc:script 的块体是**原始 JS**（不是 JSON）。
+      块 id（\`{#b3}\`）是票、脚本产出、块间联动认的锚，保存时会自动带上，不用手写。
+    </div>
+  </div>`;
+}
+
+/** 源码模式的挂载：Tab 缩进 + 实时预览 + AI 抽屉（与 Markdown 模式共用同一份面板）。 */
+function mountSourceTools() {
+  const editor = docState.editor;
+  const textarea = $('[data-doc-source]');
+  if (!editor || !textarea) return;
+  const box = $('[data-doc-preview] .md');
+  const status = $('[data-doc-src-status]');
+
+  const paint = () => {
+    if (paint.timer) clearTimeout(paint.timer);
+    paint.timer = setTimeout(async () => {
+      paint.timer = 0;
+      const text = textarea.value ?? '';
+      if (!box) return;
+      if (text.trim() === '') {
+        box.innerHTML = '<div class="hint">右边跟着打字实时更新。</div>';
+        return;
+      }
+      try {
+        const data = await api(`/api/docs/${editor.id}/preview`, {
+          method: 'POST',
+          body: { markdown: text },
+        });
+        // 旧 iframe 会被 innerHTML 丢掉，但它们的看门狗还挂在 registry 里 —— 先清。
+        unmountSandboxes();
+        box.innerHTML = data.html || '<div class="hint">（这段源码没有渲染出内容）</div>';
+        ntRenderMath(box);
+        // 预览里的沙箱**不接** onDerivedChange：脚本写派生层时重画 ui.app 会把编辑器整个冲掉。
+        mountSandboxes({ blocks: data.blocks, doc: { id: data.documentId } }, box, null);
+        if (status) {
+          status.textContent = (data.warnings ?? []).map((item) => item.message).join('；');
+        }
+      } catch (error) {
+        if (status) status.textContent = `预览失败：${error.message}`;
+      }
+    }, 400);
+  };
+
+  textarea.addEventListener('input', paint);
+  // Tab 键插两个空格 —— 源码里要写脚本，没有缩进等于没法写。
+  textarea.addEventListener('keydown', (event) => {
+    if (event.key !== 'Tab') return;
+    event.preventDefault();
+    const start = textarea.selectionStart ?? 0;
+    const end = textarea.selectionEnd ?? 0;
+    if (typeof textarea.setRangeText === 'function') textarea.setRangeText('  ', start, end, 'end');
+    else textarea.value = `${textarea.value.slice(0, start)}  ${textarea.value.slice(end)}`;
+    paint();
+  });
+
+  paint();
+  mountNotesPanel(document.getElementById('docNotesMount'), $('[data-doc-editor-host]'), status);
+}
+
+/**
+ * 把「这段文本就是这篇的正文」交给服务端。
+ *
+ * 两个文本视图（纯 Markdown / 源码）共用同一条路：服务端解析、按 id 对齐、写回
+ * `source_text`，再把对齐之后的 `source` 与 `blocks` 还回来 —— 客户端**绝不**自己推定
+ * 「存完应该长什么样」，对齐是服务端才做得了的事（LCS + id 归属）。
+ */
+async function putDraft(text, force = false) {
+  const editor = docState.editor;
+  const data = await api(`/api/docs/${editor.id}/markdown${force ? '?confirm=1' : ''}`, {
+    method: 'PUT',
+    body: { markdown: text },
+  });
+  editor.data = data;
+  return data;
+}
+
+/**
+ * 跑一次「写正文」的动作，撞上服务端那道「块数暴跌」的 409 就问一次、再带 `?confirm=1` 重来。
+ * 返回 `null` 表示作者点了取消 —— 调用方必须原地不动，不能把界面切走。
+ */
+async function withShrinkConfirm(task) {
+  try {
+    return await task(false);
+  } catch (error) {
+    if (Number(error?.status) !== 409) throw error;
+    if (!window.confirm(`${error.message}（点确定就照这样存）`)) return null;
+    return task(true);
+  }
+}
+
+/** 当前视图里那段没保存的文本，连同它的「脏基线」；积木视图没有文本框，回 null。 */
+function currentDraft() {
+  const editor = docState.editor;
+  if (!editor) return null;
+  const el = editor.mode === 'source' ? $('[data-doc-source]') : editor.mode === 'markdown' ? $('[data-doc-markdown]') : null;
+  if (!el) return null;
+  const baseline = editor.mode === 'source' ? (editor.data?.source ?? '') : (editor.markdown ?? '');
+  return { el, text: el.value ?? '', baseline };
+}
+
+/**
+ * 切视图之前把改动存下去。
+ *
+ * 为什么切视图一定要存：三个视图是**同一篇帖子的三种看法**，而块与 id 的真相在服务端
+ * （Markdown 视图里根本没有 id，源码视图里有）。「在 Markdown 里写一半就切过去拼积木」
+ * 只有两条路 —— 让服务端把这段文本解析成块，或者在客户端再养一份解析器。后者是第二份
+ * 真相，迟早对不上；所以选前者。
+ *
+ * 存的时机只在**真的改了**（`text !== baseline`）才算数：来回点页签不该平白多出修订。
+ */
+async function flushDraft() {
+  const draft = currentDraft();
+  if (!draft || draft.text === draft.baseline) return true;
+  const data = await withShrinkConfirm((force) => putDraft(draft.text, force));
+  if (!data) return false;
+  if (docState.editor.mode === 'markdown') docState.editor.markdown = draft.text;
+  toast('切换前先把改动存下了');
+  return true;
+}
+
+/**
+ * 保存源码。
+ *
+ * 服务端那两道防手滑（§3.5）都要能走完：源码解析不出块 → 400（直接把话甩给作者）；
+ * 块数暴跌 → 409，**问一次**再带 `?confirm=1` 重发，不循环。
+ */
+async function saveSource() {
+  const draft = currentDraft();
+  if (!draft) return;
+  const data = await withShrinkConfirm((force) => putDraft(draft.text, force));
+  if (!data) return;
+  toast('源码存好了');
+  // 重画而不是就地改：响应的 `source` 是服务端对齐 id 之后的结果，
+  // 用它重置 textarea 才是「脏基线归零」，手写一份本地推定迟早对不上。
+  renderEditor();
+}
+
+/** 重新拉一次源码（放弃本地改动）。 */
+async function reloadSource() {
+  const editor = docState.editor;
+  const data = await api(`/api/docs/${editor.id}`);
+  absorb(data);
+  toast('拿回服务端的版本了');
+}
+
+/**
+ * 纯 Markdown 视图能**如实**表达的块：正文类的这些。
+ *
+ * 判据只认块类型，不认「Markdown 里能不能打出来」—— 因为出问题的不是打字，
+ * 是**看见的和你改的不是一回事**：`poll` / `app` / `script` / 自定义块在纯 Markdown 里
+ * 只能退化成一坨围栏 JSON（` ```doc:poll `），作者在其中改错一个字符就毁了整块。
+ */
+const MARKDOWN_VIEW_TYPES = new Set(['heading', 'paragraph', 'list', 'quote', 'code', 'table', 'formula', 'image', 'wiki']);
+
+/** 这篇能不能用纯 Markdown 编辑？不能就回一句「为什么」（能就回空串）。 */
+function markdownViewBlocked(blocks) {
+  const exotic = (blocks ?? []).filter((block) => !MARKDOWN_VIEW_TYPES.has(String(block?.type ?? '')));
+  if (exotic.length === 0) return '';
+  const names = [...new Set(exotic.map((block) => String(block.type)))].join(' / ');
+  return `这篇里有 Markdown 表达不了的积木（${names}），所以这一页只读 —— 点上面的「⚡ 源码模式」改。`;
+}
+
+function markdownEditorHtml(markdown, blocked = '') {
   // `name="content"` 不是装饰：`NotesAgent.createTextareaAdapter()` 就是按 `#content`
   // 或 `[name="content"]` 找编辑区的，改了它 AI 抽屉就挂不上去。
+  const ro = blocked ? ' readonly' : '';
   return `<div class="card doc-panel">
-    <div class="card-head"><span class="card-title">📝 Markdown 模式</span><span class="hint">右边跟着打字实时更新；保存会把整篇的块换成这份 Markdown 解析出来的块</span></div>
+    <div class="card-head"><span class="card-title">📝 纯 Markdown</span><span class="hint">右边跟着打字实时更新；保存会把整篇的块换成这份 Markdown 解析出来的块</span></div>
+    ${blocked ? `<div class="doc-hint doc-md-blocked">⚠ ${esc(blocked)}</div>` : ''}
     <div class="doc-md-grid">
-      <div class="doc-md-edit" id="docMdHost">
-        <textarea class="doc-input doc-textarea doc-md" name="content" data-doc-markdown rows="18" spellcheck="false">${esc(markdown ?? '')}</textarea>
+      <div class="doc-md-edit" id="docMdHost" data-doc-editor-host>
+        <textarea class="doc-input doc-textarea doc-md" name="content" data-doc-markdown rows="18" spellcheck="false"${ro}>${esc(markdown ?? '')}</textarea>
       </div>
       <div class="doc-md-side">
         <div class="doc-md-preview" data-doc-preview><div class="md"><span class="hint">开始打字就有预览。</span></div></div>
@@ -615,11 +1048,11 @@ function markdownEditorHtml(markdown) {
       </div>
     </div>
     <div class="doc-actions">
-      <button class="btn btn-sm btn-primary" type="button" data-doc-action="md-save">保存 Markdown</button>
+      <button class="btn btn-sm btn-primary" type="button" data-doc-action="md-save"${blocked ? ' disabled' : ''}>保存 Markdown</button>
       <button class="btn btn-sm btn-ghost" type="button" data-doc-action="md-reload">重新拉取</button>
       <span class="doc-hint" data-doc-md-status></span>
     </div>
-    <div class="doc-hint">支持标题 / 段落 / 列表 / 代码围栏 / 表格 / $$公式$$ / 图片 / 引用 / [[双链]]，以及 \`\`\`doc:poll 这种结构化块（由结构化块自己写的会原样回来）。</div>
+    <div class="doc-hint">支持标题 / 段落 / 列表 / 代码围栏 / 表格 / $$公式$$ / 图片 / 引用 / [[双链]]；结构化块（\`\`\`doc:poll 这种）在这里只读，请去源码模式改。</div>
   </div>`;
 }
 
@@ -633,7 +1066,7 @@ function markdownEditorHtml(markdown) {
  *
  * 两个都**只做锦上添花**：拿不到就把原因写在状态里，绝不让编辑器本身挂掉。
  */
-function mountMarkdownTools() {
+function mountMarkdownTools(blocked = '') {
   const textarea = $('[data-doc-markdown]');
   const box = $('[data-doc-preview] .md');
   const status = $('[data-doc-md-status]');
@@ -669,29 +1102,65 @@ function mountMarkdownTools() {
 
   const mount = document.getElementById('docNotesMount');
   const host = document.getElementById('docMdHost');
+  // 只读的 Markdown 页**不挂 AI 抽屉**：适配器的 `setDoc` 直接写 `textarea.value`，
+  // readonly 拦不住它 —— 挂上去就等于留了一条绕过「这一页改不了」的后门。
+  if (blocked) {
+    if (status) status.textContent = '这一页只读，AI 抽屉在源码模式里可用';
+    return;
+  }
+  mountNotesPanel(mount, host, status);
+}
+
+/**
+ * AI 抽屉（`/notes-panel.js` 的 `window.NotesAgent.attach`，与 compose 同一份）。
+ *
+ * 适配器就是契约里的 `createTextareaAdapter`：它按 `[name="content"]` 找编辑区，
+ * 所以源码模式那个 textarea 特意也叫 `content` —— 编辑器换了形态，契约不用换。
+ * 挂不上（脚本没加载、假 DOM）就只写一句状态：**绝不让编辑器本身挂掉**。
+ */
+function mountNotesPanel(mount, host, status) {
   const agent = typeof window === 'undefined' ? null : window.NotesAgent;
   if (!mount || !agent || typeof agent.attach !== 'function' || typeof agent.createTextareaAdapter !== 'function') {
     if (status) status.textContent = mount ? 'AI 抽屉没加载（/notes-panel.js 不在）' : '';
-    return;
+    return null;
   }
   try {
     mdNotesPanel = agent.attach({ mount, editor: agent.createTextareaAdapter(host) });
+    return mdNotesPanel;
   } catch (error) {
     console.warn('[notes-agent] 积木编辑器挂载失败：', error);
     mdNotesPanel = null;
-    if (status) status.textContent = 'AI 抽屉挂载失败，Markdown 编辑照常能用';
+    if (status) status.textContent = 'AI 抽屉挂载失败，编辑照常能用';
+    return null;
   }
 }
 
-function toolboxHtml(doc) {
-  return `<div class="card doc-panel">
-    <div class="card-head"><span class="card-title">🧰 工具箱</span></div>
+/**
+ * 模板栏 —— **只在积木模式里出现**。
+ *
+ * 放在这里是因为套模板的实质是「换一整套块」，只有正对着块列表时这个决定才有意义；
+ * 「新建一篇」那条路上已经没有任何模板入口了（见 `newDocAndEdit`）。
+ */
+function templatePanelHtml() {
+  return `<div class="card doc-panel doc-tpl-bar">
+    <div class="card-head">
+      <span class="card-title">🧩 模板</span>
+      <span class="hint">套用会把整篇现有的块换成模板的块（旧的留在修订记录里，随时能滚回来）</span>
+    </div>
     <div class="doc-actions">
       <select class="doc-input doc-select" data-doc-template>
         <option value="">选一个模板…</option>
         ${docState.templates.map((item) => `<option value="${esc(item.key)}">${esc(item.title)}</option>`).join('')}
       </select>
       <button class="btn btn-sm" type="button" data-doc-action="apply-template">套用模板（替换全部块）</button>
+    </div>
+  </div>`;
+}
+
+function toolboxHtml(doc) {
+  return `<div class="card doc-panel">
+    <div class="card-head"><span class="card-title">🧰 工具箱</span></div>
+    <div class="doc-actions">
       <button class="btn btn-sm" type="button" data-doc-action="revisions">修订记录</button>
       <button class="btn btn-sm" type="button" data-doc-action="export">导出 JSON</button>
       <button class="btn btn-sm" type="button" data-doc-action="import-toggle">导入 JSON</button>
@@ -712,6 +1181,7 @@ function renderEditor() {
   const editor = docState.editor;
   const doc = editor.data.doc ?? {};
   const blocks = editor.data.blocks ?? [];
+  const mdBlocked = markdownViewBlocked(blocks);
   ui.app.innerHTML = `
     <div class="card doc-panel">
       <div class="card-head">
@@ -730,15 +1200,23 @@ function renderEditor() {
         <button class="btn btn-sm btn-primary" type="button" data-doc-action="save-meta">保存标题与范围</button>
       </div>
       <div class="doc-tabs">
+        <button class="doc-tab${editor.mode === 'markdown' ? ' doc-tab-on' : ''}" type="button" data-doc-tab="markdown">📝 纯 Markdown${mdBlocked ? ' ⚠' : ''}</button>
+        <button class="doc-tab${editor.mode === 'source' ? ' doc-tab-on' : ''}" type="button" data-doc-tab="source">⚡ 源码模式</button>
         <button class="doc-tab${editor.mode === 'blocks' ? ' doc-tab-on' : ''}" type="button" data-doc-tab="blocks">🧱 积木模式</button>
-        <button class="doc-tab${editor.mode === 'markdown' ? ' doc-tab-on' : ''}" type="button" data-doc-tab="markdown">📝 Markdown 模式</button>
       </div>
     </div>
-    ${editor.mode === 'markdown' ? markdownEditorHtml(editor.markdown) : blocksEditorHtml(blocks)}
+    ${
+      editor.mode === 'source'
+        ? sourceEditorHtml(editor.data.source ?? '')
+        : editor.mode === 'markdown'
+          ? markdownEditorHtml(editor.markdown, mdBlocked)
+          : `${blocksEditorHtml(blocks)}${templatePanelHtml()}`
+    }
     ${toolboxHtml(doc)}
     <div class="card doc-revisions" data-doc-revisions hidden></div>`;
   ensureDelegate();
-  if (editor.mode === 'markdown') mountMarkdownTools();
+  if (editor.mode === 'markdown') mountMarkdownTools(mdBlocked);
+  if (editor.mode === 'source') mountSourceTools();
 }
 
 /** 保存一次之后统一用后端的新形状重画 —— 永不本地推定服务端状态。 */
@@ -833,10 +1311,15 @@ async function loadMarkdown() {
 }
 
 async function saveMarkdown() {
-  const editor = docState.editor;
-  const markdown = $('[data-doc-markdown]')?.value ?? '';
-  absorb(await api(`/api/docs/${editor.id}/markdown`, { method: 'PUT', body: { markdown } }));
+  const draft = currentDraft();
+  if (!draft) return;
+  const data = await withShrinkConfirm((force) => putDraft(draft.text, force));
+  if (!data) return;
   toast('整篇按 Markdown 重写了');
+  // **存完必须重新拉一次**：Markdown 视图画的 `editor.markdown` 是上次拉的文本，
+  // 不重拉就等于把作者刚敲的东西从编辑区里抹掉（空文档上尤其明显：直接变空白）。
+  // 顺便也把脏基线对齐到服务端真存下来的那份（它是有损的：表格分隔行、嵌套列表都会被改写）。
+  await loadMarkdown();
 }
 
 async function showRevisions() {
@@ -891,7 +1374,14 @@ async function viewDocEdit(id, query = new URLSearchParams()) {
     toast('只有作者和站务能编辑这篇文档', 'error');
     return navigate(`/doc/${id}`);
   }
-  docState.editor = { id, data, mode: query.get('mode') === 'markdown' ? 'markdown' : 'blocks', markdown: '' };
+  // 默认进**纯 Markdown**：这一轮的主编辑面是「先写字」，积木与脚本是后面才切过去的事。
+  const wanted = query.get('mode') ?? 'markdown';
+  docState.editor = {
+    id,
+    data,
+    mode: wanted === 'source' || wanted === 'blocks' ? wanted : 'markdown',
+    markdown: '',
+  };
   if (docState.editor.mode === 'markdown') return loadMarkdown();
   renderEditor();
 }
@@ -1083,26 +1573,7 @@ async function onAppClick(event) {
   const currentId = docState.editor ? docState.editor.id : docState.viewing;
   const withBusy = (task) => withButtonBusy(node, task).catch((error) => toastError(error));
 
-  if (action === 'new') {
-    const panel = $('[data-doc-form="create"]');
-    if (panel) panel.hidden = false;
-    return;
-  }
-  if (action === 'pick-template') {
-    // 模板卡片只做两件事：点亮自己、把键写进隐藏框 —— 真正的「套模板」在提交时做。
-    const key = node.dataset.template ?? '';
-    const form = typeof node.closest === 'function' ? node.closest('[data-doc-form="create"]') : null;
-    const picks = typeof form?.querySelectorAll === 'function' ? form.querySelectorAll('[data-doc-action="pick-template"]') : [];
-    for (const item of picks) item.classList?.toggle('is-on', item === node);
-    const field = form?.querySelector?.('[name="template"]');
-    if (field) field.value = key;
-    return;
-  }
-  if (action === 'new-cancel') {
-    const panel = $('[data-doc-form="create"]');
-    if (panel) panel.hidden = true;
-    return;
-  }
+  if (action === 'new') return withBusy(newDocAndEdit);
   if (action === 'import-toggle') {
     const panel = $('[data-doc-form="import"]');
     if (panel) panel.hidden = !panel.hidden;
@@ -1111,13 +1582,16 @@ async function onAppClick(event) {
   if (action === 'block-save') return withBusy(() => saveBlock(blockId));
   if (action === 'source-save') return withBusy(() => saveBlockSource(blockId));
   if (action === 'wiki-open') return withBusy(() => openWikiPage(node.dataset.wikiName));
+  if (action === 'wiki-new-station') return withBusy(newStationFromInput);
   if (action === 'wiki-new') {
     const name = String($('[data-wiki-new-name]')?.value ?? '').trim();
     if (!name) {
       toast('先写一个页面标题', 'error');
       return;
     }
-    return withBusy(() => openWikiPage(name));
+    // 站在三栏页面上时，新页要挂到**这个**站上；老的双链落点没有站，才退回默认站。
+    const stationId = Number(docState.stationId) || 0;
+    return withBusy(() => (stationId ? createStationPageIn(stationId, name) : openWikiPage(name)));
   }
   if (action === 'wiki-cat') {
     const id = docState.viewing;
@@ -1143,6 +1617,8 @@ async function onAppClick(event) {
   if (action === 'save-meta') return withBusy(saveMeta);
   if (action === 'md-save') return withBusy(saveMarkdown);
   if (action === 'md-reload') return withBusy(loadMarkdown);
+  if (action === 'src-save') return withBusy(saveSource);
+  if (action === 'src-reload') return withBusy(reloadSource);
   if (action === 'apply-template') {
     const key = $('[data-doc-template]')?.value ?? '';
     if (!key) {
@@ -1175,14 +1651,6 @@ async function onAppSubmit(event) {
         if (values.kind) params.set('kind', values.kind);
         if (values.mine) params.set('mine', '1');
         return navigate(`/docs${params.toString() ? `?${params}` : ''}`);
-      }
-      if (form.dataset.docForm === 'create') {
-        const created = await api('/api/docs', {
-          method: 'POST',
-          body: { title: values.title, kind: values.kind, scope: values.scope, template: values.template },
-        });
-        toast('建好了，开始写吧');
-        return navigate(`/doc/${created.doc.id}/edit`);
       }
       if (form.dataset.docForm === 'import') {
         let payload;
@@ -1226,21 +1694,46 @@ async function onAppSubmit(event) {
   });
 }
 
-/** 编辑器里的两个模式页签（切到 Markdown 时才真的去拉正文）。 */
-function onTabClick(mode) {
-  if (!docState.editor || docState.editor.mode === mode) return;
-  docState.editor.mode = mode;
-  if (mode === 'markdown') {
-    loadMarkdown().catch((error) => toastError(error));
-    return;
+/**
+ * 重新拉一次这篇的完整形状（`doc` + `blocks` + `source` + `settings`）。
+ *
+ * 为什么需要：积木视图的每一次改动走的是块接口（`PUT/POST /api/docs/:id/blocks…`），
+ * 它们**只回 block(s)**，不回 `source` —— 于是 `editor.data.source` 会停在旧文本上。
+ * 切到源码视图前不重取，作者看到的就是上一版源码。
+ */
+async function refreshEditorData() {
+  const editor = docState.editor;
+  editor.data = await api(`/api/docs/${editor.id}`);
+  return editor.data;
+}
+
+/**
+ * 编辑器里的三个视图页签。
+ *
+ * 切之前先 `flushDraft()`：这样「Markdown 里写一半 → 切过去拼积木 → 再切回来」
+ * 一路都不会丢东西，而且积木/源码视图看到的是**服务端解析出来**的那份。
+ * 作者在「块数暴跌」的确认框上点了取消，就原地不动 —— 半途切走会让他以为改动没了。
+ */
+async function onTabClick(mode) {
+  const editor = docState.editor;
+  if (!editor || editor.mode === mode) return;
+  try {
+    if (!(await flushDraft())) return;
+    editor.mode = mode;
+    if (mode === 'markdown') return await loadMarkdown();
+    // 积木视图里可能刚改过块（那些接口不回 source），切过去之前把整篇重取一遍。
+    await refreshEditorData();
+    renderEditor();
+  } catch (error) {
+    toastError(error);
   }
-  renderEditor();
 }
 
 // ── 导出 ──────────────────────────────────────────────────────────────
 export { viewDocs };
 export { viewDoc };
 export { viewWiki };
+export { viewWikiIndex };
 export { viewDocEdit };
 export { viewBlocks };
 

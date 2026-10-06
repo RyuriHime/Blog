@@ -97,6 +97,42 @@
   overflow: auto;
 }
 
+/*
+ * 脚本产出的派生块（`block.derived` → `types.js` 的 `shell()` 加的那个类）。
+ *
+ * 它的语义是「这不是正文，是脚本此刻画出来的东西」：所以给它一条虚线边、
+ * 一个左上角的小标，并且**不可点选拖拽**（它不是 document_blocks 里的一行）。
+ * 作者在编辑器里点「采纳」之后，它才变成真块、褪掉这层皮。
+ */
+.doc-block.doc-derived {
+  position: relative;
+  border-left: 3px dashed var(--accent);
+  padding-left: 10px;
+}
+
+.doc-block.doc-derived::before {
+  content: '脚本产出';
+  position: absolute;
+  top: -10px;
+  left: 8px;
+  font-size: 11px;
+  line-height: 1;
+  padding: 2px 6px;
+  border-radius: 999px;
+  border: 1px solid var(--accent);
+  color: var(--accent);
+  background: var(--panel);
+}
+
+/* 纯 Markdown 视图改不了这篇时的横幅（原因由 doc.js 的 markdownViewBlocked() 拼）。 */
+.doc-md-blocked {
+  margin: 0 0 10px;
+  padding: 8px 10px;
+  border-radius: var(--radius);
+  border: 1px solid var(--accent);
+  color: var(--accent);
+}
+
 /* 块间联动：这一块的值从哪一块的哪个字段来（`bind`，跨块约定，见设计 §3.3③）。 */
 .doc-bind {
   display: flex;
@@ -685,8 +721,8 @@
   position: sticky;
   top: 12px;
   display: grid;
-  gap: 10px;
-  padding: 12px;
+  gap: 8px;
+  padding: 10px;
   border: 1px solid var(--border);
   border-radius: var(--radius);
   background: var(--bg-soft);
@@ -763,6 +799,259 @@
 
 .doc-wiki-nav-tools .doc-input {
   font-size: 13px;
+}
+
+/* ── Wiki 站（一个帖子一个 wiki）：左树 / 中正文 / 右目录 ───────────────── */
+
+/*
+ * 站页面把论坛侧栏让开：三栏（左树 + 正文 + 右目录）本身就要宽度，
+ * 再和 306px 的侧栏平分 1180px，正文只剩三百来像素、两侧全是白。
+ * 所以整站页面挂 `body.doc-wide`：侧栏收掉、`.layout` 放宽。
+ */
+body.doc-wide .layout {
+  max-width: 1560px;
+  grid-template-columns: minmax(0, 1fr);
+}
+
+body.doc-wide .sidebar {
+  display: none;
+}
+
+.doc-wiki-station {
+  grid-template-columns: 208px minmax(0, 1fr) 176px;
+  gap: 14px;
+}
+
+.doc-wiki-side {
+  align-content: start;
+}
+
+.doc-wiki-nav-back {
+  color: inherit;
+  text-decoration: none;
+  font-weight: 600;
+}
+
+.doc-wiki-nav-back:hover {
+  color: var(--accent);
+}
+
+.doc-wiki-station-name {
+  font-weight: 600;
+  font-size: 15px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.doc-wiki-search {
+  font-size: 13px;
+}
+
+.doc-wiki-tree {
+  display: grid;
+  gap: 1px;
+}
+
+.doc-wiki-tree[hidden],
+.doc-wiki-tree-link[hidden] {
+  display: none;
+}
+
+.doc-wiki-tree-icon {
+  margin-right: 4px;
+}
+
+/* 层级缩进用 data-depth 选择器算 —— 树是服务端前序遍历铺好的一根线 */
+.doc-wiki-tree-link[data-depth="1"] { padding-left: 16px; }
+.doc-wiki-tree-link[data-depth="2"] { padding-left: 30px; }
+.doc-wiki-tree-link[data-depth="3"] { padding-left: 44px; }
+.doc-wiki-tree-link[data-depth="4"] { padding-left: 58px; }
+.doc-wiki-tree-link[data-depth="5"] { padding-left: 72px; }
+.doc-wiki-tree-link[data-depth="6"] { padding-left: 86px; }
+
+.doc-wiki-search-hit {
+  display: grid;
+  gap: 1px;
+  white-space: normal;
+}
+
+.doc-wiki-search-title {
+  font-size: 13px;
+}
+
+.doc-wiki-search-excerpt {
+  color: var(--muted);
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.doc-wiki-toc {
+  position: sticky;
+  top: 12px;
+  display: grid;
+  gap: 4px;
+  padding: 8px 10px;
+  border-left: 1px solid var(--border);
+  max-height: calc(100vh - 32px);
+  overflow: auto;
+}
+
+.doc-wiki-toc[hidden] {
+  display: none;
+}
+
+.doc-wiki-toc-head {
+  color: var(--muted);
+  font-size: 12px;
+  margin-bottom: 2px;
+}
+
+.doc-wiki-toc-link {
+  color: var(--muted);
+  text-decoration: none;
+  font-size: 12px;
+  line-height: 1.5;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.doc-wiki-toc-link:hover {
+  color: var(--accent);
+}
+
+.doc-wiki-toc-link[data-level="2"] { padding-left: 8px; }
+.doc-wiki-toc-link[data-level="3"] { padding-left: 16px; }
+.doc-wiki-toc-link[data-level="4"] { padding-left: 24px; }
+.doc-wiki-toc-link[data-level="5"] { padding-left: 32px; }
+.doc-wiki-toc-link[data-level="6"] { padding-left: 40px; }
+
+.doc-wiki-pager {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 12px;
+  margin-top: 14px;
+}
+
+.doc-wiki-pager-link {
+  display: grid;
+  gap: 2px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-soft);
+  color: inherit;
+  text-decoration: none;
+  min-width: 0;
+}
+
+.doc-wiki-pager-link:hover {
+  border-color: var(--accent);
+}
+
+.doc-wiki-pager-next {
+  text-align: right;
+}
+
+.doc-wiki-pager-label {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.doc-wiki-pager-title {
+  font-size: 13px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.doc-wiki-pager-hole {
+  min-width: 0;
+}
+
+/* 红链：这一页还没建（`[[某某]]` 指向一个还不存在的页） */
+.doc-wiki-link.is-missing {
+  color: var(--muted);
+  border-bottom-style: dotted;
+}
+
+/* 站里的页卡片（`subpage` 块） */
+.doc-subpage {
+  display: grid;
+  gap: 2px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-soft);
+  color: inherit;
+  text-decoration: none;
+}
+
+.doc-subpage:hover {
+  border-color: var(--accent);
+}
+
+.doc-subpage-full {
+  padding: 12px 14px;
+}
+
+.doc-subpage-title {
+  font-weight: 600;
+}
+
+.doc-subpage-note {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+/* `#/wiki`：站列表 */
+.doc-station-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 10px;
+  margin: 10px 0;
+}
+
+.doc-station-card {
+  display: grid;
+  gap: 4px;
+  text-decoration: none;
+  color: inherit;
+}
+
+.doc-station-title {
+  font-weight: 600;
+}
+
+.doc-station-meta {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.doc-station-new {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+  margin: 12px 0 8px;
+}
+
+.doc-station-new .doc-wiki-search {
+  flex: 1 1 220px;
+  min-width: 180px;
+}
+
+@media (max-width: 1100px) {
+  .doc-wiki-station {
+    grid-template-columns: 208px minmax(0, 1fr);
+  }
+
+  .doc-wiki-station .doc-wiki-toc {
+    display: none;
+  }
 }
 
 @media (max-width: 900px) {
@@ -924,7 +1213,22 @@
   min-height: 240px;
 }
 
-/* 「新建一篇」的三步向导：模板摊成卡片，每个都带一句它能干什么。 */
+/*
+ * 模板栏（积木模式里那一栏）。
+ *
+ * 它取代的是原先「新建一篇」里那张三步向导 + 模板卡片墙 —— 卡片样式
+ * （`.doc-tpl-picks` / `.doc-tpl-pick` / `.doc-steps`）暂时留着，将来要做
+ * 「模板预览卡片」还能捡回来。
+ */
+.doc-tpl-bar .doc-actions {
+  flex-wrap: wrap;
+}
+
+.doc-tpl-bar .doc-select {
+  max-width: 260px;
+}
+
+/* 「新建一篇」的简洁表单：标题 + 形态 + 范围，创建后直接进 Markdown 编辑页。 */
 .doc-wizard {
   display: grid;
   gap: 10px;

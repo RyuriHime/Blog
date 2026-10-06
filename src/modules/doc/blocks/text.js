@@ -33,8 +33,11 @@ const WIKI_TOKEN = /\[\[([^[\]|]+)(?:\|([^[\]]*))?\]\]/g;
  * 再 `encodeURIComponent` 就编成 `%26amp%3B`，链接直接指到不存在的页。
  * 所以这里对**原文**切片：链接之外的片段照常转义，链接的目标与显示字各自转义。
  */
-export function escapeHtmlWithWikiLinks(value, { multiline = false } = {}) {
+export function escapeHtmlWithWikiLinks(value, { multiline = false, existing = null } = {}) {
   const raw = String(value ?? '');
+  // 红链：`existing` 是所有**看得见的** wiki 页标题（服务端在渲染前算好塞进 options）。
+  // 没传就当作「不知道」，一律画成蓝链 —— 老调用点与预览（没有库可查）都不会因此变红。
+  const known = existing instanceof Set ? existing : null;
   const plain = (chunk) => {
     const text = escapeHtml(chunk);
     return multiline ? text.replace(/\n/g, '<br>') : text;
@@ -48,8 +51,9 @@ export function escapeHtmlWithWikiLinks(value, { multiline = false } = {}) {
       out += plain(match[0]);
     } else {
       const text = String(match[2] ?? '').trim() || name;
+      const missing = known && !known.has(name.toLowerCase()) ? ' is-missing' : '';
       out +=
-        `<a class="doc-wiki-link" data-wiki="${escapeHtml(name)}"` +
+        `<a class="doc-wiki-link${missing}" data-wiki="${escapeHtml(name)}"` +
         ` href="#/wiki/${encodeURIComponent(name)}">${escapeHtml(text)}</a>`;
     }
     last = match.index + match[0].length;

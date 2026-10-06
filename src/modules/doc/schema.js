@@ -1,6 +1,6 @@
 // 可编程帖子（P2）的数据表。
 //
-// 六张表全是新增的，v1 的表一张都不动 —— 迁移是纯加法（同 feed 的做法）。
+// 十二张表全是新增的，v1 的表一张都不动 —— 迁移是纯加法（同 feed 的做法）。
 //
 // 建表顺序 = 别的模块 import 这个文件时登记的顺序；
 // `addScript` 会按「括号深度为 0 的分号」切开逐条登记，
@@ -50,6 +50,14 @@ export const BLOCK_TYPE_PATTERN = /^[a-z][a-z0-9_]{0,31}$/;
 export const BLOCK_ID_PATTERN = /^b\d+$/;
 
 /**
+ * 派生块的 id 形状（脚本自己起的名字，如 `s1` / `chart-main`）。
+ *
+ * 与 `BLOCK_ID_PATTERN` 是**两个命名空间**：派生层的 id 永远不会与真块的 `b\d+` 撞车，
+ * 因为脚本产出的东西压根不写进 `document_blocks`。
+ */
+export const DERIVED_ID_PATTERN = /^[A-Za-z0-9_-]{1,32}$/;
+
+/**
  * 沙箱代码（`app` 块的 `props.code`）的长度上限。
  * 超了**在保存时**就 `bad_request`，不等到渲染 —— 一份超长正文不该先落库再变成 500。
  * 20000 是「一个真写得成功能的小应用」的量级：几百行 JS + 一点 HTML / CSS。
@@ -62,8 +70,61 @@ export const MAX_APP_CODE = 20000;
  */
 export const MAX_APP_STATE = 32768;
 
-/** `Sandbox.state` 的两种作用域。 */
+/** `Sandbox.state` 的两种作用域（`doc_app_state` 上的 CHECK 钉死了这两个）。 */
 export const APP_STATE_SCOPES = ['user', 'shared'];
+
+/**
+ * 帖子级脚本（第 13 种内置块类型 `script`）的代码长度上限。
+ * 与 `MAX_APP_CODE` 同一个量级：脚本是一段真写得成一个应用的程序。
+ */
+export const MAX_SCRIPT_CODE = 20000;
+
+/**
+ * 派生层（脚本产出）的配额。超限**不是错误**，是把超出部分丢掉并附一条警告 ——
+ * 脚本写飞了不该让整篇帖子打不开。
+ */
+export const MAX_DERIVED_BLOCKS = 100;
+export const MAX_DERIVED_PROPS_BYTES = 8 * 1024;
+export const MAX_DERIVED_TOTAL_BYTES = 64 * 1024;
+
+/**
+ * 派生块的两种作用域。
+ *   user   每个访问者一份（「我的待办」这类）
+ *   shared 全站共享一份（user_id 恒为 0，排行榜这类）
+ */
+export const DERIVED_SCOPES = ['user', 'shared'];
+
+/** 帖子页的两种呈现方式：`inline` 正常流里的一枚小标；`fullpage` 铺满视口的整屏应用。 */
+export const APP_MODES = ['inline', 'fullpage'];
+
+/** `state` 能力的第三种作用域：全站共享。它落在 `doc_site_state`，不落 `doc_app_state`。 */
+export const SITE_STATE_SCOPE = 'site';
+
+/** 沙箱状态（含全站共享）的全部作用域。 */
+export const STATE_SCOPES = [...APP_STATE_SCOPES, SITE_STATE_SCOPE];
+
+/** 全站共享状态的配额：单值字节、每个 namespace 的键数。 */
+export const MAX_SITE_STATE_VALUE = 4096;
+export const MAX_SITE_STATE_KEYS = 1000;
+
+/**
+ * 服务端能力调用的限流：每个 (访客, 文档) 每分钟多少次。
+ * 沙箱那边 200 条/秒管的是**消息频率**，管不到服务端压力 —— 这是两道不同的闸。
+ */
+export const MAX_CAPABILITY_CALLS_PER_MINUTE = 60;
+
+/**
+ * `state` 能力用 `scope='site'` 时，数据落在哪个 namespace。
+ *
+ *   - 带代码的自定义块类型（§2.4）：**用类型名** —— 于是同一个组件在所有引用它的
+ *     帖子之间共享一份全局数据（「计算器用过几次」是它自己的事，不是哪一篇帖子的）。
+ *   - 内置的 `script` 块：**用 `doc:<文档 id>`** —— 一篇帖子一个名字空间，
+ *     否则两篇帖子的脚本会互相踩。
+ */
+export function siteStateNamespace({ type = '', documentId = 0 } = {}) {
+  const name = String(type ?? '');
+  return name === 'script' ? `doc:${Number(documentId) || 0}` : name;
+}
 
 /**
  * 沙箱里的代码能向宿主申请的**能力白名单**。
@@ -74,8 +135,14 @@ export const APP_STATE_SCOPES = ['user', 'shared'];
  *   `doc-blocks` 正文里其它块的 `{id, type, props}` —— 于是「按别的块算点东西」写得出来
  *   `viewer`     正在看的人（登录与否 / 用户名 / 是不是管理员）
  *   `state`      读写**自己的**持久状态（`Sandbox.state`）—— 没有它，代码算完就没了
+ *
+ * 第二轮新增的两个（走**帖子级脚本**才拿得到，见 spec §4.3）：
+ *   `blocks.derived` 派生层增删改查。`list` 永远允许（它只回访客本来就看得见的东西），
+ *                    其余三个只在文档的 `allow_script_write=1` 时放行。
+ *   `site.read`      读站内其它内容的**只读**出口：只回 `scope='public'` 且未删除的行，
+ *                    分页 ≤ 50，绝不含邮箱等私密字段。这是本轮唯一新增的信息暴露面。
  */
-export const SANDBOX_CAPABILITIES = ['doc-meta', 'doc-blocks', 'viewer', 'state'];
+export const SANDBOX_CAPABILITIES = ['doc-meta', 'doc-blocks', 'viewer', 'state', 'blocks.derived', 'site.read'];
 
 /**
  * 沙箱 → 宿主可以发的消息类型白名单（§6.2）。其余一律丢弃并计数。
@@ -160,7 +227,7 @@ CREATE TABLE IF NOT EXISTS document_revisions (
   document_id INTEGER NOT NULL REFERENCES documents(id),
   revision    INTEGER NOT NULL,
   blocks_json TEXT    NOT NULL DEFAULT '[]',
-  reason      TEXT    NOT NULL DEFAULT 'edit' CHECK (reason IN ('create','edit','ops','template','import','rollback')),
+  reason      TEXT    NOT NULL DEFAULT 'edit' CHECK (reason IN ('create','edit','ops','template','import','rollback','adopt')),
   author_id   INTEGER NOT NULL REFERENCES users(id),
   created_at  INTEGER NOT NULL,
   UNIQUE (document_id, revision)
@@ -261,4 +328,79 @@ CREATE TABLE IF NOT EXISTS doc_app_state (
   PRIMARY KEY (document_id, block_id, scope, user_id)
 );
 CREATE INDEX IF NOT EXISTS idx_doc_app_state_doc ON doc_app_state (document_id, block_id);
+
+-- 每篇文档一份的**设置**（第二轮新增）。脚本代码、开关、全屏、wiki 归站位置都在这里。
+-- 为什么不加列到 documents：documents 早就建好了，CREATE TABLE IF NOT EXISTS 对已存在的表
+-- 是空操作，而 core 的 ensureColumn 只覆盖 users 与 posts（见文件头与 §2.1 的长注释）。
+-- 这八样也都不是**正文**：不进修订、不进导出、不进 props —— 所以它们不能塞进 document_blocks。
+--   allow_script_write 每篇一个开关，**默认 0 = 脚本只能读本帖的块**（Q6）
+--   app_mode           inline（正常流里一枚小标）/ fullpage（铺满视口的整屏应用）
+--   station_id         属于哪个 wiki 站（0 = 不属于任何站，于是它照旧是一条独立帖子）
+--   parent_id          站在树上的父页（0 = 直接挂在站下）
+--   sort_order         同一个父页下的排序
+--   icon               树上的图标（一个短字符串，不是表情图片）
+--   source_text        作者最后一次输入的**源码原文，逐字节**（§3.4）。
+--                      解析器是有损的（表格分隔行会被剥、嵌套列表被吞、看不懂的退回段落），
+--                      所以编辑器的往返基准必须是这一串字节，而不是「解析再拼回来」。
+--                      只读路径**完全不看它**：渲染永远以 document_blocks 为准。
+-- 一行都不存在时按默认值算（queries.settingsOf 返回 null，调用方补默认值），所以不写「INSERT 默认行」。
+CREATE TABLE IF NOT EXISTS doc_settings (
+  document_id        INTEGER PRIMARY KEY REFERENCES documents(id),
+  allow_script_write INTEGER NOT NULL DEFAULT 0,
+  app_mode           TEXT    NOT NULL DEFAULT 'inline' CHECK (app_mode IN ('inline','fullpage')),
+  station_id         INTEGER NOT NULL DEFAULT 0,
+  parent_id          INTEGER NOT NULL DEFAULT 0,
+  sort_order         INTEGER NOT NULL DEFAULT 0,
+  icon               TEXT    NOT NULL DEFAULT '',
+  source_text        TEXT    NOT NULL DEFAULT '',
+  updated_at         INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_doc_settings_station ON doc_settings (station_id, parent_id, sort_order);
+
+-- 派生层：**脚本产出的块**（第二轮新增，Q6 的 C 方案）。
+-- 它像真块一样渲染、能参与 bind、能按「每人一份」或「全站共享一份」持久化，
+-- 但**永远不进 document_blocks**：不产生修订、不算作者编辑。
+-- 「采纳为真块」= 把这些行拷进 document_blocks（发新 id、position 接到末尾）+ 写一条
+-- reason='adopt' 的修订 + 删掉这些行 —— 于是固化一次就是一次普通文档写，不需要新机制。
+-- block_id 是**脚本自己的命名空间**（s1 / chart-main 这类），与真块的 b 加数字互不干扰；
+-- position 用 REAL 的理由与 document_blocks 一样（插到 3 和 4 之间写 3.5）。
+-- 删文档 / 采纳时由 store 清掉，不留孤儿行。
+CREATE TABLE IF NOT EXISTS doc_script_blocks (
+  document_id INTEGER NOT NULL REFERENCES documents(id),
+  scope       TEXT    NOT NULL DEFAULT 'user' CHECK (scope IN ('user','shared')),
+  user_id     INTEGER NOT NULL DEFAULT 0,
+  block_id    TEXT    NOT NULL,
+  type        TEXT    NOT NULL,
+  props_json  TEXT    NOT NULL DEFAULT '{}',
+  position    REAL    NOT NULL,
+  updated_at  INTEGER NOT NULL,
+  PRIMARY KEY (document_id, scope, user_id, block_id)
+);
+CREATE INDEX IF NOT EXISTS idx_doc_script_blocks_doc ON doc_script_blocks (document_id, position);
+
+-- 全站共享状态（state 能力的 scope='site'，第二轮新增）。
+-- 为什么不是 doc_app_state 加一个 scope 值：那张表的 CHECK 只允许 user|shared，
+-- 而给已存在的表改 CHECK 要重建表（SQLite 没有 ALTER CONSTRAINT）—— 新表是纯加法。
+-- namespace 由 schema.js:siteStateNamespace 决定（自定义组件用类型名、内置 script 用 doc:<id>）；
+-- key 是脚本自己起的名字；user_id 恒为 0，留着这一列是为了以后要按人分时可以长出来。
+CREATE TABLE IF NOT EXISTS doc_site_state (
+  namespace  TEXT    NOT NULL,
+  key        TEXT    NOT NULL,
+  user_id    INTEGER NOT NULL DEFAULT 0,
+  value      TEXT    NOT NULL DEFAULT '',
+  updated_at INTEGER NOT NULL,
+  PRIMARY KEY (namespace, key, user_id)
+);
 `;
+
+/**
+ * 从 `DOC_SCHEMA` 里摘出某张表的 CREATE 语句（迁移要**重建**表时用同一份 DDL）。
+ *
+ * 为什么不把 DDL 抄第二遍：两份真相必然分叉，改了其中一份忘了另一份，
+ * 正是这类迁移 bug 的经典写法。宁可在这里正则摘一次。
+ */
+export function docTableDdl(name) {
+  const match = new RegExp(`CREATE TABLE IF NOT EXISTS ${name} \\([\\s\\S]*?\\n\\);`).exec(DOC_SCHEMA);
+  if (!match) throw new Error(`DOC_SCHEMA 里没有 ${name} 这张表`);
+  return match[0];
+}

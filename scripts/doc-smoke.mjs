@@ -19,6 +19,9 @@ import { existsSync, mkdirSync, openSync, readFileSync, rmSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
+import { runInNewContext } from 'node:vm';
+// 直接引模块（不是走 HTTP）：S9.7 要把沙箱 bootstrap 拉进 vm 里演一遍握手顺序。
+import { buildSandboxDocument } from '../src/modules/doc/sandbox.js';
 
 const ROOT = resolve(fileURLToPath(new URL('.', import.meta.url)), '..');
 const SERVER = join(ROOT, 'src', 'server.js');
@@ -242,15 +245,15 @@ try {
   /* ---------- 2.1 类型清单与契约对拍 ---------- */
 
   const typeNames = engine.listBlockTypes().map((type) => type.name);
-  check('内置 12 种块类型', typeNames.length === 12, typeNames.join(','));
+  check('内置 14 种块类型', typeNames.length === 14, typeNames.join(','));
   check(
     '前 7 种与 note-agent 的 BLOCK_TYPES 逐字同序（契约对拍，两边块序列可互换）',
     JSON.stringify(typeNames.slice(0, 7)) === JSON.stringify(agent.BLOCK_TYPES),
     `${JSON.stringify(typeNames.slice(0, 7))} vs ${JSON.stringify(agent.BLOCK_TYPES)}`,
   );
   check(
-    '新增 5 种是 quote / poll / wiki / embed / app',
-    JSON.stringify(typeNames.slice(7)) === JSON.stringify(['quote', 'poll', 'wiki', 'embed', 'app']),
+    '新增 7 种是 quote / poll / wiki / embed / app / script / subpage',
+    JSON.stringify(typeNames.slice(7)) === JSON.stringify(['quote', 'poll', 'wiki', 'embed', 'app', 'script', 'subpage']),
     JSON.stringify(typeNames.slice(7)),
   );
   check('每种类型都有 name / version / label / icon / schema / editor', engine.listBlockTypes().every(
@@ -415,6 +418,8 @@ try {
         case 'wiki': return { target: sentence(1, 2), label: rnd() < 0.5 ? sentence(1, 2) : '', note: '' };
         case 'embed': return { url: `https://example.com/${Math.floor(rnd() * 20)}`, title: sentence(1, 2), height: 200 + Math.floor(rnd() * 4) * 40 };
         case 'app': return { app: pick(['todo', 'calc']), config: { n: Math.floor(rnd() * 10) }, code: pick(['', '<b>hi</b>', 'Sandbox.value(1)']) };
+        case 'script': return { code: pick(['', 'Sandbox.value(1);', 'const a = 1;\nSandbox.render.put("s1", "paragraph", { text: "hi" });']) };
+        case 'subpage': return { doc: String(1 + Math.floor(rnd() * 9)), mode: rnd() < 0.5 ? 'card' : 'full', title: sentence(1, 2), note: '' };
         default: return {};
       }
     };
@@ -537,13 +542,13 @@ try {
   {
     const templates = await anon.call('/api/docs/meta/templates');
     check(
-      'GET /api/docs/meta/templates 匿名可读且给出 7 个模板',
-      templates.status === 200 && templates.data?.templates?.length === 7,
+      'GET /api/docs/meta/templates 匿名可读且给出 8 个模板',
+      templates.status === 200 && templates.data?.templates?.length === 8,
       `${templates.status} ${JSON.stringify(templates.data).slice(0, 160)}`,
     );
 
     const types = await anon.call('/api/docs/meta/block-types');
-    check('GET /api/docs/meta/block-types 给出 12 个内置类型', types.status === 200 && types.data?.types?.length === 12, `len=${types.data?.types?.length}`);
+    check('GET /api/docs/meta/block-types 给出 14 个内置类型', types.status === 200 && types.data?.types?.length === 14, `len=${types.data?.types?.length}`);
     check(
       '内置类型都标了 builtin:true 且带声明式 schema',
       types.data?.types?.every((type) => type.builtin === true && type.schema && typeof type.schema === 'object'),
@@ -687,7 +692,7 @@ try {
     const linkDoc = created.data?.doc?.id;
     check('联动试验文档建得出来', Number.isInteger(linkDoc), `${created.status} ${JSON.stringify(created.error)}`);
 
-    await author.call(`/api/docs/${linkDoc}/markdown`, { method: 'PUT', body: { markdown: '甲段的正文' } });
+    await author.call(`/api/docs/${linkDoc}/markdown?confirm=1`, { method: 'PUT', body: { markdown: '甲段的正文' } });
     const seedBlocks = (await author.call(`/api/docs/${linkDoc}`)).data?.blocks ?? [];
     const sourceId = seedBlocks[0]?.blockId;
     check('联动试验有了源块', Boolean(sourceId), JSON.stringify(seedBlocks));
@@ -927,8 +932,8 @@ try {
     const types = await anon.call('/api/docs/meta/block-types');
     const timeline = types.data?.types?.find((type) => type.name === 'timeline');
     check(
-      '注册表变成 13 种，新类型 builtin=false 且带自己的 schema',
-      types.data?.types?.length === 13 && timeline?.builtin === false && timeline?.schema?.text,
+      '注册表变成 15 种，新类型 builtin=false 且带自己的 schema',
+      types.data?.types?.length === 15 && timeline?.builtin === false && timeline?.schema?.text,
       JSON.stringify(timeline),
     );
 
@@ -1401,7 +1406,7 @@ try {
     for (const id of created) await staff.call(`/api/docs/${id}`, { method: 'DELETE' });
 
     const list = await anon.call('/api/docs/meta/templates');
-    check('模板清单是 7 个', list.data?.templates?.length === 7, JSON.stringify(list.data?.templates?.length));
+    check('模板清单是 8 个', list.data?.templates?.length === 8, JSON.stringify(list.data?.templates?.length));
 
     const readText = (relative) => {
       const full = join(ROOT, relative);
@@ -1635,7 +1640,7 @@ try {
 
       // 行内双链：`markdownToBlocks` 只把**独占一行**的 `[[x]]` 变 wiki 块，
       // 夹在句子里的那条不能就原样显示成 `[[x]]`（用户会以为双链坏了）。
-      const inline = await staff.call(`/api/docs/${first.data?.doc?.id}/markdown`, {
+      const inline = await staff.call(`/api/docs/${first.data?.doc?.id}/markdown?confirm=1`, {
         method: 'PUT',
         body: { markdown: '下一站：[[S8 子页面]]。' },
       });
@@ -1931,9 +1936,21 @@ try {
       const editorJs = readText('public/views/doc.js');
       const partsJs = readText('public/views/doc-blocks.js');
       const css = readText('public/css/41-doc.css');
-      check('8.9 新建面板是三步向导', editorJs.includes('doc-steps') && editorJs.includes('function newDocPanelHtml()'), '');
-      check('8.9 模板摊成卡片并带上说明（不是只有名字的下拉框）', editorJs.includes('data-doc-action="pick-template"') && editorJs.includes('item.description'), '');
-      check('8.9 选中的模板写进隐藏框，提交路径没变', editorJs.includes('data-doc-action="pick-template"') && editorJs.includes('<input type="hidden" name="template"'), '');
+      check('8.9 新建一篇是一点就进（那道「先写个名字」的表单已经删了）', !editorJs.includes('function newDocPanelHtml()') && editorJs.includes('function newDocAndEdit()'), '');
+      check(
+        '8.9 点一下就建「未命名」并直接落进编辑器',
+        /async function newDocAndEdit\(\)[\s\S]{0,400}?title: '未命名'[\s\S]{0,300}?(?:await )?navigate\(`\/doc\/\$\{created\.doc\.id\}\/edit`\)/.test(editorJs),
+        '',
+      );
+      check('8.9 建完直接进编辑器（跳转那一行还在）', editorJs.includes('return navigate(`/doc/${created.doc.id}/edit`)'), '');
+      check('8.9 模板搬到了积木模式那一栏（模板栏只在积木视图里渲染）', editorJs.includes('function templatePanelHtml()') && editorJs.includes('${blocksEditorHtml(blocks)}${templatePanelHtml()}'), '');
+      /* 用户在浏览器里报的四个 bug（m01284 / m01317）的回归钉：
+         ① 默认是纯 Markdown；② 三种视图共用一份草稿（切之前先存）；③ 源码里有 Markdown
+         表达不了的块时 Markdown 页只读；④ 保存之后编辑区不能被清空。 */
+      check('8.9 默认是纯 Markdown 模式', editorJs.includes("const wanted = query.get('mode') ?? 'markdown'"), '');
+      check('8.9 切视图前先把当前编辑区的改动存下去', editorJs.includes('async function flushDraft()') && editorJs.includes('if (!(await flushDraft())) return;'), '');
+      check('8.9 Markdown 存完会重新拉一次（不重拉就会把刚敲的从编辑区抹掉）', /async function saveMarkdown\(\)[\s\S]{0,600}?await loadMarkdown\(\)/.test(editorJs), '');
+      check('8.9 源码里有 Markdown 表达不了的块时，Markdown 页只读并说明原因', editorJs.includes('function markdownViewBlocked(') && editorJs.includes('MARKDOWN_VIEW_TYPES') && editorJs.includes('blocked ? \' readonly\' : \'\''), '');
       check('8.9 编辑器开头有「四步」说明卡', editorJs.includes('doc-howto') && editorJs.includes('保存本块'), '');
       check('8.9 每块底部也有一个「保存本块」（表单一长就滚不到顶上那个）', editorJs.includes('doc-block-foot'), '');
       check('8.9 联动默认收起（进阶功能不抢主线）', partsJs.includes('块间联动（进阶，可选）') && partsJs.includes('<details class="doc-bind"'), '');
@@ -1943,6 +1960,311 @@ try {
       check('8.9 新样式都在 41-doc.css 里', ['.doc-wizard', '.doc-tpl-pick', '.doc-steps', '.doc-howto', '.doc-block-foot', '.doc-code-box'].every((item) => css.includes(item)), '');
       // display:grid 会盖掉 hidden 属性（这个坑踩过两次），新建面板默认是收着的。
       check('8.9 hidden 的新建面板不会被 display:grid 顶出来', css.includes('.doc-wizard[hidden]'), '');
+    }
+
+    /* ---------- 【S9】脚本运行时：直接往帖子上写代码，块是数据 ---------- */
+    // 用户点名的第 1 件事：「底层逻辑不再是只能改 JSON，而是能直接往帖子上写代码」。
+    // 这一节从 HTTP 走完整条链：源码里的 `doc:script` → 解析成代码 → 能力申请（默认被拒）
+    // → 作者开开关 → 脚本写派生块 → 渲染 → 采纳为真块 → 审计留痕。
+    {
+      const created = await author.call('/api/docs', { method: 'POST', body: { title: 'S9 脚本帖', kind: 'post', scope: 'public' } });
+      const docId = created.data?.doc?.id;
+      check('9.1 建得出一篇脚本帖', Number.isInteger(docId), `${created.status} ${JSON.stringify(created.error)}`);
+
+      const src = [
+        '```doc:script {#b1}',
+        'const me = await Sandbox.viewer();',
+        'await Sandbox.render.put("s1", "paragraph", { text: "脚本产出的一段话" });',
+        '```',
+        '',
+        '## 正文标题',
+        '',
+        '这一段是作者写的。',
+      ].join('\n');
+      const saved = await author.call(`/api/docs/${docId}/markdown?confirm=1`, { method: 'PUT', body: { markdown: src } });
+      check('9.1 源码里能直接写 JS（doc:script 的块体不是 JSON）', saved.status === 200, `${saved.status} ${JSON.stringify(saved.error)}`);
+      const savedTypes = (saved.data?.blocks ?? []).map((block) => block.type);
+      check('9.1 解析成 script + heading + paragraph', JSON.stringify(savedTypes) === JSON.stringify(['script', 'heading', 'paragraph']), JSON.stringify(savedTypes));
+      check('9.1 源码逐字节原样回来了（编辑器往返靠它）', saved.data?.source === src, JSON.stringify(saved.data?.source));
+      check('9.1 script 块的 code 就是那段原文', String((saved.data?.blocks ?? [])[0]?.props?.code ?? '').includes('Sandbox.render.put'), JSON.stringify((saved.data?.blocks ?? [])[0]?.props));
+      check('9.1 沙箱代码按 20000 字卡（不是 app 的那条路）', typeof (saved.data?.blocks ?? [])[0]?.props?.code === 'string', '');
+
+      const denied = await author.call(`/api/docs/${docId}/capabilities`, {
+        method: 'POST',
+        body: { blockId: 'b1', capability: 'blocks.derived', payload: { op: 'put', blockId: 's1', type: 'paragraph', props: { text: 'hi' }, scope: 'shared' } },
+      });
+      check('9.2 开关默认关着 → 脚本写块被拒（403）', denied.status === 403, `${denied.status} ${JSON.stringify(denied.error)}`);
+      // 白名单之外的能力连「尝试」都要留痕（allowed:false 的那条就是它）。
+      const rejected = await author.call(`/api/docs/${docId}/capabilities`, {
+        method: 'POST',
+        body: { blockId: 'b1', capability: 'blocks.secret', payload: { op: 'put' } },
+      });
+      check('9.2 白名单外的能力 → 403，而且照样记一条审计', rejected.status === 403, `${rejected.status}`);
+
+      const settings = await author.call(`/api/docs/${docId}/settings`, { method: 'PUT', body: { allowScriptWrite: true } });
+      check('9.2 作者能打开「脚本可以改块」', settings.status === 200 && settings.data?.settings?.allowScriptWrite === true, `${settings.status} ${JSON.stringify(settings.data?.settings)}`);
+      const badMode = await author.call(`/api/docs/${docId}/settings`, { method: 'PUT', body: { appMode: 'nope' } });
+      check('9.2 乱给 appMode → 400（枚举真的在校验）', badMode.status === 400, `${badMode.status}`);
+
+      const put = await author.call(`/api/docs/${docId}/capabilities`, {
+        method: 'POST',
+        body: { blockId: 'b1', capability: 'blocks.derived', payload: { op: 'put', blockId: 's1', type: 'paragraph', props: { text: '脚本产出的一段话' }, scope: 'shared' } },
+      });
+      check('9.3 开了开关之后脚本能写派生块', put.status === 200 && put.data?.value?.blockId === 's1', `${put.status} ${JSON.stringify(put.data)}`);
+
+      const shown = await author.call(`/api/docs/${docId}`);
+      const derivedBlock = (shown.data?.blocks ?? []).find((block) => block.derived === true);
+      check('9.3 派生块进 blocks 且打了 derived 标记', derivedBlock?.blockId === 's1' && derivedBlock?.scope === 'shared', JSON.stringify((shown.data?.blocks ?? []).map((block) => block.blockId)));
+      const shownHtml = String(shown.data?.html ?? '');
+      check('9.3 派生块接在真块之后，照样走渲染管线', shownHtml.includes('脚本产出的一段话') && shownHtml.includes('doc-derived'), shownHtml.slice(-320));
+      check('9.3 派生块一个字节都没写进正文（真块还是 3 个）', (shown.data?.blocks ?? []).filter((block) => !block.derived).length === 3, '');
+
+      const bogus = await author.call(`/api/docs/${docId}/capabilities`, {
+        method: 'POST',
+        body: { blockId: 'b1', capability: 'blocks.derived', payload: { op: 'put', blockId: 's2', type: 'not_a_type', props: {} } },
+      });
+      check('9.3 脚本不能凭空造类型（400，不是渲染出裸 HTML）', bogus.status === 400, `${bogus.status} ${JSON.stringify(bogus.error)}`);
+
+      const adopted = await author.call(`/api/docs/${docId}/adopt`, { method: 'POST', body: { blockId: 's1', scope: 'shared' } });
+      check('9.4 采纳为真块：发新 id 并接进正文', adopted.status === 200 && /^b\d+$/.test(String(adopted.data?.adopted?.blockId ?? '')), `${adopted.status} ${JSON.stringify(adopted.data?.adopted)}`);
+      const after = await author.call(`/api/docs/${docId}`);
+      check('9.4 采纳之后它不再是派生块', !(after.data?.blocks ?? []).some((block) => block.blockId === 's1'), JSON.stringify((after.data?.blocks ?? []).map((block) => block.blockId)));
+      check('9.4 采纳之后源码里看得见这个新块', String(after.data?.source ?? '').includes('脚本产出的一段话'), String(after.data?.source ?? ''));
+      const revisions = await author.call(`/api/docs/${docId}/revisions`);
+      check('9.4 采纳写了一条 adopt 修订（不是偷偷改正文）', (revisions.data?.revisions ?? []).some((revision) => revision.reasonLabel === '采纳脚本产出'), JSON.stringify((revisions.data?.revisions ?? []).map((revision) => revision.reasonLabel)));
+
+      const deniedLogs = await author.call(`/api/docs/${docId}/capabilities`);
+      check('9.5 审计只有管理员看得到（作者也不行）', deniedLogs.status === 403, `${deniedLogs.status}`);
+      const logs = await staff.call(`/api/docs/${docId}/capabilities`);
+      const entries = logs.data?.logs ?? [];
+      check('9.5 能力申请（含被拒的那次）全进了审计', entries.some((log) => log.allowed === false) && entries.some((log) => log.allowed === true), JSON.stringify(entries.slice(0, 2)));
+
+      // 【S9.6】源码预览：编辑器右边那块。纯读 —— 不落库、不动 source_text、不建修订。
+      const beforePreview = await author.call(`/api/docs/${docId}`);
+      const preview = await author.call(`/api/docs/${docId}/preview`, {
+        method: 'POST',
+        body: { markdown: '# 预览标题\n\n预览里的一段话\n' },
+      });
+      check('9.6 预览回渲染好的 HTML 与块清单', preview.status === 200 && String(preview.data?.html ?? '').includes('预览标题') && (preview.data?.blocks ?? []).length === 2, `${preview.status} ${JSON.stringify(preview.data?.blocks)}`);
+      const afterPreview = await author.call(`/api/docs/${docId}`);
+      check(
+        '9.6 预览不改正文、不改源码、不建修订',
+        (afterPreview.data?.blocks ?? []).length === (beforePreview.data?.blocks ?? []).length
+          && afterPreview.data?.source === beforePreview.data?.source,
+        `${(beforePreview.data?.blocks ?? []).length} → ${(afterPreview.data?.blocks ?? []).length}`,
+      );
+
+      // 【S9.7】沙箱握手：`init` 消息可能比用户脚本先到 —— bootstrap 在 `<head>` 里发完
+      // `ready`，宿主立刻回 `init`，而用户的 `<script>` 还在 `<body>` 里排队。这时
+      // `onInit` 必须**排队补交**，否则用户的初始化代码永远不跑（页面不报错，票数、
+      // 初始数据一直空着，看起来就是「功能挂了」）。这里把 bootstrap 拉进 vm 里演一遍。
+      {
+        const built = buildSandboxDocument('<p>user code</p>');
+        const OPEN = '<' + 'script>';
+        const CLOSE = '</' + 'script>';
+        const code = built.slice(built.indexOf(OPEN) + OPEN.length, built.indexOf(CLOSE));
+        const sent = [];
+        const listeners = [];
+        const sandbox = {
+          console, setTimeout, clearTimeout, Promise, Object, Error, JSON, Math,
+          parent: { postMessage(message) { sent.push(message); } },
+          document: {
+            documentElement: { scrollHeight: 10 },
+            body: { scrollHeight: 12 },
+            addEventListener() {},
+          },
+          window: {
+            addEventListener(type, handler) { if (type === 'message') listeners.push(handler); },
+          },
+        };
+        runInNewContext(code, sandbox);
+        const api = sandbox.window.Sandbox;
+        const fire = (data) => { for (const handler of listeners) handler({ data, source: sandbox.window }); };
+        check('9.7 沙箱 bootstrap 起来就发 ready 完成握手', sent.some((message) => message.type === 'ready'), JSON.stringify(sent));
+
+        // ① `init` 先到、`onInit` 后挂：要补交。
+        fire({ type: 'init', props: { app: '投票' }, inputs: { a: 1 } });
+        let late = null;
+        api.onInit((props, inputs) => { late = { props, inputs }; });
+        check('9.7 init 比 onInit 先到时也要补交（不然初始化永远不跑）', late?.props?.app === '投票' && late?.inputs?.a === 1, JSON.stringify(late));
+
+        // ② 赋值式写法 `Sandbox.onInit = fn` 同样接得住。
+        let assigned = null;
+        api.onInit = (props) => { assigned = props; };
+        fire({ type: 'init', props: { app: '第二发' }, inputs: {} });
+        check('9.7 `Sandbox.onInit = fn` 赋值写法也接得住', assigned?.app === '第二发', JSON.stringify(assigned));
+
+        // ③ 能力申请：请求发给宿主，回执把 Promise 兑现（投票就是靠这条路写票数的）。
+        const pendingValue = api.state.get('shared');
+        const request = sent.find((message) => message.type === 'request' && message.capability === 'state');
+        check('9.7 能力申请发给宿主（带 op 与 scope）', request?.payload?.op === 'get' && request?.payload?.scope === 'shared', JSON.stringify(request));
+        fire({ type: 'capability', id: request.id, ok: true, value: { scope: 'shared', value: { counts: [1, 2, 3] } } });
+        const resolved = await pendingValue;
+        check('9.7 回执把 Promise 兑现成状态值', Array.isArray(resolved?.counts) && resolved.counts[2] === 3, JSON.stringify(resolved));
+
+        // ④ 被拒时抛出来（脚本里 catch 得到，才能把「没投上」显示给用户）。
+        const denied = api.state.set({ counts: [9] }, 'shared');
+        const write = sent.find((message) => message.type === 'request' && message.payload?.op === 'set');
+        fire({ type: 'capability', id: write.id, ok: false, message: '要保存状态得先登录' });
+        let refused = '';
+        await denied.then(() => {}, (error) => { refused = String(error?.message ?? error); });
+        check('9.7 能力被拒时 Promise 抛错（不再静默失败）', refused.includes('登录'), refused);
+      }
+
+      await author.call(`/api/docs/${docId}`, { method: 'DELETE' });
+    }
+  }
+
+  /* ================= S10 Wiki 站（一个帖子一个 wiki） ================= */
+
+  console.log('\n【S10】Wiki 站：站是一篇帖子，页挂在站里');
+
+  {
+    // 10.1 建站：站就是一篇普通帖子（`template='station'`）。
+    const created = await author.call('/api/docs/wiki/stations', { method: 'POST', body: { title: 'S10 测试站', scope: 'public' } });
+    const stationId = created.data?.doc?.id;
+    check('10.1 POST /api/docs/wiki/stations 建站', created.status === 200 && Number.isInteger(stationId), `${created.status} ${JSON.stringify(created.error)}`);
+    check('10.1 站是一篇普通帖子（kind=post + template=station）', created.data?.doc?.kind === 'post' && created.data?.doc?.template === 'station', JSON.stringify(created.data?.doc));
+
+    const listed = await anon.call('/api/docs/wiki/stations');
+    check('10.1 GET /api/docs/wiki/stations 匿名看得见公开站', (listed.data?.stations ?? []).some((row) => row.id === stationId), JSON.stringify((listed.data?.stations ?? []).map((row) => row.title)));
+    check('10.1 老的 pages / categories 照旧一起回（旧客户端不红）', Array.isArray(listed.data?.pages) && listed.data?.categories !== undefined, JSON.stringify(Object.keys(listed.data ?? {})));
+
+    // 10.2 建页：自动挂到站上（站里多一块 subpage 卡片），页不出现在积木板块。
+    const first = await author.call(`/api/docs/wiki/station/${stationId}/pages`, { method: 'POST', body: { title: 'S10 第一页' } });
+    const firstId = first.data?.doc?.id;
+    check('10.2 在站里建页', first.status === 200 && first.data?.created === true && first.data?.doc?.template === 'page', `${first.status} ${JSON.stringify(first.error)}`);
+    const again = await author.call(`/api/docs/wiki/station/${stationId}/pages`, { method: 'POST', body: { title: 'S10 第一页' } });
+    check('10.2 同名再建是幂等（created:false，不建第二篇）', again.status === 200 && again.data?.created === false && again.data?.doc?.id === firstId, `${again.status} ${again.data?.created}`);
+    const second = await author.call(`/api/docs/wiki/station/${stationId}/pages`, { method: 'POST', body: { title: 'S10 子页一', parentId: firstId } });
+    const secondId = second.data?.doc?.id;
+    check('10.2 建子页（带 parentId）', second.status === 200 && Number.isInteger(secondId), `${second.status} ${JSON.stringify(second.error)}`);
+
+    const stationDoc = await author.call(`/api/docs/${stationId}`);
+    const cards = (stationDoc.data?.blocks ?? []).filter((block) => block.type === 'subpage');
+    check('10.2 每建一页，站里就多一块 subpage 卡片', cards.length === 2, JSON.stringify((stationDoc.data?.blocks ?? []).map((block) => block.type)));
+    check('10.2 subpage 卡片被渲染成 .doc-subpage（不是裸 HTML）', String(stationDoc.data?.html ?? '').includes('doc-subpage'), String(stationDoc.data?.html ?? '').slice(0, 200));
+
+    const pageRow = scalar('SELECT p.hidden AS hidden FROM documents d JOIN posts p ON p.id = d.anchor_post_id WHERE d.id = ?', firstId);
+    check('10.2 站里的页的影子帖是 hidden=1（所以不进积木板块）', pageRow?.hidden === 1, JSON.stringify(pageRow));
+    const stationAnchor = scalar('SELECT p.hidden AS hidden FROM documents d JOIN posts p ON p.id = d.anchor_post_id WHERE d.id = ?', stationId);
+    check('10.2 站自己的影子帖不藏（它就该出现在积木板块）', stationAnchor?.hidden === 0, JSON.stringify(stationAnchor));
+
+    // 10.3 三栏要的东西一次拿齐：树（前序 + depth）、ToC、上一页 / 下一页。
+    const tree = await anon.call(`/api/docs/wiki/station?title=${encodeURIComponent('S10 测试站')}`);
+    const pages = tree.data?.pages ?? [];
+    check('10.3 按站名开站，回树与站本体正文', tree.status === 200 && tree.data?.found === true && pages.length === 2 && Boolean(tree.data?.doc?.html), `${tree.status} ${JSON.stringify(pages.map((page) => page.title))}`);
+    check('10.3 树是前序遍历 + depth（子页跟在父页后面）', pages[0]?.title === 'S10 第一页' && pages[0]?.depth === 0 && pages[1]?.depth === 1, JSON.stringify(pages.map((page) => [page.title, page.depth])));
+
+    const opened = await anon.call(`/api/docs/wiki/station?title=${encodeURIComponent('S10 测试站')}&page=${encodeURIComponent('S10 第一页')}`);
+    check('10.3 按「站 + 页」开页：正文 + wiki 上下文一次给全', opened.status === 200 && opened.data?.doc?.doc?.id === firstId && Boolean(opened.data?.doc?.wiki), `${opened.status} doc=${opened.data?.doc?.doc?.id} want=${firstId}`);
+    check('10.3 页里带着上一页 / 下一页（树中线上的邻居）', opened.data?.doc?.wiki?.next?.title === 'S10 子页一' && !opened.data?.doc?.wiki?.prev, JSON.stringify([opened.data?.doc?.wiki?.prev, opened.data?.doc?.wiki?.next]));
+    check('10.3 ToC 由服务端算（present 里给 toc）', Array.isArray(opened.data?.doc?.toc), JSON.stringify(opened.data?.doc?.toc));
+
+    // 10.4 权限：不是这个站作者的人加不了页。
+    const intruder = await other.call(`/api/docs/wiki/station/${stationId}/pages`, { method: 'POST', body: { title: 'S10 别人塞的页' } });
+    check('10.4 非作者加页 → 403', intruder.status === 403, `${intruder.status}`);
+    const privateStation = await author.call('/api/docs/wiki/stations', { method: 'POST', body: { title: 'S10 私有站', scope: 'private' } });
+    const privateId = privateStation.data?.doc?.id;
+    await author.call(`/api/docs/wiki/station/${privateId}/pages`, { method: 'POST', body: { title: 'S10 私有页' } });
+    const peek = await other.call(`/api/docs/wiki/station?title=${encodeURIComponent('S10 私有站')}`);
+    check('10.4 私有站对陌生人 found:false', peek.status === 200 && peek.data?.found === false, `${peek.status} ${JSON.stringify(peek.data?.found)}`);
+    const otherList = await other.call('/api/docs/wiki/stations');
+    check('10.4 别人的站列表里没有私有站', !(otherList.data?.stations ?? []).some((row) => row.id === privateId), JSON.stringify((otherList.data?.stations ?? []).map((row) => row.title)));
+
+    // 10.5 站内搜索：搜的是**原文**（`source_text`），不只标题。
+    const SOURCE = '# S10 第一页\n\n这里有一个独门暗号：菠萝蜜罐头\n';
+    const saved = await author.call(`/api/docs/${firstId}/markdown`, { method: 'PUT', body: { markdown: SOURCE } });
+    check('10.5 用源码保存一页', saved.status === 200 && String(saved.data?.source ?? '').includes('菠萝蜜罐头'), `${saved.status} ${JSON.stringify(saved.error)}`);
+    const found = await anon.call(`/api/docs/wiki/station/${stationId}/search?q=${encodeURIComponent('菠萝蜜')}`);
+    check('10.5 站内搜索命中正文里的词（不是只搜标题）', (found.data?.results ?? []).some((row) => row.id === firstId && String(row.excerpt ?? '').includes('菠萝蜜')), JSON.stringify(found.data?.results));
+    const empty = await anon.call(`/api/docs/wiki/station/${stationId}/search?q=`);
+    check('10.5 空查询回空结果（不是把全站倒出来）', (empty.data?.results ?? []).length === 0, JSON.stringify(empty.data?.results));
+
+    // 10.6 红链：`[[没建过的页]]` 要能看出来还没建。
+    const redSource = `${SOURCE}\n去 [[S10 不存在的一页]] 看看。\n`;
+    await author.call(`/api/docs/${firstId}/markdown`, { method: 'PUT', body: { markdown: redSource } });
+    const red = await anon.call(`/api/docs/${firstId}`);
+    check('10.6 还没建的页渲染成红链（is-missing）', String(red.data?.html ?? '').includes('is-missing'), String(red.data?.html ?? '').slice(-260));
+    await author.call(`/api/docs/wiki/station/${stationId}/pages`, { method: 'POST', body: { title: 'S10 不存在的一页' } });
+    const notRed = await anon.call(`/api/docs/${firstId}`);
+    check('10.6 建好之后同一处不再是红链', !String(notRed.data?.html ?? '').includes('is-missing'), String(notRed.data?.html ?? '').slice(-260));
+
+    // 10.7 老语义不破：`GET /api/docs/wiki/<页名>` 照样找得到（`[[双链]]` 的落点）。
+    const legacy = await anon.call(`/api/docs/wiki/${encodeURIComponent('S10 第一页')}`);
+    check('10.7 老的 /api/docs/wiki/<页名> 照样找得到（双链落点不破）', legacy.status === 200 && legacy.data?.found === true && legacy.data?.doc?.id === firstId, `${legacy.status} ${JSON.stringify(legacy.data?.found)}`);
+
+    // 10.8 迁移收编：老的 `template='page'` 且还没归站时，第一次打开就地收编（幂等）。
+    {
+      // 造一个「老页」：有块、但**没有** source_text（那是后来才加的列）。
+      const lonely = await author.call('/api/docs', {
+        method: 'POST',
+        body: {
+          title: 'S10 野页',
+          kind: 'post',
+          scope: 'public',
+          template: 'page',
+          blocks: [{ block_id: 'b1', type: 'paragraph', props: { text: '野页里的一句话' } }],
+        },
+      });
+      const lonelyId = lonely.data?.doc?.id;
+      const beforeStation = scalar('SELECT COALESCE(s.station_id, 0) AS station_id FROM documents d LEFT JOIN doc_settings s ON s.document_id = d.id WHERE d.id = ?', lonelyId);
+      check('10.8 老页一开始不属于任何站', beforeStation?.station_id === 0, JSON.stringify(beforeStation));
+      await author.call(`/api/docs/${lonelyId}`);
+      const after = scalar('SELECT COALESCE(s.station_id, 0) AS station_id FROM documents d LEFT JOIN doc_settings s ON s.document_id = d.id WHERE d.id = ?', lonelyId);
+      check('10.8 第一次打开就地收编进站（不用手点迁移）', after?.station_id !== 0, JSON.stringify(after));
+      check('10.8 收编顺手补了 source_text（否则站内搜索漏老页）', String(scalar('SELECT source_text AS s FROM doc_settings WHERE document_id = ?', lonelyId)?.s ?? '').includes('野页里的一句话'), JSON.stringify(scalar('SELECT source_text AS s FROM doc_settings WHERE document_id = ?', lonelyId)?.s));
+      const again2 = await author.call(`/api/docs/${lonelyId}`);
+      check('10.8 收编是幂等的（第二次打开不报错、不改归属）', again2.status === 200, `${again2.status}`);
+    }
+
+    // 10.9 前端接线：三栏页面、站列表、`#/wiki` 都能落地。
+    const docJs = readFileSync(join(ROOT, 'public', 'views', 'doc.js'), 'utf8');
+    const routerJs = readFileSync(join(ROOT, 'public', 'core', 'router.js'), 'utf8');
+    const css = readFileSync(join(ROOT, 'public', 'css', '41-doc.css'), 'utf8');
+    check('10.9 前端有站列表与三栏渲染', ['viewWikiIndex', 'stationTreeHtml', 'stationShellHtml', 'mountStationTools'].every((name) => docJs.includes(name)), '');
+    check('10.9 路由认识 #/wiki（站列表）且保住 #/wiki/<名字>', routerJs.includes("first === 'wiki' && second") && routerJs.includes('viewWikiIndex'), '');
+    check('10.9 CSS 有三栏 / 树 / 目录 / 卡片 / 红链的规则', ['.doc-wiki-station', '.doc-wiki-tree-link', '.doc-wiki-toc-link', '.doc-wiki-pager-link', '.doc-subpage', '.doc-wiki-link.is-missing'].every((selector) => css.includes(selector)), '');
+    check('10.9 #/wiki 上能新建站（入口 + 处理函数 + 样式都在）', docJs.includes('wiki-new-station') && docJs.includes('newStationFromInput') && css.includes('.doc-station-new'), '');
+
+    // 10.10 脚本块的块体是原始 JS，必须被包进 `<script>` 才会跑（不然只是把代码当文字显示）。
+    {
+      const scriptPost = await author.call('/api/docs', { method: 'POST', body: { title: 'S10 脚本页', kind: 'post', scope: 'public' } });
+      const scriptId = scriptPost.data?.doc?.id;
+      const scriptSource = ['# S10 脚本页', '', '```doc:script {#b1}', 'var n = 40 + 2;', 'Sandbox.render.put("s1", "paragraph", { text: "答案是 " + n }, "shared");', '```', ''].join('\n');
+      const saved = await author.call(`/api/docs/${scriptId}/markdown`, { method: 'PUT', body: { markdown: scriptSource } });
+      check('10.10 源码里的 doc:script 存得下', saved.status === 200, `${saved.status} ${JSON.stringify(saved.error)}`);
+      const shown = await anon.call(`/api/docs/${scriptId}`);
+      const html = String(shown.data?.html ?? '');
+      check('10.10 脚本块渲染成 iframe 沙箱', html.includes('doc-app-frame'), html.slice(0, 300));
+      check('10.10 原始 JS 被包进 script 标签里（否则不会跑）', html.includes('&lt;script&gt;') && html.includes('40 + 2'), html.slice(0, 600));
+    }
+
+    // 10.11 「一个帖子一个 wiki」是拼出来的，不是另起一套功能：普通建帖接口 +
+    //       `template='station'` + 一块 `subpage` 积木，就得到同样的三栏 wiki。
+    {
+      const hand = await author.call('/api/docs', {
+        method: 'POST',
+        body: {
+          title: 'S10 手工站',
+          kind: 'post',
+          scope: 'public',
+          template: 'station',
+          blocks: [
+            { block_id: 'b1', type: 'heading', props: { text: '手工站', level: 1 } },
+            { block_id: 'b2', type: 'paragraph', props: { text: '这一页没有调过任何「站」接口。' } },
+            { block_id: 'b3', type: 'subpage', props: { doc: String(firstId), mode: 'card', title: '', note: '' } },
+          ],
+        },
+      });
+      const handId = hand.data?.doc?.id;
+      check('10.11 普通建帖接口 + station 模板就搭得出一个站', hand.status === 200 && Number.isInteger(handId), `${hand.status} ${JSON.stringify(hand.error)}`);
+      const opened = await anon.call(`/api/docs/${handId}`);
+      check('10.11 打开就是三栏 wiki（present 里给 wiki 与 toc）', Boolean(opened.data?.wiki?.station) && Array.isArray(opened.data?.toc), JSON.stringify(Object.keys(opened.data ?? {})));
+      check('10.11 首页的页卡片就是一块普通 subpage 积木（标题从 documents 现查）', String(opened.data?.html ?? '').includes('doc-subpage') && String(opened.data?.html ?? '').includes('S10 第一页'), String(opened.data?.html ?? '').slice(0, 400));
+      check('10.11 站本身照样出现在积木广场（它就是一个帖子）', (await anon.call('/api/docs')).data?.documents?.some((row) => row.id === handId) === true, '');
+      const source = await author.call(`/api/docs/${handId}/markdown`);
+      check('10.11 这一篇的源码就是普通 Markdown + 一段 doc:subpage（可 1:1 复刻）', String(source.data?.markdown ?? '').includes('doc:subpage'), JSON.stringify(source.data?.markdown ?? '').slice(0, 300));
     }
   }
 
