@@ -360,6 +360,66 @@ const EXTRA = {
       { revision: 1, reason: 'create', reasonLabel: '创建', authorId: 1, author: { id: 1, username: FIXTURE_USERNAME, displayName: '站长' }, createdAt: Date.now() - 86400000 },
     ],
   },
+  // P3 的 AI 编辑台（能力目录 / 审计 / 全站用量）。采集器还没采这三条，先手工给真形状，
+  // 形状以 `src/modules/ai/routes.js` 的 capabilities / shapeOp / usage 三处为准。
+  // 【为什么必须带上 expiresAt 与 rolledBackAt】这两处曾经写成 `Fmt.time(...)`，而
+  // `public/core/format.js` 只导出 timeAgo / fullTime —— 于是线上 `#/ai-edit` 整页
+  // `TypeError: Fmt.time is not a function`。空夹具下这两行根本渲染不到，渲染测试照样全绿，
+  // 所以夹具里必须有「已授权的临时授权」和「已落盘 + 已回滚过」的记录把这两行真的跑一遍。
+  '/api/ai-edit/capabilities': {
+    capabilities: [
+      { key: 'read_post', label: '读帖子', risk: 'low', highRisk: false, granted: true, dailyQuota: 50, usedToday: 3, expiresAt: Date.now() + 86400000 },
+      { key: 'edit_content', label: '改内容', risk: 'high', highRisk: true, granted: false, dailyQuota: 0, usedToday: 0, expiresAt: null },
+    ],
+  },
+  '/api/ai-edit/ops': {
+    ops: [
+      {
+        id: 12,
+        capability: 'edit_content',
+        action: 'apply',
+        targetType: 'document_block',
+        targetId: '1:b2',
+        status: 'rolled_back',
+        reason: '采样：把段落改成投票',
+        before: { type: 'paragraph', props: { text: '旧正文' } },
+        after: { type: 'poll', props: { question: '选哪个？', options: [{ id: 'o1', text: '甲' }, { id: 'o2', text: '乙' }], multiple: false } },
+        createdAt: Date.now() - 7200000,
+        rolledBackAt: Date.now() - 3600000,
+        canRollback: false,
+      },
+      {
+        id: 13,
+        capability: 'edit_content',
+        action: 'apply',
+        targetType: 'document_block',
+        targetId: '1:b1',
+        status: 'applied',
+        reason: '',
+        before: { type: 'quote', props: { text: '旧引用' } },
+        after: { type: 'heading', props: { text: '采样标题', level: 2 } },
+        createdAt: Date.now() - 600000,
+        rolledBackAt: null,
+        canRollback: true,
+      },
+    ],
+    total: 2,
+    limit: 30,
+  },
+  '/api/ai-edit/usage': {
+    scope: 'site',
+    since: Date.now() - 3600000,
+    today: {
+      total: 5,
+      billed: 3,
+      blocked: 1,
+      users: 1,
+      byAction: [{ action: 'apply', count: 3 }, { action: 'draft', count: 2 }],
+      topUsers: [{ userId: 1, username: FIXTURE_USERNAME, displayName: '站长', count: 5 }],
+    },
+    allTime: { total: 42 },
+    budget: { envKey: 'AI_DAILY_TOTAL_LIMIT', unlimited: true, limit: 0, used: 0, remaining: null },
+  },
   // 团队（P4）的路由是 `#/teams`（列表）与 `#/team/<slug>`（主页）。
   // 采集器还没采这几条，先手工给真形状 —— 接口形状改了就跟着改这里。
   '/api/teams': {
@@ -1062,6 +1122,40 @@ if (!state.theme) problems.push('state.theme 没被初始化');
     return known;
   };
 
+  // 只抠注释与单/双引号字符串，**保留模板串**：`${...}` 插值里的代码还得看得见。
+  // （`blankOut` 会把整段模板串换成空格，而下面要抓的那类错恰恰全藏在插值里。）
+  const blankOutKeepingTemplates = (source) =>
+    source
+      .replace(/\/\*[\s\S]*?\*\//g, (m) => m.replace(/[^\n]/g, ' '))
+      .replace(/\/\/[^\n]*/g, (m) => ' '.repeat(m.length))
+      .replace(/'(?:[^'\\\n]|\\.)*'/g, '""')
+      .replace(/"(?:[^"\\\n]|\\.)*"/g, '""');
+
+  /** 一个文件到底导出了哪些名字（`export function/const` 与 `export { … }` 两种写法都算）。 */
+  const exportCache = new Map();
+  const exportedNamesOf = (filePath) => {
+    if (!exportCache.has(filePath)) {
+      const names = new Set();
+      let source = '';
+      try {
+        source = readFileSync(filePath, 'utf8');
+      } catch {
+        // 读不到就当「没有导出」，交给调用处按「模块不存在」处理。
+      }
+      for (const m of source.matchAll(/export\s+(?:async\s+)?(?:function|class)\s+([\w$]+)/g)) names.add(m[1]);
+      for (const m of source.matchAll(/export\s+(?:const|let|var)\s+([\w$]+)/g)) names.add(m[1]);
+      for (const m of source.matchAll(/export\s*\{([^}]*)\}/g)) {
+        for (const part of m[1].split(',')) {
+          const name = part.trim().split(/\s+as\s+/).pop().trim();
+          if (name) names.add(name);
+        }
+      }
+      if (/export\s+default/.test(source)) names.add('default');
+      exportCache.set(filePath, names);
+    }
+    return exportCache.get(filePath);
+  };
+
   let scanned = 0;
   const publicDir = join(ROOT, 'public');
   for (const file of walkJs(publicDir).filter((item) => item.endsWith('.js'))) {
@@ -1078,9 +1172,56 @@ if (!state.theme) problems.push('state.theme 没被初始化');
         );
       }
     });
+
+    /* 名字空间成员：`import * as Fmt from '../core/format.js'` 之后写 `Fmt.time(...)`，
+     * 而 format.js 压根没导出 `time` —— 线上 `#/ai-edit` 整页就报
+     * `TypeError: Fmt.time is not a function`（这条比下面那条更阴：渲染测试用的空夹具
+     * 走不到那三行插值，全绿）。上面那条规则只盯 `名字(`，前面带点的成员调用被
+     * `(?<![\w.$])` 一律跳过，所以这一类必须在这里单独钉。 */
+    const codeLines = blankOutKeepingTemplates(raw).split('\n');
+    for (const imp of raw.matchAll(/import\s*\*\s*as\s+([\w$]+)\s+from\s*'([^']+)'/g)) {
+      const alias = imp[1];
+      const spec = imp[2];
+      if (!spec.startsWith('.')) continue; // 裸模块名（node: 之类）不在这儿管
+      const base = join(dirname(file), spec);
+      const target = existsSync(base) ? base : existsSync(`${base}.js`) ? `${base}.js` : null;
+      if (!target) {
+        problems.push(`${file.slice(ROOT.length + 1)} 里 \`import * as ${alias} from '${spec}'\` 指的文件不存在`);
+        continue;
+      }
+      const exported = exportedNamesOf(target);
+      if (!exported.size) continue; // 抓不出导出（比如整段 re-export）就不乱报
+      const memberPattern = new RegExp(`(?<![\\w$.])${alias}\\.([a-zA-Z_$][\\w$]*)`, 'g');
+      codeLines.forEach((line, index) => {
+        for (const use of line.matchAll(memberPattern)) {
+          if (exported.has(use[1])) continue;
+          problems.push(
+            `${file.slice(ROOT.length + 1)}:${index + 1} 调了 ${alias}.${use[1]}，但 ${spec} 根本没导出这个名字 —— 运行到就是 TypeError`,
+          );
+        }
+      });
+    }
+
+    /* 具名导入写错名字也一样：`import { toastError } from '../core/errors.js'` 若那边叫别的，
+     * 上面那条「裸调用」规则反倒会把它当成已知名字放过去。 */
+    for (const imp of raw.matchAll(/import\s*\{([^}]*)\}\s*from\s*'(\.[^']+)'/g)) {
+      const base = join(dirname(file), imp[2]);
+      const target = existsSync(base) ? base : existsSync(`${base}.js`) ? `${base}.js` : null;
+      if (!target) continue;
+      const exported = exportedNamesOf(target);
+      if (!exported.size) continue;
+      for (const part of imp[1].split(',')) {
+        const piece = part.trim();
+        if (!piece) continue;
+        const original = piece.split(/\s+as\s+/)[0].trim();
+        const local = piece.split(/\s+as\s+/).pop().trim();
+        if (exported.has(original)) continue;
+        problems.push(`${file.slice(ROOT.length + 1)} 从 ${imp[2]} 导入了 ${local}，但那边没导出 ${original}`);
+      }
+    }
   }
   if (scanned < 25) problems.push(`只扫到 ${scanned} 个前端模块，文件枚举八成坏了（正常是二十九个）`);
-  console.log(`  ${problems.length ? '❌' : '✅'} 静态：${scanned} 个前端模块里没有「裸调用未定义的名字」`);
+  console.log(`  ${problems.length ? '❌' : '✅'} 静态：${scanned} 个前端模块里没有「裸调用未定义的名字」，也没有「调了隔壁模块没导出的成员」`);
 }
 
 if (problems.length) {

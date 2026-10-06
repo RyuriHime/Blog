@@ -311,7 +311,7 @@ function aeCapHtml(cap) {
         <div class="ae-cap-meta">
           <span>今日已用 ${cap.usedToday ?? 0}</span>
           <span>每日配额 ${cap.dailyQuota ?? 0}${on ? '' : `（${QUOTA_HINT}）`}</span>
-          ${cap.expiresAt ? `<span>到期 ${esc(Fmt.time(cap.expiresAt))}</span>` : '<span>长期有效</span>'}
+          ${cap.expiresAt ? `<span>到期 ${esc(Fmt.fullTime(cap.expiresAt))}</span>` : '<span>长期有效</span>'}
         </div>
       </div>
       <div class="ae-cap-actions">
@@ -448,9 +448,9 @@ function aeOpsHtml() {
               </div>
               <div class="ae-op-meta">
                 <span>${esc(op.targetId || '')}</span>
-                <span>${esc(Fmt.time(op.createdAt))}</span>
+                <span>${esc(Fmt.fullTime(op.createdAt))}</span>
                 ${op.reason ? `<span>${esc(op.reason)}</span>` : ''}
-                ${op.rolledBackAt ? `<span>回滚于 ${esc(Fmt.time(op.rolledBackAt))}</span>` : ''}
+                ${op.rolledBackAt ? `<span>回滚于 ${esc(Fmt.fullTime(op.rolledBackAt))}</span>` : ''}
               </div>
             </div>
             <div class="ae-op-actions">
