@@ -578,9 +578,13 @@ export function createDocStore({ db, queries, now = () => Date.now() }) {
    * `canReact` / `canCoin` 必须与 `src/core/guards.js` 的 `assertPostVisible` **同规则**：
    * 核心的赞 / 踩 / 投币 / 收藏只认影子行的 `hidden`，而 `hidden` 又只由 scope 决定。
    * 前端照着它藏按钮，才不会出现"点了就 404"的按钮。
+   *
+   * 「同规则」落地成两件事，改一处必须改另一处：
+   *   1. 这里直接复用 `canView`（public / 作者 / staff / 关注者 / 同队）；
+   *   2. `src/modules/doc/index.js` 把同一条判定登记给 core（`addPostVisibility`）。
    */
   function abilitiesOf(docRow, viewer) {
-    const interactionAllowed = docRow.scope === 'public' || Boolean(viewer && (isStaff(viewer) || viewer.id === docRow.user_id));
+    const interactionAllowed = canView(docRow, viewer);
     return {
       canView: true,
       canEdit: canEdit(docRow, viewer),
@@ -623,6 +627,32 @@ export function createDocStore({ db, queries, now = () => Date.now() }) {
     // 源码只给改得动的人：它带着块 id，是编辑器的起点，不是读者需要的东西。
     if (abilities.canEdit) data.source = sourceOf(settingsRow, blocks);
     return data;
+  }
+
+  /**
+   * 这篇文档的互动锚点（影子行）是哪一行帖子。
+   *
+   * 阅读页要拿它去拉赞 / 踩 / 投币 / 收藏 / AI 解读的现状 —— 那些数据全在
+   * `posts` 那一行上（见 `anchor.js` 的「为什么需要它」）。回 `0` 表示
+   * 「没有锚点」或「这篇你看不见」，两种情况调用方都给空互动条，不区分。
+   */
+  function anchorPostIdOf({ id, viewer } = {}) {
+    const row = mustSee(id, viewer);
+    return Number(row.anchor_post_id) || 0;
+  }
+
+  /**
+   * 反查：这一行帖子是**哪篇积木**的影子行（帖子详情页要拿它指回积木页）。
+   *
+   * 影子行本身不对外展示，所以这里也过一遍 `canView`：看不见的文档
+   * 一律回 `null`（和互动接口的 404 同一个态度）。
+   */
+  function documentByAnchorFor({ postId, viewer } = {}) {
+    const anchorId = Number(postId);
+    if (!Number.isInteger(anchorId) || anchorId <= 0) return null;
+    const row = queries.documentByAnchor(anchorId);
+    if (!row || !canView(row, viewer)) return null;
+    return { id: Number(row.id), title: String(row.title ?? ''), scope: row.scope };
   }
 
   /**
@@ -2046,6 +2076,8 @@ export function createDocStore({ db, queries, now = () => Date.now() }) {
     ensurePagesAttached,
     getPollState,
     votePoll,
+    anchorPostIdOf,
+    documentByAnchorFor,
     listScriptTemplates,
     saveScriptTemplate,
     deleteScriptTemplate,

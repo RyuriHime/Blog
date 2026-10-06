@@ -8,12 +8,14 @@
 // 所以下面的 `schemas.addScript(...)` 是模块顶层语句（副作用导入），
 // 和 `src/modules/feed/index.js`、`src/core/tables.sql.js` 用的是同一个套路。
 import { schemas } from '../../core/schema.js';
+import { addPostVisibility } from '../../core/guards.js';
 import { DOC_SCHEMA } from './schema.js';
 import { migrateDocTables } from './migrate.js';
 import { createDocQueries } from './queries.js';
 import { createDocStore } from './store.js';
 import { registerDocRoutes } from './routes.js';
 import { loadBlockTypes } from './blocks/index.js';
+import { createVisibility, detectTeams } from './visibility.js';
 
 // 副作用：登记本模块的十三张表（必须在开库之前，见文件头注释）。
 schemas.addScript(DOC_SCHEMA, 'doc');
@@ -57,6 +59,16 @@ export default {
     loadBlockTypes(ctx.db);
     const queries = createDocQueries(ctx.db);
     const store = createDocStore({ db: ctx.db, queries });
+
+    // 影子行的可见性：core 只认 `hidden`，而 `hidden` 只由文档 scope 决定。
+    // 把「这篇文档这个人看得见吗」登记给 core，关注者才能给 followers / team
+    // 的积木点赞（否则一律 404，见 src/modules/doc/anchor.js 第 3 条）。
+    const { canView } = createVisibility({ db: ctx.db, hasTeams: detectTeams(ctx.db) });
+    addPostVisibility((post, reqCtx) => {
+      const row = queries.documentByAnchor(post.id);
+      return Boolean(row && canView(row, reqCtx?.user));
+    });
+
     registerDocRoutes(ctx, { store, queries });
   },
 };

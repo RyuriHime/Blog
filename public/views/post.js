@@ -148,15 +148,39 @@ function repostSectionHtml(post, reposters) {
       <div style="margin-top:14px">${list}</div>
     </section>`;
 }
+/**
+ * 「这一篇已经搬进积木了」。
+ *
+ * 帖子页现在是被弃用的入口：新东西都写进积木（`#/doc/:id`）。但旧链接、旧收藏、
+ * 列表卡片点进来还是这条路，所以**不能把帖子页关掉**，只能在顶上挂一条横幅，
+ * 把读者送到真正该去的地方 —— 积木页上的正文、点赞、投币、收藏和 AI 解读
+ * 就是从这里搬过去的（阅读页的互动条直接打在锚点行上）。
+ */
+function movedNoteHtml(doc) {
+  return `<div class="doc-moved-banner">
+    <span class="doc-moved-icon">🧩</span>
+    <div class="doc-moved-text">
+      <strong>这一篇已经搬进积木了</strong>
+      <div class="hint">正文、点赞、投币、收藏和 AI 解读都在积木页上。这里留着的只是它的「影子」（旧链接还能点进来）。</div>
+    </div>
+    <a class="btn btn-sm btn-primary" href="#/doc/${esc(doc.id)}">去积木页 →</a>
+  </div>`;
+}
+
 async function viewPost(id) {
   ui.app.innerHTML = loadingHtml();
-  const [{ post, replies, reposters }, aiInfo] = await Promise.all([
+  const [{ post, replies, reposters }, aiInfo, moved] = await Promise.all([
     api(`/api/posts/${id}`),
     api(`/api/ai/posts/${id}`).catch(() => ({ cached: null, stale: false })),
+    // 反查这篇帖子是不是某篇积木的影子行。影子行的可见性跟着文档 scope 走，
+    // 列表里能看见它就说明读者本来就有权看，所以这里拿不到也只是「不是影子行」。
+    api(`/api/docs/by-anchor/${id}`).catch(() => ({ doc: null })),
   ]);
+  const movedDoc = moved?.doc ?? null;
 
   ui.app.innerHTML = `
     <article class="card">
+      ${movedDoc ? movedNoteHtml(movedDoc) : ''}
       ${
         post.hidden
           ? `<div class="moderation-banner">

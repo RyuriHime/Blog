@@ -13,9 +13,10 @@
 //   1. **正文的 HTML 一律由后端出**（`src/modules/doc/blocks/html.js`）。
 //      前端只画外壳、只发请求。想「在浏览器里先把块渲染一遍」的冲动要忍住 ——
 //      那等于把块引擎实现两遍，出错时你分不清是哪一遍错了。
-//   2. **编辑器里没有全局「保存」**。每块自己保存、自己上移下移删除，
-//      因为块的语义本来就是独立的（这也是它和一篇 Markdown 的根本区别）。
-//      标题和可见范围是文档级属性，单独一个按钮保存。
+//   2. **编辑器只有一个「保存」**（`saveAll()`）：标题、可见范围、正文一起存。
+//      「标题和正文分开存」是给实现找的方便，不是给作者找的方便 —— 作者心里
+//      「这篇改完了」是一件事。块仍然一块一块写进后端（一次 PUT 一块），
+//      但那是 `saveAll()` 内部的事，作者不用知道。
 //
 // 权限只做「藏按钮」，真正的判断在后端 —— 前端藏起来的按钮不叫权限。
 
@@ -26,6 +27,8 @@ import { navigate } from '../core/router.js';
 import { state } from '../core/state.js';
 import * as Fmt from '../core/format.js';
 import * as Blocks from './doc-blocks.js';
+import * as Ai from './ai.js';
+import { reactionBarHtml } from './post.js';
 import { attachSandbox, unmountSandboxes } from '../core/sandbox.js';
 import { ntRenderMath } from './notes.js';
 
@@ -192,18 +195,65 @@ function warningsHtml(warnings) {
   </div>`;
 }
 
-/** 互动区。核心互动接口只认 `posts` 那行的 hidden，这是登记在案的已知短板。 */
+/**
+ * 互动区。赞 / 踩 / 投币 / 收藏 / 转发 / 关注 / AI 解读**就在积木页里**。
+ *
+ * 这些数据全都长在影子行（`posts` 那一行）上 —— 但那是存放位置，不是使用位置。
+ * 积木才是正文的正式形态，帖子只是它的影子；让读者为了点个赞跳走是本末倒置。
+ *
+ * 具体那条互动条交给 `views/post.js` 的 `reactionBarHtml` 画：同一份实现、同一套事件
+ * （`core/events.js` 里 reaction / coin / bookmark 都按 `data-id` 找帖子，这里给的就是
+ * 影子行 id），所以积木页和帖子页的行为不会两边不一样。真正的数据由
+ * `GET /api/docs/:id/anchor` 按当前访客读出来（见 `mountInteraction`）。
+ */
 function interactHtml(doc, abilities) {
   if (!doc.anchorPostId) return '';
-  if (abilities.canReact) {
+  if (!abilities.canReact) {
+    // 看不见这篇的人也看不见这条 —— 前端只负责不画按钮，能不能动在后端。
     return `<div class="card doc-interact">
-      <span>👍 点赞 / 投币 / 收藏走的是它的互动锚点。</span>
-      <a class="btn btn-sm" href="#/post/${esc(doc.anchorPostId)}">去帖子里互动</a>
+      <div class="doc-hint">这篇对「${esc(doc.scopeLabel ?? '不公开')}」可见。赞 / 投币 / 收藏记在它的互动锚点上，只有看得见这篇的人给得上。</div>
     </div>`;
   }
   return `<div class="card doc-interact">
-    <span>这篇的可见范围不是「公开」，核心互动接口只认帖子的 hidden 标记，别人在这里点赞 / 投币会 404 —— 设计文档 §2.5 登记过的已知短板，本轮不动 core。</span>
+    <div class="doc-interact-bar" data-doc-interact-bar><div class="doc-hint">互动条加载中…</div></div>
+    <div class="doc-interact-ai" data-doc-interact-ai></div>
   </div>`;
+}
+
+/**
+ * 阅读页的互动条 + AI 解读面板：正文挂好之后再异步填。
+ *
+ * 为什么分开取：正文是「谁都能看的那部分」，互动状态是「按访客算的那部分」——
+ * 后者慢、还依赖登录，不该拖着文章不让显示。
+ */
+async function mountInteraction(doc) {
+  const anchorHost = $('[data-doc-interact-bar]');
+  if (!anchorHost || !doc.anchorPostId) return;
+  const anchorId = Number(doc.anchorPostId);
+  const bar = anchorHost;
+  let post = null;
+  try {
+    const data = await api(`/api/docs/${doc.id}/anchor`);
+    post = data?.post ?? null;
+  } catch (error) {
+    bar.innerHTML = `<div class="doc-hint">互动条没读出来：${esc(error.message)}</div>`;
+    return;
+  }
+  if (!post) {
+    bar.innerHTML = '<div class="doc-hint">这篇还没有互动锚点（刚建出来或还在同步），刷新一下就有了。</div>';
+    return;
+  }
+  bar.innerHTML = reactionBarHtml(post);
+  const aiHost = $('[data-doc-interact-ai]');
+  if (!aiHost) return;
+  // AI 面板按 postId 工作（它读的是帖子表），影子行 id 就是它的 postId。
+  let aiInfo = { cached: null, stale: false };
+  try {
+    aiInfo = await api(`/api/ai/posts/${anchorId}`);
+  } catch {
+    aiInfo = { cached: null, stale: false };
+  }
+  aiHost.innerHTML = Ai.aiPostPanelHtml(post, aiInfo);
 }
 
 function docActionsHtml(doc, abilities) {
@@ -698,6 +748,7 @@ function renderDoc(data) {
   if (data.wiki) mountStationTools(data.wiki);
   else if (data.nav) mountWikiNav();
   loadPolls(doc.id).catch((error) => console.warn('[doc] 票数加载失败：', error));
+  mountInteraction(doc).catch((error) => console.warn('[doc] 互动条加载失败：', error));
   // 公式渲染必须在 innerHTML 之后 —— renderMathInElement 只处理**已经在 DOM 里**的节点
   // （论坛那边同样如此，见 views/timeline.js 的同名注释）。块里的 `$…$` 才不是一行源码。
   ntRenderMath($('.doc-body'));
@@ -842,10 +893,10 @@ function blocksEditorHtml(blocks) {
   return `<div class="card doc-panel doc-howto">
       <div class="card-head"><span class="card-title">🧱 积木模式：四步</span><span class="hint">这张卡是说明书，不参与正文</span></div>
       <ol class="doc-steps">
-        <li><span class="doc-step-no">1</span>上面的<strong>标题 / 谁可以看</strong>改完，点那张卡里的「保存标题与范围」。</li>
-        <li><span class="doc-step-no">2</span>滚到最下面「➕ 插入一块」选一种类型 —— 新块加在<strong>末尾</strong>，再用块头的 ↑ ↓ 挪到想要的位置。</li>
-        <li><span class="doc-step-no">3</span>填完一块点<strong>那一块自己的「保存本块」</strong>：块是一块一块存的，这里没有「保存全文」。</li>
-        <li><span class="doc-step-no">4</span>要直接改数据就展开块里的「源码」；要把两块串起来就用「块间联动（进阶）」。</li>
+        <li><span class="doc-step-no">1</span>写正文：最下面「➕ 插入一块」选一种类型 —— 新块加在<strong>末尾</strong>，再用块头的 ↑ ↓ 挪到想要的位置，然后在块里填字段。</li>
+        <li><span class="doc-step-no">2</span>改标题和「谁可以看」：就在这张卡上面的两个输入框里改。</li>
+        <li><span class="doc-step-no">3</span>点这张卡里的<strong>「保存」</strong>：标题、可见范围和这一页上所有改过的块<strong>一起存</strong>就完了。</li>
+        <li><span class="doc-step-no">4</span>只想存一块（比如表单一长、别的块还要接着改），每块自己的<strong>「保存本块」</strong>也在；要直接改数据就展开块里的「源码」。</li>
       </ol>
     </div>
     <div class="doc-editor">
@@ -894,9 +945,8 @@ function sourceEditorHtml(source) {
       </div>
     </div>
     <div class="doc-actions">
-      <button class="btn btn-sm btn-primary" type="button" data-doc-action="src-save">保存源码</button>
       <button class="btn btn-sm btn-ghost" type="button" data-doc-action="src-reload">重新拉取</button>
-      <span class="doc-hint" data-doc-src-status></span>
+      <span class="doc-hint" data-doc-src-status>改完点上方的「保存」—— 标题、可见范围和这段源码一起存。</span>
     </div>
     <div class="doc-hint">
       正文直接写 Markdown（标题 / 段落 / 列表 / 表格 / 代码围栏 / $$公式$$ / 图片 / [[双链]]）；
@@ -1022,23 +1072,6 @@ async function flushDraft() {
   return true;
 }
 
-/**
- * 保存源码。
- *
- * 服务端那两道防手滑（§3.5）都要能走完：源码解析不出块 → 400（直接把话甩给作者）；
- * 块数暴跌 → 409，**问一次**再带 `?confirm=1` 重发，不循环。
- */
-async function saveSource() {
-  const draft = currentDraft();
-  if (!draft) return;
-  const data = await withShrinkConfirm((force) => putDraft(draft.text, force));
-  if (!data) return;
-  toast('源码存好了');
-  // 重画而不是就地改：响应的 `source` 是服务端对齐 id 之后的结果，
-  // 用它重置 textarea 才是「脏基线归零」，手写一份本地推定迟早对不上。
-  renderEditor();
-}
-
 /** 重新拉一次源码（放弃本地改动）。 */
 async function reloadSource() {
   const editor = docState.editor;
@@ -1081,9 +1114,8 @@ function markdownEditorHtml(markdown, blocked = '') {
       </div>
     </div>
     <div class="doc-actions">
-      <button class="btn btn-sm btn-primary" type="button" data-doc-action="md-save"${blocked ? ' disabled' : ''}>保存 Markdown</button>
       <button class="btn btn-sm btn-ghost" type="button" data-doc-action="md-reload">重新拉取</button>
-      <span class="doc-hint" data-doc-md-status></span>
+      <span class="doc-hint" data-doc-md-status>改完点上方的「保存」—— 标题、可见范围和这段正文一起存。</span>
     </div>
     <div class="doc-hint">支持标题 / 段落 / 列表 / 代码围栏 / 表格 / $$公式$$ / 图片 / 引用 / [[双链]]；结构化块（\`\`\`doc:poll 这种）在这里只读，请去源码模式改。</div>
   </div>`;
@@ -1232,7 +1264,8 @@ function renderEditor() {
           允许脚本改块（打开后，沙箱里的 <code class="doc-code">Sandbox.render</code> 能往派生层写块）</label>
       </div>
       <div class="doc-actions">
-        <button class="btn btn-sm btn-primary" type="button" data-doc-action="save-meta">保存标题与范围</button>
+        <button class="btn btn-sm btn-primary" type="button" data-doc-action="save-all">保存</button>
+        <span class="doc-hint">标题、可见范围、正文一起存 —— 不用先存一样再存另一样。</span>
       </div>
       <div class="doc-tabs">
         <button class="doc-tab${editor.mode === 'markdown' ? ' doc-tab-on' : ''}" type="button" data-doc-tab="markdown">📝 纯 Markdown${mdBlocked ? ' ⚠' : ''}</button>
@@ -1260,23 +1293,134 @@ function absorb(data) {
   renderEditor();
 }
 
-async function saveMeta() {
+/** 两份 props 是不是一回事（不比键顺序）。判断「这块改过没有」用。 */
+function sameProps(a, b) {
+  const stable = (value) => {
+    if (Array.isArray(value)) return `[${value.map(stable).join(',')}]`;
+    if (value && typeof value === 'object') {
+      return `{${Object.keys(value)
+        .sort()
+        .map((key) => `${JSON.stringify(key)}:${stable(value[key])}`)
+        .join(',')}}`;
+    }
+    return JSON.stringify(value ?? null);
+  };
+  return stable(a ?? {}) === stable(b ?? {});
+}
+
+/**
+ * 积木模式的正文：把**这一页上所有改过的块**一起存。
+ *
+ * 块仍然是一块一条 PUT（块的语义本来就独立，服务端也是这么存的），但那是实现细节：
+ * 作者点「保存」时心里想的是「这一篇我改完了」，不是「b7 那个块我改完了」。
+ *
+ * 回 `null` = 有个块填得不对（必填没填之类）—— 这时**一块都不存**。宁可什么都不存
+ * 让作者改完再点一次，也不要留下「前三块存了、第四块没存」这种谁也说不清的状态。
+ */
+async function saveDirtyBlocks() {
   const editor = docState.editor;
-  const title = $('[data-doc-title]')?.value ?? '';
-  const scope = $('[data-doc-scope]')?.value ?? 'public';
-  absorb(
-    await api(`/api/docs/${editor.id}`, {
-      method: 'PUT',
-      body: { title, scope, template: editor.data.doc?.template ?? '' },
-    }),
-  );
-  // 「允许脚本改块」是单独的 settings 接口（默认关）—— 没变就不发这一次请求。
-  const scriptWrite = Boolean($('[data-doc-script-write]')?.checked);
-  const before = Boolean(editor.data.settings?.allowScriptWrite);
-  if (scriptWrite !== before) {
-    absorb(await api(`/api/docs/${editor.id}/settings`, { method: 'PUT', body: { allowScriptWrite: scriptWrite } }));
+  const blocks = editor.data.blocks ?? [];
+  const queued = [];
+  for (const card of document.querySelectorAll('[data-doc-card]')) {
+    const blockId = card.dataset?.docCard ?? '';
+    const block = blocks.find((item) => item.blockId === blockId);
+    if (!block) continue;
+    const { props, problems } = Blocks.readForm(card, typeDef(block.type));
+    if (problems.length > 0) {
+      toast(problems[0], 'error');
+      return null;
+    }
+    if (sameProps(props, block.props)) continue;
+    queued.push({ blockId, props });
   }
-  toast(scriptWrite === before ? '标题和可见范围存好了' : `存好了，「允许脚本改块」已${scriptWrite ? '打开' : '关闭'}`);
+  let fresh = blocks;
+  for (const item of queued) {
+    // 顺序发，不并发：块之间有顺序（position），并发写同一条序列对不上。
+    const result = await api(`/api/docs/${editor.id}/blocks/${item.blockId}`, {
+      method: 'PUT',
+      body: { props: item.props },
+    });
+    fresh = result.blocks ?? fresh;
+  }
+  editor.data = { ...editor.data, blocks: fresh };
+  return queued.length;
+}
+
+/**
+ * 编辑器唯一的「保存」：标题 + 可见范围 + 正文，一次点完。
+ *
+ * 为什么必须是一个动作：这三样在作者心里是同一件事（「这篇改好了」）。拆成
+ * 「保存标题与范围」+「保存本块」+「保存 Markdown」是照着存储结构设计的界面 ——
+ * 作者得先学会服务端怎么分表，才能把文章存对。界面该跟着人走，不是跟着表走。
+ *
+ * 服务端该是几条请求还是几条（块的语义独立、正文有对齐逻辑），那些都发生在这一层之下。
+ */
+async function saveAll() {
+  const editor = docState.editor;
+  if (!editor) return;
+  const doc = editor.data.doc ?? {};
+  const title = ($('[data-doc-title]')?.value ?? '').trim();
+  if (title === '') {
+    toast('标题不能为空', 'error');
+    return;
+  }
+  const scope = $('[data-doc-scope]')?.value ?? doc.scope ?? 'public';
+  const scriptWrite = Boolean($('[data-doc-script-write]')?.checked);
+  const metaChanged = title !== (doc.title ?? '') || scope !== (doc.scope ?? 'public');
+  const settingsChanged = scriptWrite !== Boolean(editor.data.settings?.allowScriptWrite);
+  const draft = currentDraft();
+
+  // 1) 文档级属性。**改了才发** —— 每次都发一遍会平白多出修订记录（修订列表是给人看的）。
+  if (metaChanged) {
+    editor.data = await api(`/api/docs/${editor.id}`, {
+      method: 'PUT',
+      body: { title, scope, template: doc.template ?? '' },
+    });
+  }
+  if (settingsChanged) {
+    editor.data = await api(`/api/docs/${editor.id}/settings`, {
+      method: 'PUT',
+      body: { allowScriptWrite: scriptWrite },
+    });
+  }
+
+  // 2) 正文。
+  let contentSaved = 0;
+  if (editor.mode === 'blocks') {
+    const saved = await saveDirtyBlocks();
+    if (saved === null) {
+      // 有块填错了：已经把话说清楚了，界面原地不动，别把作者敲的东西弄丢。
+      renderEditor();
+      return;
+    }
+    contentSaved = saved;
+  } else if (draft && draft.text !== draft.baseline) {
+    const data = await withShrinkConfirm((force) => putDraft(draft.text, force));
+    if (!data) {
+      toast('正文没存：你在确认框里点了取消', 'error');
+      renderEditor();
+      return;
+    }
+    if (editor.mode === 'markdown') editor.markdown = draft.text;
+    contentSaved = 1;
+  }
+
+  // 3) 重画（本地推定「存完该长什么样」迟早对不上）。
+  //    Markdown 模式**必须重新拉一次**：编辑区画的 `editor.markdown` 是上次拉的文本，
+  //    不重拉就等于把作者刚敲的东西从框里抹掉（空文档上尤其明显：直接变空白）；
+  //    顺带也把脏基线对齐到服务端真存下来的那份（解析是有损的：表格分隔行、嵌套列表会被改写）。
+  if (editor.mode === 'markdown') await loadMarkdown();
+  else renderEditor();
+
+  if (!metaChanged && !settingsChanged && !contentSaved) {
+    toast('没有改动要存');
+    return;
+  }
+  const bits = [];
+  if (metaChanged) bits.push('标题与可见范围');
+  if (settingsChanged) bits.push(`「允许脚本改块」已${scriptWrite ? '打开' : '关闭'}`);
+  if (contentSaved) bits.push(editor.mode === 'blocks' ? `${contentSaved} 个块` : '正文');
+  toast(`存好了：${bits.join('、')}`);
 }
 
 /**
@@ -1349,18 +1493,6 @@ async function loadMarkdown() {
   const data = await api(`/api/docs/${editor.id}/markdown`);
   editor.markdown = data.markdown ?? '';
   renderEditor();
-}
-
-async function saveMarkdown() {
-  const draft = currentDraft();
-  if (!draft) return;
-  const data = await withShrinkConfirm((force) => putDraft(draft.text, force));
-  if (!data) return;
-  toast('整篇按 Markdown 重写了');
-  // **存完必须重新拉一次**：Markdown 视图画的 `editor.markdown` 是上次拉的文本，
-  // 不重拉就等于把作者刚敲的东西从编辑区里抹掉（空文档上尤其明显：直接变空白）。
-  // 顺便也把脏基线对齐到服务端真存下来的那份（它是有损的：表格分隔行、嵌套列表都会被改写）。
-  await loadMarkdown();
 }
 
 async function showRevisions() {
@@ -1804,10 +1936,8 @@ async function onAppClick(event) {
     });
   }
   if (action === 'insert') return withBusy(insertBlock);
-  if (action === 'save-meta') return withBusy(saveMeta);
-  if (action === 'md-save') return withBusy(saveMarkdown);
+  if (action === 'save-all') return withBusy(saveAll);
   if (action === 'md-reload') return withBusy(loadMarkdown);
-  if (action === 'src-save') return withBusy(saveSource);
   if (action === 'src-reload') return withBusy(reloadSource);
   if (action === 'apply-template') {
     const key = $('[data-doc-template]')?.value ?? '';

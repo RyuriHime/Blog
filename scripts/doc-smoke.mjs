@@ -867,9 +867,25 @@ try {
 
     const mateView = await mate.call(`/api/docs/${followersDocId}`);
     check(
-      'followers 文档对关注者的 abilities.canReact=false（诚实暴露已知短板，免得前端给一个点了就 404 的按钮）',
-      mateView.data?.abilities?.canReact === false,
+      'followers 文档对关注者给出 canReact=true（可见性判定同时登记给了 core）',
+      mateView.data?.abilities?.canReact === true,
       JSON.stringify(mateView.data?.abilities),
+    );
+    // 光有 `canReact` 不算数：按钮点下去得真能过 core 那道闸。
+    // 影子行的 `hidden` 只由 scope 决定，所以关注者点关注者文档的赞，
+    // 以前是 404（`assertPostVisible` 只放行 staff / 作者）—— 这就是那条已知短板。
+    const mateAnchor = scalar('SELECT anchor_post_id AS id FROM documents WHERE id = ?', followersDocId)?.id;
+    const mateLike = await mate.call(`/api/posts/${mateAnchor}/reaction`, { method: 'POST', body: { kind: 'like' } });
+    check(
+      '关注者能真的给 followers 文档点赞（不再点了就 404）',
+      mateLike.status === 200 && mateLike.data?.liked === true,
+      `${mateLike.status} ${JSON.stringify(mateLike.error)}`,
+    );
+    const strangerLike = await other.call(`/api/posts/${mateAnchor}/reaction`, { method: 'POST', body: { kind: 'like' } });
+    check(
+      '没关注的人给 followers 文档点赞仍然是 404（放行的是「看得见的人」，不是所有人）',
+      strangerLike.status === 404,
+      `${strangerLike.status} ${JSON.stringify(strangerLike.error)}`,
     );
     const authorView = await author.call(`/api/docs/${followersDocId}`);
     check('作者自己的 followers 文档 canReact=true（core 的 assertPostVisible 放行作者）', authorView.data?.abilities?.canReact === true, JSON.stringify(authorView.data?.abilities));
@@ -889,6 +905,43 @@ try {
 
     const post = await other.call(`/api/posts/${anchorId}`);
     check('旧帖子详情接口能打开影子行，标题就是文档标题', post.status === 200 && JSON.stringify(post.data ?? {}).includes('第一篇积木'), `${post.status} ${JSON.stringify(post.error ?? post.data).slice(0, 160)}`);
+  }
+
+  /* ---------- 3.10.1 互动搬进积木页：两条新接口 ---------- */
+  // 阅读页不再让读者「去帖子里互动」：它自己拿锚点帖（`/api/docs/:id/anchor`），
+  // 把点赞 / 投币 / 收藏 / AI 解读都画在积木页上；帖子页反过来用 `by-anchor` 挂横幅。
+  // 这两条接口各自有一个容易写错的地方，所以钉在这里：
+  //   ① `/anchor` 必须回**列表形状**（详情形状的 `content` 白拉一遍大正文）；
+  //   ② 它**不能**像 `/api/posts/:id` 那样 `bumpViews` —— 看一遍积木不该涨帖子浏览量。
+
+  {
+    const anchorView = await other.call(`/api/docs/${docId}/anchor`);
+    check('GET /api/docs/:id/anchor 给出可互动的影子帖', anchorView.status === 200 && anchorView.data?.post?.id === anchorId, `${anchorView.status} ${JSON.stringify(anchorView.data ?? anchorView.error).slice(0, 160)}`);
+    const shape = anchorView.data?.post ?? {};
+    check(
+      '互动条要的字段一个不少（少一个前端就少一个按钮）',
+      ['id', 'likeCount', 'dislikeCount', 'coinCount', 'bookmarkCount', 'repostCount', 'myCoins', 'liked', 'disliked', 'bookmarked', 'reposted', 'authorFollowed', 'author', 'coin'].every((key) => key in shape),
+      Object.keys(shape).join(','),
+    );
+    check('用的是列表形状：不带 content（阅读页的正文自己会渲染）', !('content' in shape) && !('contentHtml' in shape), Object.keys(shape).join(','));
+    check('coin 跟帖子详情一样按访客算', typeof shape.coin?.available === 'boolean' && Number.isInteger(shape.coin?.perPostLimit), JSON.stringify(shape.coin));
+
+    const viewsBefore = scalar('SELECT views FROM posts WHERE id = ?', anchorId)?.views ?? 0;
+    await other.call(`/api/docs/${docId}/anchor`);
+    const viewsAfter = scalar('SELECT views FROM posts WHERE id = ?', anchorId)?.views ?? 0;
+    check('看积木页不涨帖子浏览量（这条接口不 bumpViews）', viewsBefore === viewsAfter, `${viewsBefore} → ${viewsAfter}`);
+
+    const privateAnchor = await author.call(`/api/docs/${privateDocId}/anchor`);
+    check('自己的 private 文档也能拿到锚点（作者本来就能互动）', privateAnchor.status === 200 && privateAnchor.data?.post?.id === scalar('SELECT anchor_post_id AS id FROM documents WHERE id = ?', privateDocId)?.id, `${privateAnchor.status} ${JSON.stringify(privateAnchor.data ?? privateAnchor.error).slice(0, 120)}`);
+    const otherPrivate = await other.call(`/api/docs/${privateDocId}/anchor`);
+    check('看不见的文档拿锚点 → 404（与读文档同一条可见性判定）', otherPrivate.status === 404, `${otherPrivate.status} ${JSON.stringify(otherPrivate.error)}`);
+
+    const back = await other.call(`/api/docs/by-anchor/${anchorId}`);
+    check('GET /api/docs/by-anchor/:postId 反查得到文档', back.status === 200 && back.data?.doc?.id === docId && back.data?.doc?.scope === 'public', `${back.status} ${JSON.stringify(back.data ?? back.error)}`);
+    const backMissing = await other.call('/api/docs/by-anchor/99999999');
+    check('反查一条不是影子行的帖子 → { doc: null }（不是 404：帖子页照常渲染）', backMissing.status === 200 && backMissing.data?.doc === null, `${backMissing.status} ${JSON.stringify(backMissing.data)}`);
+    const backPrivate = await other.call(`/api/docs/by-anchor/${scalar('SELECT anchor_post_id AS id FROM documents WHERE id = ?', privateDocId)?.id}`);
+    check('反查看不见的文档 → 也是 { doc: null }（不泄露存在性）', backPrivate.status === 200 && backPrivate.data?.doc === null, `${backPrivate.status} ${JSON.stringify(backPrivate.data)}`);
   }
 
   /* ---------- 3.11 列表与可见范围 ---------- */
@@ -1949,7 +2002,11 @@ try {
          表达不了的块时 Markdown 页只读；④ 保存之后编辑区不能被清空。 */
       check('8.9 默认是纯 Markdown 模式', editorJs.includes("const wanted = query.get('mode') ?? 'markdown'"), '');
       check('8.9 切视图前先把当前编辑区的改动存下去', editorJs.includes('async function flushDraft()') && editorJs.includes('if (!(await flushDraft())) return;'), '');
-      check('8.9 Markdown 存完会重新拉一次（不重拉就会把刚敲的从编辑区抹掉）', /async function saveMarkdown\(\)[\s\S]{0,600}?await loadMarkdown\(\)/.test(editorJs), '');
+      // 这条钉子跟着「一次保存」改了名字：以前是 `saveMarkdown()` 自己存自己重拉，
+    // 现在正文、标题、可见范围都由 `saveAll()` 一处存完 —— 但「Markdown 存完必须重拉」
+    // 这条不变量没变（不重拉就会把作者刚敲的从编辑区抹掉）。
+    check('8.9 Markdown 存完会重新拉一次（不重拉就会把刚敲的从编辑区抹掉）', /async function saveAll\(\)[\s\S]{0,4000}?if \(editor\.mode === 'markdown'\) await loadMarkdown\(\)/.test(editorJs), '');
+    check('8.9 编辑器只有一个「保存」（标题 / 可见范围 / 正文一起存）', editorJs.includes('function saveAll()') && !editorJs.includes('data-doc-action="save-meta"') && !editorJs.includes('function saveMeta('), '');
       check('8.9 源码里有 Markdown 表达不了的块时，Markdown 页只读并说明原因', editorJs.includes('function markdownViewBlocked(') && editorJs.includes('MARKDOWN_VIEW_TYPES') && editorJs.includes('blocked ? \' readonly\' : \'\''), '');
       check('8.9 编辑器开头有「四步」说明卡', editorJs.includes('doc-howto') && editorJs.includes('保存本块'), '');
       check('8.9 每块底部也有一个「保存本块」（表单一长就滚不到顶上那个）', editorJs.includes('doc-block-foot'), '');
@@ -2393,7 +2450,11 @@ try {
     check('11.9 「一键新建一篇积木」按内容认块类型（HTML → app，纯 JS → script）', docJs.includes('function newDocFromScriptTemplate(') && docJs.includes("type: 'app'") && docJs.includes("type: 'script'"), '');
     check('11.10 编辑器里能开关「允许脚本改块」（以前这个开关没有界面）', docJs.includes('data-doc-script-write') && docJs.includes('allowScriptWrite'), '');
     check('11.10 教程页顶上是动态块类型清单（谁注册了新类型，教程里就有）', guideJs.includes('export async function viewGuide') && guideJs.includes('/api/docs/meta/block-types'), '');
-    check('11.10 教程讲了能力、状态与坑（不是一页空话）', ['Sandbox.state.set', '能力', '超时'].every((needle) => guideJs.includes(needle)), '');
+    check('11.10 教程讲了上手步骤、能力与超时（不是一页空话）', ['Sandbox.state.set', '能力', '超时', '新建一篇'].every((needle) => guideJs.includes(needle)), '');
+    // 教程是写给「用积木的人」的：按顺序教怎么新建 / 编辑 / 保存 / 分享，
+    // 不夹只有作者本人看得懂的内部记录（以前那一节标题叫「踩过的坑」，就属于这一类）。
+    check('11.10 教程不夹内部笔记（「踩过的坑」这类不算教程）', !guideJs.includes('踩过的坑'), '');
+    check('11.10 教程的保存说法与编辑器一致（一次全存）', guideJs.includes('一次全存') && !guideJs.includes('保存标题与范围'), '');
     check('11.10 教程的代码框样式在 41-doc.css 里', css.includes('.guide-pre'), '');
     check('11.10 前端清单里登记了开发者功能与积木教程两页', frontendJs.includes("['开发者功能'") && frontendJs.includes("['积木教程'"), '');
   }

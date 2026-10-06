@@ -353,6 +353,49 @@
   font-size: 13px;
 }
 
+/* 阅读页的互动条：点赞 / 投币 / 收藏 / 关注 + AI 解读。
+   它们长在文档的影子帖子上（接口 `/api/docs/:id/anchor`），所以这里只是
+   「一块地方」—— 条子本身还是 `post.js` 那套 `.action-bar`，样式不许另起一套。 */
+.doc-interact-bar:empty {
+  display: none;
+}
+
+.doc-interact-ai {
+  margin-top: 12px;
+  border-top: 1px solid var(--border-soft);
+  padding-top: 12px;
+}
+
+.doc-interact-ai:empty {
+  display: none;
+}
+
+/* 帖子页顶上的「已经搬进积木」横幅（`public/views/post.js` 的 movedNoteHtml）。 */
+.doc-moved-banner {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  border: 1px solid var(--accent);
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+  border-radius: 12px;
+  padding: 12px 14px;
+  margin-bottom: 16px;
+}
+
+.doc-moved-icon {
+  font-size: 22px;
+  line-height: 1;
+}
+
+.doc-moved-text {
+  flex: 1;
+  min-width: 0;
+}
+
+.doc-moved-text .hint {
+  margin-top: 4px;
+}
+
 /* ── 编辑器：块卡片与表单 ──────────────────────────────────────────────── */
 
 .doc-editor {

@@ -585,6 +585,49 @@ const EXTRA = {
       { revision: 1, reason: 'create', reasonLabel: '创建', authorId: 1, author: { id: 1, username: FIXTURE_USERNAME, displayName: '站长' }, createdAt: Date.now() - 86400000 },
     ],
   },
+  // 阅读页的互动条（点赞 / 投币 / 收藏 / AI 解读）与帖子页的「已经搬进积木」横幅，
+  // 分别走这两条接口。**空夹具会让它们整段渲染不到**：互动条只会写一句「还没有互动锚点」，
+  // 横幅压根不出现 —— 渲染测试照样全绿，等于新代码没被跑过。所以这里给真形状：
+  // `/anchor` 回的是**列表形状**的影子帖（见 `src/modules/doc/routes.js`），
+  // 逐字对齐 `shapePostListRow` + `coinAvailability`，一个字段都不能少（少一个按钮就少一个）。
+  '/api/docs/1/anchor': {
+    post: {
+      id: Number(FIXTURE_POST_ID),
+      title: '采样用的积木帖子',
+      excerpt: '采样 正文一段。',
+      board: { id: 6, slug: 'documents', name: '积木', icon: '🧩' },
+      author: { id: 1, username: FIXTURE_USERNAME, displayName: '站长', role: 'owner', avatar: 'emoji:🧭:212' },
+      category: null,
+      profilePinned: false,
+      views: 3,
+      replyCount: 0,
+      likeCount: 2,
+      dislikeCount: 0,
+      coinCount: 1,
+      bookmarkCount: 1,
+      repostCount: 0,
+      myCoins: 0,
+      liked: true,
+      disliked: false,
+      bookmarked: true,
+      reposted: false,
+      authorFollowed: true,
+      hidden: false,
+      hiddenAt: null,
+      hiddenReason: '',
+      hiddenBy: null,
+      baseScore: 0,
+      valueScore: 0,
+      pinned: false,
+      locked: false,
+      createdAt: Date.now() - 86400000,
+      updatedAt: Date.now() - 3600000,
+      lastActiveAt: Date.now() - 3600000,
+      coin: { perPostLimit: 2, signupGrant: 10, myCoins: 0, balance: 12, available: false, reason: 'self', message: '不能给自己的帖子投币，把币留给别人吧 🙌' },
+    },
+  },
+  // 反查「这条帖子是不是某篇积木的影子行」。有值 → 帖子页顶上出现横幅（`movedNoteHtml`）。
+  [`/api/docs/by-anchor/${FIXTURE_POST_ID}`]: { doc: { id: 1, title: '采样用的积木帖子', scope: 'public' } },
   // P3 的 AI 编辑台（能力目录 / 审计 / 全站用量）。采集器还没采这三条，先手工给真形状，
   // 形状以 `src/modules/ai/routes.js` 的 capabilities / shapeOp / usage 三处为准。
   // 【为什么必须带上 expiresAt 与 rolledBackAt】这两处曾经写成 `Fmt.time(...)`，而

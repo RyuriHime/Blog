@@ -119,6 +119,15 @@ export function registerDocRoutes(ctx, { store }) {
     ok(reqCtx.res, store.deleteScriptTemplate({ viewer: user, id }));
   });
 
+  // 帖子 → 积木：影子行对普通访客是隐藏的（点开只见到 404），所以帖子详情页
+  // 靠这个反查「这条帖子其实是哪篇积木的影子」，把读者送到真正的积木页。
+  // 看不见的文档回 `{ doc: null }`，不是错误（列表里仍显示那张卡片）。
+  add('GET', '/api/docs/by-anchor/:postId', async (reqCtx) => {
+    const postId = Number(reqCtx.params.postId);
+    ensure(Number.isInteger(postId) && postId > 0, 404, 'not_found', '这条帖子不存在');
+    ok(reqCtx.res, { doc: store.documentByAnchorFor({ postId, viewer: reqCtx.user }) });
+  });
+
   /* ---------------- Wiki 站（§6：一个帖子一个 wiki） ---------------- */
 
   // 注意登记顺序：这几个的第三段是**字面量**（`stations` / `station`），
@@ -261,6 +270,29 @@ export function registerDocRoutes(ctx, { store }) {
       scope: reqCtx.body.scope,
       template: reqCtx.body.template,
     }));
+  });
+
+  /**
+   * 这篇积木的互动现状（赞 / 踩 / 投币 / 收藏 / 转发 / 关注 —— 阅读页那条互动条要的）。
+   *
+   * 为什么不塞进 `GET /api/docs/:id`：
+   *   1. 这些字段长在**影子行**上，形状由 core 的 shape 说了算。借它的形状，
+   *      比在 doc 里抄一份字段表、日后 core 加一个字段就漏一个强。
+   *   2. 它要按访客算（我赞过没有、我的币够不够），和文档本体（谁都能看的那部分）
+   *      不是同一件事 —— 分开之后 `GET /api/docs/:id` 仍然可以随便缓存/预取。
+   * 只读，**不 bumpViews**：翻积木不该涨影子行的浏览量。
+   */
+  add('GET', '/api/docs/:id/anchor', async (reqCtx) => {
+    const viewer = reqCtx.user;
+    const anchorId = store.anchorPostIdOf({ id: readId(reqCtx), viewer });
+    const row = anchorId ? ctx.store.postById(anchorId, viewer?.id ?? 0) : null;
+    // 没有锚点（还没同步）或影子行被删了：给空条子，别把阅读页搞成报错页。
+    if (!row) {
+      ok(reqCtx.res, { post: null });
+      return;
+    }
+    // 用列表形状而不是详情形状：互动条只读得到这些字段，不带 content 省一半流量。
+    ok(reqCtx.res, { post: { ...ctx.shape.shapePostListRow(row), coin: ctx.shape.coinAvailability(row, viewer) } });
   });
 
   add('DELETE', '/api/docs/:id', async (reqCtx) => {
