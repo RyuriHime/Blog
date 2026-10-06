@@ -273,6 +273,51 @@
   word-break: break-word;
 }
 
+/*
+ * 渲染出来的预览（改动前 / 模型建议）。
+ * 正文排版交给站点现成的 .md（40-post.css），这里只管容器与滚动，
+ * 颜色一律走 CSS 变量，深浅主题都看得清。
+ */
+.ae-preview-body {
+  padding: 10px 12px;
+  max-height: 340px;
+  overflow: auto;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-sm);
+  background: var(--panel);
+}
+.ae-preview-body iframe {
+  width: 100%;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: var(--panel);
+}
+.ae-preview-warn {
+  font-size: 12px;
+  color: var(--warn-fg);
+  word-break: break-word;
+}
+.ae-preview-warn:empty {
+  display: none;
+}
+
+/* 整篇才给的「看 Markdown 源码」：默认折叠，别把整篇 Markdown 铺满页面 */
+.ae-source {
+  margin: 10px 0;
+  padding: 6px 10px;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-sm);
+  background: var(--bg-soft);
+}
+.ae-source > summary {
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--muted);
+}
+.ae-source .ae-preview-code {
+  margin-top: 8px;
+}
+
 /* 审计日志 -------------------------------------------------------------- */
 .ae-ops {
   display: flex;
@@ -315,6 +360,30 @@
   gap: 6px;
 }
 
+/* 操作记录里「看改动前 / 改动后」的折叠块：长文本已经截断过，这里只管容器 */
+.ae-op-detail {
+  margin-top: 6px;
+  padding: 6px 10px;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-sm);
+  background: var(--panel);
+}
+.ae-op-detail > summary {
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--muted);
+}
+.ae-op-detail .ae-preview {
+  margin: 8px 0 2px;
+}
+
+/* 落盘撞上 409（块数暴跌）时的确认块：要显眼，但别像报错 */
+.ae-conflict {
+  border-color: var(--warn);
+  background: var(--bg-soft);
+  color: var(--text);
+}
+
 /* 补一个 95-ai.css 里没定义的 chip 变体（已授权 = 绿色） ------------------ */
 .ai-chip.ok {
   color: var(--success);
@@ -331,3 +400,5 @@
     grid-template-columns: 1fr;
   }
 }
+
+/* @hand-written */

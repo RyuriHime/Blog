@@ -32,7 +32,7 @@ const TARGETS = ['src', 'public', 'scripts', 'forum-ai/src', 'note-agent/src', '
  * 三个新文件）合进来之后实测 193，抬到 193。
  * 这个数字存在的意义：前端文件被搬走却没同步检查脚本时，哨兵必须响。
  */
-const MIN_CHECKED = Number(process.env.MIN_CHECKED || 193);
+const MIN_CHECKED = Number(process.env.MIN_CHECKED || 194);
 
 /** 新布局里必须存在的关键文件。少一个就说明有人把文件搬走却没同步这份检查。 */
 const REQUIRED_FILES = [
@@ -97,6 +97,7 @@ const REQUIRED_FILES = [
   'scripts/ai-smoke.mjs',
   'src/modules/ai/schema.js',
   'src/modules/ai/routes.js',
+  'src/modules/ai/sections.js',
   // 可编程帖子（P2，积木）：后端模块、块引擎、沙箱、页面、样式与它自己的冒烟脚本。
   'src/modules/doc/schema.js',
   'src/modules/doc/queries.js',
