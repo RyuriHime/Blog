@@ -124,7 +124,7 @@ async function viewStart() {
             href: '#/',
             icon: '🌊',
             title: '动态',
-            desc: '全站最新动态：发帖、评价、投币、@ 提醒都在这里。',
+            desc: '全站最新动态：发帖、评价、点赞、@ 提醒都在这里。',
             items: feedItems,
             empty: '还没有动态，成为第一个发帖的人吧。',
           })}
