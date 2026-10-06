@@ -29,6 +29,14 @@ function notifTarget(item) {
   if (item.actor) return `#/u/${encodeURIComponent(item.actor.username)}`;
   return null;
 }
+/*
+ * 【别把 `notif-actor` 改回链接】整条通知本身就是一个 `<a>`（下面那个 `notif-item`）。
+ * HTML 解析器遇到「已经有一个 `<a>` 开着时再来一个 `<a>` 起始标签」会**隐含闭合外层**，
+ * 于是外层链接只包住最前面那个图标方块、后面的正文全掉到链接外面去 ——
+ * 这一版的通知列表就是这么坏掉的：每条只剩一个 30px 的图标，正文全跑到卡片左边缘堆着。
+ * 想让人名可点，只能换个做法（例如整条不套 `<a>`、改用 `data-action` 跳转），
+ * 不能靠往里塞第二个 `<a>`。
+ */
 function notifHtml(item) {
   const meta = NOTIF_META[item.type] ?? { icon: '🔔', text: '有新消息' };
   const target = notifTarget(item);
@@ -36,11 +44,7 @@ function notifHtml(item) {
     <div class="notif-icon">${meta.icon}</div>
     <div class="notif-main">
       <div class="notif-line">
-        ${
-          item.actor
-            ? `<a class="notif-actor" href="#/u/${encodeURIComponent(item.actor.username)}">${esc(item.actor.displayName)}</a>`
-            : '<span class="notif-actor">系统</span>'
-        }
+        <span class="notif-actor">${item.actor ? esc(item.actor.displayName) : '系统'}</span>
         <span class="notif-action">${meta.text}</span>
       </div>
       ${
