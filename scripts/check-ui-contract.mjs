@@ -29,7 +29,7 @@ const PORT = Number(process.env.CONTRACT_PORT || 3412);
 const BASE = `http://127.0.0.1:${PORT}`;
 
 /** 不下降哨兵：接手的模块只允许加，不允许把这些数字改小。 */
-const MIN_CHECKS = Number(process.env.MIN_UI_CHECKS || 245);
+const MIN_CHECKS = Number(process.env.MIN_UI_CHECKS || 249);
 
 /**
  * 前端源码入口清单。搬家前这三份文件在 public/ 根目录；骨架会把它们拆进
@@ -229,6 +229,42 @@ check(
 check(
   'AI 编辑台不再用自造的块形状 { blockType, content }',
   !/blockType/.test(appJs),
+);
+
+/* 剪贴板：线上是**明文 http**（`http://47.106.123.230:8080/`，没有 nginx 也没有 443），
+ * 而 `navigator.clipboard` 带 `[SecureContext]`，在那种页面上是 undefined ——
+ * 「复制」按钮点了什么也不会发生。偏偏本地开发跑在 localhost（属于安全上下文），
+ * 所以这个洞在开发机上**永远复现不出来**，2026-10 线上实测才踩到。
+ * 这四条把它钉住：只留 core/dom.js 一处碰剪贴板，且必须带 execCommand 兜底。
+ */
+// 先剥掉注释再看：下面几个文件的注释里就写着 `navigator.clipboard` / `execCommand`
+// 这几个字（正是为了解释「为什么不能直接用」），不剥的话这几条会被自己的注释喂饱 ——
+// 把 dom.js 的 execCommand 兜底删掉、只留注释，断言照样绿。这是实测出来的教训。
+// `(^|[^:])` 是为了不误伤字符串里的 `https://`。
+const stripComments = (source) =>
+  source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/.*$/gm, '$1');
+const codeOnly = new Map(jsFiles.map((file) => [file, stripComments(readFileSync(file, 'utf8'))]));
+const appCode = [...codeOnly.values()].join('\n');
+const clipboardFiles = [...codeOnly]
+  .filter(([, source]) => /navigator\.clipboard|document\.execCommand/.test(source))
+  .map(([file]) => file.slice(ROOT.length + 1).replace(/\\/g, '/'));
+const domCode = codeOnly.get(join(publicDir, 'core', 'dom.js')) ?? '';
+
+check(
+  '剪贴板只在 core/dom.js 一处碰（copyText），别处一律走它',
+  clipboardFiles.length === 1 && clipboardFiles[0].endsWith('public/core/dom.js'),
+  clipboardFiles.join(', ') || '(没有任何文件碰剪贴板)',
+);
+check(
+  'copyText 用 execCommand 兜住明文 http（navigator.clipboard 在那里不存在）',
+  /function copyText\(/.test(domCode) &&
+    /document\.execCommand\('copy'\)/.test(domCode) &&
+    /export \{ copyText \}/.test(domCode),
+);
+check('团队号「复制」按钮走 copyText', /await copyText\(code\)/.test(appCode));
+check(
+  '帖子「复制链接」走 copyText',
+  /await copyText\(shareUrl\)/.test(appCode) && !/navigator\.clipboard\.writeText\(shareUrl\)/.test(appCode),
 );
 
 /* 团队第二批（成员管理 / 文件柜 / 群聊）的契约。

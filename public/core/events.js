@@ -4,7 +4,7 @@
 // 整体替换，逐元素 addEventListener 会随替换一起丢。所以统一在 document 上委托，
 // 靠 data-action="xxx" 属性分发。新增动作 = 在下面的 switch 里加一个 case。
 
-import { $, esc, toast, ui } from './dom.js';
+import { $, copyText, esc, toast, ui } from './dom.js';
 import { api, withButtonBusy } from './api.js';
 import { apiErrorText, toastError } from './errors.js';
 import { state } from './state.js';
@@ -185,12 +185,10 @@ document.addEventListener('click', async (event) => {
       case 'copy-link': {
         const linkPostId = Number(actionNode.dataset.id);
         const shareUrl = `${location.origin}${location.pathname}#/post/${linkPostId}`;
-        try {
-          await navigator.clipboard.writeText(shareUrl);
-          toast('链接已复制，发给朋友吧 🔗', 'success');
-        } catch {
-          window.prompt('复制这个链接：', shareUrl);
-        }
+        // 走 copyText 而不是直接 navigator.clipboard：线上是明文 http，
+        // 那个对象只在安全上下文里存在，直接调会一路掉进 catch 弹 prompt（见 core/dom.js）。
+        if (await copyText(shareUrl)) toast('链接已复制，发给朋友吧 🔗', 'success');
+        else window.prompt('复制这个链接：', shareUrl);
         break;
       }
       case 'profile-pin': {
