@@ -61,6 +61,9 @@ async function route() {
   // 换页时也把动态的「全屏编辑」解开 —— 否则用户在展开状态下点了别的链接，
   // body 上那条 overflow:hidden 会跟着过去，整个新页面滚不动（查起来极其费解）。
   document.body.classList.remove('feed-fullscreen');
+  // 同理：wiki 站页面会把论坛侧栏让开（`body.doc-wide`），换页时先摘掉，
+  // 由积木的阅读页在真的需要时再加回来 —— 不然离开 wiki 之后首页也少一栏。
+  document.body.classList.remove('doc-wide');
   Compose.destroyComposeNotesPanel(); // 换页时销毁写作页的 AI 工作台（见其定义处的说明）
   Session.renderSidebar();
   if (first !== 'search') ui.searchInput.value = query.get('q') || '';

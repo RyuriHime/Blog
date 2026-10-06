@@ -47,6 +47,7 @@ function renderUserArea() {
       <a class="menu-item" href="#/following">👥 我的关注</a>
       <a class="menu-item" href="#/bookmarks">⭐ 我的收藏</a>
       <a class="menu-item" href="#/docs">🧩 积木广场</a>
+      <a class="menu-item" href="#/wiki">⧉ Wiki 站</a>
       <a class="menu-item" href="#/settings">⚙️ 账号设置</a>
       <a class="menu-item" href="#/new">✏️ 发布新帖</a>
       ${Fmt.isStaffUser(me) ? '<a class="menu-item" href="#/admin">🛠️ 管理后台</a>' : ''}

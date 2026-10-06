@@ -133,6 +133,7 @@ async function viewDocs(query = new URLSearchParams()) {
       </form>
       <div class="doc-actions">
         ${state.me ? '<button class="btn btn-sm" type="button" data-doc-action="new">＋ 新建一篇</button>' : '<a class="btn btn-sm" href="#/login">登录后可以新建</a>'}
+        <a class="btn btn-sm" href="#/wiki">⧉ Wiki 站</a>
         <a class="btn btn-sm btn-ghost" href="#/blocks">块类型表</a>
       </div>
     </div>
@@ -200,6 +201,10 @@ function leaveDocPage() {
   }
   mdNotesPanel = null;
   unmountSandboxes();
+  // wiki 站是三栏（左树 / 中正文 / 右目录），再叠上论坛自己的 306px 侧栏
+  //（每日签到、我的账户、热榜）正文就只剩三百来像素 —— 所以站页面挂 `body.doc-wide`
+  // 把侧栏让开（规则见 41-doc.css；换页时由 router 统一摘掉）。
+  document.body.classList.remove('doc-wide');
   ui.app.innerHTML = loadingHtml();
 }
 
@@ -477,8 +482,12 @@ async function viewWikiIndex() {
     <div class="card-head"><span class="card-title">⧉ Wiki 站</span><span class="hint">一个帖子一个 wiki</span></div>
     <div class="doc-station-list">${cards || '<div class="doc-hint">还没有 wiki 站。</div>'}</div>
     <div class="doc-station-new">
-      <input class="doc-wiki-search" data-wiki-station-name maxlength="80" placeholder="新站的名字，例如「算法笔记」">
-      <button class="btn" data-doc-action="wiki-new-station" type="button">＋ 新建一个 wiki</button>
+      ${
+        state.me
+          ? `<input class="doc-wiki-search" data-wiki-station-name maxlength="80" placeholder="新站的名字，例如「算法笔记」">
+      <button class="btn" data-doc-action="wiki-new-station" type="button">＋ 新建一个 wiki</button>`
+          : '<a class="btn btn-sm" href="#/login">登录后可以建站</a>'
+      }
     </div>
     <div class="doc-hint">站里的页是独立文档，用 <code>[[双链]]</code> 互相链；站本身就是一个普通帖子。</div>
   </div>`;
@@ -642,7 +651,8 @@ function renderDoc(data) {
     </article>`;
   // wiki 页多一条分类边栏。用后端给的 `nav` 判断，不在前端猜「这算不算 wiki」。
   if (data.wiki) {
-    // 站里的页：三栏（左树 / 中正文 / 右目录）。
+    // 站里的页：三栏（左树 / 中正文 / 右目录）。整站页面让开论坛侧栏换取宽度。
+    document.body.classList.add('doc-wide');
     ui.app.innerHTML = stationShellHtml(article, data.wiki, data.toc);
   } else if (data.nav) {
     ui.app.innerHTML = `<div class="doc-wiki-layout">${wikiNavHtml(data.nav, doc)}<div class="doc-wiki-main">${article}</div></div>`;
@@ -736,6 +746,7 @@ function renderMissingWikiPage(title, station = null, nav = null) {
       </div>
     </div>`;
   if (station) {
+    document.body.classList.add('doc-wide');
     ui.app.innerHTML = stationShellHtml(body, { ...station, current: 0, prev: null, next: null }, []);
   } else {
     ui.app.innerHTML = `<div class="doc-wiki-layout">${wikiNavHtml(nav, null)}<div class="doc-wiki-main">${body}</div></div>`;

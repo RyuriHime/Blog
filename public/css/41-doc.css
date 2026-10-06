@@ -721,8 +721,8 @@
   position: sticky;
   top: 12px;
   display: grid;
-  gap: 10px;
-  padding: 12px;
+  gap: 8px;
+  padding: 10px;
   border: 1px solid var(--border);
   border-radius: var(--radius);
   background: var(--bg-soft);
@@ -803,8 +803,23 @@
 
 /* ── Wiki 站（一个帖子一个 wiki）：左树 / 中正文 / 右目录 ───────────────── */
 
+/*
+ * 站页面把论坛侧栏让开：三栏（左树 + 正文 + 右目录）本身就要宽度，
+ * 再和 306px 的侧栏平分 1180px，正文只剩三百来像素、两侧全是白。
+ * 所以整站页面挂 `body.doc-wide`：侧栏收掉、`.layout` 放宽。
+ */
+body.doc-wide .layout {
+  max-width: 1560px;
+  grid-template-columns: minmax(0, 1fr);
+}
+
+body.doc-wide .sidebar {
+  display: none;
+}
+
 .doc-wiki-station {
-  grid-template-columns: 232px minmax(0, 1fr) 196px;
+  grid-template-columns: 208px minmax(0, 1fr) 176px;
+  gap: 14px;
 }
 
 .doc-wiki-side {
@@ -878,7 +893,7 @@
   top: 12px;
   display: grid;
   gap: 4px;
-  padding: 10px 12px;
+  padding: 8px 10px;
   border-left: 1px solid var(--border);
   max-height: calc(100vh - 32px);
   overflow: auto;
@@ -1031,7 +1046,7 @@
 
 @media (max-width: 1100px) {
   .doc-wiki-station {
-    grid-template-columns: 232px minmax(0, 1fr);
+    grid-template-columns: 208px minmax(0, 1fr);
   }
 
   .doc-wiki-station .doc-wiki-toc {

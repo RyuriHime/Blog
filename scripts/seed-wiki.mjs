@@ -198,6 +198,42 @@ const TUTORIAL = [
   '- 站里的页各自是独立文档，**不会**出现在「积木」板块的列表里（它们是站的零件）。',
   '- 左树支持子页：在新页面时选父页，或者在源码里用 `subpage` 块指定 `doc` 与 `mode`。',
   '- 站内搜索会翻页的正文；`[[不存在的页]]` 是红链，点一下就能建。',
+  '',
+  '## 8. 自己搭一个 wiki（两条路，用的都是普通积木）',
+  '',
+  '「站」**不是另写的一套功能**，它是三样普通东西拼出来的：',
+  '',
+  '1. 一篇普通帖子 —— 形态选「**Wiki 站**」（`template: station`）。',
+  '2. 一套挂在首页上的 **`subpage` 积木**（就是上面那种页卡片）。',
+  '3. 每一页 = 一篇普通文档 —— 形态「**Wiki 页面**」（`template: page`），各自有作者、修订、权限。',
+  '',
+  '**路 A：用模板搭。** 新建一篇 → 在「积木」视图的模板栏里挑「Wiki 站」 → 保存。',
+  '它立刻就是站（左树、右目录都会长出来），再点左树底下的「＋ 新建页面」添页。',
+  '任何一篇普通帖子套上这个模板也会变成站 —— 套模板只是把 `template` 这个字段改成 `station`。',
+  '',
+  '**路 B：用源码搭。** 新建一篇帖子，源码写成下面这样（`doc` 填那一页的 id；',
+  '打开那一页时地址栏 `#/doc/数字` 里的数字就是它）：',
+  '',
+  `${F4}markdown`,
+  '# 我的站',
+  '',
+  '这个站的说明。',
+  '',
+  `${F3}doc:subpage`,
+  '{ "doc": "30", "mode": "card", "title": "", "note": "一句话说明" }',
+  `${F3}`,
+  '',
+  `${F3}doc:subpage`,
+  '{ "doc": "31", "mode": "card", "title": "", "note": "" }',
+  `${F3}`,
+  `${F4}`,
+  '',
+  '`mode` 是 `card`（卡片列在首页）或 `full`（整页嵌进来）；`title` 留空就现查那一页的真标题，',
+  '那一页改名之后这里会跟着变。想让某一页当别的页的子页，给它一个 `parentId` 就行 ——',
+  '「＋ 新建页面」旁边那个接口 `PUT /api/docs/wiki/station/<站 id>/pages/<页 id>` 就是干这个的。',
+  '',
+  '**路 C（等价的一步到位）**：直接调 `POST /api/docs/wiki/stations` 建站、',
+  '`POST /api/docs/wiki/station/<站 id>/pages` 建页 —— 这两个接口做的事，就是上面那些块与字段。',
 ].join('\n');
 
 const POLL_TITLE = '投票示例';
@@ -347,6 +383,15 @@ const home = await call(`/api/docs/${station.id}/markdown?confirm=1`, {
   body: JSON.stringify({ markdown: `${STATION_INTRO}\n\n${cards}\n` }),
 });
 console.log(`首页正文 ${home.status === 200 ? '✓' : `✗ ${home.status} ${JSON.stringify(home.body)}`}`);
+
+// 站里可能还有被自动收编进来的老页（`template='page'` 的老文档第一次被打开就会归站）：
+// 把它们的顺序压到这两页后面，教程和示例就一直在最上面。
+const all = await call(`/api/docs/wiki/station?id=${station.id}`);
+let below = 100;
+for (const page of all.body?.data?.pages ?? []) {
+  if (pageIds.some((mine) => mine.id === page.id)) continue;
+  await call(`/api/docs/wiki/station/${station.id}/pages/${page.id}`, { method: 'PUT', body: JSON.stringify({ sortOrder: (below += 1) }) });
+}
 
 const check = await call(`/api/docs/wiki/station?id=${station.id}`);
 const data = check.body?.data ?? {};

@@ -2179,6 +2179,33 @@ try {
       check('10.10 脚本块渲染成 iframe 沙箱', html.includes('doc-app-frame'), html.slice(0, 300));
       check('10.10 原始 JS 被包进 script 标签里（否则不会跑）', html.includes('&lt;script&gt;') && html.includes('40 + 2'), html.slice(0, 600));
     }
+
+    // 10.11 「一个帖子一个 wiki」是拼出来的，不是另起一套功能：普通建帖接口 +
+    //       `template='station'` + 一块 `subpage` 积木，就得到同样的三栏 wiki。
+    {
+      const hand = await author.call('/api/docs', {
+        method: 'POST',
+        body: {
+          title: 'S10 手工站',
+          kind: 'post',
+          scope: 'public',
+          template: 'station',
+          blocks: [
+            { block_id: 'b1', type: 'heading', props: { text: '手工站', level: 1 } },
+            { block_id: 'b2', type: 'paragraph', props: { text: '这一页没有调过任何「站」接口。' } },
+            { block_id: 'b3', type: 'subpage', props: { doc: String(firstId), mode: 'card', title: '', note: '' } },
+          ],
+        },
+      });
+      const handId = hand.data?.doc?.id;
+      check('10.11 普通建帖接口 + station 模板就搭得出一个站', hand.status === 200 && Number.isInteger(handId), `${hand.status} ${JSON.stringify(hand.error)}`);
+      const opened = await anon.call(`/api/docs/${handId}`);
+      check('10.11 打开就是三栏 wiki（present 里给 wiki 与 toc）', Boolean(opened.data?.wiki?.station) && Array.isArray(opened.data?.toc), JSON.stringify(Object.keys(opened.data ?? {})));
+      check('10.11 首页的页卡片就是一块普通 subpage 积木（标题从 documents 现查）', String(opened.data?.html ?? '').includes('doc-subpage') && String(opened.data?.html ?? '').includes('S10 第一页'), String(opened.data?.html ?? '').slice(0, 400));
+      check('10.11 站本身照样出现在积木广场（它就是一个帖子）', (await anon.call('/api/docs')).data?.documents?.some((row) => row.id === handId) === true, '');
+      const source = await author.call(`/api/docs/${handId}/markdown`);
+      check('10.11 这一篇的源码就是普通 Markdown + 一段 doc:subpage（可 1:1 复刻）', String(source.data?.markdown ?? '').includes('doc:subpage'), JSON.stringify(source.data?.markdown ?? '').slice(0, 300));
+    }
   }
 
   await finish(failures.length ? 1 : 0);
