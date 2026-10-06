@@ -1,7 +1,7 @@
 // core 路由：分类与置顶 / 收藏 / 关注 / 黑名单 / 私信
 // // 搬运自 src/server.js 的固定行区间（预铺骨架，逐字未改），见 docs/tools/extract-server-modules.mjs。
 import { HttpError, ensure, field, ok, rateLimit, res_ } from '../../core/http.js';
-import { assertPinAllowed, coinAvailability, notifyMentions, resolveOwnCategory, shapeAuthor, shapeCategory, shapeConversation, shapeMessage, shapeNotification, shapePerson, shapePostDetail, shapePostListRow, shapeProfile, shapeReply, shapeReposter, shapeUser } from '../../core/shape.js';
+import { assertPinAllowed, notifyMentions, resolveOwnCategory, shapeAuthor, shapeCategory, shapeConversation, shapeMessage, shapeNotification, shapePerson, shapePostDetail, shapePostListRow, shapeProfile, shapeReply, shapeReposter, shapeUser } from '../../core/shape.js';
 import { assertPostVisible, isOwner, isStaff, requireOwner, requireStaff, requireUser } from '../../core/guards.js';
 import { issueSession, removeAvatarFile, saveAvatarFile, sessionCookie } from '../../core/sessions.js';
 import { store } from '../../core/store.js';
@@ -257,7 +257,6 @@ export function registerRoutesC(route) {
     ensure(row, 404, 'user_not_found', '用户不存在');
     const viewerId = ctx.user?.id ?? ANON;
     const isMe = viewerId === row.id;
-    const balance = isMe ? Number(store.wallet(row.id)?.coin_balance ?? row.coin_balance) : undefined;
 
     // 拉黑关系：对方拉黑了我 → 我连 TA 的主页都打不开；我拉黑了对方 → 能打开但看不到文章
     const blockedByMe = !isMe && viewerId !== ANON && store.isBlocked(viewerId, row.id);
@@ -310,7 +309,6 @@ export function registerRoutesC(route) {
         followsMe: viewerId !== ANON && !isMe ? store.isFollowing(row.id, viewerId) : false,
         mutualFollow,
         blockedByMe,
-        ...(isMe ? { coinBalance: balance } : {}),
       }),
       ...(isMe || viewerId === ANON
         ? {}
@@ -333,7 +331,6 @@ export function registerRoutesC(route) {
     ok(res_(ctx), {
       items: store.listFollowing(user.id).map(shapePerson),
       counts: store.followCounts(user.id),
-      coinBalance: Number(store.wallet(user.id)?.coin_balance ?? user.coin_balance),
     });
   });
 }

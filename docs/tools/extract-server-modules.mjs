@@ -19,7 +19,8 @@
  *
  * ⚠️ 历史脚本，**别再跑**：名单停留在搬家那一刻，里面的签到（`/api/checkin`、
  *    `checkins` / `checkin_bonuses`）与价值排行（`/api/ranking`、`VALUE_WEIGHTS`）
- *    都已随「删掉签到与价值排行」下线，照着跑会把删掉的路由与常量又切出来。
+ *    都已随「删掉签到与价值排行」下线，币系统（`/api/posts/:id/coin`、`coins` 表、
+ *    `COIN_*` 常量）同样已删除，照着跑会把删掉的路由与常量又切出来。
  */
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';

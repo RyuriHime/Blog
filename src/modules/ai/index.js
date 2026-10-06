@@ -10,7 +10,7 @@
 // 开库动作发生在 `src/server.js` 里（调用 `core/open-db.js` 导出的那个函数），
 // 那时 `schemas` 必须已经满员。所以这里的 `schemas.addScript(...)` 是模块顶层语句，
 // 和 `src/core/tables.sql.js`、`src/modules/feed/index.js` 用的是同一个套路。
-// 顺序：`src/server.js` 先 import `./store.js`（登记 17 张 core 表），
+// 顺序：`src/server.js` 先 import `./store.js`（登记 14 张 core 表），
 // 再 import `./modules/index.js`（登记这两张表）—— 所以 `ai_op_logs.user_id`
 // 引用 `users(id)` 时外键目标已经存在。
 // （注意：上面别写出「函数名 + 左括号」的字样，scripts/check-skeleton.mjs 用行正则

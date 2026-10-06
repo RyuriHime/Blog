@@ -142,7 +142,7 @@ ctx.log       日志
 
 | 表 | 归谁 |
 | --- | --- |
-| `users` `sessions` `boards` `posts` `replies` `reactions` `coins` `bookmarks` `follows` `notifications` `profile_categories` `reposts` `moderation_logs` `messages` `blocks` | core |
+| `users` `sessions` `boards` `posts` `replies` `reactions` `bookmarks` `follows` `notifications` `profile_categories` `reposts` `moderation_logs` `messages` `blocks` | core |
 | `ai_post_reviews` `ai_site_reports` | forum-ai（运行时自己建，不在核心建表清单里） |
 | `notes_*` | note-studio / note-agent |
 | `feed_items` `feed_reactions` | 🅿️ P1 |

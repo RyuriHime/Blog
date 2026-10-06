@@ -1,9 +1,9 @@
 // 搬运自 src/db.js:8-201 的 SCHEMA 大字符串（预铺骨架，逐字未改，只去掉了外壳）。
-// 16 张 core 表：users / sessions / boards / posts / replies / reactions / coins /
+// 14 张 core 表：users / sessions / boards / posts / replies / reactions /
 // bookmarks / follows / notifications /
 // profile_categories / reposts / moderation_logs / messages / blocks。
 //
-// 这里是唯一还留着一大块 SQL 的地方。拆成 16 个文件并不划算：
+// 这里是唯一还留着一大块 SQL 的地方。拆成 14 个文件并不划算：
 // 它们之间靠外键互相引用，拆开只会让「按什么顺序建表」变得更难看出。
 // 各业务模块自己的表**不要**写在这里，走 schemas.add() 登记。
 import { schemas } from './table.js';
@@ -18,8 +18,6 @@ CREATE TABLE IF NOT EXISTS users (
   bio             TEXT    NOT NULL DEFAULT '',
   avatar          TEXT    NOT NULL DEFAULT '',
   banned          INTEGER NOT NULL DEFAULT 0,
-  coin_balance    INTEGER NOT NULL DEFAULT 10,
-  coin_refresh_at INTEGER NOT NULL DEFAULT 0,
   created_at      INTEGER NOT NULL
 );
 
@@ -82,16 +80,6 @@ CREATE TABLE IF NOT EXISTS reactions (
   PRIMARY KEY (user_id, post_id)
 );
 CREATE INDEX IF NOT EXISTS idx_reactions_post ON reactions(post_id, kind);
-
--- 投币：单帖每人最多 2 币，作者收币，用户每日额度 10
-CREATE TABLE IF NOT EXISTS coins (
-  user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  post_id    INTEGER NOT NULL REFERENCES posts(id) ON DELETE CASCADE,
-  amount     INTEGER NOT NULL DEFAULT 1,
-  created_at INTEGER NOT NULL,
-  PRIMARY KEY (user_id, post_id)
-);
-CREATE INDEX IF NOT EXISTS idx_coins_post ON coins(post_id);
 
 CREATE TABLE IF NOT EXISTS bookmarks (
   user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,

@@ -282,9 +282,6 @@ try {
     method: 'POST',
     body: { kind: 'like' },
   });
-  await record('post-coin', alice, `/api/posts/${newId}/coin`, { method: 'POST' });
-  await record('post-coin-again', alice, `/api/posts/${newId}/coin`, { method: 'POST' });
-  await record('post-coin-self', member, `/api/posts/${newId}/coin`, { method: 'POST' });
   await record('post-bookmark', alice, `/api/posts/${newId}/bookmark`, { method: 'POST' });
   await record('post-repost-create', alice, `/api/posts/${newId}/repost`, {
     method: 'POST',

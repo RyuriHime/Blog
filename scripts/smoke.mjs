@@ -128,10 +128,8 @@ try {
   check('GET /api/site 返回板块列表', site.status === 200 && site.data.boards.length >= 5, `status=${site.status}`);
   check('站点统计包含帖子数', site.data.stats.posts > 0, JSON.stringify(site.data?.stats));
   check(
-    '下发投币规则（注册赠送 + 单帖上限，没有每日补足）',
-    site.data.coinRules?.signupGrant === 10 &&
-      site.data.coinRules?.perPostLimit === 2 &&
-      site.data.coinRules?.dailyAllowance === undefined,
+    '/api/site 不再下发投币规则（投币已下线）',
+    site.data.coinRules === undefined,
     JSON.stringify(site.data?.coinRules),
   );
   const home = await anon.call('/', { raw: true });
@@ -160,7 +158,7 @@ try {
   check('新用户注册成功', register.status === 200 && register.data.user.username === `smoke_${unique}`);
   const me = await member.call('/api/auth/me');
   check('会话保持有效', me.data?.user?.displayName === '冒烟测试员');
-  check('新用户注册赠送 10 币', me.data?.user?.coinBalance === 10, String(me.data?.user?.coinBalance));
+  check('新用户注册不再赠送币（coinBalance 不存在）', me.data?.user?.coinBalance === undefined, JSON.stringify(me.data?.user));
   check('新用户收到欢迎通知', me.data?.unread >= 1, `unread=${me.data?.unread}`);
 
   const welcome = await member.call('/api/notifications');
@@ -191,9 +189,14 @@ try {
   check('列表分页字段完整', listed.data.items.length <= 5 && listed.data.totalPages >= 1);
   check(
     '列表返回评价与收藏计数字段',
-    ['likeCount', 'dislikeCount', 'coinCount', 'bookmarkCount', 'myCoins', 'liked', 'disliked', 'authorFollowed'].every(
+    ['likeCount', 'dislikeCount', 'bookmarkCount', 'liked', 'disliked', 'authorFollowed'].every(
       (key) => key in listed.data.items[0],
     ),
+  );
+  check(
+    '列表形状里不再有投币字段（coinCount / myCoins）',
+    listed.data.items.every((item) => item.coinCount === undefined && item.myCoins === undefined),
+    JSON.stringify(Object.keys(listed.data.items[0] ?? {})),
   );
   check('新帖出现在列表中', listed.data.items.some((item) => item.id === postId) || listed.data.total > 5);
 
@@ -228,101 +231,32 @@ try {
   const anonReaction = await anon.call(`/api/posts/${postId}/reaction`, { method: 'POST', body: { kind: 'like' } });
   check('未登录不能评价（401）', anonReaction.status === 401, `status=${anonReaction.status}`);
 
-  console.log('\n▶ 投币');
-  const balanceBefore = (await admin.call('/api/auth/me')).data.user.coinBalance;
-  const adminCoin = await admin.call(`/api/posts/${postId}/coin`, { method: 'POST', body: { amount: 1 } });
-  check('投币成功并返回余额', adminCoin.status === 200 && adminCoin.data.given === 1 && adminCoin.data.myCoins === 1, JSON.stringify(adminCoin.data));
+  console.log('\n▶ 投币已下线');
+  const goneCoin = await member.call(`/api/posts/${postId}/coin`, { method: 'POST', body: { amount: 1 } });
+  check('投币接口已下线（404，而不是 401 / 403）', goneCoin.status === 404, JSON.stringify(goneCoin.body).slice(0, 120));
   check(
-    '投币后帖子币数 +1、余额 -1',
-    adminCoin.data.coinCount === 1 && adminCoin.data.balance === balanceBefore - 1,
-    JSON.stringify({ ...adminCoin.data, balanceBefore }),
+    '匿名投币同样是 404（路由整条没了）',
+    (await anon.call(`/api/posts/${postId}/coin`, { method: 'POST', body: { amount: 1 } })).status === 404,
   );
-  const adminCoin2 = await admin.call(`/api/posts/${postId}/coin`, { method: 'POST', body: { amount: 1 } });
-  check('同一用户可给同一帖子投第 2 币', adminCoin2.data.myCoins === 2 && adminCoin2.data.coinCount === 2);
-  const adminCoin3 = await admin.call(`/api/posts/${postId}/coin`, { method: 'POST', body: { amount: 1 } });
-  check('超过单帖上限被拒绝（400）', adminCoin3.status === 400 && adminCoin3.error?.code === 'per_post_limit', JSON.stringify(adminCoin3.body));
-  const selfCoin = await member.call(`/api/posts/${postId}/coin`, { method: 'POST', body: { amount: 1 } });
-  check('不能给自己的帖子投币（400）', selfCoin.status === 400 && selfCoin.error?.code === 'self_coin', JSON.stringify(selfCoin.body));
-  const anonCoin = await anon.call(`/api/posts/${postId}/coin`, { method: 'POST', body: { amount: 1 } });
-  check('未登录不能投币（401）', anonCoin.status === 401);
-
-  // 详情接口会下发「当前浏览者能否投币」，前端据此展示原因（避免点了没反应的死按钮）
-  const detailAsAnon = await anon.call(`/api/posts/${postId}`);
+  check('管理员投币也是 404', (await admin.call(`/api/posts/${postId}/coin`, { method: 'POST', body: { amount: 1 } })).status === 404);
+  const siteNoCoin = await anon.call('/api/site');
+  check('/api/site 不再下发投币规则', siteNoCoin.data.coinRules === undefined, JSON.stringify(siteNoCoin.data?.coinRules));
+  const listNoCoin = await anon.call('/api/posts?perPage=5');
   check(
-    '未登录时详情告知需要登录才能投币',
-    detailAsAnon.data.post.coin.available === false && detailAsAnon.data.post.coin.reason === 'anonymous',
-    JSON.stringify(detailAsAnon.data.post.coin),
+    '帖子列表形状里没有 coinCount / myCoins',
+    listNoCoin.data.items.every((item) => item.coinCount === undefined && item.myCoins === undefined),
+    JSON.stringify(Object.keys(listNoCoin.data.items[0] ?? {})),
   );
-  const detailAsAuthor = await member.call(`/api/posts/${postId}`);
+  const detailNoCoin = await member.call(`/api/posts/${postId}`);
   check(
-    '作者看自己的帖子得到 self 原因',
-    detailAsAuthor.data.post.coin.available === false &&
-      detailAsAuthor.data.post.coin.reason === 'self' &&
-      detailAsAuthor.data.post.coin.message.length > 0,
-    JSON.stringify(detailAsAuthor.data.post.coin),
+    '帖子详情形状里没有 coin / coinCount / myCoins',
+    detailNoCoin.data.post.coin === undefined &&
+      detailNoCoin.data.post.coinCount === undefined &&
+      detailNoCoin.data.post.myCoins === undefined,
+    JSON.stringify(Object.keys(detailNoCoin.data.post)),
   );
-  const detailAfterLimit = await admin.call(`/api/posts/${postId}`);
-  check(
-    '投满 2 币后详情告知已达单帖上限',
-    detailAfterLimit.data.post.coin.available === false && detailAfterLimit.data.post.coin.reason === 'per_post_limit',
-    JSON.stringify(detailAfterLimit.data.post.coin),
-  );
-  const bobEarlyLogin = await bob.call('/api/auth/login', { method: 'POST', body: { username: 'bob', password: 'demo1234' } });
-  check('Bob 可登录（用于投币可用性检查）', bobEarlyLogin.status === 200);
-  const detailAsOther = await bob.call(`/api/posts/${postId}`);
-  check(
-    '可投币时详情返回 available=true 与余额',
-    detailAsOther.data.post.coin.available === true &&
-      detailAsOther.data.post.coin.reason === 'ok' &&
-      detailAsOther.data.post.coin.balance > 0,
-    JSON.stringify(detailAsOther.data.post.coin),
-  );
-
-  // 注册赠送的 10 币花光后就不能再投了
-  const spender = createClient();
-  await spender.call('/api/auth/register', { method: 'POST', body: { username: `coin_${unique}`, password: 'secret123' } });
-  const targets = (await anon.call('/api/posts?perPage=10')).data.items.filter((item) => item.author.username !== `coin_${unique}`);
-  let spent = 0;
-  for (const target of targets.slice(0, 5)) {
-    for (let i = 0; i < 2; i += 1) {
-      const result = await spender.call(`/api/posts/${target.id}/coin`, { method: 'POST', body: { amount: 1 } });
-      if (result.status === 200) spent += 1;
-    }
-  }
-  check('注册赠送的 10 币可以花完', spent === 10, `spent=${spent}`);
-  const broke = await spender.call(`/api/posts/${targets[5].id}/coin`, { method: 'POST', body: { amount: 1 } });
-  check('币花完后拒绝投币（400）', broke.status === 400 && broke.error?.code === 'insufficient_coins', JSON.stringify(broke.body));
-  check(
-    '拒绝原因文案指向「等别人投币」而不是签到',
-    /投币/.test(broke.error?.message ?? '') && !/签到/.test(broke.error?.message ?? ''),
-    broke.error?.message,
-  );
-
-  // 关键回归：把「上次刷新时间」改成一万小时前，再登录也不应该补币（已取消每日补足）
-  {
-    const { DatabaseSync } = await import('node:sqlite');
-    const raw = new DatabaseSync(DB_FILE);
-    raw
-      .prepare('UPDATE users SET coin_balance = 0, coin_refresh_at = ? WHERE username = ?')
-      .run(Date.now() - 10000 * 3600 * 1000, `coin_${unique}`);
-    raw.close();
-  }
-  const afterTimeTravel = await spender.call('/api/auth/me');
-  check(
-    '取消每日补足：隔了很久登录余额仍是 0',
-    afterTimeTravel.data?.user?.coinBalance === 0,
-    String(afterTimeTravel.data?.user?.coinBalance),
-  );
-  const stillBroke = await spender.call(`/api/posts/${targets[5].id}/coin`, { method: 'POST', body: { amount: 1 } });
-  check('取消每日补足：仍然投不了币（400）', stillBroke.status === 400 && stillBroke.error?.code === 'insufficient_coins');
-  const detailForBroke = await spender.call(`/api/posts/${targets[5].id}`);
-  check(
-    '详情里的投币提示也是「币不够」而不是「额度用完」',
-    detailForBroke.data.post.coin.available === false &&
-      detailForBroke.data.post.coin.reason === 'insufficient_coins' &&
-      detailForBroke.data.post.coin.dailyAllowance === undefined,
-    JSON.stringify(detailForBroke.data.post.coin),
-  );
+  const meNoCoin = await member.call('/api/auth/me');
+  check('登录信息里没有 coinBalance', meNoCoin.data?.user?.coinBalance === undefined, JSON.stringify(meNoCoin.data?.user));
 
   console.log('\n▶ 收藏');
   const bookmark = await member.call(`/api/posts/${postId}/bookmark`, { method: 'POST' });
@@ -362,7 +296,6 @@ try {
   console.log('\n▶ 消息通知');
   // 通知应该发给内容作者 / 被关注者，而不是操作者
   const authorNotifs = await member.call('/api/notifications?perPage=50');
-  check('投币通知发给帖子作者', Boolean(typeOf(authorNotifs.data.items, 'post_coin', (item) => item.post?.id === postId)));
   check('关注者自己不会收到自己的关注通知', !typeOf(authorNotifs.data.items, 'follow'));
   const adminNotifs = await admin.call('/api/notifications?perPage=50');
   check(
@@ -370,7 +303,6 @@ try {
     Boolean(typeOf(adminNotifs.data.items, 'follow', (item) => item.actor?.username === `smoke_${unique}`)),
     JSON.stringify(adminNotifs.data.items.slice(0, 4).map((item) => `${item.type}:${item.actor?.username}`)),
   );
-  check('操作者自己不会收到投币通知', !typeOf(adminNotifs.data.items, 'post_coin', (item) => item.post?.id === postId));
   const unreadBefore = adminNotifs.data.unreadCount;
 
   const memberLikeAdmin = await member.call(`/api/posts/${adminPost.id}/reaction`, { method: 'POST', body: { kind: 'like' } });
@@ -972,10 +904,14 @@ try {
   check('后台统计可用', overview.status === 200 && overview.data.stats.users >= 4);
   check(
     '后台统计包含互动数据',
-    ['reactions', 'coins', 'follows', 'bookmarks'].every((key) => key in overview.data.stats),
+    ['reactions', 'follows', 'bookmarks'].every((key) => key in overview.data.stats),
     JSON.stringify(overview.data.stats),
   );
-  check('后台返回用户列表（含粉丝数与余额）', Array.isArray(overview.data.users) && 'followerCount' in overview.data.users[0] && 'coinBalance' in overview.data.users[0]);
+  check('后台统计不再有 coins 计数', !('coins' in overview.data.stats), JSON.stringify(overview.data.stats));
+  check(
+    '后台返回用户列表（含粉丝数，不含余额）',
+    Array.isArray(overview.data.users) && 'followerCount' in overview.data.users[0] && !('coinBalance' in overview.data.users[0]),
+  );
 
   const freshUser = `ban_${unique}`;
   const victim = createClient();
@@ -1149,8 +1085,6 @@ try {
     try {
       const reaction = await dmAlice.call(`/api/posts/${lockedPost.id}/reaction`, { method: 'POST', body: { kind: 'like' } });
       check('锁定后不能评价（403 locked）', reaction.status === 403 && reaction.error?.code === 'locked', JSON.stringify(reaction.body));
-      const coin = await dmAlice.call(`/api/posts/${lockedPost.id}/coin`, { method: 'POST', body: { amount: 1 } });
-      check('锁定后不能投币（403 locked）', coin.status === 403 && coin.error?.code === 'locked', JSON.stringify(coin.body));
       const bookmark = await dmAlice.call(`/api/posts/${lockedPost.id}/bookmark`, { method: 'POST' });
       check('锁定后不能收藏（403 locked）', bookmark.status === 403 && bookmark.error?.code === 'locked', JSON.stringify(bookmark.body));
       const reply = await dmAlice.call(`/api/posts/${lockedPost.id}/replies`, { method: 'POST', body: { content: '锁了还能回吗' } });

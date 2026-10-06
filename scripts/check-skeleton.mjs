@@ -96,7 +96,7 @@ for (const name of BUSINESS) {
     problems.push(`模块 ${name} 导入失败：${error.message}`);
   }
 }
-// core 也必须过同一套形状检查：它的 owns 是 17 张既有表，漏一张就没人认领。
+// core 也必须过同一套形状检查：它的 owns 是 14 张既有表，漏一张就没人认领。
 try {
   mods.core = (await import(pathToFileURL(join(MODULES_DIR, 'core', 'index.js')).href)).default;
 } catch (error) {

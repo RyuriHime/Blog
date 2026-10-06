@@ -53,7 +53,7 @@ const CHUNKS = [
   { file: 'public/css/60-admin.css', start: 1202, header: '管理后台。' },
   { file: 'public/css/65-helpers.css', start: 1260, header: '空状态、加载占位、Toast。' },
   { file: 'public/css/70-responsive.css', start: 1340, header: '响应式断点。⚠️ 手机端 375px 必须可用，这是验收项（FR-UI-08）。' },
-  { file: 'public/css/75-social.css', start: 1370, header: 'v1.1 新增：通知铃铛、侧栏账户卡、评价与投币按钮。' },
+  { file: 'public/css/75-social.css', start: 1370, header: 'v1.1 新增：通知铃铛、侧栏账户卡、评价按钮。' },
   { file: 'public/css/76-theme-switch.css', start: 1521, header: 'v1.4 新增：主题按钮与弹层、设置页里的主题选择卡片。' },
   { file: 'public/css/77-avatar.css', start: 1623, header: 'v1.5 新增：头像设置。' },
   { file: 'public/css/78-repost.css', start: 1674, header: 'v1.3 新增：转发区。（原 78-repost-ranking.css：排行榜与公式卡已随功能删除）' },

@@ -284,7 +284,7 @@ function interactHtml(doc, abilities) {
   if (!abilities.canReact) {
     // 看不见这篇的人也看不见这条 —— 前端只负责不画按钮，能不能动在后端。
     return `<div class="card doc-interact">
-      <div class="doc-hint">这篇对「${esc(doc.scopeLabel ?? '不公开')}」可见。赞 / 投币 / 收藏记在它的互动锚点上，只有看得见这篇的人给得上。</div>
+      <div class="doc-hint">这篇对「${esc(doc.scopeLabel ?? '不公开')}」可见。赞 / 踩 / 收藏记在它的互动锚点上，只有看得见这篇的人给得上。</div>
     </div>`;
   }
   return `<div class="card doc-interact">

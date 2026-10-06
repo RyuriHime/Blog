@@ -94,10 +94,6 @@
         ".pdf"
       ]
     },
-    "coinRules": {
-      "signupGrant": 10,
-      "perPostLimit": 2
-    },
     "profileRules": {
       "pinLimit": 3,
       "categoryLimit": 8
@@ -108,39 +104,34 @@
     },
     "hotPosts": [
       {
-        "id": 2,
-        "title": "Node.js 24 内置 SQLite 上手实测：零依赖做全栈",
+        "id": 8,
+        "title": "论坛 v1.1 上线：消息通知、评价与关注",
         "replyCount": 3,
-        "likeCount": 3,
-        "coinCount": 3
+        "likeCount": 3
       },
       {
         "id": 1,
         "title": "【必读】论坛版规与发帖指南",
         "replyCount": 2,
-        "likeCount": 2,
-        "coinCount": 2
+        "likeCount": 3
+      },
+      {
+        "id": 6,
+        "title": "大家平时用什么工具记笔记？",
+        "replyCount": 2,
+        "likeCount": 2
       },
       {
         "id": 7,
         "title": "SQLite 分页查询在大数据量下变慢，怎么优化？",
         "replyCount": 1,
-        "likeCount": 3,
-        "coinCount": 0
+        "likeCount": 1
       },
       {
-        "id": 4,
-        "title": "分享：我整理的 12 个 Markdown 写作小技巧",
+        "id": 5,
+        "title": "CSS 变量做主题切换的正确姿势",
         "replyCount": 1,
-        "likeCount": 3,
-        "coinCount": 0
-      },
-      {
-        "id": 8,
-        "title": "论坛 v1.1 上线：消息通知、评价、投币与关注",
-        "replyCount": 3,
-        "likeCount": 2,
-        "coinCount": 0
+        "likeCount": 1
       }
     ]
   },
@@ -153,8 +144,7 @@
       "bio": "论坛站长（拥有者），有事找我。",
       "avatar": "emoji:🧭:212",
       "banned": false,
-      "coinBalance": 12,
-      "createdAt": 1788719530154
+      "createdAt": 1788720501733
     },
     "unread": 15
   },
@@ -189,8 +179,8 @@
         "dislikeCount": 0,
         "liked": false,
         "disliked": false,
-        "createdAt": 1791311530781,
-        "updatedAt": 1791311530781,
+        "createdAt": 1791312502380,
+        "updatedAt": 1791312502380,
         "edited": false
       }
     ],
@@ -249,8 +239,8 @@
         "dislikeCount": 0,
         "liked": false,
         "disliked": false,
-        "createdAt": 1791311530781,
-        "updatedAt": 1791311530781,
+        "createdAt": 1791312502380,
+        "updatedAt": 1791312502380,
         "edited": false
       }
     ],
@@ -309,8 +299,8 @@
         "dislikeCount": 0,
         "liked": false,
         "disliked": false,
-        "createdAt": 1791311530781,
-        "updatedAt": 1791311530781,
+        "createdAt": 1791312502380,
+        "updatedAt": 1791312502380,
         "edited": false
       }
     ],
@@ -369,8 +359,8 @@
         "dislikeCount": 0,
         "liked": false,
         "disliked": false,
-        "createdAt": 1791311530781,
-        "updatedAt": 1791311530781,
+        "createdAt": 1791312502380,
+        "updatedAt": 1791312502380,
         "edited": false
       }
     ],
@@ -422,15 +412,13 @@
           "name": "数据库"
         },
         "profilePinned": true,
-        "profilePinnedAt": 1791307930501,
-        "views": 236,
+        "profilePinnedAt": 1791308902047,
+        "views": 23,
         "replyCount": 3,
-        "likeCount": 3,
+        "likeCount": 1,
         "dislikeCount": 0,
-        "coinCount": 3,
         "bookmarkCount": 0,
         "repostCount": 1,
-        "myCoins": 0,
         "liked": true,
         "disliked": false,
         "bookmarked": false,
@@ -442,9 +430,9 @@
         "hiddenBy": null,
         "pinned": true,
         "locked": false,
-        "createdAt": 1790793130154,
-        "updatedAt": 1790793130154,
-        "lastActiveAt": 1790965930154
+        "createdAt": 1790794101733,
+        "updatedAt": 1790794101733,
+        "lastActiveAt": 1790966901733
       },
       {
         "id": 1,
@@ -468,15 +456,13 @@
           "name": "站务公告"
         },
         "profilePinned": true,
-        "profilePinnedAt": 1791307930501,
-        "views": 115,
+        "profilePinnedAt": 1791308902047,
+        "views": 20,
         "replyCount": 2,
-        "likeCount": 2,
-        "dislikeCount": 1,
-        "coinCount": 2,
+        "likeCount": 3,
+        "dislikeCount": 0,
         "bookmarkCount": 0,
         "repostCount": 1,
-        "myCoins": 0,
         "liked": false,
         "disliked": false,
         "bookmarked": false,
@@ -488,9 +474,9 @@
         "hiddenBy": null,
         "pinned": true,
         "locked": false,
-        "createdAt": 1790533930154,
-        "updatedAt": 1790533930154,
-        "lastActiveAt": 1790706730154
+        "createdAt": 1790534901733,
+        "updatedAt": 1790534901733,
+        "lastActiveAt": 1790707701733
       },
       {
         "id": 9,
@@ -516,10 +502,8 @@
         "replyCount": 0,
         "likeCount": 0,
         "dislikeCount": 0,
-        "coinCount": 0,
         "bookmarkCount": 0,
         "repostCount": 0,
-        "myCoins": 0,
         "liked": false,
         "disliked": false,
         "bookmarked": false,
@@ -531,14 +515,14 @@
         "hiddenBy": null,
         "pinned": false,
         "locked": false,
-        "createdAt": 1791311530770,
-        "updatedAt": 1791311530770,
-        "lastActiveAt": 1791311530770
+        "createdAt": 1791312502367,
+        "updatedAt": 1791312502367,
+        "lastActiveAt": 1791312502367
       },
       {
         "id": 8,
-        "title": "论坛 v1.1 上线：消息通知、评价、投币与关注",
-        "excerpt": "本次更新把社区互动补齐了： 🔔 消息通知：有人回复、点赞、踩、投币、关注你，或 @ 提到你，都会推送 👍👎 评价：点赞 / 踩二选一，可以随时改主意 🪙 投币：每天 10 币额度，单个帖子最多投 2 币，币会真的进入作者账户 ⭐ 收藏：在「我的收藏」里集中查看 👥 关注：关注作者后，首页「…",
+        "title": "论坛 v1.1 上线：消息通知、评价与关注",
+        "excerpt": "本次更新把社区互动补齐了： 🔔 消息通知：有人回复、点赞、踩、关注你，或 @ 提到你，都会推送 👍👎 评价：点赞 / 踩二选一，可以随时改主意 ⭐ 收藏：在「我的收藏」里集中查看 👥 关注：关注作者后，首页「我关注的」里只看 TA 们的帖子 有任何建议直接回帖，或者 @站长 叫我 📮",
         "board": {
           "id": 4,
           "slug": "share",
@@ -558,14 +542,12 @@
         },
         "profilePinned": false,
         "profilePinnedAt": null,
-        "views": 220,
+        "views": 223,
         "replyCount": 3,
-        "likeCount": 2,
+        "likeCount": 3,
         "dislikeCount": 0,
-        "coinCount": 0,
         "bookmarkCount": 0,
         "repostCount": 1,
-        "myCoins": 0,
         "liked": false,
         "disliked": false,
         "bookmarked": false,
@@ -577,9 +559,9 @@
         "hiddenBy": null,
         "pinned": false,
         "locked": false,
-        "createdAt": 1791304330154,
-        "updatedAt": 1791304330154,
-        "lastActiveAt": 1791310030154
+        "createdAt": 1791305301733,
+        "updatedAt": 1791305301733,
+        "lastActiveAt": 1791311001733
       },
       {
         "id": 7,
@@ -604,15 +586,13 @@
         },
         "profilePinned": false,
         "profilePinnedAt": null,
-        "views": 188,
+        "views": 209,
         "replyCount": 1,
-        "likeCount": 3,
+        "likeCount": 1,
         "dislikeCount": 0,
-        "coinCount": 0,
         "bookmarkCount": 0,
         "repostCount": 0,
-        "myCoins": 0,
-        "liked": true,
+        "liked": false,
         "disliked": false,
         "bookmarked": false,
         "reposted": false,
@@ -623,9 +603,9 @@
         "hiddenBy": null,
         "pinned": false,
         "locked": false,
-        "createdAt": 1791289930154,
-        "updatedAt": 1791289930154,
-        "lastActiveAt": 1791293530154
+        "createdAt": 1791290901733,
+        "updatedAt": 1791290901733,
+        "lastActiveAt": 1791294501733
       },
       {
         "id": 6,
@@ -650,15 +630,13 @@
         },
         "profilePinned": false,
         "profilePinnedAt": null,
-        "views": 297,
+        "views": 248,
         "replyCount": 2,
         "likeCount": 2,
-        "dislikeCount": 0,
-        "coinCount": 0,
+        "dislikeCount": 1,
         "bookmarkCount": 0,
         "repostCount": 0,
-        "myCoins": 0,
-        "liked": false,
+        "liked": true,
         "disliked": false,
         "bookmarked": false,
         "reposted": false,
@@ -669,9 +647,9 @@
         "hiddenBy": null,
         "pinned": false,
         "locked": false,
-        "createdAt": 1791268330154,
-        "updatedAt": 1791268330154,
-        "lastActiveAt": 1791275530154
+        "createdAt": 1791269301733,
+        "updatedAt": 1791269301733,
+        "lastActiveAt": 1791276501733
       },
       {
         "id": 5,
@@ -696,14 +674,12 @@
         },
         "profilePinned": false,
         "profilePinnedAt": null,
-        "views": 262,
+        "views": 163,
         "replyCount": 1,
         "likeCount": 1,
-        "dislikeCount": 1,
-        "coinCount": 0,
+        "dislikeCount": 0,
         "bookmarkCount": 0,
         "repostCount": 0,
-        "myCoins": 0,
         "liked": false,
         "disliked": false,
         "bookmarked": false,
@@ -715,9 +691,9 @@
         "hiddenBy": null,
         "pinned": false,
         "locked": false,
-        "createdAt": 1791239530154,
-        "updatedAt": 1791239530154,
-        "lastActiveAt": 1791246730154
+        "createdAt": 1791240501733,
+        "updatedAt": 1791240501733,
+        "lastActiveAt": 1791247701733
       },
       {
         "id": 4,
@@ -741,16 +717,14 @@
           "name": "写作"
         },
         "profilePinned": true,
-        "profilePinnedAt": 1791307930501,
-        "views": 201,
+        "profilePinnedAt": 1791308902047,
+        "views": 64,
         "replyCount": 1,
-        "likeCount": 3,
+        "likeCount": 1,
         "dislikeCount": 0,
-        "coinCount": 0,
         "bookmarkCount": 0,
         "repostCount": 1,
-        "myCoins": 0,
-        "liked": true,
+        "liked": false,
         "disliked": false,
         "bookmarked": false,
         "reposted": false,
@@ -761,9 +735,9 @@
         "hiddenBy": null,
         "pinned": false,
         "locked": false,
-        "createdAt": 1791203530154,
-        "updatedAt": 1791203530154,
-        "lastActiveAt": 1791207130154
+        "createdAt": 1791204501733,
+        "updatedAt": 1791204501733,
+        "lastActiveAt": 1791208101733
       },
       {
         "id": 3,
@@ -787,15 +761,13 @@
           "name": "前端笔记"
         },
         "profilePinned": true,
-        "profilePinnedAt": 1791307930501,
-        "views": 231,
+        "profilePinnedAt": 1791308902047,
+        "views": 172,
         "replyCount": 2,
-        "likeCount": 2,
-        "dislikeCount": 0,
-        "coinCount": 0,
+        "likeCount": 1,
+        "dislikeCount": 1,
         "bookmarkCount": 0,
         "repostCount": 0,
-        "myCoins": 0,
         "liked": false,
         "disliked": false,
         "bookmarked": false,
@@ -807,9 +779,9 @@
         "hiddenBy": null,
         "pinned": false,
         "locked": false,
-        "createdAt": 1791149530154,
-        "updatedAt": 1791149530154,
-        "lastActiveAt": 1791156730154
+        "createdAt": 1791150501733,
+        "updatedAt": 1791150501733,
+        "lastActiveAt": 1791157701733
       }
     ],
     "page": 1,
@@ -843,10 +815,8 @@
       "replyCount": 0,
       "likeCount": 0,
       "dislikeCount": 0,
-      "coinCount": 0,
       "bookmarkCount": 0,
       "repostCount": 0,
-      "myCoins": 0,
       "liked": false,
       "disliked": false,
       "bookmarked": false,
@@ -858,20 +828,11 @@
       "hiddenBy": null,
       "pinned": false,
       "locked": false,
-      "createdAt": 1791311530770,
-      "updatedAt": 1791311530770,
-      "lastActiveAt": 1791311530770,
+      "createdAt": 1791312502367,
+      "updatedAt": 1791312502367,
+      "lastActiveAt": 1791312502367,
       "content": "# 采样\n\n正文一段。\n\n- 列表项\n\n`code`",
-      "contentHtml": "<h1>采样</h1>\n<p>正文一段。</p>\n<ul><li>列表项</li></ul>\n<p><code>code</code></p>",
-      "coin": {
-        "perPostLimit": 2,
-        "signupGrant": 10,
-        "myCoins": 0,
-        "balance": 12,
-        "available": false,
-        "reason": "self",
-        "message": "不能给自己的帖子投币，把币留给别人吧 🙌"
-      }
+      "contentHtml": "<h1>采样</h1>\n<p>正文一段。</p>\n<ul><li>列表项</li></ul>\n<p><code>code</code></p>"
     },
     "replies": [],
     "reposters": []
@@ -902,10 +863,8 @@
         "replyCount": 0,
         "likeCount": 0,
         "dislikeCount": 0,
-        "coinCount": 0,
         "bookmarkCount": 0,
         "repostCount": 0,
-        "myCoins": 0,
         "liked": false,
         "disliked": false,
         "bookmarked": false,
@@ -917,9 +876,9 @@
         "hiddenBy": null,
         "pinned": false,
         "locked": false,
-        "createdAt": 1791311530770,
-        "updatedAt": 1791311530770,
-        "lastActiveAt": 1791311530770
+        "createdAt": 1791312502367,
+        "updatedAt": 1791312502367,
+        "lastActiveAt": 1791312502367
       },
       {
         "id": 6,
@@ -944,15 +903,13 @@
         },
         "profilePinned": false,
         "profilePinnedAt": null,
-        "views": 297,
+        "views": 248,
         "replyCount": 2,
         "likeCount": 2,
-        "dislikeCount": 0,
-        "coinCount": 0,
+        "dislikeCount": 1,
         "bookmarkCount": 0,
         "repostCount": 0,
-        "myCoins": 0,
-        "liked": false,
+        "liked": true,
         "disliked": false,
         "bookmarked": false,
         "reposted": false,
@@ -963,9 +920,9 @@
         "hiddenBy": null,
         "pinned": false,
         "locked": false,
-        "createdAt": 1791268330154,
-        "updatedAt": 1791268330154,
-        "lastActiveAt": 1791275530154
+        "createdAt": 1791269301733,
+        "updatedAt": 1791269301733,
+        "lastActiveAt": 1791276501733
       }
     ],
     "page": 1,
@@ -1000,10 +957,8 @@
         "replyCount": 0,
         "likeCount": 0,
         "dislikeCount": 0,
-        "coinCount": 0,
         "bookmarkCount": 0,
         "repostCount": 0,
-        "myCoins": 0,
         "liked": false,
         "disliked": false,
         "bookmarked": false,
@@ -1015,9 +970,9 @@
         "hiddenBy": null,
         "pinned": false,
         "locked": false,
-        "createdAt": 1791311530770,
-        "updatedAt": 1791311530770,
-        "lastActiveAt": 1791311530770
+        "createdAt": 1791312502367,
+        "updatedAt": 1791312502367,
+        "lastActiveAt": 1791312502367
       }
     ],
     "page": 1,
@@ -1059,15 +1014,13 @@
         },
         "profilePinned": false,
         "profilePinnedAt": null,
-        "views": 297,
+        "views": 248,
         "replyCount": 2,
         "likeCount": 2,
-        "dislikeCount": 0,
-        "coinCount": 0,
+        "dislikeCount": 1,
         "bookmarkCount": 0,
         "repostCount": 0,
-        "myCoins": 0,
-        "liked": false,
+        "liked": true,
         "disliked": false,
         "bookmarked": false,
         "reposted": false,
@@ -1078,9 +1031,9 @@
         "hiddenBy": null,
         "pinned": false,
         "locked": false,
-        "createdAt": 1791268330154,
-        "updatedAt": 1791268330154,
-        "lastActiveAt": 1791275530154
+        "createdAt": 1791269301733,
+        "updatedAt": 1791269301733,
+        "lastActiveAt": 1791276501733
       },
       {
         "id": 4,
@@ -1104,16 +1057,14 @@
           "name": "写作"
         },
         "profilePinned": true,
-        "profilePinnedAt": 1791307930501,
-        "views": 201,
+        "profilePinnedAt": 1791308902047,
+        "views": 64,
         "replyCount": 1,
-        "likeCount": 3,
+        "likeCount": 1,
         "dislikeCount": 0,
-        "coinCount": 0,
         "bookmarkCount": 0,
         "repostCount": 1,
-        "myCoins": 0,
-        "liked": true,
+        "liked": false,
         "disliked": false,
         "bookmarked": false,
         "reposted": false,
@@ -1124,9 +1075,9 @@
         "hiddenBy": null,
         "pinned": false,
         "locked": false,
-        "createdAt": 1791203530154,
-        "updatedAt": 1791203530154,
-        "lastActiveAt": 1791207130154
+        "createdAt": 1791204501733,
+        "updatedAt": 1791204501733,
+        "lastActiveAt": 1791208101733
       }
     ],
     "page": 1,
@@ -1144,14 +1095,13 @@
       "bio": "论坛站长（拥有者），有事找我。",
       "avatar": "emoji:🧭:212",
       "banned": false,
-      "createdAt": 1788719530154,
-      "coinBalance": 12,
+      "createdAt": 1788720501733,
       "postCount": 3,
       "replyCount": 2,
       "followerCount": 3,
       "followingCount": 1,
-      "likesReceived": 4,
-      "dislikesReceived": 1,
+      "likesReceived": 6,
+      "dislikesReceived": 0,
       "bookmarkCount": 0,
       "isMe": true,
       "isFollowing": false,
@@ -1187,7 +1137,7 @@
         "role": "member",
         "bio": "产品经理，偶尔写点东西。",
         "avatar": "emoji:🌻:45",
-        "followedAt": 1791225130154,
+        "followedAt": 1791226101733,
         "blockedAt": null,
         "postCount": 2,
         "followerCount": null,
@@ -1200,7 +1150,7 @@
         "role": "member",
         "bio": "后端开发，Node / Go / 数据库。",
         "avatar": "emoji:🐳:198",
-        "followedAt": 1791052330154,
+        "followedAt": 1791053301733,
         "blockedAt": null,
         "postCount": 2,
         "followerCount": null,
@@ -1213,7 +1163,7 @@
         "role": "member",
         "bio": "前端工程师，喜欢折腾 UI。",
         "avatar": "emoji:🦊:24",
-        "followedAt": 1790965930154,
+        "followedAt": 1790966901733,
         "blockedAt": null,
         "postCount": 2,
         "followerCount": null,
@@ -1228,7 +1178,7 @@
         "role": "member",
         "bio": "产品经理，偶尔写点东西。",
         "avatar": "emoji:🌻:45",
-        "followedAt": 1791225130154,
+        "followedAt": 1791226101733,
         "blockedAt": null,
         "postCount": 2,
         "followerCount": 2
@@ -1257,15 +1207,13 @@
           "name": "站务公告"
         },
         "profilePinned": true,
-        "profilePinnedAt": 1791307930501,
-        "views": 115,
+        "profilePinnedAt": 1791308902047,
+        "views": 20,
         "replyCount": 2,
-        "likeCount": 2,
-        "dislikeCount": 1,
-        "coinCount": 2,
+        "likeCount": 3,
+        "dislikeCount": 0,
         "bookmarkCount": 0,
         "repostCount": 1,
-        "myCoins": 0,
         "liked": false,
         "disliked": false,
         "bookmarked": false,
@@ -1277,9 +1225,9 @@
         "hiddenBy": null,
         "pinned": true,
         "locked": false,
-        "createdAt": 1790533930154,
-        "updatedAt": 1790533930154,
-        "lastActiveAt": 1790706730154
+        "createdAt": 1790534901733,
+        "updatedAt": 1790534901733,
+        "lastActiveAt": 1790707701733
       },
       {
         "id": 9,
@@ -1305,10 +1253,8 @@
         "replyCount": 0,
         "likeCount": 0,
         "dislikeCount": 0,
-        "coinCount": 0,
         "bookmarkCount": 0,
         "repostCount": 0,
-        "myCoins": 0,
         "liked": false,
         "disliked": false,
         "bookmarked": false,
@@ -1320,14 +1266,14 @@
         "hiddenBy": null,
         "pinned": false,
         "locked": false,
-        "createdAt": 1791311530770,
-        "updatedAt": 1791311530770,
-        "lastActiveAt": 1791311530770
+        "createdAt": 1791312502367,
+        "updatedAt": 1791312502367,
+        "lastActiveAt": 1791312502367
       },
       {
         "id": 8,
-        "title": "论坛 v1.1 上线：消息通知、评价、投币与关注",
-        "excerpt": "本次更新把社区互动补齐了： 🔔 消息通知：有人回复、点赞、踩、投币、关注你，或 @ 提到你，都会推送 👍👎 评价：点赞 / 踩二选一，可以随时改主意 🪙 投币：每天 10 币额度，单个帖子最多投 2 币，币会真的进入作者账户 ⭐ 收藏：在「我的收藏」里集中查看 👥 关注：关注作者后，首页「…",
+        "title": "论坛 v1.1 上线：消息通知、评价与关注",
+        "excerpt": "本次更新把社区互动补齐了： 🔔 消息通知：有人回复、点赞、踩、关注你，或 @ 提到你，都会推送 👍👎 评价：点赞 / 踩二选一，可以随时改主意 ⭐ 收藏：在「我的收藏」里集中查看 👥 关注：关注作者后，首页「我关注的」里只看 TA 们的帖子 有任何建议直接回帖，或者 @站长 叫我 📮",
         "board": {
           "id": 4,
           "slug": "share",
@@ -1347,14 +1293,12 @@
         },
         "profilePinned": false,
         "profilePinnedAt": null,
-        "views": 220,
+        "views": 223,
         "replyCount": 3,
-        "likeCount": 2,
+        "likeCount": 3,
         "dislikeCount": 0,
-        "coinCount": 0,
         "bookmarkCount": 0,
         "repostCount": 1,
-        "myCoins": 0,
         "liked": false,
         "disliked": false,
         "bookmarked": false,
@@ -1366,9 +1310,9 @@
         "hiddenBy": null,
         "pinned": false,
         "locked": false,
-        "createdAt": 1791304330154,
-        "updatedAt": 1791304330154,
-        "lastActiveAt": 1791310030154
+        "createdAt": 1791305301733,
+        "updatedAt": 1791305301733,
+        "lastActiveAt": 1791311001733
       }
     ]
   },
@@ -1399,7 +1343,7 @@
         "role": "member",
         "bio": "产品经理，偶尔写点东西。",
         "avatar": "emoji:🌻:45",
-        "followedAt": 1791225130154,
+        "followedAt": 1791226101733,
         "blockedAt": null,
         "postCount": 2,
         "followerCount": 2
@@ -1408,8 +1352,7 @@
     "counts": {
       "followerCount": 3,
       "followingCount": 1
-    },
-    "coinBalance": 12
+    }
   },
   "/api/me/blocks": {
     "items": [],
@@ -1418,11 +1361,11 @@
   "/api/notifications": {
     "items": [
       {
-        "id": 45,
+        "id": 37,
         "type": "system",
         "excerpt": "欢迎来到围炉论坛！先看看《论坛版规与发帖指南》，然后去发你的第一个帖子吧 🎉",
         "read": false,
-        "createdAt": 1791311530493,
+        "createdAt": 1791312502039,
         "post": null,
         "team": null,
         "actor": null
@@ -1430,12 +1373,12 @@
       {
         "id": 13,
         "type": "post_reply",
-        "excerpt": "投币额度挺合理，@站长 这个 @ 提醒能收到吗？",
+        "excerpt": "试了下通知真的能收到，@站长 这个 @ 提醒也能用 👍",
         "read": false,
-        "createdAt": 1791310030154,
+        "createdAt": 1791311001733,
         "post": {
           "id": 8,
-          "title": "论坛 v1.1 上线：消息通知、评价、投币与关注",
+          "title": "论坛 v1.1 上线：消息通知、评价与关注",
           "deleted": false
         },
         "team": null,
@@ -1452,10 +1395,10 @@
         "type": "post_reply",
         "excerpt": "希望以后能加上消息通知 🔔",
         "read": false,
-        "createdAt": 1791309130154,
+        "createdAt": 1791310101733,
         "post": {
           "id": 8,
-          "title": "论坛 v1.1 上线：消息通知、评价、投币与关注",
+          "title": "论坛 v1.1 上线：消息通知、评价与关注",
           "deleted": false
         },
         "team": null,
@@ -1472,10 +1415,10 @@
         "type": "post_reply",
         "excerpt": "速度很快，UI 也清爽 👍",
         "read": false,
-        "createdAt": 1791307930154,
+        "createdAt": 1791308901733,
         "post": {
           "id": 8,
-          "title": "论坛 v1.1 上线：消息通知、评价、投币与关注",
+          "title": "论坛 v1.1 上线：消息通知、评价与关注",
           "deleted": false
         },
         "team": null,
@@ -1488,14 +1431,14 @@
         }
       },
       {
-        "id": 33,
+        "id": 28,
         "type": "post_like",
         "excerpt": "",
         "read": false,
-        "createdAt": 1791304390154,
+        "createdAt": 1791305361733,
         "post": {
           "id": 8,
-          "title": "论坛 v1.1 上线：消息通知、评价、投币与关注",
+          "title": "论坛 v1.1 上线：消息通知、评价与关注",
           "deleted": false
         },
         "team": null,
@@ -1508,14 +1451,34 @@
         }
       },
       {
-        "id": 32,
+        "id": 27,
         "type": "post_like",
         "excerpt": "",
         "read": false,
-        "createdAt": 1791304390154,
+        "createdAt": 1791305361733,
         "post": {
           "id": 8,
-          "title": "论坛 v1.1 上线：消息通知、评价、投币与关注",
+          "title": "论坛 v1.1 上线：消息通知、评价与关注",
+          "deleted": false
+        },
+        "team": null,
+        "actor": {
+          "id": 3,
+          "username": "bob",
+          "displayName": "Bob",
+          "role": "member",
+          "avatar": "emoji:🐳:198"
+        }
+      },
+      {
+        "id": 26,
+        "type": "post_like",
+        "excerpt": "",
+        "read": false,
+        "createdAt": 1791305361733,
+        "post": {
+          "id": 8,
+          "title": "论坛 v1.1 上线：消息通知、评价与关注",
           "deleted": false
         },
         "team": null,
@@ -1529,30 +1492,10 @@
       },
       {
         "id": 36,
-        "type": "post_coin",
-        "excerpt": "投了 2 币",
-        "read": false,
-        "createdAt": 1791300730154,
-        "post": {
-          "id": 1,
-          "title": "【必读】论坛版规与发帖指南",
-          "deleted": false
-        },
-        "team": null,
-        "actor": {
-          "id": 3,
-          "username": "bob",
-          "displayName": "Bob",
-          "role": "member",
-          "avatar": "emoji:🐳:198"
-        }
-      },
-      {
-        "id": 44,
         "type": "follow",
         "excerpt": "",
         "read": false,
-        "createdAt": 1791225130154,
+        "createdAt": 1791226101733,
         "post": null,
         "team": null,
         "actor": {
@@ -1564,11 +1507,11 @@
         }
       },
       {
-        "id": 39,
+        "id": 31,
         "type": "follow",
         "excerpt": "",
         "read": false,
-        "createdAt": 1791052330154,
+        "createdAt": 1791053301733,
         "post": null,
         "team": null,
         "actor": {
@@ -1580,11 +1523,11 @@
         }
       },
       {
-        "id": 38,
+        "id": 30,
         "type": "follow",
         "excerpt": "",
         "read": false,
-        "createdAt": 1790965930154,
+        "createdAt": 1790966901733,
         "post": null,
         "team": null,
         "actor": {
@@ -1600,7 +1543,7 @@
         "type": "post_reply",
         "excerpt": "补充一点：提问时贴出报错堆栈真的能省下很多来回。",
         "read": false,
-        "createdAt": 1790706730154,
+        "createdAt": 1790707701733,
         "post": {
           "id": 1,
           "title": "【必读】论坛版规与发帖指南",
@@ -1620,7 +1563,7 @@
         "type": "post_reply",
         "excerpt": "收到，已认真阅读 ✅",
         "read": false,
-        "createdAt": 1790620330154,
+        "createdAt": 1790621301733,
         "post": {
           "id": 1,
           "title": "【必读】论坛版规与发帖指南",
@@ -1640,7 +1583,7 @@
         "type": "post_like",
         "excerpt": "",
         "read": false,
-        "createdAt": 1790533990154,
+        "createdAt": 1790534961733,
         "post": {
           "id": 1,
           "title": "【必读】论坛版规与发帖指南",
@@ -1660,7 +1603,7 @@
         "type": "post_like",
         "excerpt": "",
         "read": false,
-        "createdAt": 1790533990154,
+        "createdAt": 1790534961733,
         "post": {
           "id": 1,
           "title": "【必读】论坛版规与发帖指南",
@@ -1677,10 +1620,10 @@
       },
       {
         "id": 14,
-        "type": "post_dislike",
+        "type": "post_like",
         "excerpt": "",
         "read": false,
-        "createdAt": 1790533990154,
+        "createdAt": 1790534961733,
         "post": {
           "id": 1,
           "title": "【必读】论坛版规与发帖指南",
@@ -1761,8 +1704,7 @@
       "banned": 0,
       "postsToday": 5,
       "repliesToday": 7,
-      "reactions": 20,
-      "coins": 5,
+      "reactions": 15,
       "follows": 8,
       "bookmarks": 0,
       "hiddenPosts": 0,
@@ -1777,8 +1719,7 @@
         "bio": "论坛站长（拥有者），有事找我。",
         "avatar": "emoji:🧭:212",
         "banned": false,
-        "coinBalance": 12,
-        "createdAt": 1788719530154,
+        "createdAt": 1788720501733,
         "postCount": 3,
         "replyCount": 2,
         "followerCount": 3
@@ -1791,8 +1732,7 @@
         "bio": "前端工程师，喜欢折腾 UI。",
         "avatar": "emoji:🦊:24",
         "banned": false,
-        "coinBalance": 8,
-        "createdAt": 1788805930154,
+        "createdAt": 1788806901733,
         "postCount": 2,
         "replyCount": 5,
         "followerCount": 2
@@ -1805,8 +1745,7 @@
         "bio": "后端开发，Node / Go / 数据库。",
         "avatar": "emoji:🐳:198",
         "banned": false,
-        "coinBalance": 11,
-        "createdAt": 1788892330154,
+        "createdAt": 1788893301733,
         "postCount": 2,
         "replyCount": 6,
         "followerCount": 1
@@ -1819,8 +1758,7 @@
         "bio": "产品经理，偶尔写点东西。",
         "avatar": "emoji:🌻:45",
         "banned": false,
-        "coinBalance": 9,
-        "createdAt": 1788978730154,
+        "createdAt": 1788979701733,
         "postCount": 2,
         "replyCount": 2,
         "followerCount": 2
@@ -1833,8 +1771,7 @@
         "bio": "",
         "avatar": "",
         "banned": false,
-        "coinBalance": 10,
-        "createdAt": 1791311530724,
+        "createdAt": 1791312502317,
         "postCount": 0,
         "replyCount": 0,
         "followerCount": 0
@@ -1844,7 +1781,7 @@
       {
         "id": 9,
         "title": "假数据采样帖",
-        "createdAt": 1791311530770,
+        "createdAt": 1791312502367,
         "views": 0,
         "author": "站长",
         "board": "综合讨论",
@@ -1852,9 +1789,9 @@
       },
       {
         "id": 8,
-        "title": "论坛 v1.1 上线：消息通知、评价、投币与关注",
-        "createdAt": 1791304330154,
-        "views": 220,
+        "title": "论坛 v1.1 上线：消息通知、评价与关注",
+        "createdAt": 1791305301733,
+        "views": 223,
         "author": "站长",
         "board": "分享创造",
         "hidden": false
@@ -1862,8 +1799,8 @@
       {
         "id": 7,
         "title": "SQLite 分页查询在大数据量下变慢，怎么优化？",
-        "createdAt": 1791289930154,
-        "views": 188,
+        "createdAt": 1791290901733,
+        "views": 209,
         "author": "Bob",
         "board": "问答求助",
         "hidden": false
@@ -1871,8 +1808,8 @@
       {
         "id": 6,
         "title": "大家平时用什么工具记笔记？",
-        "createdAt": 1791268330154,
-        "views": 297,
+        "createdAt": 1791269301733,
+        "views": 248,
         "author": "Carol",
         "board": "综合讨论",
         "hidden": false
@@ -1880,8 +1817,8 @@
       {
         "id": 5,
         "title": "CSS 变量做主题切换的正确姿势",
-        "createdAt": 1791239530154,
-        "views": 262,
+        "createdAt": 1791240501733,
+        "views": 163,
         "author": "Alice",
         "board": "技术交流",
         "hidden": false
@@ -1889,8 +1826,8 @@
       {
         "id": 4,
         "title": "分享：我整理的 12 个 Markdown 写作小技巧",
-        "createdAt": 1791203530154,
-        "views": 201,
+        "createdAt": 1791204501733,
+        "views": 64,
         "author": "Carol",
         "board": "分享创造",
         "hidden": false
@@ -1898,8 +1835,8 @@
       {
         "id": 3,
         "title": "求助：前端 SPA 用 hash 路由会不会影响 SEO？",
-        "createdAt": 1791149530154,
-        "views": 231,
+        "createdAt": 1791150501733,
+        "views": 172,
         "author": "Alice",
         "board": "问答求助",
         "hidden": false
@@ -1907,8 +1844,8 @@
       {
         "id": 2,
         "title": "Node.js 24 内置 SQLite 上手实测：零依赖做全栈",
-        "createdAt": 1790793130154,
-        "views": 236,
+        "createdAt": 1790794101733,
+        "views": 23,
         "author": "Bob",
         "board": "技术交流",
         "hidden": false
@@ -1916,8 +1853,8 @@
       {
         "id": 1,
         "title": "【必读】论坛版规与发帖指南",
-        "createdAt": 1790533930154,
-        "views": 115,
+        "createdAt": 1790534901733,
+        "views": 20,
         "author": "站长",
         "board": "站务公告",
         "hidden": false

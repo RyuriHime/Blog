@@ -37,7 +37,7 @@ import {
 } from './core/index.js';
 import { installModules } from './modules/index.js';
 
-// 1-2. 建库。core 的 17 张表在 import './db.js' 时由 `import './core/tables.sql.js'` 的副作用登记。
+// 1-2. 建库。core 的 14 张表在 import './db.js' 时由 `import './core/tables.sql.js'` 的副作用登记。
 const { db, seeded, notifications: backfilledNotifications } = openDatabase(DB_FILE, schemas);
 
 // 3. 数据层。必须在装模块之前建好：openDatabase 之前，各模块里的 store 句柄是空的。

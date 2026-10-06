@@ -27,7 +27,6 @@ function postMetaStatsHtml(post) {
     <span class="spacer"></span>
     <span class="meta-item" title="点赞">👍 ${Fmt.fmtNum(post.likeCount)}</span>
     <span class="meta-item ${post.disliked ? 'is-dim' : ''}" title="踩">👎 ${Fmt.fmtNum(post.dislikeCount)}</span>
-    <span class="meta-item" title="投币">🪙 ${Fmt.fmtNum(post.coinCount)}</span>
     <span class="meta-item" title="浏览">👁 ${Fmt.fmtNum(post.views)}</span>
     <span class="meta-item" title="回复">💬 ${post.replyCount}</span>
     ${post.bookmarked ? '<span class="meta-item" title="已收藏">⭐</span>' : ''}`;
@@ -97,7 +96,7 @@ function postCompactHtml(items, toolsFor = null) {
     <div class="compact-row ${post.profilePinned ? 'is-pinned' : ''}">
       <a class="compact-title" href="#/post/${post.id}">${post.profilePinned ? '📌 ' : ''}${esc(post.title)}</a>
       ${post.category ? `<span class="tag tag-category">${esc(post.category.name)}</span>` : ''}
-      <span class="compact-meta">${Fmt.timeAgo(post.createdAt)} · 👍 ${post.likeCount} · 👎 ${post.dislikeCount} · 🪙 ${post.coinCount} · 💬 ${post.replyCount}</span>
+      <span class="compact-meta">${Fmt.timeAgo(post.createdAt)} · 👍 ${post.likeCount} · 👎 ${post.dislikeCount} · 💬 ${post.replyCount}</span>
       ${toolsFor ? `<div class="post-owner-row">${toolsFor(post)}</div>` : ''}
     </div>`,
     )

@@ -196,44 +196,6 @@ document.addEventListener('click', async (event) => {
         await refreshProfile();
         break;
       }
-      case 'coin': {        const postId = Number(actionNode.dataset.id);
-        // 服务端已经算好能不能投，这里只负责把原因说清楚，绝不留一个「点了没反应」的按钮
-        if (actionNode.dataset.coinLocked === '1') {
-          if (actionNode.dataset.coinReason === 'anonymous') {
-            Session.requireLogin('登录后才能投币');
-            break;
-          }
-          toast(actionNode.dataset.coinHint || '暂时不能投币', 'error');
-          break;
-        }
-        const result = await withButtonBusy(actionNode, () =>
-          api(`/api/posts/${postId}/coin`, { method: 'POST', body: { amount: 1 } }),
-        );
-        if (state.me) state.me.coinBalance = result.balance;
-
-        const count = actionNode.querySelector('[data-coin-count]');
-        if (count) count.textContent = result.coinCount;
-        const mine = actionNode.querySelector('[data-my-coins]');
-        if (mine) mine.innerHTML = ` <span class="tag tag-soft">我投了 ${result.myCoins}</span>`;
-        actionNode.classList.add('is-on-coin');
-
-        const bar = actionNode.closest('.action-bar');
-        const budget = bar?.querySelector('[data-coin-budget]');
-        if (budget) budget.textContent = `可用 ${result.balance} 币`;
-
-        // 达到单帖上限或余额用尽时，把按钮切换成「锁定但可解释」的状态
-        const limit = Number(actionNode.dataset.limit ?? result.perPostLimit);
-        const hint = bar?.querySelector('.coin-locked-hint');
-        if (result.myCoins >= limit) {
-          Compose.lockCoinButton(actionNode, `这篇帖子你已经投满 ${limit} 币了`, hint);
-        } else if (result.balance <= 0) {
-          Compose.lockCoinButton(actionNode, '币不够了：等别人给你的文章投币，攒够了再来', hint);
-        }
-
-        Session.renderSidebar();
-        toast(`投币成功，感谢支持作者！剩余 ${result.balance} 币 🪙`, 'success');
-        break;
-      }
       case 'bookmark': {
         if (!Session.requireLogin('登录后才能收藏')) break;
         const postId = Number(actionNode.dataset.id);
@@ -497,7 +459,6 @@ async function refreshProfile() {
   if (parts[0] === 'u' && parts[1]) await User.viewUser(parts[1], query);
 }
 
-/** 把投币按钮切成「不可用但可点击」的状态：点了会弹出原因，而不是毫无反应。 */
 document.addEventListener('change', async (event) => {
   const avatarInput = event.target.closest('[data-avatar-input]');
   if (avatarInput) {

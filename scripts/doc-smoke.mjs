@@ -900,8 +900,13 @@ try {
     const bookmark = await other.call(`/api/posts/${anchorId}/bookmark`, { method: 'POST' });
     check('收藏走的也是同一个影子行', bookmark.status === 200, `${bookmark.status} ${JSON.stringify(bookmark.error)}`);
 
-    const coin = await other.call(`/api/posts/${anchorId}/coin`, { method: 'POST', body: { amount: 1 } });
-    check('投币也能投给文档的影子行', coin.status === 200, `${coin.status} ${JSON.stringify(coin.error)}`);
+    // 投币已整体下线，这里换成转发：换一种「同样只认 posts 那一行」的互动，
+    // 撤销掉以免给后面的断言留下计数器。
+    const repost = await other.call(`/api/posts/${anchorId}/repost`, { method: 'POST', body: { comment: '文档影子行转发' } });
+    check('转发也能作用在文档的影子行上（core 的转发接口一行没改）', repost.status === 200 && repost.data?.reposted === true, `${repost.status} ${JSON.stringify(repost.error)}`);
+
+    const unrepost = await other.call(`/api/posts/${anchorId}/repost`, { method: 'DELETE' });
+    check('撤销转发后影子行不留状态', unrepost.status === 200 && unrepost.data?.reposted === false, `${unrepost.status} ${JSON.stringify(unrepost.error)}`);
 
     const post = await other.call(`/api/posts/${anchorId}`);
     check('旧帖子详情接口能打开影子行，标题就是文档标题', post.status === 200 && JSON.stringify(post.data ?? {}).includes('第一篇积木'), `${post.status} ${JSON.stringify(post.error ?? post.data).slice(0, 160)}`);

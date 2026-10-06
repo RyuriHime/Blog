@@ -1,7 +1,7 @@
 // core 路由：认证 / 资料 / 头像 / 密码 / 个人主页分类
 // // 搬运自 src/server.js 的固定行区间（预铺骨架，逐字未改），见 docs/tools/extract-server-modules.mjs。
 import { HttpError, ensure, field, ok, rateLimit, res_ } from '../../core/http.js';
-import { assertPinAllowed, coinAvailability, notifyMentions, resolveOwnCategory, shapeAuthor, shapeCategory, shapeConversation, shapeMessage, shapeNotification, shapePerson, shapePostDetail, shapePostListRow, shapeProfile, shapeReply, shapeReposter, shapeUser } from '../../core/shape.js';
+import { assertPinAllowed, notifyMentions, resolveOwnCategory, shapeAuthor, shapeCategory, shapeConversation, shapeMessage, shapeNotification, shapePerson, shapePostDetail, shapePostListRow, shapeProfile, shapeReply, shapeReposter, shapeUser } from '../../core/shape.js';
 import { isOwner, isStaff, requireOwner, requireStaff, requireUser } from '../../core/guards.js';
 import { issueSession, removeAvatarFile, saveAvatarFile, sessionCookie } from '../../core/sessions.js';
 import { store } from '../../core/store.js';
@@ -51,7 +51,7 @@ export function registerRoutesA(route) {
     ensure(user && verifyPassword(password, user.password_hash), 401, 'bad_credentials', '用户名或密码不对');
     ensure(!user.banned, 403, 'banned', '该账号已被封禁');
     const token = issueSession(user.id);
-    ok(res_(ctx), { user: shapeUser(store.wallet(user.id)) }, { 'Set-Cookie': sessionCookie(token) });
+    ok(res_(ctx), { user: shapeUser(store.userById(user.id)) }, { 'Set-Cookie': sessionCookie(token) });
   });
 
   route('POST', '/api/auth/logout', async (ctx) => {
@@ -61,7 +61,7 @@ export function registerRoutesA(route) {
 
   route('GET', '/api/auth/me', async (ctx) => {
     if (!ctx.user) return ok(res_(ctx), { user: null, unread: 0 });
-    const fresh = store.wallet(ctx.user.id) ?? ctx.user;
+    const fresh = store.userById(ctx.user.id) ?? ctx.user;
     ok(res_(ctx), { user: shapeUser(fresh), unread: store.unreadCount(ctx.user.id) });
   });
 
@@ -191,7 +191,6 @@ export function registerRoutesA(route) {
       stats: store.stats(),
       ai: forumAiStatus(),
       notes: noteAgentStatus(),
-      coinRules: store.COIN_RULES,
       profileRules: store.PROFILE_RULES,
       messageRules: store.MESSAGE_RULES,
       hotPosts: store.hotPosts(5).map((row) => ({
@@ -199,7 +198,6 @@ export function registerRoutesA(route) {
         title: row.title,
         replyCount: row.reply_count,
         likeCount: row.like_count,
-        coinCount: row.coin_count,
       })),
     });
   });

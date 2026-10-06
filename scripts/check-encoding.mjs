@@ -147,15 +147,15 @@ const REQUIRED_FILES = [
  */
 const EXPECTED = [
   ['围炉论坛已启动', ['src/server.js']],
-  ['不能给自己的帖子投币', ['src/core/shape.js']],
+  ['分类不存在或不属于你', ['src/core/shape.js']],
   ['只支持「赞」或「踩」', ['src/modules/core/routes-b.js']],
-  ['投币经济', ['src/core/open-db-support.js']],
+  ['把老的 likes 表迁进 reactions 后删除', ['src/core/open-db-support.js']],
   ['头像：预设 emoji 或上传图片', ['src/core/sessions.js']],
   ['需要管理团队身份', ['src/core/guards.js']],
   ['黑名单', ['src/store.js']],
 
   ['数据访问层', ['src/store.js']],
-  ['已取消「每天补足」机制', ['src/store.js']],
+  ['同一用户对同一帖子只能赞或踩；重复点击同一个则取消。', ['src/store.js']],
   ['隐藏 / 取消隐藏', ['src/store.js']],
   ['互相关注', ['src/store.js']],
   ['私信', ['src/store.js']],
@@ -166,7 +166,7 @@ const EXPECTED = [
   ['恒定时间比对', ['src/password.js']],
 
   // 建表 SQL 搬进了 src/core/tables.sql.js，播种与回填文案搬进了 src/core/open-db-support.js
-  ['投币：单帖每人最多 2 币', ['src/core/tables.sql.js']],
+  ['评价：赞 / 踩（同一用户对同一帖子只能二选一）', ['src/core/tables.sql.js']],
   ['个人主页的文章分类', ['src/core/tables.sql.js']],
   ['转发（同一用户对同一篇只留一条', ['src/core/tables.sql.js']],
   ['综合讨论', ['src/core/open-db-support.js']],
@@ -184,7 +184,7 @@ const EXPECTED = [
   //    所以候选文件名必须换成**搬过去以后真正含有该文案**的那个文件；
   //    仍保留 `public/app.js` 当候选是没用的 —— 它现在只是个 44 行的装配文件。
   ['消息通知', ['public/core/session.js', 'public/views/feed.js', 'public/views/user.js']],
-  ['投币成功，感谢支持作者', ['public/core/events.js']],
+  ['这篇文章暂时不能转发', ['public/core/events.js']],
   ['转发会出现在你的主页', ['public/views/post.js']],
   ['跟随系统', ['public/core/theme.js', 'src/core/open-db-support.js']],
   ['暖阳', ['public/core/theme.js', 'public/css/00-themes.css']],
@@ -205,7 +205,7 @@ const EXPECTED = [
   ['拉黑之后看不到对方的公开动态', ['scripts/feed-smoke.mjs']],
 
   ['消息铃铛', ['public/css/75-social.css']],
-  ['评价 / 投币按钮', ['public/css/75-social.css']],
+  ['评价按钮', ['public/css/75-social.css']],
   ['转发按钮与转发区', ['public/css/78-repost.css']],
   ['暖阳：琥珀黄深色', ['public/css/00-themes.css']],
   ['头像设置', ['public/css/77-avatar.css']],

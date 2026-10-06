@@ -170,7 +170,7 @@ export const AI_USAGE_TOP_USERS = 10;
  * 两条 `CREATE TABLE IF NOT EXISTS` 进表名册（就是 `owns` 里的那两个名字），
  * `CREATE INDEX` 照常执行但不进名册。
  *
- * `user_id` 引用 `users(id)`：`src/server.js` 先 import `./store.js`（登记 17 张 core 表）
+ * `user_id` 引用 `users(id)`：`src/server.js` 先 import `./store.js`（登记 14 张 core 表）
  * 再 import `./modules/index.js`（登记这两张），所以外键目标那时已经存在。
  */
 export const AI_SCHEMA = `

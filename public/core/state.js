@@ -15,7 +15,6 @@ const state = {
     boards: [],
     stats: { users: 0, posts: 0, replies: 0 },
     hotPosts: [],
-    coinRules: { signupGrant: 10, perPostLimit: 2 },
     profileRules: { pinLimit: 3, categoryLimit: 8 },
     messageRules: { oneWayDailyLimit: 1, maxLength: 1000 },
   },

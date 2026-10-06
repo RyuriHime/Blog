@@ -30,7 +30,6 @@ const roleTag = (role) => {
   if (role === 'admin') return '<span class="tag tag-admin">🛡️ 管理员</span>';
   return '';
 };
-const coinRules = () => state.site.coinRules ?? { signupGrant: 10, perPostLimit: 2 };
 const profileRules = () => state.site.profileRules ?? { pinLimit: 3, categoryLimit: 8 };
 
 // ── 导出 ──────────────────────────────────────────────────────────────
@@ -41,7 +40,6 @@ export { isStaffRole };
 export { isStaffUser };
 export { roleLabel };
 export { roleTag };
-export { coinRules };
 export { profileRules };
 
 /* @hand-written */

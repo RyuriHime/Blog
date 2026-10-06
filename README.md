@@ -9,13 +9,13 @@
 ├── 账号设置 ── 修改头像、昵称、个性签名、修改密码（改密后其它设备强制下线）
 ├── 内容发布 ── 发帖 / 编辑 / 删除，Markdown 渲染 + 实时预览，@提及
 ├── 讨论互动 ── 回复、置顶、锁定
-├── 文章评价 ── 👍 点赞 / 👎 踩（互斥）+ 🪙 投币（注册送币、单帖上限、币转给作者、无每日补足）+ ⭐ 收藏
+├── 文章评价 ── 👍 点赞 / 👎 踩（互斥）+ ⭐ 收藏
 ├── 转发分享 ── 🔁 带评语转发到自己的主页、可撤销、可复制链接，原作者收到通知
 ├── 个人主页 ── 作者自建分类、列表/卡片/紧凑三种排版、置顶推荐（最多 3 篇）、转发列表
 ├── 关注关系 ── 关注作者，首页「我关注的」只看 TA 们的帖子
 ├── 私信 ── ✉️ 互相关注不限量；单方面关注每天 1 条；未关注需先关注
 ├── 黑名单 ── 🚫 被拉黑者无法关注 / 私信 / 查看我的文章，双向内容互不可见
-├── 消息通知 ── 回复 / 点赞 / 踩 / 投币 / 转发 / 关注 / @提及 / 关注的人发新帖 / 管理操作 / 团队公告
+├── 消息通知 ── 回复 / 点赞 / 踩 / 转发 / 关注 / @提及 / 关注的人发新帖 / 管理操作 / 团队公告
 ├── 背景主题 ── 🎨 暗夜 / 极夜 / 明亮 / 暖阳 / 奶黄 / 森林 / 暮紫 + 跟随系统，选择记在本地
 ├── 个性头像 ── 🖼️ 12 个预设表情或上传图片（客户端压缩、服务端校验落盘）
 ├── 角色权限 ── 👑 站长（唯一，可任命管理员）/ 🛡️ 管理员 / 成员，三级权限
@@ -92,31 +92,10 @@ HOST=0.0.0.0 node src/server.js       # 允许局域网内其它设备访问
 
 ## 2. 互动机制说明
 
-### 投币 🪙
-
-**没有「每日补足」**：币不会随着时间自动回涨，只会从两个地方进账 ——
-
-1. **注册赠送 10 币**（一次性）；
-2. **别人给你的文章投的币**（投出的币直接转进作者账户）。
-
-规则与限制：
-
-- 对同一篇文章最多投 **2 币**（可以一次投 1 币，分两次投满）；
-- 不能给自己的文章投币；
-- 投币按钮旁边始终显示「可用 N 币」，余额花完就是花完，得等别人投你；
-- 币花完时按钮会变虚线灰态并直接写出原因：「币不够了：等别人给你的文章投币，攒够了再来」。
-
-这样币就成了一种**真正稀缺的货币**：投出去就没了，所以投币是"最肉疼"的认可 —— 币也只会从注册赠送和别人投给你这两处来。
-
-**能不能投币由服务端判定**：`GET /api/posts/:id` 会返回 `post.coin`，包含 `available`、`reason`（`ok` / `self` / `per_post_limit` / `insufficient_coins` / `anonymous`）、`message`、`balance`、`myCoins`、`perPostLimit`、`signupGrant`。前端只是照着展示：
-
-- 可投 → 按钮高亮，hover 提示「投 1 币给作者（可用 N 币，单帖上限 2 币）」；
-- 不可投 → 按钮变为虚线灰态并**在旁边直接写出原因**，**点它还会再弹一次提示**，不会出现「点了没反应」的情况。
-
 ### 评价：赞 / 踩
 
 同一用户对同一篇文章只能「赞」或「踩」二选一，重复点同一个按钮表示取消，改主意时直接点另一个即可（会自动清掉原来的）。
-热度排序的公式是 `赞×4 + 币×5 + 回复×3 − 踩×2 + 浏览×0.1`（列表排序用），看的是热度而不是质量。
+热度排序的公式是 `赞×4 + 回复×3 − 踩×2 + 浏览×0.1`（列表排序用），看的是热度而不是质量。
 
 ### 转发 🔁
 
@@ -145,7 +124,6 @@ HOST=0.0.0.0 node src/server.js       # 允许局域网内其它设备访问
 | --- | --- | --- |
 | 有人回复你的帖子 | 楼主 | `post_reply` |
 | 有人赞 / 踩你的帖子 | 作者 | `post_like` / `post_dislike` |
-| 有人给你的帖子投币 | 作者 | `post_coin` |
 | 有人关注你 | 被关注者 | `follow` |
 | 有人在正文 / 回复里 @你 | 被提及者 | `mention` |
 | 你关注的人发了新帖 | 关注者 | `following_post` |
@@ -247,7 +225,7 @@ HOST=0.0.0.0 node src/server.js       # 允许局域网内其它设备访问
 
 **隐藏 vs 删除**（管理团队两者都能做）：
 
-- **🙈 隐藏**：可逆。文章对普通访客与搜索引擎直接 404，也不出现在板块列表、搜索、首页里；**作者本人仍然能看到**（详情页顶部有醒目提示 + 隐藏原因），管理团队也照常可见并带「已隐藏」标记。隐藏期间访客无法点赞/投币/回复/转发（一律 404）。填写的隐藏原因会随通知发给作者。
+- **🙈 隐藏**：可逆。文章对普通访客与搜索引擎直接 404，也不出现在板块列表、搜索、首页里；**作者本人仍然能看到**（详情页顶部有醒目提示 + 隐藏原因），管理团队也照常可见并带「已隐藏」标记。隐藏期间访客无法点赞/回复/转发（一律 404）。填写的隐藏原因会随通知发给作者。
 - **🗑 删除**：软删除，作者和管理团队都看不到，数据仍留在库里。
 
 **审计日志**：隐藏/恢复、删除、封禁/解封、任命/收回管理员都会写进 `moderation_logs`，后台「📜 管理操作记录」里能看到操作人、动作、对象、原因和时间。
@@ -306,7 +284,6 @@ HOST=0.0.0.0 node src/server.js       # 允许局域网内其它设备访问
 - **个人资料**：修改昵称（1-20 字符）与个性签名（≤100 字符，展示在个人主页）；
 - **外观**：背景主题选择（与顶栏 🎨 同步）；
 - **修改密码**：需要输入当前密码，新密码至少 6 位且不能与旧密码相同；**改密成功后其它设备上的会话会被立即吊销**，当前浏览器保持登录；
-- **我的资产**：可用币余额（币只从注册赠送和别人的投币来），以及账号创建时间等信息；
 - **账号信息**：用户名（不可改）、身份、注册时间、状态。
 
 ---
@@ -342,8 +319,8 @@ forum/
 │   ├── views/                   # 页面：feed / user / post / compose / timeline / messages / notes / doc / team / ai / admin …
 │   └── css/                     # 22 个样式分片（00-themes … 97-notes）
 ├── scripts/
-│   ├── smoke.mjs                # 后端端到端冒烟测试（253 项）
-│   ├── check-golden.mjs         # ★ 行为金标准：96 条请求的状态码 + 响应结构指纹
+│   ├── smoke.mjs                # 后端端到端冒烟测试（227 项）
+│   ├── check-golden.mjs         # ★ 行为金标准：88 条请求的状态码 + 响应结构指纹
 │   ├── check-skeleton.mjs       # ★ 骨架自检：模块解耦证明 + 薄入口行数
 │   ├── check-ui-contract.mjs    # 前端契约检查：CSS 类名 + API 字段 + 主题/头像/角色/私信结构
 │   ├── check-encoding.mjs       # 源码编码体检（BOM / 乱码 / 批处理换行与 ASCII）
@@ -372,9 +349,9 @@ forum/
 | --- | --- |
 | `#/` | 首页：Hero + 讨论列表（全部 / 我关注的）+ 排序切换 |
 | `#/board/tech` | 板块页（`general` / `tech` / `qa` / `share` / `meta`） |
-| `#/post/:id` | 帖子详情：Markdown 正文、赞/踩/投币/收藏/关注作者、回复列表与回复框 |
+| `#/post/:id` | 帖子详情：Markdown 正文、赞/踩/收藏/关注作者、回复列表与回复框 |
 | `#/new`、`#/edit/:id` | 发帖 / 编辑，带 Markdown 工具栏、分类选择与「主页置顶」开关 |
-| `#/settings` | 账号设置：资料、密码、我的资产、账号信息 |
+| `#/settings` | 账号设置：资料、密码、账号信息 |
 | `#/u/:username` | 个人主页：分类筛选、三种排版、置顶推荐、关注者与关注列表 |
 | `#/notifications` | 消息通知（全部 / 只看未读） |
 | `#/following` | 📋 关注列表：我关注了**谁**（头像 + 昵称 + 一键取关）。关注**流**（只看 TA 们发的帖子）是动态流的一个筛选，走 `#/?filter=following` |
@@ -383,7 +360,7 @@ forum/
 | `#/login`、`#/register` | 登录 / 注册 |
 | `#/admin` | 管理后台（仅管理员） |
 | `#/docs` | 积木广场：可编程帖子 / 笔记 / 主页文档的列表，支持 `?kind=` `?scope=` `?mine=1` `?q=` `?tag=标签`（点卡片上的标签就是跳到这儿）；两种排法 `▦ 网格` / `☰ 列表`（从上往下列下来），选择记在本地偏好 `forum:docsLayout` 里 |
-| `#/doc/:id` | 积木阅读页：块渲染结果、降级警告、修订记录、导出/导入、顶部挂着**标签**（点一下看同标签的积木），底下是**互动条**（点赞 / 踩 / 投币 / 收藏 / 转发 / 关注作者 + AI 解读）—— 它挂在文档的锚点帖上，走 `GET /api/docs/:id/anchor`，不再需要跳到帖子页 |
+| `#/doc/:id` | 积木阅读页：块渲染结果、降级警告、修订记录、导出/导入、顶部挂着**标签**（点一下看同标签的积木），底下是**互动条**（点赞 / 踩 / 收藏 / 转发 / 关注作者 + AI 解读）—— 它挂在文档的锚点帖上，走 `GET /api/docs/:id/anchor`，不再需要跳到帖子页 |
 | `#/doc/:id/edit` | 积木编辑器：逐块编辑、上下移动、Markdown 双向、`ops` 增量改动、套模板、回滚、沙箱开关、标签（跟着同一个「保存」一起存） |
 | `#/doc/:id/blocks` | 同一个编辑器的高级入口（默认落在积木模式）：块列表 + 当前块的 props 表单 |
 | `#/blocks` | 块类型表的老地址：进的是同一页 `#/dev`（页面没下线，收藏夹里的链接照样能开） |
@@ -407,7 +384,7 @@ forum/
 | POST | `/api/auth/login` | 登录，下发 `forum_sid` Cookie | 公开 |
 | POST | `/api/auth/logout` | 退出登录 | 登录 |
 | POST | `/api/auth/password` | 修改密码（校验旧密码，吊销其它会话） | 登录 |
-| GET | `/api/auth/me` | 当前用户 + 未读数（含可用币） | 公开 |
+| GET | `/api/auth/me` | 当前用户 + 未读数 | 公开 |
 | POST | `/api/me/profile` | 修改昵称 / 个性签名 | 登录 |
 | POST | `/api/me/avatar` | 设置头像：`{type:'emoji'\|'upload'\|'reset'}` | 登录 |
 | GET | `/avatars/:file` | 读取上传的头像文件（长缓存 + nosniff） | 公开 |
@@ -415,14 +392,13 @@ forum/
 | POST | `/api/me/categories` | 新建分类（≤8 个） | 登录 |
 | PUT | `/api/me/categories/:id` | 重命名分类 | 登录 |
 | DELETE | `/api/me/categories/:id` | 删除分类（文章回到未分类） | 登录 |
-| GET | `/api/site` | 板块列表 + 站点统计 + 投币/主页规则 + 热门帖子 | 公开 |
+| GET | `/api/site` | 板块列表 + 站点统计 + 主页规则 + 热门帖子 | 公开 |
 | GET | `/api/posts` | 帖子列表，支持 `board` `q` `author` `sort` `page` `perPage` `bookmarked` `following` | 公开 |
 | POST | `/api/posts` | 发帖（可带 `categoryId`、`profilePinned`） | 登录 |
-| GET | `/api/posts/:id` | 帖子详情（含回复、我的评价状态、可投币状态） | 公开 |
+| GET | `/api/posts/:id` | 帖子详情（含回复、我的评价状态） | 公开 |
 | PUT | `/api/posts/:id` | 编辑帖子 | 作者/管理员 |
 | DELETE | `/api/posts/:id` | 删除帖子（软删除，管理员删他人帖子会通知作者） | 作者/管理员 |
 | POST | `/api/posts/:id/reaction` | 赞 / 踩，body `{ kind: 'like' \| 'dislike' }` | 登录 |
-| POST | `/api/posts/:id/coin` | 投币，body `{ amount }` | 登录 |
 | POST | `/api/posts/:id/bookmark` | 收藏 / 取消收藏 | 登录 |
 | POST | `/api/posts/:id/repost` | 转发（带评语，同一篇只留一条，重复转发=更新评语） | 登录 |
 | DELETE | `/api/posts/:id/repost` | 撤销转发 | 登录 |
@@ -432,7 +408,7 @@ forum/
 | DELETE | `/api/replies/:id` | 删除回复 | 回复者/楼主/管理员 |
 | POST | `/api/users/:id/follow` | 关注 / 取关 | 登录 |
 | GET | `/api/users/:username` | 个人主页：统计 + 分类 + 关注者/关注 + 文章（`?category=<id\|none>`） | 公开 |
-| GET | `/api/me/following` | 我的关注列表 + 计数 + 余额 | 登录 |
+| GET | `/api/me/following` | 我的关注列表 + 计数 | 登录 |
 | GET | `/api/notifications` | 通知列表，支持 `filter=unread` `page` `perPage`（上限 50）。每行带 `post` / `actor` / `team`；`team_announcement` 的 `team` 用来跳回团队主页 | 登录 |
 | GET | `/api/notifications/summary` | 未读数（铃铛轮询用） | 登录 |
 | POST | `/api/notifications/:id/read` | 单条已读 | 登录 |
@@ -576,7 +552,7 @@ forum/
 
 ```
 users(id, username, display_name, password_hash, role, bio, avatar, banned,   -- role: owner | admin | member
-      coin_balance, coin_refresh_at, created_at)   -- coin_refresh_at 为历史字段，已不再读写
+      created_at)
 sessions(token, user_id, created_at, expires_at)
 boards(id, slug, name, description, icon, sort_order)
 posts(id, board_id, user_id, title, content, views, pinned, locked, deleted,
@@ -584,7 +560,6 @@ posts(id, board_id, user_id, title, content, views, pinned, locked, deleted,
       hidden, hidden_at, hidden_by, hidden_reason)
 replies(id, post_id, user_id, content, deleted, created_at)
 reactions(user_id, post_id, kind)        -- kind: like | dislike，联合主键保证赞踩互斥
-coins(user_id, post_id, amount)          -- 单帖累计上限 2，作者收币
 bookmarks(user_id, post_id, created_at)  -- 私密收藏
 follows(follower_id, followee_id, created_at)
 notifications(id, user_id, actor_id, type, post_id, reply_id, team_id, excerpt, read_at, created_at)
@@ -667,12 +642,10 @@ team_messages(id, team_id, user_id, content, deleted, created_at)
 
 - **软删除**：删帖/删回复只置 `deleted = 1`，数据可追溯，也不会破坏点赞、收藏的外键。
 - **日期只按天算**：日历相关的日期统一用本地时区的 `YYYY-MM-DD` 字符串（见 `src/dates.js`），避开用时间戳做日历运算的时区坑。
-- **余额只增不减**：币没有「每日补足」，只会靠注册赠送和别人的投币增加，投出去才减少。
 - **评价互斥**：`reactions` 用 `(user_id, post_id)` 做主键，一个用户对一篇文章只可能有一行记录。
-- **投币事务**：扣币、加币、记账包在 `BEGIN IMMEDIATE` 事务里，失败自动回滚。
 - **通知去重**：写通知前先查「同一 actor + 同一类型 + 同一对象 + 未读」是否存在，存在就跳过。**团队公告是例外**（`createNotification({ dedupe: false })`）：一次广播要响一次是一次，改两回就该有两条未读。
 - **分类归属校验**：只能把文章放进自己的分类，服务端逐次校验，前端下拉框只是便利。
-- **积木的影子行**：每份文档在 `posts` 里留一条只做互动锚点的行（`anchor_post_id`），赞/踩/投币/收藏/通知因此**零改动**复用；`hidden` 由文档 scope 决定，`public` 的文档还会把标题与纯文本摘要同步过去，所以旧列表与搜索照样能用它。代价（已知短板）：`hidden=1` 的影子行对非站长非作者是 404，所以 `followers` / `team` 可见的文档，**别人点不了赞**。
+- **积木的影子行**：每份文档在 `posts` 里留一条只做互动锚点的行（`anchor_post_id`），赞/踩/收藏/通知因此**零改动**复用；`hidden` 由文档 scope 决定，`public` 的文档还会把标题与纯文本摘要同步过去，所以旧列表与搜索照样能用它。代价（已知短板）：`hidden=1` 的影子行对非站长非作者是 404，所以 `followers` / `team` 可见的文档，**别人点不了赞**。
 - **降级永不白屏**：块类型没注册、`props_json` 坏了、props 不合法、`bind` 成环、沙箱 2 秒没 `ready` —— 一律渲染成 `doc-block-unknown` 占位并往响应的 `warnings[]` 里记一条，绝不抛异常。
 - **沙箱是浏览器给的，不是自己写的**：`<iframe sandbox="allow-scripts">`（**不给** `allow-same-origin`）+ iframe 内 CSP `default-src 'none'`，服务端从不执行用户代码，只做转义与拼装；消息白名单只有 `ready` / `resize` / `value` / `request` 四种，能力调用逐条记审计。用户注册的沙箱块类型（`rendererKind:'sandbox'`）走的是同一个玻璃房，不是另一条路。
 - **JSON 是数据，JavaScript 才是行为**：`props` + schema 只负责「这块有哪些字段」（数据），凡是「这块要做什么」（行为）都写在 `app` 块的 `code` 里，跑在沙箱 iframe 中。沙箱里那套 `Sandbox` API 是真能落东西的：`Sandbox.props` / `inputs` / `value(v)` / `resize()` 之外，`Sandbox.doc()` 读文档元信息、`Sandbox.blocks()` 读正文里每一块（能「按别的块算点东西」）、`Sandbox.viewer()` 读正在看的人（不透明源里连「我登录了吗」都读不到，所以由宿主递进去）、`Sandbox.state.get(scope)` / `set(value, scope)` **把状态存到服务端**（`user` 作用域各人一份、`shared` 全站一份；写下要登录，读匿名也给）。每个 API 都是一次可审计的能力申请，白名单之外一律 403 且照样留一行 `allowed=0`。**记住 `request()` 成功时 resolve 的就是值本身**（失败才 reject），不要写 `if (r.ok)`。
@@ -686,13 +659,13 @@ team_messages(id, team_id, user_id, content, deleted, created_at)
 
 升级是**原地完成**的，`openDatabase()` 里做了五件事：
 
-1. 建新表（`reactions` / `coins` / `follows` / `notifications` / `profile_categories` / `reposts`）；
-2. 给 `users` 补 `coin_balance` / `coin_refresh_at`，给 `posts` 补 `category_id` / `profile_pinned` / `profile_pinned_at`；
+1. 建新表（`reactions` / `follows` / `notifications` / `profile_categories` / `reposts`）；
+2. 给 `posts` 补 `category_id` / `profile_pinned` / `profile_pinned_at`；
 3. 把旧的 `likes` 表数据搬进 `reactions` 后删掉旧表，并把已有的回复 / 点赞 / 关注**回填成消息通知**；
 4. 首次升级时给示例账号补上演示用的分类与主页置顶（`profile_categories` 非空就跳过，真实用户不会被塞假数据）；
 5. 转发表为空时给示例账号补几条演示转发。
 
-> 旧库里的 `checkins` / `checkin_bonuses`（签到）两张表**不主动删除**：签到与价值排行功能已下线，但没人愿意在升级时替你丢掉历史数据。留着不占事，想清掉自己 `DROP TABLE` 即可。
+> 旧库里的 `checkins` / `checkin_bonuses`（签到）两张表、`coins` 表与 `users.coin_balance` / `users.coin_refresh_at` 两列**都不主动删除**：签到与价值排行、币系统都已下线（新库不再建这些表 / 列），但没人愿意在升级时替你丢掉历史数据。留着不占事，想清掉自己 `DROP TABLE` / `DROP COLUMN` 即可。
 
 `data/backup-pre-upgrade.db` 是第一次升级前的自动备份（含 `-wal` / `-shm`），确认没问题后可以删掉。
 
@@ -706,7 +679,7 @@ team_messages(id, team_id, user_id, content, deleted, created_at)
 - 链接白名单：仅允许 `http(s)` / `mailto` / 站内相对路径，`javascript:` 等伪协议会被降级为 `#`。
 - 所有 SQL 使用预编译参数绑定，不存在字符串拼接注入。
 - 登录、注册、发帖、回帖、改密、转发都有基于内存桶的速率限制；请求体大小、各字段长度均有限制。
-- 投币、分类、置顶、转发等写操作全部在服务端校验规则（额度、上限、归属、不能自投/自转），前端置灰只是体验优化。
+- 分类、置顶、转发等写操作全部在服务端校验规则（上限、归属、不能自转），前端置灰只是体验优化。
 - 静态文件做了路径穿越校验，响应带 `X-Content-Type-Options: nosniff`。
 
 ---
@@ -714,16 +687,16 @@ team_messages(id, team_id, user_id, content, deleted, created_at)
 ## 8. 测试
 
 ```bash
-node scripts/check-golden.mjs      # ★ 行为金标准：96 条请求的状态码 + 响应结构，一条都不能变
+node scripts/check-golden.mjs      # ★ 行为金标准：88 条请求的状态码 + 响应结构，一条都不能变
 node scripts/check-skeleton.mjs    # ★ 骨架自检：模块能不能独立拆掉、薄入口有没有变胖
-node scripts/check-frontend.mjs    # ★ 前端渲染冒烟：38 个页面全部渲染一遍 + 关注列表 / 团队的文件柜/群聊/成员名单/团队号/公告/加入申请与审核/隐藏开关/设置与申请改右侧抽屉/帖子预览与详情回复（「💬 回复」按钮、编辑权只归作者）交互 + 裸调用未定义名字的静态扫描
-node scripts/smoke.mjs             # 后端端到端：253 项（临时独立库+端口，跑完自动清理）
+node scripts/check-frontend.mjs    # ★ 前端渲染冒烟：36 个页面全部渲染一遍 + 关注列表 / 团队的文件柜/群聊/成员名单/团队号/公告/加入申请与审核/隐藏开关/设置与申请改右侧抽屉/帖子预览与详情回复（「💬 回复」按钮、编辑权只归作者）交互 + 裸调用未定义名字的静态扫描
+node scripts/smoke.mjs             # 后端端到端：227 项（临时独立库+端口，跑完自动清理）
 node scripts/smoke-ai.mjs          # AI 接口端到端：61 项
 node scripts/ai-smoke.mjs          # AI 接口端到端（更细的一套：校验 / 限流 / 额度）：387 项
 node scripts/feed-smoke.mjs        # 动态流端到端：95 项
-node scripts/doc-smoke.mjs         # 积木（可编程帖子）端到端：469 项
+node scripts/doc-smoke.mjs         # 积木（可编程帖子）端到端：470 项
 node scripts/team-smoke.mjs        # 团队端到端：301 项（可见范围 / 越权 / 版本冲突 / 编辑权只归作者 / 文件柜 / 群聊 / 团队号 / 公告通知 / Markdown 与公式 / 帖子回复 / 加入申请与审核 / 隐藏团队 / 老库升级与坏库自愈）
-node scripts/check-ui-contract.mjs # 前端契约：CSS 类名 + API 字段 + 主题/头像/角色/私信/团队号/公告/剪贴板/公式/关注列表/详情与回复/申请与隐藏结构/编辑权与侧边抽屉/表重建与自愈（通过项数不下降哨兵：313）
+node scripts/check-ui-contract.mjs # 前端契约：CSS 类名 + API 字段 + 主题/头像/角色/私信/团队号/公告/剪贴板/公式/关注列表/详情与回复/申请与隐藏结构/编辑权与侧边抽屉/表重建与自愈/币已下线（通过项数不下降哨兵：314）
 node scripts/ui-smoke.mjs          # 首页外壳轻量化 + 右侧栏抽屉：42 项
 node scripts/check-encoding.mjs    # 源码编码体检：BOM / 乱码 / 关键中文内容
 node scripts/check-notes-ui.mjs    # 笔记 UI
@@ -736,9 +709,9 @@ node scripts/capture-fixtures.mjs  # 重采前端冒烟用的假数据（改了�
 一次跑完（`npm test` 就是上面这些，14 组）：
 
 ```
-check-encoding 194 文件 / 82 断言 · check-skeleton 47 项 · check-golden 91 项 0 差异
-check-frontend 36 个页面 + 31 个模块静态扫描 · smoke 238 · smoke-ai 61 · ai-smoke 387 · feed-smoke 95
-doc-smoke 469 · team-smoke 301 · check-ui-contract 310 · check-notes-ui 33 · notes-smoke 44 · ui-smoke 42
+check-encoding 194 文件 / 82 断言 · check-skeleton 47 项 · check-golden 88 项 0 差异
+check-frontend 36 个页面 + 31 个模块静态扫描 · smoke 227 · smoke-ai 61 · ai-smoke 387 · feed-smoke 95
+doc-smoke 470 · team-smoke 301 · check-ui-contract 314 · check-notes-ui 33 · notes-smoke 44 · ui-smoke 42
 ```
 
 > 知识网络图（`knowledge-pack/` + `#/graph` + `/api/knowledge/*`）已在 2026-10 整条链路删除：
@@ -755,16 +728,16 @@ node forum-ai/selftest.mjs            # AI 层：92 项
 npm run test:notes                    # AI 工作台抽屉：32 个文件 / 722 条断言
 ```
 
-**`check-golden.mjs` 是这套测试里最该先跑的一个**：它把 96 条固定请求的「状态码 + 响应 JSON 的键结构」
+**`check-golden.mjs` 是这套测试里最该先跑的一个**：它把 88 条固定请求的「状态码 + 响应 JSON 的键结构」
 与 `scripts/golden.json` 逐条比对，**只管结构不管取值**（不会因为你发了一篇新帖就红）。
 重构、搬家、改前端时先跑它 —— 绿了才说明「用户能感知到的行为一个字都没变」。
 真的有意改了行为，用 `--write` 重采指纹，并在提交信息里说明为什么。
 （`--dump` 只打印不比对；指纹文件不存在时它会**直接报错退出**，因为「改造完再补采」等于没测。）
 
 
-覆盖范围：静态资源与 SPA 回落、注册登录登出、投币规则与上限与「不可投币的四种原因」、**取消每日补足（把 coin_refresh_at 改成一万小时前再登录，余额仍然是 0，仍然投不了币；文案指向"等别人投你"而不是"明天刷新"）**、主页分类（增删改查、上限、归属校验、按分类/未分类筛选）、主页置顶（上限 3 篇、取消置顶、越权 403）、**转发（成功计数、重复转发只改评语、撤销、不能自转、不能未登录转发、转发者列表、主页转发分类、通知原作者）**、**签到与价值排行已下线（`/api/checkin`、`/api/ranking` 一律 404，`/api/site` 不再下发签到规则与价值权重，帖子形状里没有 `baseScore` / `valueScore`，个人主页没有 `coinsReceived`）**、账号设置（昵称签名校验、改密校验旧密码、改密后其它会话失效 / 当前会话保留 / 新旧密码登录）、重复用户名、会话保持、分页、全文搜索、Markdown 转义、赞踩互斥、收藏、关注与关注流、消息通知的收件人与去重、越权访问后台、封禁等。
+覆盖范围：静态资源与 SPA 回落、注册登录登出、**投币已下线（`POST /api/posts/:id/coin` 一律 404，`/api/site` 不再下发 `coinRules`，帖子形状里没有 `coinCount` / `myCoins` / `coinBalance`）**、主页分类（增删改查、上限、归属校验、按分类/未分类筛选）、主页置顶（上限 3 篇、取消置顶、越权 403）、**转发（成功计数、重复转发只改评语、撤销、不能自转、不能未登录转发、转发者列表、主页转发分类、通知原作者）**、**签到与价值排行已下线（`/api/checkin`、`/api/ranking` 一律 404，`/api/site` 不再下发签到规则与价值权重，帖子形状里没有 `baseScore` / `valueScore`，个人主页没有 `coinsReceived`）**、账号设置（昵称签名校验、改密校验旧密码、改密后其它会话失效 / 当前会话保留 / 新旧密码登录）、重复用户名、会话保持、分页、全文搜索、Markdown 转义、赞踩互斥、收藏、关注与关注流、消息通知的收件人与去重、越权访问后台、封禁等。
 
-`check-ui-contract` 另有 7 条**静态守卫**钉住「删干净了」：签到页文件不存在、服务端没有那两条路由、`CHECKIN_*` / `VALUE_WEIGHTS` / `rankPosts` / `checkin_bonuses` 等名字一个都不剩、样式分片只剩 `78-repost.css` 与 `80-profile.css` —— 想把这套东西加回来的人，先得来改这几条断言。
+`check-ui-contract` 另有 15 条**静态守卫**钉住「删干净了」：签到与价值排行那边 7 条 —— 签到页文件不存在、服务端没有那两条路由、`CHECKIN_*` / `VALUE_WEIGHTS` / `rankPosts` / `checkin_bonuses` 等名字一个都不剩、样式分片只剩 `78-repost.css` 与 `80-profile.css`；币这边 8 条 —— 投币路由不存在、`COIN_RULES` / `COIN_SIGNUP_GRANT` / `COIN_PER_POST_LIMIT` / `coinAvailability` / `coinState` / `giveCoin` / `coinByUserPost` / `upsertCoin` / `addCoins` / `spendCoins` / `totalCoins` / `coin_count` 这些名字一个都不剩、`tables.sql.js` 不建 `coins` 表且它不在 core 的 `owns` 清单里、帖子与用户形状里没有 `coinCount` / `myCoins` / `coinBalance` / `canCoin`、`/api/site` 不下发 `coinRules`、通知类型里没有 `post_coin`、前端没有 `data-action="coin"` 与「我的资产」卡、样式里没有 `.coin-chip`。想把这套东西加回来的人，先得来改这几条断言。（这 15 条都匹配**去掉注释后**的源码，所以注释里写「旧库的 `coins` 表不主动删」不会把它们弄红。）
 
 ---
 
@@ -790,10 +763,10 @@ node scripts/reset-db.mjs --yes
 Windows 上如果报文件被占用，说明服务或测试脚本还在跑，关掉再试。
 
 **Q：想调整规则数值？**
-都在 `src/db.js` 顶部（实体在 `src/core/open-db-support.js`）：`COIN_SIGNUP_GRANT`（注册赠送币数）、`COIN_PER_POST_LIMIT`（单帖投币上限）、`PROFILE_PIN_LIMIT`（主页置顶数）、`PROFILE_CATEGORY_LIMIT`（分类数上限）。
+都在 `src/db.js` 顶部（实体在 `src/core/open-db-support.js`）：`PROFILE_PIN_LIMIT`（主页置顶数）、`PROFILE_CATEGORY_LIMIT`（分类数上限）。
 
-**Q：排行榜和签到去哪了？**
-删掉了（用户要求）。币系统本身保留：注册赠送、投币、余额、投稿上限都照旧，只是**币只从注册赠送和别人的投币来**，没有签到，也没有价值分 / 权重 / 榜单。
+**Q：排行榜、签到和币去哪了？**
+删掉了（用户要求）。签到、价值排行、以及**币**这套东西都删掉了；赞/踩/收藏/转发/关注/回复这些评价方式不受影响。
 
 **Q：想部署到线上？**
 把它挂在 Nginx/Caddy 后面即可（记得配 HTTPS 并把 Cookie 换成 `Secure`），单进程足够支撑小型社区；`data/forum.db` 记得做定时备份。上线的第一件事是**改掉 admin 的演示密码**（登录后到 `#/settings` 修改）。
@@ -817,24 +790,24 @@ Windows 上如果报文件被占用，说明服务或测试脚本还在跑，关
 
 ### 10.1 积木与帖子：互动已经搬进积木页，帖子退成影子（本条已修，留档）
 
-**以前的现象**：`#/doc/:id` 阅读页上**没有点赞 / 踩 / 投币 / 收藏 / 转发**的按钮，
+**以前的现象**：`#/doc/:id` 阅读页上**没有点赞 / 踩 / 收藏 / 转发**的按钮，
 只有一张卡片写着「去帖子里互动」，点过去跳到 `#/post/:anchorPostId` —— 同一条内容两个地址，
 一个是积木页（只能读），一个是帖子页（才能互动）。
 
 **现在**：阅读页自己就有一条互动条。它向 `GET /api/docs/:id/anchor` 要「这一篇的互动锚点帖」
-（列表形状 + 按访客算好的 `coin`），然后把帖子页那套按钮原样画出来
+（帖子列表形状），然后把帖子页那套按钮原样画出来
 （`public/views/post.js` 导出的 `reactionBarHtml`，连提交后**就地改 DOM** 的事件处理都不用改，
-见 `public/core/events.js` 的 `reaction` / `coin` / `bookmark` 三段），
+见 `public/core/events.js` 的 `reaction` / `bookmark` 两段），
 AI 解读面板（`public/views/ai.js` 的 `aiPostPanelHtml`）也一起搬了过来。
 反过来，帖子页顶上会挂一条「这一篇已经搬进积木了」的横幅 —— 它用
 `GET /api/docs/by-anchor/:postId` 反查自己是不是某篇积木的影子行。
 
-**根因**：`documents` 和 `posts` 是两张表。所有互动（赞/踩/投币/收藏/通知）都认 `posts.id`，
+**根因**：`documents` 和 `posts` 是两张表。所有互动（赞/踩/收藏/通知）都认 `posts.id`，
 所以建文档时会顺手插一条「影子行」当互动锚点（`src/modules/doc/anchor.js`）。
 但影子行有两条互相打架的硬约束：
 
 1. 它必须 `deleted = 0` —— 赞/踩走 `src/store.js` 的 `WHERE p.id = ? AND p.deleted = 0`，
-   投币走 `postRow` + `ensure(post && !post.deleted)`，`deleted = 1` 就找不到；
+   `deleted = 1` 就找不到这条影子行，互动全部 404；
 2. 而 `deleted = 0` 的行**必然**被所有帖子列表收录（`src/store.js:412` 的 `buildFilter()` 第一句就是 `p.deleted = 0`），
    只能靠 `hidden` 把自己藏起来，而 `hidden` 的语义是「非 staff 非作者 404」（`src/core/guards.js` 的 `assertPostVisible`）。
 
@@ -850,7 +823,7 @@ AI 解读面板（`public/views/ai.js` 的 `aiPostPanelHtml`）也一起搬了�
 - **doc 模块登记自己的可见性**：`src/modules/doc/index.js` 把 `visibility.js` 的 `canView`
   包成一个判定注册进去（`queries.documentByAnchor(post.id)` + `canView(row, viewer)`），
   于是「看得见这篇积木的人」= 「能对它的影子行点赞的人」。
-- **`abilities` 跟着走**：`src/modules/doc/store.js` 的 `abilitiesOf` 里 `canReact` / `canCoin`
+- **`abilities` 跟着走**：`src/modules/doc/store.js` 的 `abilitiesOf` 里 `canReact`
   改成复用同一条 `canView`（改一处必须改另一处，注释写在那儿了），否则前端还会把按钮藏起来。
 
 **还剩什么**：
@@ -869,7 +842,7 @@ AI 解读面板（`public/views/ai.js` 的 `aiPostPanelHtml`）也一起搬了�
 
 | 缺口 | 现状 |
 | --- | --- |
-| **积木阅读页没有回复框** | 点赞 / 踩 / 投币 / 收藏 / 转发 / AI 解读都已经在阅读页上（见 10.1），但**评论还没有**：回复框仍在 `#/post/:anchorPostId` 上 |
+| **积木阅读页没有回复框** | 点赞 / 踩 / 收藏 / 转发 / AI 解读都已经在阅读页上（见 10.1），但**评论还没有**：回复框仍在 `#/post/:anchorPostId` 上 |
 | **AI 只在 Markdown 模式** | AI 抽屉挂在 Markdown 的 textarea 上（`createTextareaAdapter`）；块模式没有「让 AI 写一块」这种能力 |
 | **块类型撤不掉** | 注册接口 `POST /api/docs/meta/block-types` 对**所有登录用户**开放（记 `created_by`），但没有删除/停用接口，也没有管理后台界面 —— 注册错了只能改库 |
 | **沙箱能力只有六个，而且有一个没实装** | 白名单是 `doc-meta` / `doc-blocks` / `viewer` / `state` / `blocks.derived` / `site.read`（见 `src/modules/doc/schema.js` 的 `SANDBOX_CAPABILITIES`）。没有网络请求、没有跨文档读、也不能通过沙箱改文档正文（`POST /api/docs/:id/ops` 存在但沙箱没接）。**`site.read` 目前走的是 `requestCapability` 的兜底分支，回的载荷和 `doc-meta` 一样**（`src/modules/doc/store.js:1795`）—— 名单里留着这个名字，但还没有站内数据给它 |

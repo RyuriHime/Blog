@@ -165,31 +165,6 @@
   text-decoration: none;
 }
 
-/* ---------------- 顶栏可用币（P5：从侧栏搬到用户名右边） ---------------- */
-.coin-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  padding: 6px 10px;
-  border-radius: 999px;
-  border: 1px solid var(--border);
-  background: var(--bg-soft);
-  color: var(--warn-fg);
-  font-size: 13.5px;
-  font-weight: 600;
-  white-space: nowrap;
-}
-
-.coin-chip-icon {
-  font-size: 15px;
-  line-height: 1;
-}
-
-/* 等宽数字：币数变化时宽度不跳，顶栏不会跟着抖 */
-.coin-chip-value {
-  font-variant-numeric: tabular-nums;
-}
-
 .menu {
   position: absolute;
   right: 0;

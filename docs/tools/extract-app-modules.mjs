@@ -18,6 +18,7 @@
  *
  * ⚠️ 历史脚本，**别再跑**：它的名单还停留在搬家那一刻，里面的 `views/checkin.js` /
  *    `viewRanking` / `checkinCardHtml` 都已经随「签到与价值排行下线」删掉了，
+ *    币系统也已删除（名单里的 `coinRules` / `coinAvailability` 同样过期），
  *    照着跑会把删掉的文件和函数又生成出来。这里留着只为记录当初怎么切的。
  */
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
