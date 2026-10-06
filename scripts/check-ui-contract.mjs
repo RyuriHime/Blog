@@ -29,7 +29,7 @@ const PORT = Number(process.env.CONTRACT_PORT || 3412);
 const BASE = `http://127.0.0.1:${PORT}`;
 
 /** 不下降哨兵：接手的模块只允许加，不允许把这些数字改小。 */
-const MIN_CHECKS = Number(process.env.MIN_UI_CHECKS || 221);
+const MIN_CHECKS = Number(process.env.MIN_UI_CHECKS || 234);
 
 /**
  * 前端源码入口清单。搬家前这三份文件在 public/ 根目录；骨架会把它们拆进
@@ -216,6 +216,64 @@ check('侧栏有「团队广场」入口', /class="side-link" href="#\/teams"/.t
 check(
   '团队入口和路由用的同一个地址',
   /href="#\/teams"/.test(appJs) && /first === 'teams'/.test(appJs),
+);
+
+/* 团队第二批（成员管理 / 文件柜 / 群聊）的契约。
+ * 这几条守的都是「页面照渲染、功能悄悄没了」的回归：
+ *  ① 详情取不到时又退回那句含糊的「也许它已经解散了」（读起来像陈述事实，其实只是请求失败）
+ *     —— 或者退路按钮被删掉，用户卡在一张死页上；
+ *  ② 三个页签、上传入口、成员名单的按钮少一个：渲染测试照样全绿；
+ *  ③ 群聊轮询忘了停 —— `api()` 的页面代次守卫管不到 `setInterval`（发起时 routeInFlight 是 null），
+ *     于是切走页面之后还在偷偷拉消息。
+ */
+check(
+  '团队打不开时说的是「不存在或者已经解散」，而不是含糊的「也许它已经解散了」',
+  /error\?\.status === 404 \? '这个团队不存在，或者已经被解散了'/.test(appJs) &&
+    !/emptyHtml\('🧭', esc\(text\), '也许它已经解散了'\)/.test(appJs),
+);
+check(
+  '打不开的团队页给一条「← 返回团队广场」的退路',
+  /class="team-gone-bar"><a class="btn" href="#\/teams">/.test(appJs),
+);
+check(
+  '团队详情有 讨论 / 文件 / 群聊 三个页签',
+  /const TEAM_TABS = /.test(appJs) && ['💬 讨论', '📁 文件', '🗨️ 群聊'].every((label) => appJs.includes(label)),
+);
+check(
+  '页签状态存在地址栏里（?tab=），刷新与分享链接都停在同一个页签',
+  /tab: value === 'discuss' \? null : value/.test(appJs) && /query\.get\('tab'\)/.test(appJs),
+);
+check(
+  '群聊轮询在每个渲染入口都会被停掉（api() 的页面代次守卫对 setInterval 无效）',
+  (appJs.match(/stopChatPolling\(\)/g) ?? []).length >= 3,
+);
+check('文件是选完就传（change 委托），不再要求再点一次「上传」', /\[data-team-file-picker\]/.test(appJs));
+check(
+  '踢人按 canManage 放权，但改角色仍然只有创建者能做（与服务端同口径）',
+  /team\.canManage && !owner/.test(appJs) && /team\.myRole === 'owner' && !owner/.test(appJs),
+);
+check(
+  '成员比列出来的多时给「查看全部」和「收起名单」',
+  /data-team-action="load-all-members"/.test(appJs) && /data-team-action="collapse-members"/.test(appJs),
+);
+check(
+  '文件上传走 JSON + base64，并且只给这一条路由放宽请求体上限（其余接口还是 512 KB）',
+  /dataUrl/.test(appJs) && /bodyLimit: TEAM_FILE_BODY_LIMIT/.test(serverJs) && /readJsonBody\(req, bodyLimit\)/.test(serverJs),
+);
+check(
+  '文件一律按附件下发（octet-stream + attachment + nosniff），传 .html 也不会在本站源里被当成页面渲染',
+  /'Content-Type': 'application\/octet-stream'/.test(serverJs) &&
+    /attachment; filename=/.test(serverJs) &&
+    /'X-Content-Type-Options': 'nosniff'/.test(serverJs),
+);
+check(
+  '文件柜与群聊只认团队成员：未登录 401、登录了但不是成员 403',
+  /requireTeamMember/.test(serverJs) && /not_team_member/.test(serverJs),
+);
+check('文件柜与群聊各自独立限流，别把发帖和传文件算进同一个桶', /team:file:/.test(serverJs) && /team:chat:/.test(serverJs));
+check(
+  '用户给的文件名会被削平（../../etc/passwd 只留最后一段），空名字有兜底',
+  /sanitizeFileName/.test(serverJs) && /未命名文件/.test(serverJs),
 );
 
 /* ---------- 1b. 背景主题契约 ---------- */

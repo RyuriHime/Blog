@@ -11,6 +11,12 @@
 //      有对应规则，否则 scripts/check-ui-contract.mjs 会红。注意它是按
 //      「类名等于引号引起来的东西」去扫的，连注释里随手写的省略号样式
 //      都会被当成一个类名 —— 所以别在注释里演示那种写法。
+//   4) 主页的三个页签（讨论 / 文件 / 群聊）走地址栏的 ?tab= 参数，不做「就地隐藏切换」：
+//      切页签得重新走一遍 route()，视图才有机会去拉那一页的数据。草稿在 teamState.draft 里，
+//      整页重画不会丢。
+//   5) 群聊的定时轮询由本模块自己负责停。core/api.js 的「页面代次」守卫是给
+//      「视图渲染期间发出的请求」准备的，而 setInterval 回调发起请求时 routeInFlight
+//      是 null —— 守卫压根不会拦它。所以每个渲染入口都先 stopChatPolling()。
 import { $, esc, emptyHtml, loadingHtml, toast, ui } from '../core/dom.js';
 import { api, withButtonBusy } from '../core/api.js';
 import { apiErrorText, toastError } from '../core/errors.js';
@@ -36,13 +42,89 @@ const SCOPE_ICON = { public: '🌍', followers: '👥', team: '🎽', private: '
  */
 const teamState = {
   scopes: FALLBACK_SCOPES,
-  draft: { title: '', content: '', scope: 'team', name: '', intro: '', slug: '', joinPolicy: 'open', username: '' },
+  draft: { title: '', content: '', scope: 'team', name: '', intro: '', slug: '', joinPolicy: 'open', username: '', message: '' },
   editing: null,
   conflict: null,
   panel: null,
+  /** 当前团队主页的快照。局部重画（成员名单、文件柜、群聊）要用，免得整页重来把草稿冲掉。 */
+  team: null,
+  members: [],
+  memberTotal: 0,
+  membersExpanded: false,
+  membersAll: [],
+  filesData: null,
+  maxFileBytes: 0,
 };
 /** 列表里每条帖子的原始数据：编辑要用回原文，渲染出来的是 HTML。 */
 const postCache = new Map();
+
+/** 三个页签。讨论页是默认页签，所以它的地址里不带 tab 参数。 */
+const TEAM_TABS = [
+  ['discuss', '💬 讨论'],
+  ['files', '📁 文件'],
+  ['chat', '🗨️ 群聊'],
+];
+/** 与 src/modules/team/schema.js 的 MAX_TEAM_FILE_BYTES 对齐：真正的裁判是服务端。 */
+const FALLBACK_MAX_FILE_BYTES = 4 * 1024 * 1024;
+/** 群聊轮询间隔。 */
+const CHAT_POLL_MS = 5000;
+
+let chatTimer = null;
+/** 群聊的增量游标与当前列表：只记最新一条的 id，轮询时用 ?after= 拿新消息。 */
+const chatState = { slug: '', latestId: 0, messages: [] };
+
+/**
+ * 停掉群聊轮询。**每个渲染入口都要先调它**：
+ * core/api.js 的「页面代次」守卫对 setInterval 回调是失效的（见文件头第 5 条），
+ * 不自己停，用户切走之后它还会继续往别的页面上写。
+ */
+function stopChatPolling() {
+  if (chatTimer) clearInterval(chatTimer);
+  chatTimer = null;
+}
+
+/** 字节数说人话。core/format.js 只有时间/数字，没有文件大小。 */
+function sizeLabel(bytes) {
+  const value = Number(bytes) || 0;
+  if (value < 1024) return `${value} B`;
+  if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KB`;
+  return `${(value / 1024 / 1024).toFixed(2)} MB`;
+}
+
+function fileIcon(file) {
+  const name = String(file?.name ?? '').toLowerCase();
+  if (/\.(png|jpe?g|gif|webp|bmp|svg)$/.test(name)) return '🖼️';
+  if (/\.(zip|rar|7z|tar|gz)$/.test(name)) return '🗜️';
+  if (/\.(mp3|wav|ogg|m4a|flac)$/.test(name)) return '🎵';
+  if (/\.(mp4|mov|mkv|webm|avi)$/.test(name)) return '🎬';
+  if (/\.pdf$/.test(name)) return '📕';
+  if (/\.(xlsx?|csv)$/.test(name)) return '📊';
+  if (/\.docx?$/.test(name)) return '📘';
+  if (/\.(txt|md|json|js|mjs|css|html|py|sql|ya?ml)$/.test(name)) return '📄';
+  return '📦';
+}
+
+/** 把选中的文件读成 data URL。服务端收的就是 {name, dataUrl} —— 零依赖，不写 multipart。 */
+function fileToDataUrl(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ''));
+    reader.onerror = () => reject(new Error('这个文件读不出来，换一个试试'));
+    reader.readAsDataURL(file);
+  });
+}
+
+function teamTabsHtml(team, tab, query) {
+  const links = TEAM_TABS.map(([value, label]) => {
+    const href = routeQuery(`/team/${team.slug}`, query, {
+      tab: value === 'discuss' ? null : value,
+      page: null,
+      fpage: null,
+    });
+    return `<a class="team-tab ${value === tab ? 'is-active' : ''}" href="${href}">${label}</a>`;
+  }).join('');
+  return `<div class="team-tabs">${links}</div>`;
+}
 
 const scopeLabel = (value) => teamState.scopes.find((item) => item.value === value)?.label ?? '仅团队';
 const scopeOptionsHtml = (selected) =>
@@ -102,6 +184,7 @@ function createFormHtml() {
 
 async function viewTeams(query) {
   bindTeamOnce();
+  stopChatPolling(); // 从团队主页切回列表：群聊轮询到这儿必须断掉
   resetTransient();
   const mine = query.get('mine') === '1';
   ui.app.innerHTML = `<div class="team-page">
@@ -152,12 +235,16 @@ async function viewTeams(query) {
 function memberChipHtml(member, team) {
   const owner = team.owner?.id === member.user.id;
   const tools = [];
+  // 改角色只有创建者能做（服务端 PUT members/:id 也是这么判的）；
+  // 踢人管理员就行，所以这里放宽到 canManage —— 与服务端对齐，别自己收窄。
   if (team.myRole === 'owner' && !owner) {
     tools.push(
       member.teamRole === 'admin'
         ? `<button class="team-mini" data-team-action="demote-member" data-team-user="${member.user.id}">降为成员</button>`
         : `<button class="team-mini" data-team-action="promote-member" data-team-user="${member.user.id}">设为管理员</button>`,
     );
+  }
+  if (team.canManage && !owner) {
     tools.push(`<button class="team-mini team-mini-danger" data-team-action="kick-member" data-team-user="${member.user.id}">移出</button>`);
   }
   return `<div class="team-member">
@@ -222,13 +309,45 @@ function teamHeroHtml(team, memberTotal) {
   </div>`;
 }
 
-function membersHtml(members, memberTotal, team) {
+function membersHtml(members, memberTotal, team, expanded = false) {
   if (!members.length) return '';
   const more = memberTotal > members.length ? `<span class="hint">等 ${Fmt.fmtNum(memberTotal)} 人</span>` : '';
+  // 详情接口只给前 12 个成员（页面别一上来就渲染几百个人），要看全的走「查看全部」。
+  const bar = expanded
+    ? `<div class="team-members-bar"><button class="btn btn-sm" data-team-action="collapse-members">收起名单</button></div>`
+    : memberTotal > members.length
+      ? `<div class="team-members-bar"><button class="btn btn-sm" data-team-action="load-all-members">查看全部 ${Fmt.fmtNum(memberTotal)} 位成员</button></div>`
+      : '';
   return `<div class="card team-members">
     <div class="team-members-title">成员 ${more}</div>
     <div class="team-members-list">${members.map((member) => memberChipHtml(member, team)).join('')}</div>
+    ${bar}
   </div>`;
+}
+
+/** 只重画成员区。整页重画会把用户在框里写的字冲掉，这里是他的名字旁边点按钮。 */
+function repaintMembers() {
+  const box = $('[data-team-members]');
+  const team = teamState.team;
+  if (!box || !team) return;
+  const expanded = teamState.membersExpanded && teamState.membersAll.length > 0;
+  box.innerHTML = membersHtml(
+    expanded ? teamState.membersAll : teamState.members,
+    teamState.memberTotal,
+    team,
+    expanded,
+  );
+}
+
+/**
+ * 名单展开着的时候重新拉一遍全量成员：踢人 / 改角色 / 退出之后，
+ * 只靠详情接口那前 12 条会把已经走了的人留在名单里。
+ */
+async function reloadMembers(team) {
+  if (!teamState.membersExpanded) return;
+  const data = await api(`/api/teams/${encodeURIComponent(team.slug)}/members`);
+  teamState.membersAll = Array.isArray(data.items) ? data.items : [];
+  repaintMembers();
 }
 
 function composerHtml(team) {
@@ -306,22 +425,252 @@ function teamPostHtml(post) {
   </article>`;
 }
 
+/* ── 文件柜 ────────────────────────────────────────────────────────── */
+
+function fileRowHtml(file) {
+  const tools = [`<a class="team-file-download" href="${esc(file.downloadUrl)}">下载</a>`];
+  if (file.canDelete) {
+    tools.push(`<button class="team-mini team-mini-danger" data-team-action="delete-file" data-team-file="${file.id}">删除</button>`);
+  }
+  return `<div class="team-file">
+    <span class="team-file-icon" aria-hidden="true">${fileIcon(file)}</span>
+    <span class="team-file-main">
+      <span class="team-file-name">${esc(file.name)}</span>
+      <span class="team-file-meta">${esc(file.sizeLabel || sizeLabel(file.size))} · ${esc(file.uploader?.displayName ?? '')} · ${Fmt.timeAgo(file.createdAt)}</span>
+    </span>
+    <span class="team-file-tools">${tools.join('')}</span>
+  </div>`;
+}
+
+function fileCabinetHtml(team, data, error) {
+  const maxBytes = Number(data?.maxBytes) || teamState.maxFileBytes || FALLBACK_MAX_FILE_BYTES;
+  const items = Array.isArray(data?.items) ? data.items : [];
+  const upload = team.joined
+    ? `<span class="team-file-upload">
+        <label class="btn btn-sm team-file-pick">＋ 上传文件
+          <input class="team-file-picker" type="file" data-team-file-picker /></label>
+        <span class="hint">单个文件不超过 ${esc(sizeLabel(maxBytes))}</span>
+      </span>`
+    : '<span class="hint">只有团队成员能上传和下载</span>';
+  const list = error
+    ? `<div class="team-files-empty">${emptyHtml('😵', esc(error))}</div>`
+    : items.length
+      ? `<div class="team-file-list">${items.map(fileRowHtml).join('')}</div>`
+      : `<div class="team-files-empty">${emptyHtml('📁', '文件柜还是空的', team.joined ? '第一个文件由你来传' : '加入之后就能看到')}</div>`;
+  return `<div class="card team-files">
+    <div class="team-files-head">
+      <div class="team-files-title">📁 文件柜</div>
+      ${upload}
+    </div>
+    ${list}
+  </div>`;
+}
+
+/** 用当前快照重画文件柜（上传成功后就地补一条，不重新请求）。 */
+function repaintFiles() {
+  const box = $('[data-team-files]');
+  if (!box || !teamState.team) return;
+  box.innerHTML = fileCabinetHtml(teamState.team, teamState.filesData, '');
+}
+
+async function renderFiles(team, query) {
+  const box = $('[data-team-files]');
+  if (!box) return;
+  if (!state.me || !team.joined) {
+    box.innerHTML = fileCabinetHtml(team, null, '');
+    return;
+  }
+  const page = Number(query.get('fpage')) || 1;
+  let data;
+  try {
+    data = await api(`/api/teams/${encodeURIComponent(team.slug)}/files?page=${page}`);
+  } catch (error) {
+    if (error?.aborted) return;
+    const text = apiErrorText(error);
+    if (!text) return;
+    if (!$('[data-team-files]')) return; // 期间用户切走了
+    box.innerHTML = `<div class="card team-files">${emptyHtml('😵', esc(text))}</div>`;
+    return;
+  }
+  if (!$('[data-team-files]')) return;
+  teamState.filesData = data;
+  teamState.maxFileBytes = Number(data.maxBytes) || teamState.maxFileBytes;
+  repaintFiles();
+  const pager = $('[data-team-files-pager]');
+  if (pager) {
+    pager.innerHTML = paginationHtml(Number(data.page) || 1, Number(data.totalPages) || 1, (target) =>
+      routeQuery(`/team/${team.slug}`, query, { tab: 'files', fpage: target === 1 ? null : String(target) }),
+    );
+  }
+}
+
+/* ── 群聊 ──────────────────────────────────────────────────────────── */
+
+function chatMessageHtml(message) {
+  const tools = message.canDelete
+    ? `<button class="team-mini team-mini-danger" data-team-action="delete-message" data-team-message="${message.id}">删除</button>`
+    : '';
+  return `<div class="team-chat-msg" data-team-message-card="${message.id}">
+    ${Avatar.avatarHtml(message.author, 'avatar-sm')}
+    <div class="team-chat-body">
+      <div class="team-chat-meta">
+        <a class="team-chat-author" href="#/u/${encodeURIComponent(message.author?.username ?? '')}">${esc(message.author?.displayName ?? '未知')}</a>
+        <span class="team-chat-time">${Fmt.timeAgo(message.createdAt)}</span>
+        ${tools ? `<span class="team-chat-tools">${tools}</span>` : ''}
+      </div>
+      <div class="team-chat-text">${esc(message.content)}</div>
+    </div>
+  </div>`;
+}
+
+function chatHtml(team) {
+  if (!state.me) {
+    return `<div class="card team-chat">${emptyHtml('🗨️', '群聊只有团队成员能看', '登录之后再回来')}</div>`;
+  }
+  if (!team.joined) {
+    return `<div class="card team-chat">${emptyHtml('🗨️', '群聊只有团队成员能看', '加入团队之后就能一起聊')}</div>`;
+  }
+  return `<div class="card team-chat">
+    <div class="team-chat-head">
+      <div class="team-chat-title">🗨️ 团队群聊</div>
+      <span class="hint">每 5 秒自动刷新 · 只有团队成员看得见</span>
+    </div>
+    <div class="team-chat-list" data-team-chat-list><span class="hint">正在加载…</span></div>
+    <div class="team-chat-bar">
+      <textarea class="input team-chat-input" data-team-field="message" rows="2" maxlength="1000" placeholder="说点什么…">${esc(teamState.draft.message)}</textarea>
+      <button class="btn btn-primary" data-team-action="send-message">发送</button>
+    </div>
+  </div>`;
+}
+
+function scrollChatToEnd() {
+  const list = $('[data-team-chat-list]');
+  if (list && typeof list.scrollHeight === 'number') list.scrollTop = list.scrollHeight;
+}
+
+function paintChat() {
+  const box = $('[data-team-chat-list]');
+  if (!box) return;
+  box.innerHTML = chatState.messages.length
+    ? chatState.messages.map(chatMessageHtml).join('')
+    : emptyHtml('🗨️', '还没人说话', '打个招呼吧');
+  scrollChatToEnd();
+}
+
+/** 把新消息合进来（按 id 去重，轮询和「自己刚发的那条」都走这里）。 */
+function pushChatMessages(items) {
+  const known = new Set(chatState.messages.map((item) => item.id));
+  let added = false;
+  for (const item of items) {
+    if (!item || known.has(item.id)) continue;
+    chatState.messages.push(item);
+    known.add(item.id);
+    added = true;
+  }
+  if (added) paintChat();
+}
+
+async function renderChat(team) {
+  const box = $('[data-team-chat]');
+  if (!box) return;
+  box.innerHTML = chatHtml(team);
+  if (!state.me || !team.joined) return;
+  let data;
+  try {
+    data = await api(`/api/teams/${encodeURIComponent(team.slug)}/messages`);
+  } catch (error) {
+    if (error?.aborted) return;
+    const text = apiErrorText(error);
+    const list = $('[data-team-chat-list]');
+    if (list && text) list.innerHTML = emptyHtml('😵', esc(text));
+    return;
+  }
+  if (!$('[data-team-chat-list]')) return; // 期间用户切走了
+  chatState.slug = team.slug;
+  chatState.latestId = Number(data.latestId) || 0;
+  chatState.messages = Array.isArray(data.items) ? data.items : [];
+  paintChat();
+}
+
+async function pollChat(team) {
+  if (!chatState.latestId) return;
+  if (currentSlug() !== team.slug || !$('[data-team-chat-list]')) return stopChatPolling();
+  const data = await api(`/api/teams/${encodeURIComponent(team.slug)}/messages?after=${chatState.latestId}`);
+  if (!$('[data-team-chat-list]')) return;
+  pushChatMessages(Array.isArray(data.items) ? data.items : []);
+  chatState.latestId = Math.max(chatState.latestId, Number(data.latestId) || 0);
+}
+
+function startChatPolling(team) {
+  stopChatPolling();
+  chatTimer = setInterval(() => {
+    if (document.visibilityState === 'hidden') return; // 页面在后台就别问了
+    pollChat(team).catch(() => stopChatPolling());
+  }, CHAT_POLL_MS);
+}
+
+/** 选中文件 → 客户端先按上限拦一道 → 读成 data URL → 上传。服务端还会再校验一遍。 */
+async function uploadTeamFile(picker) {
+  const team = teamState.team;
+  const file = picker?.files?.[0];
+  if (!team || !file) return;
+  const maxBytes = Number(teamState.maxFileBytes) || FALLBACK_MAX_FILE_BYTES;
+  if (file.size > maxBytes) {
+    toast(`这个文件太大了，单个最多 ${sizeLabel(maxBytes)}`, 'error');
+    picker.value = '';
+    return;
+  }
+  picker.disabled = true;
+  toast('正在上传…', 'info');
+  try {
+    const dataUrl = await fileToDataUrl(file);
+    const data = await api(`/api/teams/${encodeURIComponent(team.slug)}/files`, {
+      method: 'POST',
+      body: { name: file.name, dataUrl },
+    });
+    if (teamState.filesData) {
+      teamState.filesData.items = [data.file, ...(teamState.filesData.items ?? [])];
+      teamState.filesData.total = (Number(teamState.filesData.total) || 0) + 1;
+      repaintFiles();
+    } else {
+      await renderFiles(team, currentQuery());
+    }
+    toast('上传好了', 'success');
+  } finally {
+    picker.value = '';
+    picker.disabled = false;
+  }
+}
+
 async function viewTeam(handle, query) {
   bindTeamOnce();
+  stopChatPolling();
   const key = String(handle ?? '');
   if (teamState.handle !== key) {
     resetTransient();
     teamState.handle = key;
+    teamState.membersExpanded = false;
+    teamState.membersAll = [];
+    teamState.filesData = null;
+    chatState.slug = '';
+    chatState.latestId = 0;
+    chatState.messages = [];
     postCache.clear();
   }
+  const rawTab = query.get('tab');
+  const tab = rawTab === 'files' || rawTab === 'chat' ? rawTab : 'discuss';
 
   ui.app.innerHTML = `<div class="team-page">
     <div class="team-crumb"><a href="#/teams">← 所有团队</a></div>
     <div data-team-hero>${loadingHtml()}</div>
     <div data-team-members></div>
+    <div data-team-tabs></div>
     <div data-team-composer></div>
     <div data-team-posts></div>
     <div data-team-pager></div>
+    <div data-team-files></div>
+    <div data-team-files-pager></div>
+    <div data-team-chat></div>
   </div>`;
 
   let data;
@@ -332,13 +681,17 @@ async function viewTeam(handle, query) {
     const text = apiErrorText(error);
     if (!text) return;
     const hero = $('[data-team-hero]');
-    if (hero) hero.innerHTML = `<div class="card">${emptyHtml('🧭', esc(text), '也许它已经解散了')}</div>`;
+    if (!hero) return;
+    // 以前这里写的是「也许它已经解散了」—— 读起来像在陈述事实，其实只是详情没取到。
+    // 404 多半是团队真没了，其它情况大概率是网络的事，分开说清楚，并且给一条退路。
+    const hint = error?.status === 404 ? '这个团队不存在，或者已经被解散了' : '可能是网络断了，刷新一下再试';
+    hero.innerHTML = `<div class="card team-gone">${emptyHtml('🧭', esc(text), hint)}<div class="team-gone-bar"><a class="btn" href="#/teams">← 返回团队广场</a></div></div>`;
     return;
   }
   const team = data.team;
   if (!team) {
     const hero = $('[data-team-hero]');
-    if (hero) hero.innerHTML = `<div class="card">${emptyHtml('🧭', '团队不存在')}</div>`;
+    if (hero) hero.innerHTML = `<div class="card team-gone">${emptyHtml('🧭', '团队不存在')}<div class="team-gone-bar"><a class="btn" href="#/teams">← 返回团队广场</a></div></div>`;
     return;
   }
   const members = Array.isArray(data.members) ? data.members : [];
@@ -346,9 +699,27 @@ async function viewTeam(handle, query) {
 
   const heroBox = $('[data-team-hero]');
   if (!heroBox) return; // 期间用户又点了别处
+  teamState.team = team;
+  teamState.members = members;
+  teamState.memberTotal = memberTotal;
   heroBox.innerHTML = teamHeroHtml(team, memberTotal);
-  const memberBox = $('[data-team-members]');
-  if (memberBox) memberBox.innerHTML = membersHtml(members, memberTotal, team);
+  repaintMembers();
+  if (teamState.membersExpanded) await reloadMembers(team);
+  const tabsBox = $('[data-team-tabs]');
+  if (tabsBox) tabsBox.innerHTML = teamTabsHtml(team, tab, query);
+
+  if (tab === 'files') {
+    const filesBox = $('[data-team-files]');
+    if (filesBox) filesBox.innerHTML = loadingHtml();
+    await renderFiles(team, query);
+    return;
+  }
+  if (tab === 'chat') {
+    await renderChat(team);
+    if ($('[data-team-chat-list]')) startChatPolling(team);
+    return;
+  }
+
   const composerBox = $('[data-team-composer]');
   if (composerBox) composerBox.innerHTML = composerHtml(team);
 
@@ -400,10 +771,17 @@ function currentSlug() {
   return parts[0] === 'team' && parts[1] ? parts[1] : '';
 }
 
+/** 当前地址里的查询串（页签、页码都在这儿）。整页重画时靠它保住页签。 */
+function currentQuery() {
+  const raw = (window.location.hash || '').replace(/^#/, '');
+  const index = raw.indexOf('?');
+  return new URLSearchParams(index === -1 ? '' : raw.slice(index + 1));
+}
+
 function refreshTeam() {
   const slug = currentSlug();
-  if (slug) return viewTeam(slug, new URLSearchParams());
-  return viewTeams(new URLSearchParams());
+  if (slug) return viewTeam(slug, currentQuery());
+  return viewTeams(currentQuery());
 }
 
 async function handleAction(action, node) {
@@ -513,6 +891,21 @@ async function handleAction(action, node) {
       await refreshTeam();
     });
   }
+  if (action === 'load-all-members') {
+    const team = teamState.team;
+    if (!team) return;
+    return withButtonBusy(node, async () => {
+      const data = await api(`/api/teams/${encodeURIComponent(team.slug)}/members`);
+      teamState.membersAll = Array.isArray(data.items) ? data.items : [];
+      teamState.membersExpanded = true;
+      repaintMembers();
+    });
+  }
+  if (action === 'collapse-members') {
+    teamState.membersExpanded = false;
+    repaintMembers();
+    return;
+  }
   if (action === 'create-post') {
     const slug = currentSlug();
     const draft = teamState.draft;
@@ -562,6 +955,43 @@ async function handleAction(action, node) {
       await api(`/api/teams/${encodeURIComponent(slug)}/posts/${postId}`, { method: 'DELETE' });
       toast('已删除', 'success');
       await refreshTeam();
+    });
+  }
+  if (action === 'delete-file') {
+    const team = teamState.team;
+    const fileId = Number(node.dataset.teamFile);
+    if (!team || !Number.isInteger(fileId)) return;
+    if (!window.confirm('确定删掉这个文件吗？删了就下载不到了。')) return;
+    return withButtonBusy(node, async () => {
+      await api(`/api/teams/${encodeURIComponent(team.slug)}/files/${fileId}`, { method: 'DELETE' });
+      toast('文件已删除', 'success');
+      await renderFiles(team, currentQuery());
+    });
+  }
+  if (action === 'send-message') {
+    const team = teamState.team;
+    if (!team) return;
+    const content = String(teamState.draft.message || '').trim();
+    if (!content) return toast('消息是空的', 'error');
+    return withButtonBusy(node, async () => {
+      const data = await api(`/api/teams/${encodeURIComponent(team.slug)}/messages`, { method: 'POST', body: { content } });
+      teamState.draft.message = '';
+      const input = $('[data-team-field="message"]');
+      if (input) input.value = '';
+      pushChatMessages([data.message]);
+      toast('已发送', 'success');
+    });
+  }
+  if (action === 'delete-message') {
+    const team = teamState.team;
+    const messageId = Number(node.dataset.teamMessage);
+    if (!team || !Number.isInteger(messageId)) return;
+    if (!window.confirm('删掉这条消息吗？')) return;
+    return withButtonBusy(node, async () => {
+      await api(`/api/teams/${encodeURIComponent(team.slug)}/messages/${messageId}`, { method: 'DELETE' });
+      chatState.messages = chatState.messages.filter((item) => item.id !== messageId);
+      paintChat();
+      toast('消息已删除', 'success');
     });
   }
 }
@@ -618,6 +1048,13 @@ function bindTeamOnce() {
     if (!node) return;
     const field = node.dataset.teamField;
     if (field in teamState.draft) teamState.draft[field] = node.value;
+  });
+
+  // 文件柜：选好文件就传（不再点一次「上传」按钮）。失败照样由 toastError 报出来。
+  ui.app.addEventListener('change', (event) => {
+    const picker = event.target.closest('[data-team-file-picker]');
+    if (!picker) return;
+    uploadTeamFile(picker).catch((error) => toastError(error));
   });
 }
 

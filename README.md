@@ -21,6 +21,8 @@
 ├── 背景主题 ── 🎨 暗夜 / 极夜 / 明亮 / 暖阳 / 奶黄 / 森林 / 暮紫 + 跟随系统，选择记在本地
 ├── 个性头像 ── 🖼️ 12 个预设表情或上传图片（客户端压缩、服务端校验落盘）
 ├── 角色权限 ── 👑 站长（唯一，可任命管理员）/ 🛡️ 管理员 / 成员，三级权限
+├── 团队 ── 🎽 团队广场与团队主页：成员名单、团长任命管理员 / 踢人、成员协作编辑同一条帖子不互相覆盖
+├── 团队空间 ── 📁 文件柜（成员上传下载，单文件 4 MB，一律按附件下发）+ 🗨️ 群聊（5 秒增量拉取），未登录 401、非成员 403
 ├── 内容管理 ── 管理团队可**隐藏**（可逆，访客 404）或**删除**任何文章，全程留痕
 ├── 检索导航 ── 全文搜索、最新/最新回复/最热三种排序、分页
 └── 管理后台 ── 数据看板、任命管理员、隐藏/删除文章、封禁用户、审计日志
@@ -286,6 +288,24 @@ HOST=0.0.0.0 node src/server.js       # 允许局域网内其它设备访问
 
 **防呆规则**：站长不能被降级或封禁（避免把唯一站长弄丢）；管理团队成员之间不能互相封禁（只有站长能处理管理员）；不能把别人直接设成站长。
 
+### 团队 🎽
+
+`#/teams` 是公开的团队广场（`?mine=1` 只看我加入的），`#/team/<slug>` 是团队主页。团队主页有三个页签：
+
+- **💬 讨论**：团队帖。可见范围仍是全站那四档（公开 / 仅关注我的人 / 仅团队 / 仅自己），成员**一起编辑同一条帖子**：保存时带上 `version`，对不上就 409 让你选留哪一份，不会静默覆盖。
+- **📁 文件柜**：成员上传文件（单个 ≤ 4 MB）。文件名里的路径会被削平（`../../etc/passwd` 只会留下 `passwd`），下载一律按附件下发。上传者是本人或团队管理员才能删。
+- **🗨️ 群聊**：团队内的聊天记录，每 5 秒增量拉一次（`?after=<id>`）。消息 ≤ 1000 字，作者本人和团队管理员可以删。
+
+**团队里的角色**（`team_members.role`，和全站三级角色是两套东西）：
+
+| 角色 | 怎么来的 | 能做什么 |
+| --- | --- | --- |
+| 🎽 **创建者 owner** | 建团队的人，全队唯一 | 改团队设置、**任命/撤销管理员**、踢人、删任何团队帖与文件、解散团队；**不能退出自己的团队**（只能解散） |
+| 🛡️ **管理员 admin** | 由创建者任命 | 拉人进「需要邀请」的团队、**踢人**、删任何团队帖与文件 |
+| 成员 member | 加入或被拉进来 | 发帖、传/下文件、群聊 |
+
+站长在团队里**没有任何后门**（原因见 API 一节）。踢人是管理员就行，**改角色只有创建者能做** —— 服务端与前端按钮是同一口径。
+
 ### 账号设置 ⚙️
 
 `#/settings` 页面提供：
@@ -378,7 +398,7 @@ forum/
 | `#/blocks` | 块类型表：12 种内置块类型的声明式 schema 速查、「怎么自己编一个块」的指南 + 注册自己的块类型（可带渲染模板） |
 | `#/wiki/:name` | Wiki 多页面：`[[双链]]` 的落点；左侧是分类边栏（页内筛选 + 新建页，作者多一个「改分类」），有这一页就渲染它，没有就给「建这一页」（`?create=1` 一步进编辑器） |
 | `#/teams` | 团队列表：公开团队广场，`?mine=1` 只看我加入的，`?page=` 翻页；未登录也能看 |
-| `#/team/:slug` | 团队主页：团队简介与成员、发帖框、帖子列表（按四档可见范围过滤）；成员在这里一起编辑同一条帖子 |
+| `#/team/:slug` | 团队主页：团队简介与成员、发帖框、帖子列表（按四档可见范围过滤）；成员在这里一起编辑同一条帖子。三个页签 `?tab=discuss`（默认）/ `?tab=files`（文件柜）/ `?tab=chat`（群聊）；`?page=` 翻帖子、`?fpage=` 翻文件 |
 
 ---
 
@@ -484,10 +504,26 @@ forum/
 | GET | `/api/teams/:id/posts/:postId` | 帖子详情。**未登录访问非公开帖 → 401；已登录但无权 → 404**（404 而不是 403，否则能枚举出「哪些帖子存在」） | 按 scope |
 | PUT | `/api/teams/:id/posts/:postId` | 保存，body `{ title, content, scope, version, force? }`。版本对不上 → **409 `conflict`**，带上 `force:true` 再提交才覆盖 | 作者或任何能看见它的团队成员 |
 | DELETE | `/api/teams/:id/posts/:postId` | 删帖（软删除）。**与编辑故意不对称**：不可逆的破坏性操作只留给作者和团队管理员 | 作者/团队管理员 |
+| GET | `/api/teams/:id/files` | 文件柜列表 `{ items, page, perPage, total, totalPages, maxBytes }`；每行带 `downloadUrl` 与 `canDelete` | 团队成员 |
+| POST | `/api/teams/:id/files` | 上传，body `{ name, dataUrl }`（`data:<mime>;base64,` 的 data URL，单个 ≤ 4 MB）。**这一条路由的请求体上限单独放宽到 6 MB** | 团队成员（每 10 分钟 30 个） |
+| DELETE | `/api/teams/:id/files/:fileId` | 删文件（先软删库、再删盘） | 上传者 / 团队管理员 |
+| GET | `/api/team-files/:fileId` | 下载。直接回二进制附件（`attachment` + `application/octet-stream` + `nosniff`），**不是** `{ok,data}` 信封 | 团队成员（404 之外的越权一律 403） |
+| GET | `/api/teams/:id/messages` | 群聊记录 `{ items, latestId, total }`；`?after=<id>` 只取新的（前端 5 秒轮询用）、`?limit=`（默认 30，上限 100） | 团队成员 |
+| POST | `/api/teams/:id/messages` | 发消息，body `{ content }`（1-1000 字） | 团队成员（每分钟 60 条） |
+| DELETE | `/api/teams/:id/messages/:messageId` | 删消息 | 作者 / 团队管理员 |
 
 > **团队为什么没有站长后门**：团队管理只认 `team_members` 里的 owner / admin，站长（`role='owner'`）也不例外。
 > 一旦站长能管理任意团队，他就能把自己加进一个「需要邀请」的团队然后读到里面的帖子 —— 那是一条提权通道。
 > 读取侧同理：少给一个后门最多是管理员看不到，多给一个就是一次不可逆的泄露（内容还会被搜索、被 AI 索引）。
+>
+> **上传为什么走 JSON + base64**：全站零依赖、不引 npm，手写 multipart 解析要处理 boundary、分片、多文件、
+> 每个字段的 CRLF，上百行边界代码只换来省掉 33% 的编码膨胀 —— 不划算。代价是这条路由要单独放宽请求体上限，
+> 所以 `route()` 多了第 4 个可选参数 `{ bodyLimit }`，**只有上传用它**；抬全站上限等于让每条接口都更容易被大请求体打死。
+>
+> **文件柜与群聊不做拉黑过滤**（帖子与动态会做）：团队是成员制空间，拉黑是广场层面的关系。
+> 套进来只会让聊天记录出现空洞、文件柜莫名少东西 —— 是想过之后决定的，不是漏了。
+> 两条都只认 `team_members`：未登录 401，登录了但不是成员 403（团队主页本身公开，装 404 没意义，要守的是里面的东西）。
+> 下载一律按附件下发：即使有人传 `.html` / `.svg`，也不会在本站源里被当成页面渲染（存储型 XSS 的常见入口）。
 
 ---
 
@@ -540,6 +576,12 @@ team_posts(id, team_id, user_id, title, content, scope, version, updated_by,
                     -- scope 与 feed / documents 共用同一套四档枚举
                     -- version 从 1 开始，保存时把版本号带上；对不上就是 409，
                     -- 不静默覆盖 —— 这是「成员一起编辑且不互相覆盖」的落点
+team_files(id, team_id, user_id, name, mime, size, stored_name, deleted, created_at)
+                    -- name 是用户给的名字（只做展示），stored_name 是服务端合成的磁盘名
+                    -- 删文件 = 软删库 + 删盘，顺序不能反（先删库再删盘，盘删失败也不会留下
+                    -- 一条指向不存在文件的记录）
+team_messages(id, team_id, user_id, content, deleted, created_at)
+                    -- 群聊按 id 递增读（？after=<id> 增量拉），列表展示时再翻成正序
 ```
 
 设计要点：
@@ -593,13 +635,13 @@ team_posts(id, team_id, user_id, title, content, scope, version, updated_by,
 ```bash
 node scripts/check-golden.mjs      # ★ 行为金标准：96 条请求的状态码 + 响应结构，一条都不能变
 node scripts/check-skeleton.mjs    # ★ 骨架自检：模块能不能独立拆掉、薄入口有没有变胖
-node scripts/check-frontend.mjs    # ★ 前端渲染冒烟：30 个页面全部渲染一遍 + 裸调用未定义名字的静态扫描
+node scripts/check-frontend.mjs    # ★ 前端渲染冒烟：32 个页面全部渲染一遍 + 团队的文件柜/群聊/成员名单交互 + 裸调用未定义名字的静态扫描
 node scripts/smoke.mjs             # 后端端到端：253 项（临时独立库+端口，跑完自动清理）
 node scripts/smoke-ai.mjs          # AI 接口端到端：61 项
 node scripts/feed-smoke.mjs        # 动态流端到端：95 项
 node scripts/doc-smoke.mjs         # 积木（可编程帖子）端到端：392 项
-node scripts/team-smoke.mjs        # 团队端到端：97 项（可见范围 / 越权 / 版本冲突）
-node scripts/check-ui-contract.mjs # 前端契约：CSS 类名 + API 字段 + 主题/头像/角色/私信结构
+node scripts/team-smoke.mjs        # 团队端到端：145 项（可见范围 / 越权 / 版本冲突 / 文件柜 / 群聊）
+node scripts/check-ui-contract.mjs # 前端契约：CSS 类名 + API 字段 + 主题/头像/角色/私信结构（通过项数不下降哨兵：234）
 node scripts/check-encoding.mjs    # 源码编码体检：BOM / 乱码 / 关键中文内容
 node scripts/check-notes-ui.mjs    # 笔记 UI
 node scripts/notes-smoke.mjs       # 笔记接口

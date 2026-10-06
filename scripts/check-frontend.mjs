@@ -353,7 +353,9 @@ const EXTRA = {
         joinedAt: Date.now() - 86400000,
       },
     ],
-    memberTotal: 1,
+    // 故意比 members 多一个：详情页只列前一批，多出来的人要点「查看全部」才拉 ——
+    // 交互测试正是冲着这个入口去的。
+    memberTotal: 2,
     scopes: SCOPES,
   },
   '/api/teams/frontend-group/posts': {
@@ -384,6 +386,60 @@ const EXTRA = {
     totalPages: 1,
     scopes: SCOPES,
     myRole: 'owner',
+  },
+  // 成员名单（点「查看全部 N 位成员」时拉的那条）与团队的两块新区域。
+  '/api/teams/frontend-group/members': {
+    items: [
+      {
+        user: { id: 1, username: FIXTURE_USERNAME, displayName: '站长', avatar: null, role: 'owner' },
+        teamRole: 'owner',
+        teamRoleLabel: '创建者',
+        joinedAt: Date.now() - 86400000,
+      },
+      {
+        user: { id: 2, username: FIXTURE_PEER, displayName: '小狐', avatar: null, role: 'member' },
+        teamRole: 'member',
+        teamRoleLabel: '成员',
+        joinedAt: Date.now() - 3600000,
+      },
+    ],
+    total: 2,
+  },
+  '/api/teams/frontend-group/files': {
+    items: [
+      {
+        id: 7,
+        teamId: 1,
+        team: { id: 1, slug: 'frontend-group', name: '前端小组' },
+        name: '团队约定.md',
+        size: 2048,
+        sizeLabel: '2.0 KB',
+        mime: 'text/markdown',
+        uploader: { id: 1, username: FIXTURE_USERNAME, displayName: '站长', avatar: null },
+        downloadUrl: '/api/team-files/7',
+        canDelete: true,
+        createdAt: Date.now() - 1800000,
+      },
+    ],
+    page: 1,
+    perPage: 20,
+    total: 1,
+    totalPages: 1,
+    maxBytes: 4 * 1024 * 1024,
+  },
+  '/api/teams/frontend-group/messages': {
+    items: [
+      {
+        id: 21,
+        teamId: 1,
+        content: '晚上一起把文件柜试一下',
+        author: { id: 1, username: FIXTURE_USERNAME, displayName: '站长', avatar: null, role: 'owner' },
+        canDelete: true,
+        createdAt: Date.now() - 600000,
+      },
+    ],
+    latestId: 21,
+    total: 1,
   },
 };
 
@@ -416,11 +472,43 @@ globalThis.fetch = async (url, options = {}) => {
   fetchCount += 1;
   const raw = String(url).replace(/^https?:\/\/[^/]+/, '');
   const method = String(options.method || 'GET').toUpperCase();
-  REQUESTS.push({ url: raw, method, body: options.body ? JSON.parse(options.body) : null });
-  // 建团队：假数据里给它一条真形状的响应（否则 data.team.slug 会是 undefined，报错像是代码坏了）
+  const payload = options.body ? JSON.parse(options.body) : null;
+  REQUESTS.push({ url: raw, method, body: payload });
+  const bare = raw.split('?')[0];
+  // 建团队 / 传文件 / 发消息这三条 POST 要回自己那一小块真形状 ——
+  // 否则页面会拿到 undefined 去渲染，报出来的错看着像代码坏了，其实只是夹具缺了。
   const created = { team: { ...TEAM_FIXTURE, slug: 'new-team-1', name: '新团队' } };
-  const data = method === 'POST' && raw.split('?')[0] === '/api/teams' ? created : pickFixture(raw);
-  if (data === undefined) unknownPaths.add(raw.split('?')[0]);
+  const uploaded = {
+    file: {
+      id: 8,
+      teamId: 1,
+      team: { id: 1, slug: 'frontend-group', name: '前端小组' },
+      name: payload?.name ?? '新传的文件.png',
+      size: 1024,
+      sizeLabel: '1.0 KB',
+      mime: 'image/png',
+      uploader: { id: 1, username: FIXTURE_USERNAME, displayName: '站长', avatar: null },
+      downloadUrl: '/api/team-files/8',
+      canDelete: true,
+      createdAt: Date.now(),
+    },
+  };
+  const sent = {
+    message: {
+      id: 22,
+      teamId: 1,
+      content: payload?.content ?? '收到',
+      author: { id: 1, username: FIXTURE_USERNAME, displayName: '站长', avatar: null, role: 'owner' },
+      canDelete: true,
+      createdAt: Date.now(),
+    },
+  };
+  let data;
+  if (method === 'POST' && bare === '/api/teams') data = created;
+  else if (method === 'POST' && bare === '/api/teams/frontend-group/files') data = uploaded;
+  else if (method === 'POST' && bare === '/api/teams/frontend-group/messages') data = sent;
+  else data = pickFixture(raw);
+  if (data === undefined) unknownPaths.add(bare);
   return {
     ok: true,
     status: 200,
@@ -493,6 +581,8 @@ const CASES = [
   ['团队列表', 'team.js', 'viewTeams', [new Map()]],
   ['团队·我加入的', 'team.js', 'viewTeams', [new Map([['mine', '1']])]],
   ['团队主页', 'team.js', 'viewTeam', ['frontend-group', new Map()]],
+  ['团队·文件页签', 'team.js', 'viewTeam', ['frontend-group', new Map([['tab', 'files']])]],
+  ['团队·群聊页签', 'team.js', 'viewTeam', ['frontend-group', new Map([['tab', 'chat']])]],
 ];
 
 let rendered = 0;
@@ -651,6 +741,99 @@ if (!state.theme) problems.push('state.theme 没被初始化');
   } catch (error) {
     problems.push(`团队交互测试自身崩了：${error?.stack || error}`);
     console.log('  ❌ 交互：新建团队的表单能打开、队名能提交、建完会跳转');
+  }
+}
+
+/* ---- 交互：文件页签能传文件、群聊能发言、成员名单能展开 ----
+ *
+ * 这三条路径都只有「点了之后」才走到：渲染类断言看得到外壳画出来了，
+ * 但事件委托有没有接上、请求体里装了什么，只有真派发一次事件才测得到。
+ * 注意假 DOM 不解析 HTML：`[data-team-chat-list]` 不是 `[data-team-chat]` 的子节点，
+ * 各是各的注册元素 —— 断言要打在真正被赋值的那个盒子上。
+ */
+{
+  try {
+    const team = await view('team.js');
+    const filesBox = registered('[data-team-files]');
+    const chatList = registered('[data-team-chat-list]');
+    const membersBox = registered('[data-team-members]');
+
+    /* ① 文件页签：列表要有名字、下载地址、人话大小 */
+    await team.viewTeam('frontend-group', new Map([['tab', 'files']]));
+    await settle();
+    if (!String(filesBox.innerHTML).includes('团队约定.md')) problems.push('文件页签没有渲染出文件列表');
+    if (!String(filesBox.innerHTML).includes('/api/team-files/7')) problems.push('文件行里没有下载地址');
+    if (!String(filesBox.innerHTML).includes('2.0 KB')) problems.push('文件行里没有人话大小');
+
+    /* ② 选一个超过上限的文件：客户端就该拦下来，一个请求都不能发出去 */
+    const picker = registered('[data-team-file-picker]');
+    picker.closest = (selector) => (selector === '[data-team-file-picker]' ? picker : null);
+    picker.files = [{ name: '太大了.bin', size: 8 * 1024 * 1024 }];
+    picker.value = 'C:\\假路径\\太大了.bin';
+    REQUESTS.length = 0;
+    dispatch(app, 'change', picker);
+    await settle();
+    if (REQUESTS.some((item) => item.method === 'POST' && item.url.includes('/files'))) {
+      problems.push('超过上限的文件还是发出去了（客户端那道拦截没起作用）');
+    }
+    if (picker.value !== '') problems.push('被拦住之后没有清空文件选择框（再选同一个文件不会再触发 change）');
+
+    /* ③ 换成小文件：这次要真发出去，请求体里带文件名与 data URL。
+          FileReader 是浏览器 API，假 DOM 里没有 —— 补一个最小的替身。 */
+    globalThis.FileReader = class {
+      readAsDataURL() {
+        this.result = 'data:image/png;base64,AAAA';
+        this.onload?.();
+      }
+    };
+    picker.files = [{ name: '截图.png', size: 1024 }];
+    REQUESTS.length = 0;
+    dispatch(app, 'change', picker);
+    await settle();
+    const upload = REQUESTS.find((item) => item.method === 'POST' && item.url.split('?')[0] === '/api/teams/frontend-group/files');
+    if (!upload) problems.push('选好文件之后没有发出上传请求');
+    else if (upload.body?.name !== '截图.png') problems.push(`上传请求里的文件名不对：${JSON.stringify(upload.body?.name)}`);
+    else if (!String(upload.body?.dataUrl || '').startsWith('data:')) problems.push('上传请求里没有带 data URL');
+    if (!String(filesBox.innerHTML).includes('截图.png')) problems.push('上传成功后没有把新文件补进列表里');
+
+    /* ④ 群聊：输入框里的字要能发出去，发完立刻出现在列表里 */
+    await team.viewTeam('frontend-group', new Map([['tab', 'chat']]));
+    await settle();
+    if (!String(chatList.innerHTML).includes('晚上一起把文件柜试一下')) problems.push('群聊页签没有渲染出历史消息');
+    const chatInput = registered('[data-team-field="message"]');
+    chatInput.closest = (selector) => (selector === '[data-team-field]' ? chatInput : null);
+    chatInput.dataset.teamField = 'message';
+    chatInput.value = '我也在看';
+    dispatch(app, 'input', chatInput);
+    const sendNode = { dataset: { teamAction: 'send-message' }, disabled: false, matches: () => false };
+    sendNode.closest = (selector) => (selector === '[data-team-action]' ? sendNode : null);
+    REQUESTS.length = 0;
+    dispatch(app, 'click', sendNode);
+    await settle();
+    const message = REQUESTS.find((item) => item.method === 'POST' && item.url.split('?')[0] === '/api/teams/frontend-group/messages');
+    if (!message) problems.push('点「发送」之后没有发出消息请求');
+    else if (message.body?.content !== '我也在看') problems.push(`发出去的消息不对：${JSON.stringify(message.body?.content)}`);
+    if (!String(chatList.innerHTML).includes('我也在看')) problems.push('自己发的消息没有立刻出现在聊天列表里');
+
+    /* ⑤ 成员名单：默认只列前几位，点「查看全部」才把完整名单拉回来 */
+    await team.viewTeam('frontend-group', new Map());
+    await settle();
+    if (!String(membersBox.innerHTML).includes('查看全部')) problems.push('成员人数多于已列出的名单时，没有给出「查看全部」的入口');
+    const moreNode = { dataset: { teamAction: 'load-all-members' }, disabled: false, matches: () => false };
+    moreNode.closest = (selector) => (selector === '[data-team-action]' ? moreNode : null);
+    REQUESTS.length = 0;
+    dispatch(app, 'click', moreNode);
+    await settle();
+    if (!REQUESTS.some((item) => item.method === 'GET' && item.url.split('?')[0] === '/api/teams/frontend-group/members')) {
+      problems.push('点「查看全部」之后没有去拉完整名单');
+    }
+    if (!String(membersBox.innerHTML).includes('小狐')) problems.push('拉回完整名单之后没有重画成员区（还是那几位）');
+    if (!String(membersBox.innerHTML).includes('收起名单')) problems.push('展开之后没有给出「收起名单」的入口');
+
+    console.log(`  ${problems.length ? '❌' : '✅'} 交互：文件能传、群聊能发、成员名单能展开`);
+  } catch (error) {
+    problems.push(`团队文件柜/群聊交互测试自身崩了：${error?.stack || error}`);
+    console.log('  ❌ 交互：文件能传、群聊能发、成员名单能展开');
   }
 }
 

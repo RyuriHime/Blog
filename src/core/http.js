@@ -28,8 +28,16 @@ function sendJson(res, status, payload, headers = {}) {
 
 const ok = (res, data, headers) => sendJson(res, 200, { ok: true, data }, headers);
 
-async function readJsonBody(req) {
-  const limit = 512 * 1024;
+/**
+ * 读请求体。
+ *
+ * @param {import('node:http').IncomingMessage} req
+ * @param {number} [limit] 这条路由允许的最大字节数。
+ *   缺省 512 KB，是**全站默认**；只有明确需要更大的路由才会传第 2 个参数
+ *   （团队文件柜上传 → `TEAM_FILE_BODY_LIMIT`），见 `src/core/router.js` 与
+ *   `src/core/handler.js` 里 `entry.options.bodyLimit` 的用法。
+ */
+async function readJsonBody(req, limit = 512 * 1024) {
   const chunks = [];
   let size = 0;
   for await (const chunk of req) {

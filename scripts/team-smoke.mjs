@@ -13,7 +13,7 @@
  * 那测的是种子数据，不是我的代码。
  */
 import { spawn } from 'node:child_process';
-import { mkdirSync, openSync, rmSync } from 'node:fs';
+import { mkdirSync, openSync, readdirSync, rmSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { setTimeout as sleep } from 'node:timers/promises';
@@ -24,6 +24,8 @@ const SERVER = join(ROOT, 'src', 'server.js');
 const DB_FILE = join(ROOT, 'data', 'team-smoke.db');
 const AVATAR_DIR = join(ROOT, 'data', 'team-smoke-avatars');
 const NOTES_DIR = join(ROOT, 'data', 'team-smoke-notes');
+/** 文件柜落盘目录。必须单独指到测试用目录，否则测试上传的文件会掉进真实 data/team-files/。 */
+const TEAM_FILE_DIR = join(ROOT, 'data', 'team-smoke-files');
 const LOG_FILE = join(ROOT, 'data', 'team-smoke-server.log');
 const PORT = Number(process.env.TEAM_SMOKE_PORT || 3444);
 const BASE = `http://127.0.0.1:${PORT}`;
@@ -43,7 +45,7 @@ function check(name, condition, detail = '') {
 function createClient() {
   let cookie = '';
   return {
-    async call(path, { method = 'GET', body } = {}) {
+    async call(path, { method = 'GET', body, raw = false } = {}) {
       const response = await fetch(BASE + path, {
         method,
         headers: {
@@ -56,6 +58,14 @@ function createClient() {
       for (const value of response.headers.getSetCookie()) {
         const pair = value.split(';')[0];
         if (pair.startsWith('forum_sid=')) cookie = pair;
+      }
+      // 文件柜的下载接口返回的是二进制，不是 { ok, data } 信封 —— 要字节就传 raw: true。
+      if (raw) {
+        return {
+          status: response.status,
+          headers: response.headers,
+          buffer: Buffer.from(await response.arrayBuffer()),
+        };
       }
       const json = await response.json().catch(() => null);
       return { status: response.status, body: json, data: json?.data, error: json?.error };
@@ -97,6 +107,7 @@ const child = spawn(process.execPath, [SERVER], {
     DB_FILE,
     AVATAR_DIR,
     NOTES_DIR,
+    TEAM_FILE_DIR,
     QUIET: '1',
     AI_API_KEY: '',
   },
@@ -119,6 +130,7 @@ const finish = async (code) => {
   }
   rmSync(AVATAR_DIR, { recursive: true, force: true });
   rmSync(NOTES_DIR, { recursive: true, force: true });
+  rmSync(TEAM_FILE_DIR, { recursive: true, force: true });
   console.log('');
   console.log('──────────────────────────────────────────────');
   console.log(`通过 ${passed} 项，失败 ${failures.length} 项`);
@@ -148,17 +160,28 @@ try {
   try {
     const inspect = new DatabaseSync(DB_FILE, { readOnly: true });
     const names = inspect
-      .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('teams','team_members','team_posts')")
+      .prepare(
+        "SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('teams','team_members','team_posts','team_files','team_messages')",
+      )
       .all()
       .map((row) => row.name)
       .sort();
-    check('验收①：teams / team_members / team_posts 三张表都在库里', names.join(',') === 'team_members,team_posts,teams', names.join(','));
+    check(
+      '验收①：teams / team_members / team_posts / team_files / team_messages 五张表都在库里',
+      names.join(',') === 'team_files,team_members,team_messages,team_posts,teams',
+      names.join(','),
+    );
     const memberInfo = inspect.prepare('PRAGMA table_info(team_members)').all();
     const pk = memberInfo.filter((column) => Number(column.pk) > 0).map((column) => column.name).sort();
     check('team_members 的主键是 (team_id, user_id) —— 一个人在一个团队只可能有一行', pk.join(',') === 'team_id,user_id', pk.join(','));
     const postInfo = inspect.prepare('PRAGMA table_info(team_posts)').all().map((column) => column.name);
     check('team_posts 有 version 列（乐观并发的基础）', postInfo.includes('version'), postInfo.join(','));
     check('team_posts 有 scope 列', postInfo.includes('scope'));
+    const fileInfo = inspect.prepare('PRAGMA table_info(team_files)').all().map((column) => column.name);
+    check('team_files 有 stored_name 列（磁盘上的名字由服务端合成，跟用户给的名字分开）', fileInfo.includes('stored_name'), fileInfo.join(','));
+    check('team_files 有 deleted 列（删文件是软删库 + 删盘，不是 DELETE 语句）', fileInfo.includes('deleted'));
+    const messageInfo = inspect.prepare('PRAGMA table_info(team_messages)').all().map((column) => column.name);
+    check('team_messages 有 content / team_id / user_id', ['content', 'team_id', 'user_id'].every((name) => messageInfo.includes(name)), messageInfo.join(','));
     inspect.close();
   } catch (error) {
     check('验收①：能读到库里的表结构', false, error.message);
@@ -458,6 +481,133 @@ try {
   check('管理员能把成员移出团队', kicked.status === 200, JSON.stringify(kicked.error ?? kicked.body));
   const kickOwner = await owner.client.call(`${invitePath}/members/${owner.user.id}`, { method: 'DELETE' });
   check('不能把创建者移出团队（400）', kickOwner.status === 400, String(kickOwner.status));
+
+  /* ── 纯数字地址：曾经会被当成 id，查不到就报「也许它已经解散了」 ── */
+  const digitTeam = await mate.client.call('/api/teams', { method: 'POST', body: { name: '2026' } });
+  const digitSlug = digitTeam.data?.team?.slug;
+  check('纯数字队名也能建（地址就用它本身）', digitSlug === '2026', String(digitSlug));
+  const byDigitSlug = await mate.client.call('/api/teams/2026');
+  check(
+    '纯数字地址的团队打得开（先按 slug 查，再退化到 id —— 修复前的真 bug）',
+    byDigitSlug.status === 200 && byDigitSlug.data?.team?.slug === '2026',
+    `${byDigitSlug.status} ${JSON.stringify(byDigitSlug.error ?? '')}`,
+  );
+  const byNumericId = await owner.client.call(teamPath);
+  check('按数字 id 取详情这条路依然通', byNumericId.status === 200 && byNumericId.data?.team?.id === teamId, String(byNumericId.status));
+
+  /* ── 文件柜：只有团队成员能看 / 传 / 下 ─────────────────────────── */
+  const guest = await signUp('teamguest');
+  check('文件柜：新注册的路人账号当「已登录但不是成员」的对照组', guest.registered === true);
+
+  const emptyFiles = await owner.client.call(`${teamPath}/files`);
+  check('文件柜：成员能打开列表', emptyFiles.status === 200, JSON.stringify(emptyFiles.error ?? emptyFiles.body));
+  check('文件柜：列表字段齐全 items / total / maxBytes', Array.isArray(emptyFiles.data?.items) && Number(emptyFiles.data?.maxBytes) > 0, JSON.stringify(emptyFiles.data ?? {}));
+  const anonFiles = await anon.call(`${teamPath}/files`);
+  check('文件柜：未登录 401', anonFiles.status === 401, String(anonFiles.status));
+  const guestFiles = await guest.client.call(`${teamPath}/files`);
+  check('文件柜：登录了但不是成员 403 not_team_member', guestFiles.status === 403 && guestFiles.error?.code === 'not_team_member', String(guestFiles.status));
+
+  const fileBytes = Buffer.from('文件柜端到端测试\n第二行\n', 'utf8');
+  const uploaded = await owner.client.call(`${teamPath}/files`, {
+    method: 'POST',
+    body: { name: '测试文档.txt', dataUrl: `data:text/plain;base64,${fileBytes.toString('base64')}` },
+  });
+  check('上传文件返回 200', uploaded.status === 200, JSON.stringify(uploaded.error ?? uploaded.body));
+  const file = uploaded.data?.file;
+  check('上传后拿到下载地址 /api/team-files/<id>', file?.downloadUrl === `/api/team-files/${file?.id}`, String(file?.downloadUrl));
+  check('文件名原样保留（做展示用）', file?.name === '测试文档.txt', String(file?.name));
+  check('文件带人话大小 sizeLabel', typeof file?.sizeLabel === 'string' && file.sizeLabel.length > 0, String(file?.sizeLabel));
+  check('上传者是本人、本人有删除权', file?.canDelete === true && file?.uploader?.id === owner.user.id);
+  check('接口不下发磁盘文件名 stored_name（那是内部细节）', file?.storedName === undefined && file?.stored_name === undefined);
+
+  const memberFiles = await outsider.client.call(`${teamPath}/files`);
+  const visible = (memberFiles.data?.items ?? []).find((item) => item.id === file?.id);
+  check('同队成员能看到刚上传的文件', Boolean(visible));
+  check('同队非上传者拿不到 canDelete（前端据此不画删除键）', visible?.canDelete === false);
+
+  const guestUpload = await guest.client.call(`${teamPath}/files`, {
+    method: 'POST',
+    body: { name: '路人.txt', dataUrl: `data:text/plain;base64,${Buffer.from('x').toString('base64')}` },
+  });
+  check('非成员传不了文件（403）', guestUpload.status === 403, String(guestUpload.status));
+
+  const download = await outsider.client.call(file.downloadUrl, { raw: true });
+  check('成员下载回来的字节和上传的一模一样', download.status === 200 && download.buffer.equals(fileBytes), String(download.status));
+  check('下载头是附件：Content-Disposition 以 attachment; 开头', String(download.headers.get('content-disposition') ?? '').startsWith('attachment;'));
+  check(
+    '下载一律 octet-stream + nosniff（传 .html/.svg 也不会在本站源里被渲染）',
+    download.headers.get('content-type') === 'application/octet-stream' && download.headers.get('x-content-type-options') === 'nosniff',
+    `${download.headers.get('content-type')} / ${download.headers.get('x-content-type-options')}`,
+  );
+  const guestDownload = await guest.client.call(file.downloadUrl, { raw: true });
+  check(
+    '非成员下载 403（跟列表/上传/删除一个口径：守的是团队里的东西，不是「这个文件存不存在」）',
+    guestDownload.status === 403,
+    String(guestDownload.status),
+  );
+
+  const huge = Buffer.alloc(4 * 1024 * 1024 + 1, 0x41);
+  const tooBig = await owner.client.call(`${teamPath}/files`, {
+    method: 'POST',
+    body: { name: '太大了.bin', dataUrl: `data:application/octet-stream;base64,${huge.toString('base64')}` },
+  });
+  check('超过 4 MB 被拒：400 file_too_large', tooBig.status === 400 && tooBig.error?.code === 'file_too_large', `${tooBig.status} ${tooBig.error?.code}`);
+
+  const evilName = await owner.client.call(`${teamPath}/files`, {
+    method: 'POST',
+    body: { name: '../../etc/passwd', dataUrl: `data:text/plain;base64,${Buffer.from('nope').toString('base64')}` },
+  });
+  check('文件名里的路径被削平，只留最后一段', evilName.data?.file?.name === 'passwd', String(evilName.data?.file?.name));
+
+  const guestDelete = await guest.client.call(`${teamPath}/files/${file.id}`, { method: 'DELETE' });
+  check('非成员删不了文件（403）', guestDelete.status === 403, String(guestDelete.status));
+  const memberDelete = await outsider.client.call(`${teamPath}/files/${file.id}`, { method: 'DELETE' });
+  check('同队普通成员删不了别人传的文件（403）', memberDelete.status === 403, String(memberDelete.status));
+  const diskBefore = readdirSync(TEAM_FILE_DIR).length;
+  const ownerDelete = await owner.client.call(`${teamPath}/files/${file.id}`, { method: 'DELETE' });
+  check('创建者能删任意文件', ownerDelete.status === 200, JSON.stringify(ownerDelete.error ?? ownerDelete.body));
+  check('删文件之后磁盘上也真的清了（不是只软删库）', readdirSync(TEAM_FILE_DIR).length === diskBefore - 1, `${diskBefore} → ${readdirSync(TEAM_FILE_DIR).length}`);
+  const afterDelete = await owner.client.call(file.downloadUrl, { raw: true });
+  check('删掉之后下载 404', afterDelete.status === 404, String(afterDelete.status));
+  const repeatDelete = await owner.client.call(`${teamPath}/files/${file.id}`, { method: 'DELETE' });
+  check('重复删同一个文件 404', repeatDelete.status === 404, String(repeatDelete.status));
+
+  /* ── 团队群聊 ─────────────────────────────────────────────────── */
+  const anonChat = await anon.call(`${teamPath}/messages`);
+  check('群聊：未登录 401', anonChat.status === 401, String(anonChat.status));
+  const guestChat = await guest.client.call(`${teamPath}/messages`);
+  check('群聊：登录了但不是成员 403', guestChat.status === 403, String(guestChat.status));
+
+  const firstMessage = await owner.client.call(`${teamPath}/messages`, { method: 'POST', body: { content: '大家好，这是第一条。' } });
+  check('成员能发消息', firstMessage.status === 200 && firstMessage.data?.message?.content === '大家好，这是第一条。', JSON.stringify(firstMessage.error ?? firstMessage.body));
+  check('消息带作者与 canDelete（自己发的）', firstMessage.data?.message?.author?.id === owner.user.id && firstMessage.data?.message?.canDelete === true);
+  const secondMessage = await outsider.client.call(`${teamPath}/messages`, { method: 'POST', body: { content: '收到。' } });
+  check('另一个成员也能发', secondMessage.status === 200, String(secondMessage.status));
+
+  const chatList = await owner.client.call(`${teamPath}/messages`);
+  const messages = chatList.data?.items ?? [];
+  check('列表按时间正序回来（聊天记录得从旧到新读）', messages.length === 2 && messages[0].content === '大家好，这是第一条。' && messages[1].content === '收到。', JSON.stringify(messages.map((item) => item.content)));
+  check('列表给出 latestId（前端轮询的游标）', chatList.data?.latestId === messages[1]?.id, `${chatList.data?.latestId} vs ${messages[1]?.id}`);
+  const pollAfterFirst = await owner.client.call(`${teamPath}/messages?after=${messages[0]?.id}`);
+  check('after=<第一条> 只返回它后面的那条（增量轮询）', (pollAfterFirst.data?.items ?? []).length === 1 && pollAfterFirst.data.items[0].id === messages[1]?.id);
+  const pollAfterLast = await owner.client.call(`${teamPath}/messages?after=${chatList.data?.latestId}`);
+  check('after=<最新> 返回空（没有新消息）', (pollAfterLast.data?.items ?? []).length === 0);
+
+  const longMessage = await owner.client.call(`${teamPath}/messages`, { method: 'POST', body: { content: '啊'.repeat(1001) } });
+  check('超过 1000 字的消息被拒（400）', longMessage.status === 400, String(longMessage.status));
+  const blankMessage = await owner.client.call(`${teamPath}/messages`, { method: 'POST', body: { content: '   ' } });
+  check('空白消息被拒（400）', blankMessage.status === 400, String(blankMessage.status));
+
+  const deleteOthers = await outsider.client.call(`${teamPath}/messages/${firstMessage.data?.message?.id}`, { method: 'DELETE' });
+  check('普通成员删不了别人发的消息（403）', deleteOthers.status === 403, String(deleteOthers.status));
+  const deleteOwn = await outsider.client.call(`${teamPath}/messages/${secondMessage.data?.message?.id}`, { method: 'DELETE' });
+  check('本人能删自己发的消息', deleteOwn.status === 200, JSON.stringify(deleteOwn.error ?? deleteOwn.body));
+  const deleteByOwner = await owner.client.call(`${teamPath}/messages/${firstMessage.data?.message?.id}`, { method: 'DELETE' });
+  check('创建者能删别人发的消息（团队空间的清理权）', deleteByOwner.status === 200, String(deleteByOwner.status));
+  const chatAfter = await owner.client.call(`${teamPath}/messages`);
+  check('删完之后列表里就不剩了', (chatAfter.data?.items ?? []).length === 0 && chatAfter.data?.total === 0, JSON.stringify(chatAfter.data ?? {}));
+  const missingMessage = await owner.client.call(`${teamPath}/messages/99999999`, { method: 'DELETE' });
+  check('删一条不存在的消息 404 team_message_not_found', missingMessage.status === 404 && missingMessage.error?.code === 'team_message_not_found', String(missingMessage.status));
 
   /* ── 退出与解散 ─────────────────────────────────────────────────── */
   const left = await outsider.client.call(`${teamPath}/leave`, { method: 'POST' });

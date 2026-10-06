@@ -48,6 +48,30 @@ export const MAX_TEAM_POST_CONTENT = 20000;
 /** 一个团队主页一页显示多少条帖子。 */
 export const TEAM_PAGE_MAX = 50;
 
+/** 团队文件柜：单个文件上限。 */
+export const MAX_TEAM_FILE_BYTES = 4 * 1024 * 1024;
+
+/** 文件原名（展示用）的长度上限。磁盘上的名字由服务端另起，见 storage.js。 */
+export const MAX_TEAM_FILE_NAME = 120;
+
+/** 文件柜一页多少条。 */
+export const TEAM_FILE_PAGE_MAX = 50;
+
+/**
+ * 上传接口的请求体上限。
+ *
+ * 6 MB ≈ 「4 MB 文件做成 base64」（base64 会胀 4/3，5.33 MB）再加一点余量。
+ * 它是**逐路由**放宽的（`src/core/router.js` 里 `route()` 的第 4 个参数），
+ * 不是把全站上限抬到 6 MB —— 别的接口还是 512 KB。
+ */
+export const TEAM_FILE_BODY_LIMIT = 6 * 1024 * 1024;
+
+/** 群聊一条消息的字数上限。 */
+export const MAX_TEAM_MESSAGE = 1000;
+
+/** 群聊一次最多拉多少条（轮询用小值，进页面用大值）。 */
+export const TEAM_MESSAGE_PAGE_MAX = 100;
+
 export const TEAM_SCHEMA = `
 -- 团队本体。slug 是给人看、给 URL 用的短名；name 是可以随时改的中文名。
 CREATE TABLE IF NOT EXISTS teams (
@@ -101,4 +125,40 @@ CREATE TABLE IF NOT EXISTS team_posts (
 );
 CREATE INDEX IF NOT EXISTS idx_team_posts_team ON team_posts (team_id, created_at DESC, id DESC);
 CREATE INDEX IF NOT EXISTS idx_team_posts_user ON team_posts (user_id, created_at DESC);
+
+-- 团队文件柜。
+--
+-- 磁盘上的文件名**不存用户给的那个名字**，而是另起 <team_id>-<时间>-<随机>.<扩展名>
+-- （见 storage.js）。用户给的名字只用于展示、以及下载时回填
+-- Content-Disposition；直接拿它当路径就是一次目录穿越（「../../…」），
+-- 这里从结构上不给这个机会 —— 库里这一列只可能是白名单字符。
+CREATE TABLE IF NOT EXISTS team_files (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  team_id     INTEGER NOT NULL REFERENCES teams(id),
+  user_id     INTEGER NOT NULL REFERENCES users(id),
+  name        TEXT    NOT NULL,                 -- 展示用的原名
+  mime        TEXT    NOT NULL DEFAULT '',
+  size        INTEGER NOT NULL DEFAULT 0,
+  stored_name TEXT    NOT NULL,                 -- 落盘文件名，只含 [A-Za-z0-9._-]
+  deleted     INTEGER NOT NULL DEFAULT 0,
+  created_at  INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_team_files_team ON team_files (team_id, created_at DESC, id DESC);
+CREATE INDEX IF NOT EXISTS idx_team_files_user ON team_files (user_id, created_at DESC);
+
+-- 团队群聊。
+--
+-- 只存纯文本：**不做 Markdown 渲染**。聊天框里贴 HTML 是最容易被当成「渲染功能」
+-- 引进来的一次 XSS，这里干脆不给这个面 —— 前端只负责把文本转义后显示。
+CREATE TABLE IF NOT EXISTS team_messages (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  team_id    INTEGER NOT NULL REFERENCES teams(id),
+  user_id    INTEGER NOT NULL REFERENCES users(id),
+  content    TEXT    NOT NULL,
+  deleted    INTEGER NOT NULL DEFAULT 0,
+  created_at INTEGER NOT NULL
+);
+-- 群聊永远是「按团队取一段、按时间排」；轮询只问 id 更大的那些，所以索引带 id DESC。
+CREATE INDEX IF NOT EXISTS idx_team_messages_team ON team_messages (team_id, id DESC);
+CREATE INDEX IF NOT EXISTS idx_team_messages_user ON team_messages (user_id, id DESC);
 `;

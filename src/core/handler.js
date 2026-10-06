@@ -69,7 +69,10 @@ export function buildServer({ db, routes, notes }) {
 
         const match = entry.regex.exec(pathname);
         const params = Object.fromEntries(entry.keys.map((key, index) => [key, match[index + 1]]));
-        const body = ['POST', 'PUT', 'PATCH'].includes(req.method) ? await readJsonBody(req) : {};
+        // 请求体上限默认 512 KB；`entry.options.bodyLimit` 只有明确需要更大的路由才给
+        // （目前只有团队文件上传，见 src/core/router.js 第 4 个形参的注释）。
+        const bodyLimit = entry.options?.bodyLimit;
+        const body = ['POST', 'PUT', 'PATCH'].includes(req.method) ? await readJsonBody(req, bodyLimit) : {};
         await entry.handler({
           req,
           res,

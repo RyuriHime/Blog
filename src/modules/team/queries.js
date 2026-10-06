@@ -65,6 +65,43 @@ const POST_FROM = `
     LEFT JOIN users eu ON eu.id = p.updated_by`;
 
 /**
+ * 文件柜的列表/详情共用列。
+ *
+ * 上传者信息与帖子一样 `JOIN users` 取；`stored_name` 也一并带出来 ——
+ * 下载接口要拿它去读盘。**能不能删**不在这里算：那取决于我在这个团队里的角色，
+ * 交给 `shape.js`（它拿到了 `my_role`）。
+ */
+const FILE_COLUMNS = `
+      f.id, f.team_id, f.user_id, f.name, f.mime, f.size, f.stored_name, f.created_at,
+      u.username, u.display_name, u.avatar,
+      (SELECT m.role FROM team_members m WHERE m.team_id = f.team_id AND m.user_id = ?) AS my_role`;
+
+const fileColumnParams = (viewerId) => [viewerId];
+
+const FILE_FROM = `
+    FROM team_files f
+    JOIN users u ON u.id = f.user_id`;
+
+/**
+ * 群聊消息的共用列（同样带一份「我在这个团队里的角色」）。
+ *
+ * ⚠️ 群聊与文件柜**不做双向拉黑过滤**（与帖子/动态不同）：团队是成员制空间，
+ * 谁能进来由管理员把关；而拉黑是广场层面的关系，套到团队内部只会让聊天记录
+ * 出现空洞、文件柜莫名其妙少东西 —— 那是更难用的东西，不是更安全的东西。
+ * 这条选择写在注释里，是为了下一个人知道它是**想过之后决定的**，不是忘了。
+ */
+const MESSAGE_COLUMNS = `
+      m.id, m.team_id, m.user_id, m.content, m.created_at,
+      u.username, u.display_name, u.avatar,
+      (SELECT tm.role FROM team_members tm WHERE tm.team_id = m.team_id AND tm.user_id = ?) AS my_role`;
+
+const messageColumnParams = (viewerId) => [viewerId];
+
+const MESSAGE_FROM = `
+    FROM team_messages m
+    JOIN users u ON u.id = m.user_id`;
+
+/**
  * @param {object} db  node:sqlite 的 DatabaseSync
  */
 export function createTeamQueries(db) {
@@ -378,6 +415,98 @@ export function createTeamQueries(db) {
         now,
         id,
       ]).run();
+      return Number(result.changes) > 0;
+    },
+
+    /* ── 文件柜 ─────────────────────────────────────────────────────── */
+
+    listFiles({ teamId, viewerId, limit, offset }) {
+      return bind(
+        `SELECT${FILE_COLUMNS}${FILE_FROM}
+     WHERE f.team_id = ? AND f.deleted = 0
+     ORDER BY f.created_at DESC, f.id DESC
+     LIMIT ? OFFSET ?`,
+        [...fileColumnParams(viewerId), teamId, limit, offset],
+      ).all();
+    },
+
+    countFiles(teamId) {
+      const row = bind('SELECT COUNT(*) AS total FROM team_files WHERE team_id = ? AND deleted = 0', [teamId]).get();
+      return Number(row?.total) || 0;
+    },
+
+    /** 下载接口用：带 `stored_name`，只认没被软删的行。 */
+    fileById({ id, viewerId }) {
+      return bind(`SELECT${FILE_COLUMNS}${FILE_FROM}\n     WHERE f.id = ? AND f.deleted = 0`, [
+        ...fileColumnParams(viewerId),
+        id,
+      ]).get() ?? null;
+    },
+
+    createFile({ teamId, userId, name, mime = '', size = 0, storedName, now = Date.now() }) {
+      const result = bind(
+        `INSERT INTO team_files (team_id, user_id, name, mime, size, stored_name, deleted, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, 0, ?)`,
+        [teamId, userId, name, mime, size, storedName, now],
+      ).run();
+      return Number(result.lastInsertRowid);
+    },
+
+    softDeleteFile(id) {
+      const result = bind('UPDATE team_files SET deleted = 1 WHERE id = ? AND deleted = 0', [id]).run();
+      return Number(result.changes) > 0;
+    },
+
+    /* ── 群聊 ───────────────────────────────────────────────────────── */
+
+    /**
+     * 取消息。
+     *
+     * `after > 0`（轮询「有没有新消息」）→ 按 id 升序取比它新的那几条；
+     * `after` 缺省（刚进页面）→ 按 id 倒序取最近 limit 条，调用方自己反转回来。
+     * 两个方向都走 `idx_team_messages_team (team_id, id DESC)`：升序那条会顺着索引反向扫，
+     * 不会退化成全表扫。
+     */
+    listMessages({ teamId, viewerId, after = 0, limit = 30 }) {
+      const order = after > 0 ? 'ASC' : 'DESC';
+      return bind(
+        `SELECT${MESSAGE_COLUMNS}${MESSAGE_FROM}
+     WHERE m.team_id = ? AND m.deleted = 0 AND m.id > ?
+     ORDER BY m.id ${order}
+     LIMIT ?`,
+        [...messageColumnParams(viewerId), teamId, after, limit],
+      ).all();
+    },
+
+    countMessages(teamId) {
+      const row = bind('SELECT COUNT(*) AS total FROM team_messages WHERE team_id = ? AND deleted = 0', [teamId]).get();
+      return Number(row?.total) || 0;
+    },
+
+    /** 团队里最新一条消息的 id（前端轮询的游标起点；没有消息就是 0）。 */
+    latestMessageId(teamId) {
+      const row = bind('SELECT MAX(id) AS latest FROM team_messages WHERE team_id = ? AND deleted = 0', [teamId]).get();
+      return Number(row?.latest) || 0;
+    },
+
+    messageById({ id, viewerId }) {
+      return bind(`SELECT${MESSAGE_COLUMNS}${MESSAGE_FROM}\n     WHERE m.id = ? AND m.deleted = 0`, [
+        ...messageColumnParams(viewerId),
+        id,
+      ]).get() ?? null;
+    },
+
+    createMessage({ teamId, userId, content, now = Date.now() }) {
+      const result = bind(
+        `INSERT INTO team_messages (team_id, user_id, content, deleted, created_at)
+     VALUES (?, ?, ?, 0, ?)`,
+        [teamId, userId, content, now],
+      ).run();
+      return Number(result.lastInsertRowid);
+    },
+
+    softDeleteMessage(id, now = Date.now()) {
+      const result = bind('UPDATE team_messages SET deleted = 1 WHERE id = ? AND deleted = 0', [id]).run();
       return Number(result.changes) > 0;
     },
   };

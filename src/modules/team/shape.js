@@ -4,6 +4,7 @@
 // 单独成文件是因为列表、详情、发布、编辑几个接口都得用同一份形状 ——
 // 形状有第二份实现，就会有「列表有某个字段、详情没有」这类时好时坏的 bug。
 import { renderMarkdown } from '../../markdown.js';
+import { formatBytes } from './storage.js';
 import { TEAM_SCOPES, TEAM_ROLES } from './schema.js';
 
 /** 可见范围的中文名。与 P1（动态）、P2（积木）用同一套说法。 */
@@ -136,6 +137,76 @@ export function shapeTeamPost(row, { viewer = null, team = null } = {}) {
 
 export function shapeTeamPosts(rows, options = {}) {
   return (rows ?? []).map((row) => shapeTeamPost(row, options));
+}
+
+/**
+ * 一个文件的对外形状（文件柜）。
+ *
+ * `downloadUrl` 由服务端给出，而不是让前端自己拼 `/api/team-files/<id>`：
+ * 下载地址属于接口契约，写在前端就有第二份实现（换个前缀前端就全坏）。
+ * 链接带上 `?name=` 也没必要 —— 下载时的那句 `Content-Disposition`
+ * 用的是库里的原名，浏览器拿到的文件名就是对的。
+ */
+export function shapeFile(row, { viewer = null, team = null } = {}) {
+  if (!row) return null;
+  const myRole = TEAM_ROLES.includes(row.my_role) ? row.my_role : null;
+  const canManageTeam = myRole === 'owner' || myRole === 'admin';
+  const isUploader = Boolean(viewer) && viewer.id === row.user_id;
+
+  return {
+    id: row.id,
+    teamId: row.team_id,
+    team: team ? { id: team.id, slug: team.slug, name: team.name } : null,
+    name: String(row.name ?? ''),
+    size: Number(row.size) || 0,
+    sizeLabel: formatBytes(row.size),
+    mime: String(row.mime ?? ''),
+    uploader: {
+      id: row.user_id,
+      username: row.username ?? null,
+      displayName: row.display_name || row.username || '（已注销）',
+      avatar: row.avatar ?? null,
+    },
+    downloadUrl: `/api/team-files/${row.id}`,
+    // 与团队帖同一条规矩：删不可逆，所以只给上传者本人和团队管理员。
+    canDelete: isUploader || canManageTeam,
+    createdAt: row.created_at,
+  };
+}
+
+export function shapeFiles(rows, options = {}) {
+  return (rows ?? []).map((row) => shapeFile(row, options));
+}
+
+/**
+ * 一条群聊消息的对外形状。
+ *
+ * 只给纯文本：前端用 `esc()` 转义后按预格式化显示，**不做 Markdown 渲染**。
+ * 聊天内容里出现 `<img onerror=…>` 时，这一条就是防线。
+ */
+export function shapeMessage(row, { viewer = null } = {}) {
+  if (!row) return null;
+  const myRole = TEAM_ROLES.includes(row.my_role) ? row.my_role : null;
+  const canManageTeam = myRole === 'owner' || myRole === 'admin';
+  const isAuthor = Boolean(viewer) && viewer.id === row.user_id;
+
+  return {
+    id: row.id,
+    teamId: row.team_id,
+    content: String(row.content ?? ''),
+    author: {
+      id: row.user_id,
+      username: row.username ?? null,
+      displayName: row.display_name || row.username || '（已注销）',
+      avatar: row.avatar ?? null,
+    },
+    canDelete: isAuthor || canManageTeam,
+    createdAt: row.created_at,
+  };
+}
+
+export function shapeMessages(rows, options = {}) {
+  return (rows ?? []).map((row) => shapeMessage(row, options));
 }
 
 export { SCOPE_LABELS, SCOPE_OPTIONS, ROLE_LABELS };

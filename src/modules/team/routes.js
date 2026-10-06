@@ -10,17 +10,30 @@ import { HttpError, ensure, field, rateLimit } from '../../core/http.js';
 import { requireUser } from '../../core/guards.js';
 import { ANON } from '../../core/paths.js';
 import {
+  MAX_TEAM_FILE_BYTES,
   MAX_TEAM_INTRO,
+  MAX_TEAM_MESSAGE,
   MAX_TEAM_NAME,
   MAX_TEAM_POST_CONTENT,
   MAX_TEAM_POST_TITLE,
   MAX_TEAM_SLUG,
+  TEAM_FILE_BODY_LIMIT,
+  TEAM_FILE_PAGE_MAX,
   TEAM_JOIN_POLICIES,
+  TEAM_MESSAGE_PAGE_MAX,
   TEAM_PAGE_MAX,
   TEAM_ROLES,
   TEAM_SCOPES,
 } from './schema.js';
-import { SCOPE_OPTIONS, shapeMember, shapeTeam, shapeTeamPost } from './shape.js';
+import { SCOPE_OPTIONS, shapeFile, shapeMember, shapeMessage, shapeTeam, shapeTeamPost } from './shape.js';
+import {
+  attachmentHeaders,
+  extensionOf,
+  parseUpload,
+  readTeamFile,
+  removeTeamFile,
+  saveTeamFile,
+} from './storage.js';
 
 const SCOPE_HINT = '可见范围只能是：公开 / 仅关注我的人 / 仅团队 / 仅自己';
 const NOT_FOUND_MESSAGE = '这篇帖子不存在';
@@ -85,11 +98,20 @@ function pickSlug(queries, raw, name) {
   return `team-${Date.now().toString(36)}`;
 }
 
-/** 按 id 或 slug 取团队，取不到就是 404。 */
+/**
+ * 按 id 或 slug 取团队，取不到就是 404。
+ *
+ * ⚠️ **先按 slug 查，查不到再按数字 id 兜底**（顺序不能反）。
+ * 这里踩过一个真 bug：原来写成「长得像数字就当 id」，而 `pickSlug` 允许纯数字 slug
+ * （队名叫「2026」时 slug 就是 `2026`），于是 `/api/teams/2026` 被当成 id 去查，
+ * 查不到就 404 —— 前端画的是「也许它已经解散了」，
+ * 建队的人自己点进去都进不去。slug 是 URL 里那个东西，它优先。
+ */
 function loadTeam(reqCtx, queries) {
   const key = String(reqCtx.params.id ?? '');
   const viewerId = viewerIdOf(reqCtx.user);
-  const row = /^\d+$/.test(key) ? queries.teamById(Number(key), viewerId) : queries.teamBySlug(key, viewerId);
+  const bySlug = queries.teamBySlug(key, viewerId);
+  const row = bySlug ?? (/^\d+$/.test(key) ? queries.teamById(Number(key), viewerId) : null);
   ensure(row, 404, 'team_not_found', '团队不存在');
   return row;
 }
@@ -110,6 +132,35 @@ function requireTeamManager(reqCtx, queries, teamRow) {
     '只有团队的管理员可以执行这个操作',
   );
   return user;
+}
+
+/**
+ * 要求「是这个团队的人」才能继续（文件柜与群聊用）。
+ *
+ * 未登录 → **401**（登录之后他可能就是成员，先让他登录）；
+ * 已登录但不是成员 → **403**。这里**故意**不用 404：团队本身是公开可见的
+ * （`GET /api/teams/:id` 谁都能看），假装「这个团队不存在」骗不了任何人，
+ * 真正要守住的是团队**里面**的东西。
+ */
+function requireTeamMember(reqCtx, queries, teamRow) {
+  const user = requireUser(reqCtx);
+  const member = queries.memberOf(teamRow.id, user.id);
+  ensure(member, 403, 'not_team_member', '只有团队成员能看这里的内容，先加入团队吧');
+  return user;
+}
+
+/** 文件柜分页（上限与帖子分开，文件条目更重）。 */
+function readFilePage(query) {
+  const page = Math.max(1, Number(query.get('page')) || 1);
+  const perPage = Math.min(TEAM_FILE_PAGE_MAX, Math.max(1, Number(query.get('perPage')) || 20));
+  return { page, perPage, offset: (page - 1) * perPage };
+}
+
+/** 群聊一次拉多少条 + 从哪条之后拉（`after=0` 表示「给我最近的一批」）。 */
+function readMessageWindow(query) {
+  const limit = Math.min(TEAM_MESSAGE_PAGE_MAX, Math.max(1, Number(query.get('limit')) || 30));
+  const after = Math.max(0, Number(query.get('after')) || 0);
+  return { limit, after };
 }
 
 /**
@@ -394,6 +445,144 @@ export function registerTeamRoutes(ctx, { queries }) {
     const canDelete = row.user_id === user.id || isTeamManager(queries, teamRow.id, user.id);
     ensure(canDelete, 403, 'forbidden', '只有作者或团队管理员可以删这篇帖子');
     queries.softDeletePost(row.id);
+    ok(reqCtx.res, { deleted: true, id: row.id });
+  });
+
+  /* ── 文件柜 ─────────────────────────────────────────────────────── */
+
+  add('GET', '/api/teams/:id/files', async (reqCtx) => {
+    const teamRow = loadTeam(reqCtx, queries);
+    requireTeamMember(reqCtx, queries, teamRow);
+    const viewerId = viewerIdOf(reqCtx.user);
+    const { page, perPage, offset } = readFilePage(reqCtx.query);
+    const total = queries.countFiles(teamRow.id);
+    const rows = queries.listFiles({ teamId: teamRow.id, viewerId, limit: perPage, offset });
+    ok(reqCtx.res, {
+      items: rows.map((row) => shapeFile(row, { viewer: reqCtx.user, team: teamRow })),
+      page,
+      perPage,
+      total,
+      totalPages: Math.max(1, Math.ceil(total / perPage)),
+      maxBytes: MAX_TEAM_FILE_BYTES,
+    });
+  });
+
+  /**
+   * 上传一个文件。
+   *
+   * 请求体是 `{ name, dataUrl }`，`dataUrl` 就是浏览器 `FileReader` 读出来的
+   * `data:<mime>;base64,<内容>`。用 JSON + base64 而不是 multipart：
+   * 仓库是零依赖的，手写 multipart 解析器要多 100 行边界处理（分片、boundary 引号、
+   * 多个文件、CRLF…），而它换来的只是省掉 33% 的编码膨胀 —— 不值。
+   * 代价是请求体上限要按 4 MB 的文件放宽到 6 MB，所以这条路由显式带了
+   * `{ bodyLimit }`（见 src/core/router.js），别的接口仍然是 512 KB。
+   */
+  add(
+    'POST',
+    '/api/teams/:id/files',
+    async (reqCtx) => {
+      const teamRow = loadTeam(reqCtx, queries);
+      const user = requireTeamMember(reqCtx, queries, teamRow);
+      rateLimit(`team:file:${user.id}`, 30, 10 * 60 * 1000);
+      const body = reqCtx.body ?? {};
+      const upload = parseUpload({ rawName: body.name, dataUrl: body.dataUrl });
+      const storedName = saveTeamFile(teamRow.id, upload.buffer, extensionOf(upload.name));
+      const id = queries.createFile({
+        teamId: teamRow.id,
+        userId: user.id,
+        name: upload.name,
+        mime: upload.mime,
+        size: upload.size,
+        storedName,
+      });
+      const row = queries.fileById({ id, viewerId: user.id });
+      ok(reqCtx.res, { file: shapeFile(row, { viewer: user, team: teamRow }) });
+    },
+    { bodyLimit: TEAM_FILE_BODY_LIMIT },
+  );
+
+  add('DELETE', '/api/teams/:id/files/:fileId', async (reqCtx) => {
+    const teamRow = loadTeam(reqCtx, queries);
+    const user = requireTeamMember(reqCtx, queries, teamRow);
+    const fileId = readId(reqCtx.params.fileId, '文件');
+    const row = queries.fileById({ id: fileId, viewerId: user.id });
+    ensure(row && Number(row.team_id) === Number(teamRow.id), 404, 'team_file_not_found', '这个文件不存在');
+    const canDelete = Number(row.user_id) === user.id || isTeamManager(queries, teamRow.id, user.id);
+    ensure(canDelete, 403, 'forbidden', '只有上传的人或团队管理员可以删这个文件');
+    queries.softDeleteFile(row.id);
+    // 先删库再删盘：库里那行没了，即使盘上残留也再没有任何接口能读到它
+    // （文件名是随机的，猜不出来）。反过来先删盘的话，中途失败就会留下一条
+    // 「点下载 404」的记录，那更难看。
+    removeTeamFile(row.stored_name);
+    ok(reqCtx.res, { deleted: true, id: row.id });
+  });
+
+  /**
+   * 下载。
+   *
+   * ⚠️ 这条路由**不在 `/api/teams/:id/...` 底下**，因为下载链接要能直接用
+   * `<a href>` 打开（浏览器不会带自定义头，但会带 cookie，所以成员判定照旧有效）。
+   * 权限靠「文件 → 团队 → 我是不是成员」三级反查，与文件柜列表同一条规矩。
+   * 响应不走 `ok()`：这里要发的是原始字节，不是 JSON 信封。
+   */
+  add('GET', '/api/team-files/:fileId', async (reqCtx) => {
+    const viewerId = viewerIdOf(reqCtx.user);
+    const fileId = readId(reqCtx.params.fileId, '文件');
+    const row = queries.fileById({ id: fileId, viewerId });
+    ensure(row, 404, 'team_file_not_found', '这个文件不存在');
+    const teamRow = queries.teamById(Number(row.team_id), viewerId);
+    ensure(teamRow, 404, 'team_file_not_found', '这个文件不存在');
+    requireTeamMember(reqCtx, queries, teamRow);
+
+    const buffer = readTeamFile(row.stored_name);
+    ensure(buffer, 404, 'team_file_not_found', '这个文件已经不在服务器上了');
+
+    reqCtx.res.writeHead(200, attachmentHeaders({ name: row.name, size: Number(row.size) || buffer.length }));
+    reqCtx.res.end(buffer);
+  });
+
+  /* ── 群聊 ───────────────────────────────────────────────────────── */
+
+  add('GET', '/api/teams/:id/messages', async (reqCtx) => {
+    const teamRow = loadTeam(reqCtx, queries);
+    requireTeamMember(reqCtx, queries, teamRow);
+    const viewerId = viewerIdOf(reqCtx.user);
+    const { limit, after } = readMessageWindow(reqCtx.query);
+    const rows = queries.listMessages({ teamId: teamRow.id, viewerId, after, limit });
+    // `after=0`（刚进页面）拿到的是「最近 limit 条，倒序」，翻回正序再给前端；
+    // 轮询那次本身就是升序，不用翻。
+    const ordered = after > 0 ? rows : rows.slice().reverse();
+    ok(reqCtx.res, {
+      items: ordered.map((row) => shapeMessage(row, { viewer: reqCtx.user })),
+      latestId: ordered.length ? Number(ordered[ordered.length - 1].id) : queries.latestMessageId(teamRow.id),
+      total: queries.countMessages(teamRow.id),
+    });
+  });
+
+  add('POST', '/api/teams/:id/messages', async (reqCtx) => {
+    const teamRow = loadTeam(reqCtx, queries);
+    const user = requireTeamMember(reqCtx, queries, teamRow);
+    // 一分钟 60 条：正常聊天够用，刷屏脚本会被挡住。
+    rateLimit(`team:chat:${user.id}`, 60, 60 * 1000);
+    const content = field((reqCtx.body ?? {}).content ?? '', {
+      label: '消息',
+      min: 1,
+      max: MAX_TEAM_MESSAGE,
+    });
+    const id = queries.createMessage({ teamId: teamRow.id, userId: user.id, content });
+    const row = queries.messageById({ id, viewerId: user.id });
+    ok(reqCtx.res, { message: shapeMessage(row, { viewer: user }) });
+  });
+
+  add('DELETE', '/api/teams/:id/messages/:messageId', async (reqCtx) => {
+    const teamRow = loadTeam(reqCtx, queries);
+    const user = requireTeamMember(reqCtx, queries, teamRow);
+    const messageId = readId(reqCtx.params.messageId, '消息');
+    const row = queries.messageById({ id: messageId, viewerId: user.id });
+    ensure(row && Number(row.team_id) === Number(teamRow.id), 404, 'team_message_not_found', '这条消息不存在');
+    const canDelete = Number(row.user_id) === user.id || isTeamManager(queries, teamRow.id, user.id);
+    ensure(canDelete, 403, 'forbidden', '只能删自己发的消息');
+    queries.softDeleteMessage(row.id);
     ok(reqCtx.res, { deleted: true, id: row.id });
   });
 }
