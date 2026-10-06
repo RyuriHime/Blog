@@ -19,6 +19,9 @@ import { existsSync, mkdirSync, openSync, readFileSync, rmSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
+import { runInNewContext } from 'node:vm';
+// 直接引模块（不是走 HTTP）：S9.7 要把沙箱 bootstrap 拉进 vm 里演一遍握手顺序。
+import { buildSandboxDocument } from '../src/modules/doc/sandbox.js';
 
 const ROOT = resolve(fileURLToPath(new URL('.', import.meta.url)), '..');
 const SERVER = join(ROOT, 'src', 'server.js');
@@ -2050,6 +2053,63 @@ try {
           && afterPreview.data?.source === beforePreview.data?.source,
         `${(beforePreview.data?.blocks ?? []).length} → ${(afterPreview.data?.blocks ?? []).length}`,
       );
+
+      // 【S9.7】沙箱握手：`init` 消息可能比用户脚本先到 —— bootstrap 在 `<head>` 里发完
+      // `ready`，宿主立刻回 `init`，而用户的 `<script>` 还在 `<body>` 里排队。这时
+      // `onInit` 必须**排队补交**，否则用户的初始化代码永远不跑（页面不报错，票数、
+      // 初始数据一直空着，看起来就是「功能挂了」）。这里把 bootstrap 拉进 vm 里演一遍。
+      {
+        const built = buildSandboxDocument('<p>user code</p>');
+        const OPEN = '<' + 'script>';
+        const CLOSE = '</' + 'script>';
+        const code = built.slice(built.indexOf(OPEN) + OPEN.length, built.indexOf(CLOSE));
+        const sent = [];
+        const listeners = [];
+        const sandbox = {
+          console, setTimeout, clearTimeout, Promise, Object, Error, JSON, Math,
+          parent: { postMessage(message) { sent.push(message); } },
+          document: {
+            documentElement: { scrollHeight: 10 },
+            body: { scrollHeight: 12 },
+            addEventListener() {},
+          },
+          window: {
+            addEventListener(type, handler) { if (type === 'message') listeners.push(handler); },
+          },
+        };
+        runInNewContext(code, sandbox);
+        const api = sandbox.window.Sandbox;
+        const fire = (data) => { for (const handler of listeners) handler({ data, source: sandbox.window }); };
+        check('9.7 沙箱 bootstrap 起来就发 ready 完成握手', sent.some((message) => message.type === 'ready'), JSON.stringify(sent));
+
+        // ① `init` 先到、`onInit` 后挂：要补交。
+        fire({ type: 'init', props: { app: '投票' }, inputs: { a: 1 } });
+        let late = null;
+        api.onInit((props, inputs) => { late = { props, inputs }; });
+        check('9.7 init 比 onInit 先到时也要补交（不然初始化永远不跑）', late?.props?.app === '投票' && late?.inputs?.a === 1, JSON.stringify(late));
+
+        // ② 赋值式写法 `Sandbox.onInit = fn` 同样接得住。
+        let assigned = null;
+        api.onInit = (props) => { assigned = props; };
+        fire({ type: 'init', props: { app: '第二发' }, inputs: {} });
+        check('9.7 `Sandbox.onInit = fn` 赋值写法也接得住', assigned?.app === '第二发', JSON.stringify(assigned));
+
+        // ③ 能力申请：请求发给宿主，回执把 Promise 兑现（投票就是靠这条路写票数的）。
+        const pendingValue = api.state.get('shared');
+        const request = sent.find((message) => message.type === 'request' && message.capability === 'state');
+        check('9.7 能力申请发给宿主（带 op 与 scope）', request?.payload?.op === 'get' && request?.payload?.scope === 'shared', JSON.stringify(request));
+        fire({ type: 'capability', id: request.id, ok: true, value: { scope: 'shared', value: { counts: [1, 2, 3] } } });
+        const resolved = await pendingValue;
+        check('9.7 回执把 Promise 兑现成状态值', Array.isArray(resolved?.counts) && resolved.counts[2] === 3, JSON.stringify(resolved));
+
+        // ④ 被拒时抛出来（脚本里 catch 得到，才能把「没投上」显示给用户）。
+        const denied = api.state.set({ counts: [9] }, 'shared');
+        const write = sent.find((message) => message.type === 'request' && message.payload?.op === 'set');
+        fire({ type: 'capability', id: write.id, ok: false, message: '要保存状态得先登录' });
+        let refused = '';
+        await denied.then(() => {}, (error) => { refused = String(error?.message ?? error); });
+        check('9.7 能力被拒时 Promise 抛错（不再静默失败）', refused.includes('登录'), refused);
+      }
 
       await author.call(`/api/docs/${docId}`, { method: 'DELETE' });
     }
