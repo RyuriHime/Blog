@@ -1,0 +1,1247 @@
+// 积木（可编程帖子 / 笔记 / 个人主页）的四个页面。
+//
+//   积木广场   #/docs              列表 + 筛选 + 新建
+//   阅读页     #/doc/:id           外壳 + 后端渲染好的正文
+//   编辑器     #/doc/:id/edit      积木模式 / Markdown 模式
+//   块类型表   #/blocks            内置与自定义块类型的 schema 速查 + 注册
+//
+// 两条贯穿全文件的纪律：
+//   1. **正文的 HTML 一律由后端出**（`src/modules/doc/blocks/html.js`）。
+//      前端只画外壳、只发请求。想「在浏览器里先把块渲染一遍」的冲动要忍住 ——
+//      那等于把块引擎实现两遍，出错时你分不清是哪一遍错了。
+//   2. **编辑器里没有全局「保存」**。每块自己保存、自己上移下移删除，
+//      因为块的语义本来就是独立的（这也是它和一篇 Markdown 的根本区别）。
+//      标题和可见范围是文档级属性，单独一个按钮保存。
+//
+// 权限只做「藏按钮」，真正的判断在后端 —— 前端藏起来的按钮不叫权限。
+
+import { $, emptyHtml, esc, loadingHtml, toast, ui } from '../core/dom.js';
+import { api, withButtonBusy } from '../core/api.js';
+import { toastError } from '../core/errors.js';
+import { navigate } from '../core/router.js';
+import { state } from '../core/state.js';
+import * as Fmt from '../core/format.js';
+import * as Blocks from './doc-blocks.js';
+import { attachSandbox, unmountSandboxes } from '../core/sandbox.js';
+import { ntRenderMath } from './notes.js';
+
+/** 元数据只拉一次：块类型表 / 模板表 / 两个枚举，整个会话里不会变。 */
+const docState = { types: [], templates: [], kinds: [], scopes: [], editor: null, viewing: null };
+
+/** Markdown 模式的两件外挂的生命周期手柄（防抖句柄 + AI 抽屉实例）。 */
+let mdPreviewTimer = null;
+let mdNotesPanel = null;
+
+async function loadMeta(force = false) {
+  if (!force && docState.types.length > 0) return;
+  const [types, meta] = await Promise.all([api('/api/docs/meta/block-types'), api('/api/docs/meta/templates')]);
+  docState.types = types.types ?? [];
+  docState.templates = meta.templates ?? [];
+  docState.kinds = meta.kinds ?? [];
+  docState.scopes = meta.scopes ?? [];
+}
+
+const typeDef = (name) => docState.types.find((item) => item.name === name) ?? null;
+
+/** 表单取值：`querySelectorAll` 在假 DOM 里返回空数组，所以这段永远安全。 */
+function formValues(form) {
+  const values = {};
+  for (const node of form.querySelectorAll('[name]')) {
+    values[node.name] = node.type === 'checkbox' ? node.checked : node.value;
+  }
+  return values;
+}
+
+const optionsHtml = (list, current) =>
+  list
+    .map((item) => `<option value="${esc(item.value)}"${item.value === current ? ' selected' : ''}>${esc(item.label)}</option>`)
+    .join('');
+
+const scopeOptionsHtml = (current) => optionsHtml(docState.scopes, current);
+
+function download(filename, payload) {
+  const url = URL.createObjectURL(new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' }));
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+}
+
+/* ------------------------------------------------------------------ */
+/* 积木广场                                                            */
+/* ------------------------------------------------------------------ */
+
+function docCardHtml(doc) {
+  const author = doc.author ?? {};
+  return `<a class="doc-card" href="#/doc/${esc(doc.id)}">
+    <div class="doc-card-title">${esc(doc.title || '（无标题）')}</div>
+    <div class="doc-badges">
+      <span class="doc-badge doc-badge-kind">${esc(doc.kindLabel ?? '')}</span>
+      <span class="doc-badge doc-badge-scope">${esc(doc.scopeLabel ?? '')}</span>
+    </div>
+    <div class="doc-card-meta">${esc(author.displayName ?? author.username ?? '')} · ${esc(Fmt.timeAgo(doc.updatedAt))}</div>
+  </a>`;
+}
+
+/**
+ * 「新建一篇」的面板。
+ *
+ * 做成三步 + **模板卡片**（不是下拉框）：下拉框只能看到模板名，
+ * 而大多数人第一次建积木帖时的问题恰恰是「不知道这些模板有什么区别」——
+ * 模板自带一句 `description`，摊开来才算把话说完。
+ * 选中的键写进 `name="template"` 的隐藏框，所以 `formValues()` 照旧读得到。
+ */
+function newDocPanelHtml() {
+  const pick = (key, title, description, on) => `<button type="button" class="doc-tpl-pick${on ? ' is-on' : ''}"
+    data-doc-action="pick-template" data-template="${esc(key)}">
+    <b>${esc(title)}</b><span>${esc(description)}</span>
+  </button>`;
+  return `<form class="doc-new doc-wizard" data-doc-form="create" hidden>
+    <ol class="doc-steps">
+      <li><span class="doc-step-no">1</span>起个标题</li>
+      <li><span class="doc-step-no">2</span>挑一个起点</li>
+      <li><span class="doc-step-no">3</span>创建，进编辑器继续填</li>
+    </ol>
+    <label class="doc-field"><span class="doc-field-label">标题</span>
+      <input class="doc-input" name="title" maxlength="120" placeholder="给这篇起个名字">
+    </label>
+    <div class="doc-new-row">
+      <label class="doc-field"><span class="doc-field-label">形态</span>
+        <select class="doc-input doc-select" name="kind">${optionsHtml(docState.kinds, 'post')}</select>
+      </label>
+      <label class="doc-field"><span class="doc-field-label">谁可以看</span>
+        <select class="doc-input doc-select" name="scope">${scopeOptionsHtml('public')}</select>
+      </label>
+    </div>
+    <div class="doc-field"><span class="doc-field-label">起点</span>
+      <div class="doc-tpl-picks">
+        ${pick('', '空白（不用模板）', '给自己一个正文块，其余全手写。', true)}
+        ${docState.templates.map((item) => pick(item.key, item.title, item.description ?? '', false)).join('')}
+      </div>
+      <input type="hidden" name="template" value="">
+      <span class="doc-hint">模板只是「一段预先写好的块」，套上之后每一块都还能改、能删、能挪 —— 不是锁定格式。</span>
+    </div>
+    <div class="doc-actions">
+      <button class="btn btn-sm btn-primary" type="submit">创建并开始编辑</button>
+      <button class="btn btn-sm btn-ghost" type="button" data-doc-action="new-cancel">取消</button>
+    </div>
+  </form>`;
+}
+
+/** 积木广场：`#/docs?kind=&mine=1&q=`。 */
+async function viewDocs(query = new URLSearchParams()) {
+  leaveDocPage();
+  await loadMeta();
+  const kind = query.get('kind') ?? '';
+  const mine = query.get('mine') === '1';
+  const q = query.get('q') ?? '';
+  const params = new URLSearchParams();
+  if (kind) params.set('kind', kind);
+  if (mine) params.set('mine', '1');
+  if (q) params.set('q', q);
+  const data = await api(`/api/docs${params.toString() ? `?${params}` : ''}`);
+  const documents = data.documents ?? [];
+
+  ui.app.innerHTML = `
+    <div class="card doc-panel">
+      <div class="card-head">
+        <span class="card-title">🧩 积木广场</span>
+        <span class="hint">${Fmt.fmtNum(data.total ?? documents.length)} 篇</span>
+      </div>
+      <form class="doc-filters" data-doc-form="filter">
+        <input class="doc-input" type="search" name="q" value="${esc(q)}" placeholder="搜标题或正文摘要…">
+        <select class="doc-input doc-select" name="kind">
+          <option value="">全部形态</option>
+          ${optionsHtml(docState.kinds, kind)}
+        </select>
+        <label class="doc-check-label"><input type="checkbox" class="doc-check" name="mine"${mine ? ' checked' : ''}>只看我的</label>
+        <button class="btn btn-sm btn-primary" type="submit">筛选</button>
+      </form>
+      <div class="doc-actions">
+        ${state.me ? '<button class="btn btn-sm" type="button" data-doc-action="new">新建一篇</button>' : '<a class="btn btn-sm" href="#/login">登录后可以新建</a>'}
+        <a class="btn btn-sm btn-ghost" href="#/blocks">块类型表</a>
+      </div>
+      ${state.me ? newDocPanelHtml() : ''}
+    </div>
+    ${
+      documents.length
+        ? `<div class="doc-grid">${documents.map(docCardHtml).join('')}</div>`
+        : `<div class="card">${emptyHtml('🧩', '还没有积木', '换一个筛选条件，或者新建一篇')}</div>`
+    }`;
+
+  ensureDelegate();
+}
+
+/* ------------------------------------------------------------------ */
+/* 阅读页                                                              */
+/* ------------------------------------------------------------------ */
+
+function warningsHtml(warnings) {
+  return `<div class="card doc-warn">
+    <div class="card-head"><span class="card-title">⚠️ 有 ${warnings.length} 块降级了</span></div>
+    <ul class="doc-schema">${warnings
+      .map((item) => `<li><code class="doc-code">${esc(item.block_id ?? '?')}</code> ${esc(item.message ?? item.code ?? '')}</li>`)
+      .join('')}</ul>
+    <div class="doc-hint">降级的块不会让整篇白屏，也不会抛异常 —— 它们只是显示成占位。</div>
+  </div>`;
+}
+
+/** 互动区。核心互动接口只认 `posts` 那行的 hidden，这是登记在案的已知短板。 */
+function interactHtml(doc, abilities) {
+  if (!doc.anchorPostId) return '';
+  if (abilities.canReact) {
+    return `<div class="card doc-interact">
+      <span>👍 点赞 / 投币 / 收藏走的是它的互动锚点。</span>
+      <a class="btn btn-sm" href="#/post/${esc(doc.anchorPostId)}">去帖子里互动</a>
+    </div>`;
+  }
+  return `<div class="card doc-interact">
+    <span>这篇的可见范围不是「公开」，核心互动接口只认帖子的 hidden 标记，别人在这里点赞 / 投币会 404 —— 设计文档 §2.5 登记过的已知短板，本轮不动 core。</span>
+  </div>`;
+}
+
+function docActionsHtml(doc, abilities) {
+  const bits = [];
+  if (abilities.canEdit) {
+    bits.push(`<a class="btn btn-sm btn-primary" href="#/doc/${esc(doc.id)}/edit">编辑</a>`);
+    bits.push('<button class="btn btn-sm" type="button" data-doc-action="revisions">修订记录</button>');
+    bits.push('<button class="btn btn-sm" type="button" data-doc-action="export">导出</button>');
+    bits.push('<button class="btn btn-sm btn-ghost" type="button" data-doc-action="delete">删除</button>');
+  }
+  bits.push('<a class="btn btn-sm btn-ghost" href="#/docs">回广场</a>');
+  return bits.join('');
+}
+
+/** 离开积木页面时的统一收尾：先收外挂，再拆沙箱，最后换 DOM。 */
+function leaveDocPage() {
+  if (mdPreviewTimer) {
+    clearTimeout(mdPreviewTimer);
+    mdPreviewTimer = null;
+  }
+  if (mdNotesPanel && typeof mdNotesPanel.destroy === 'function') {
+    try {
+      mdNotesPanel.destroy();
+    } catch (error) {
+      console.warn('[notes-agent] 积木工作台销毁失败：', error);
+    }
+  }
+  mdNotesPanel = null;
+  unmountSandboxes();
+  ui.app.innerHTML = loadingHtml();
+}
+
+/**
+ * 阅读页渲染完把每个 `app` 块的 iframe 挂上宿主（§6.3 的看门狗在这里起算）。
+ * 块数据从**服务端返回的 `blocks`** 里取，不从 DOM 里反推 ——
+ * props 是 `init` 消息要送的东西，DOM 里只剩一份转义过的 HTML。
+ */
+function mountSandboxes(data) {
+  const blocks = new Map((data.blocks ?? []).map((block) => [block.blockId, block]));
+  const documentId = data.doc?.id;
+  const frames = typeof ui.app.querySelectorAll === 'function'
+    ? ui.app.querySelectorAll('iframe.doc-app-frame')
+    : [];
+  for (const frame of frames) {
+    const block = blocks.get(frame.dataset?.docBlock ?? '');
+    attachSandbox(frame, block, { documentId });
+  }
+}
+
+/**
+ * Wiki 边栏：分类 → 页面。
+ *
+ * `nav` 完全由后端给（`GET /api/docs/wiki` 与 `GET /api/docs/wiki/:name` 都带），
+ * 而且**只含看得见的页** —— 私有页不能因为名字出现在目录里而泄露存在性。
+ * 前端一行过滤逻辑都不写，就是照单渲染。
+ */
+function wikiNavHtml(nav, doc) {
+  const categories = nav?.categories ?? [];
+  const pages = nav?.pages ?? [];
+  const current = String(doc?.title ?? '');
+  const me = pages.find((page) => page.title === current);
+  const groups = categories.length ? categories : [{ name: '', count: pages.length }];
+  const groupHtml = groups
+    .map((group) => {
+      const items = pages.filter((page) => (page.category ?? '') === group.name);
+      if (items.length === 0) return '';
+      const links = items
+        .map(
+          (page) =>
+            `<a class="doc-wiki-nav-link${page.title === current ? ' is-current' : ''}" href="#/wiki/${encodeURIComponent(page.title)}" data-wiki-title="${esc(page.title)}">${esc(page.title)}</a>`,
+        )
+        .join('');
+      return `<div class="doc-wiki-nav-group" data-wiki-group>
+        <div class="doc-wiki-nav-cat"><span>${esc(group.name || '未分类')}</span><span>${Number(group.count) || items.length}</span></div>
+        ${links}
+      </div>`;
+    })
+    .join('');
+  const tools = [];
+  if (state.me) {
+    tools.push(
+      `<input class="doc-input" type="search" data-wiki-filter placeholder="按标题筛选…" aria-label="筛选 wiki 页面">`,
+      `<input class="doc-input" type="text" data-wiki-new-name placeholder="新页面标题" aria-label="新页面标题">`,
+      `<button class="btn btn-sm" type="button" data-doc-action="wiki-new">新建页面</button>`,
+    );
+  }
+  if (doc?.abilities?.canEdit) {
+    tools.push(
+      `<input class="doc-input" type="text" data-wiki-category value="${esc(me?.category ?? '')}" placeholder="这一页的分类" aria-label="这一页的分类">`,
+      `<button class="btn btn-sm" type="button" data-doc-action="wiki-cat">${me ? '改分类' : '存分类'}</button>`,
+    );
+  }
+  return `<aside class="doc-wiki-nav">
+    <div class="doc-wiki-nav-head"><span>⧉ Wiki 目录</span><span class="hint">${pages.length} 页</span></div>
+    <div data-wiki-groups>${groupHtml || '<div class="doc-wiki-nav-empty">目录还是空的。</div>'}</div>
+    <div class="doc-wiki-nav-hidden" data-wiki-nothing hidden>没有匹配的页面。</div>
+    ${tools.length ? `<div class="doc-wiki-nav-tools">${tools.join('')}</div>` : ''}
+  </aside>`;
+}
+
+/** 边栏里的筛选框：纯前端过滤已经渲染好的链接，不发请求。 */
+function mountWikiNav() {
+  const box = $('[data-wiki-filter]');
+  if (!box || typeof box.addEventListener !== 'function') return;
+  box.addEventListener('input', () => {
+    const needle = String(box.value ?? '').trim().toLowerCase();
+    const links = typeof ui.app.querySelectorAll === 'function' ? ui.app.querySelectorAll('[data-wiki-title]') : [];
+    let visible = 0;
+    for (const link of links) {
+      const match = !needle || String(link.dataset?.wikiTitle ?? '').toLowerCase().includes(needle);
+      if (link.hidden !== undefined) link.hidden = !match;
+      if (match) visible += 1;
+    }
+    const groups = typeof ui.app.querySelectorAll === 'function' ? ui.app.querySelectorAll('[data-wiki-group]') : [];
+    for (const group of groups) {
+      const any = typeof group.querySelectorAll === 'function' ? group.querySelectorAll('[data-wiki-title]') : [];
+      const hit = needle ? [...any].some((link) => !link.hidden) : true;
+      if (group.hidden !== undefined) group.hidden = !hit;
+    }
+    const nothing = $('[data-wiki-nothing]');
+    if (nothing && nothing.hidden !== undefined) nothing.hidden = needle ? visible > 0 : true;
+  });
+}
+
+/* ------------------------------------------------------------------ */
+/* 投票                                                                */
+/* ------------------------------------------------------------------ */
+
+/**
+ * 票数**不在正文 HTML 里**（服务端渲染时它还不知道谁投了什么），
+ * 所以阅读页渲染完之后再补一次 `GET /api/docs/:id/polls` 把数字填进去。
+ *
+ * 选项结构仍然全是后端画的（见 `blocks/types.js` 的 poll.toHtml），
+ * 这里只改数字、宽度、勾选状态，不动结构。
+ */
+function pollFootText(bucket, mine, multiple) {
+  const total = Number(bucket?.total) || 0;
+  const voters = Number(bucket?.voters) || 0;
+  if (mine.length === 0) return total === 0 ? '还没有人投票，点一个试试' : `${total} 票 · ${voters} 人参与`;
+  const own = mine.map((id) => id).join('、');
+  return `你投了 ${own}${multiple ? '（可多选，改完再点一次提交）' : ''} · 共 ${total} 票 · ${voters} 人参与`;
+}
+
+function paintPollCard(card, bucket) {
+  const blockId = card?.dataset?.blockId ?? '';
+  const list = card.querySelector?.('.doc-poll-options');
+  const mine = Array.isArray(bucket?.mine) ? bucket.mine : [];
+  const mineSet = new Set(mine);
+  const counts = bucket?.counts ?? {};
+  const total = Number(bucket?.total) || 0;
+  if (card.dataset) card.dataset.pollMultiple = bucket?.multiple ? '1' : '';
+  for (const item of list?.children ?? []) {
+    const optionId = item.dataset?.optionId ?? '';
+    const count = Number(counts[optionId]) || 0;
+    const button = item.querySelector?.('.doc-poll-choice');
+    if (!button) continue;
+    if (typeof button.setAttribute === 'function') {
+      button.setAttribute('aria-checked', mineSet.has(optionId) ? 'true' : 'false');
+    }
+    if (button.classList?.toggle) button.classList.toggle('is-mine', mineSet.has(optionId));
+    const mark = item.querySelector?.('.doc-poll-mark');
+    if (mark) mark.innerHTML = mineSet.has(optionId) ? '✔' : '';
+    const countNode = item.querySelector?.('.doc-poll-count');
+    if (countNode) countNode.innerHTML = `${count}`;
+    const bar = item.querySelector?.('.doc-poll-bar');
+    if (bar) bar.style = `width:${total > 0 ? Math.round((count / total) * 100) : 0}%`;
+    if (button.dataset) button.dataset.pollMine = mineSet.has(optionId) ? '1' : '';
+  }
+  // 角上那块「你投了哪几个」的提示也归这个桶管，免得数字与勾选各说各话。
+  if (card.dataset) card.dataset.pollMine = mine.join(' ');
+  const foot = card.querySelector?.('[data-poll-foot]');
+  if (foot) {
+    foot.classList?.remove?.('is-error');
+    foot.innerHTML = esc(pollFootText(bucket, mine));
+    if (foot.dataset) foot.dataset.pollBlock = blockId;
+  }
+}
+
+function pollCardNodes() {
+  if (typeof ui.app.querySelectorAll !== 'function') return [];
+  return [...ui.app.querySelectorAll('[data-block-type="poll"]')];
+}
+
+async function loadPolls(documentId) {
+  const cards = pollCardNodes();
+  if (!documentId || cards.length === 0) return;
+  try {
+    const data = await api(`/api/docs/${documentId}/polls`);
+    const polls = data?.polls ?? {};
+    for (const card of cards) paintPollCard(card, polls[card.dataset?.blockId ?? ''] ?? null);
+  } catch (error) {
+    for (const card of cards) {
+      const foot = card.querySelector?.('[data-poll-foot]');
+      if (!foot) continue;
+      foot.classList?.add?.('is-error');
+      foot.innerHTML = `票数没读出来：${esc(error.message)}`;
+    }
+  }
+}
+
+/** 点一下选项 → 提交**完整**的选择集合（后端把「提交」当改票，不是累加）。 */
+async function votePoll(node) {
+  const documentId = docState.viewing;
+  const blockId = node?.dataset?.blockId ?? '';
+  const optionId = node?.dataset?.optionId ?? '';
+  if (!documentId || !blockId || !optionId) return;
+  if (!state.me) {
+    toast('投票前请先登录', 'error');
+    return;
+  }
+  let card = null;
+  for (const item of pollCardNodes()) {
+    if ((item.dataset?.blockId ?? '') === blockId) card = item;
+  }
+  if (!card) return;
+  const multiple = card.dataset?.pollMultiple === '1';
+  const chosen = new Set();
+  for (const option of card.querySelector?.('.doc-poll-options')?.children ?? []) {
+    const button = option.querySelector?.('.doc-poll-choice');
+    if (button?.dataset?.pollMine) chosen.add(option.dataset?.optionId ?? '');
+  }
+  if (chosen.has(optionId)) {
+    chosen.delete(optionId); // 再点一次 = 撤掉这一票
+  } else if (multiple) {
+    chosen.add(optionId);
+  } else {
+    chosen.clear(); // 单选：换一个就是换掉原来那个，不能两个一起交
+    chosen.add(optionId);
+  }
+  const data = await api(`/api/docs/${documentId}/blocks/${blockId}/vote`, {
+    method: 'POST',
+    body: { options: [...chosen] },
+  });
+  for (const item of pollCardNodes()) {
+    if ((item.dataset?.blockId ?? '') === blockId) paintPollCard(item, data);
+  }
+}
+
+function renderDoc(data) {
+  const doc = data.doc ?? {};
+  const author = doc.author ?? {};
+  const abilities = data.abilities ?? {};
+  const warnings = data.warnings ?? [];
+  const article = `
+    <article class="doc-page">
+      <header class="card doc-header">
+        <div class="doc-badges">
+          <span class="doc-badge doc-badge-kind">${esc(doc.kindLabel ?? '')}</span>
+          <span class="doc-badge doc-badge-scope">${esc(doc.scopeLabel ?? '')}</span>
+          ${doc.edited ? '<span class="doc-badge">已编辑</span>' : ''}
+        </div>
+        <h1 class="doc-title">${esc(doc.title || '（无标题）')}</h1>
+        <div class="doc-byline">
+          <a href="#/u/${encodeURIComponent(author.username ?? '')}">${esc(author.displayName ?? author.username ?? '匿名')}</a>
+          · 更新于 ${esc(Fmt.timeAgo(doc.updatedAt))}
+          ${doc.template ? ` · 套过模板 ${esc(doc.template)}` : ''}
+        </div>
+        <div class="doc-actions">${docActionsHtml(doc, abilities)}</div>
+      </header>
+      ${warnings.length ? warningsHtml(warnings) : ''}
+      <div class="doc-body">${data.html ?? ''}</div>
+      ${interactHtml(doc, abilities)}
+      <div class="card doc-revisions" data-doc-revisions hidden></div>
+    </article>`;
+  // wiki 页多一条分类边栏。用后端给的 `nav` 判断，不在前端猜「这算不算 wiki」。
+  ui.app.innerHTML = data.nav
+    ? `<div class="doc-wiki-layout">${wikiNavHtml(data.nav, doc)}<div class="doc-wiki-main">${article}</div></div>`
+    : article;
+  ensureDelegate();
+  mountSandboxes(data);
+  if (data.nav) mountWikiNav();
+  loadPolls(doc.id).catch((error) => console.warn('[doc] 票数加载失败：', error));
+  // 公式渲染必须在 innerHTML 之后 —— renderMathInElement 只处理**已经在 DOM 里**的节点
+  // （论坛那边同样如此，见 views/timeline.js 的同名注释）。块里的 `$…$` 才不是一行源码。
+  ntRenderMath($('.doc-body'));
+}
+
+/** 阅读页：`#/doc/:id`。 */
+async function viewDoc(id) {
+  leaveDocPage();
+  await loadMeta();
+  docState.viewing = id;
+  docState.editor = null;
+  renderDoc(await api(`/api/docs/${id}`));
+}
+
+/* ------------------------------------------------------------------ */
+/* Wiki 多页面                                                         */
+/* ------------------------------------------------------------------ */
+
+/**
+ * `#/wiki/<标题>` —— `[[双链]]` 的落点。
+ *
+ * 有这一页就按阅读页渲染（外加「编辑这一页」）；没有就给出**建这一页**的按钮。
+ * 「没有」与「你看不见」在这里是同一句话（后端 `getWikiPage` 对看不见的也回 found:false），
+ * 不然一个私有页面的存在就泄漏了。
+ */
+async function viewWiki(name, query = new URLSearchParams()) {
+  leaveDocPage();
+  await loadMeta();
+  const title = String(name ?? '').trim();
+  const found = await api(`/api/docs/wiki/${encodeURIComponent(title)}`);
+  if (found?.found && found.doc) {
+    docState.viewing = found.doc.id;
+    docState.editor = null;
+    renderDoc(found);
+    return;
+  }
+  docState.viewing = null;
+  docState.editor = null;
+  // 页面不存在时边栏照给：wiki 的意义就是「从目录里换个地方继续看」，
+  // 停在一页空白上就没法走了（`found:false` 的响应里也带 `nav`）。
+  ui.app.innerHTML = `<div class="doc-wiki-layout">${wikiNavHtml(found?.nav, null)}<div class="doc-wiki-main">
+    <div class="card doc-panel">
+      <div class="card-head"><span class="card-title">⧉ ${esc(title || '（空标题）')}</span><span class="hint">Wiki 页面</span></div>
+      <div class="doc-hint">这一页还不存在。${state.me ? `建好之后它就是一页空白的 wiki，别的页面用 [[${esc(title)}]] 就能链过来。` : '登录之后可以把它建出来。'}</div>
+      <div class="doc-actions">
+        ${state.me ? `<button class="btn btn-sm btn-primary" type="button" data-doc-action="wiki-open" data-wiki-name="${esc(title)}">建这一页</button>` : '<a class="btn btn-sm" href="#/login">去登录</a>'}
+        <a class="btn btn-sm" href="#/docs">回积木帖</a>
+      </div>
+    </div>
+  </div></div>`;
+  ensureDelegate();
+  mountWikiNav();
+  if (query.get('create') === '1' && state.me) {
+    // 从双链点进来的「建这一页」就一步到位：直接落进编辑器，不用再点一次。
+    await openWikiPage(title);
+  }
+}
+
+/** 建（或打开）一页 wiki 然后进编辑器 —— 已经有了就只是打开。 */
+async function openWikiPage(name) {
+  const title = String(name ?? '').trim();
+  if (!title) return;
+  const page = await api(`/api/docs/wiki/${encodeURIComponent(title)}`, { method: 'POST', body: { scope: 'public' } });
+  toast(page.created ? '这一页建好了，开始写吧' : '这一页已经有了，直接打开');
+  return navigate(`/doc/${page.doc.id}/edit`);
+}
+
+/* ------------------------------------------------------------------ */
+/* 编辑器                                                              */
+/* ------------------------------------------------------------------ */
+
+function blockCardHtml(block, index, blocks) {
+  const def = typeDef(block.type);
+  const prev = blocks[index - 1]?.blockId ?? null;
+  const next = blocks[index + 1]?.blockId ?? null;
+  const id = esc(block.blockId);
+  const fields = def
+    ? Blocks.formHtml(def, block.props, `doc-${block.blockId}`)
+    : `<div class="doc-hint">这种块类型（${esc(block.type)}）现在不在注册表里，填什么都不会被渲染。</div>`;
+  return `<div class="doc-block-card" data-doc-card="${id}">
+    <div class="doc-block-head">
+      <span class="doc-block-title">${esc(def?.icon ?? '▢')} ${esc(Blocks.summarize(block, def))} <code class="doc-code">${id}</code></span>
+      <span class="doc-actions">
+        <button class="btn btn-sm btn-ghost" type="button" data-doc-action="up" data-block-id="${id}"${prev ? '' : ' disabled'}>↑</button>
+        <button class="btn btn-sm btn-ghost" type="button" data-doc-action="down" data-block-id="${id}"${next ? '' : ' disabled'}>↓</button>
+        <button class="btn btn-sm btn-ghost" type="button" data-doc-action="block-delete" data-block-id="${id}">删除</button>
+        <button class="btn btn-sm btn-primary" type="button" data-doc-action="block-save" data-block-id="${id}">保存本块</button>
+      </span>
+    </div>
+    ${fields}
+    ${Blocks.sourceHtml(block)}
+    <div class="doc-actions doc-block-foot">
+      <button class="btn btn-sm btn-primary" type="button" data-doc-action="block-save" data-block-id="${id}">保存本块</button>
+      <span class="doc-hint">字段填完点这里 —— 表单一长，右上角那个按钮就滚出屏幕了，所以底下再放一个。</span>
+    </div>
+  </div>`;
+}
+
+function blocksEditorHtml(blocks) {
+  const cards = blocks.map((block, index) => blockCardHtml(block, index, blocks)).join('');
+  return `<div class="card doc-panel doc-howto">
+      <div class="card-head"><span class="card-title">🧱 积木模式：四步</span><span class="hint">这张卡是说明书，不参与正文</span></div>
+      <ol class="doc-steps">
+        <li><span class="doc-step-no">1</span>上面的<strong>标题 / 谁可以看</strong>改完，点那张卡里的「保存标题与范围」。</li>
+        <li><span class="doc-step-no">2</span>滚到最下面「➕ 插入一块」选一种类型 —— 新块加在<strong>末尾</strong>，再用块头的 ↑ ↓ 挪到想要的位置。</li>
+        <li><span class="doc-step-no">3</span>填完一块点<strong>那一块自己的「保存本块」</strong>：块是一块一块存的，这里没有「保存全文」。</li>
+        <li><span class="doc-step-no">4</span>要直接改数据就展开块里的「源码」；要把两块串起来就用「块间联动（进阶）」。</li>
+      </ol>
+    </div>
+    <div class="doc-editor">
+      ${
+        cards ||
+        `<div class="card">${emptyHtml('🧱', '这篇还没有块', '从下面的「插入一块」开始，或者切到 Markdown 模式贴一篇进来')}</div>`
+      }
+    </div>
+    <div class="card doc-panel">
+      <div class="card-head"><span class="card-title">➕ 插入一块</span><span class="hint">加在末尾，插好再往上挪</span></div>
+      <div class="doc-actions">
+        <select class="doc-input doc-select" data-doc-insert-type>
+          ${docState.types.map((type) => `<option value="${esc(type.name)}">${esc(type.icon ?? '')} ${esc(type.label ?? type.name)}</option>`).join('')}
+        </select>
+        <button class="btn btn-sm btn-primary" type="button" data-doc-action="insert">加一块</button>
+        <a class="btn btn-sm btn-ghost" href="#/blocks">想自己编一种块？看块类型表</a>
+      </div>
+    </div>`;
+}
+
+function markdownEditorHtml(markdown) {
+  // `name="content"` 不是装饰：`NotesAgent.createTextareaAdapter()` 就是按 `#content`
+  // 或 `[name="content"]` 找编辑区的，改了它 AI 抽屉就挂不上去。
+  return `<div class="card doc-panel">
+    <div class="card-head"><span class="card-title">📝 Markdown 模式</span><span class="hint">右边跟着打字实时更新；保存会把整篇的块换成这份 Markdown 解析出来的块</span></div>
+    <div class="doc-md-grid">
+      <div class="doc-md-edit" id="docMdHost">
+        <textarea class="doc-input doc-textarea doc-md" name="content" data-doc-markdown rows="18" spellcheck="false">${esc(markdown ?? '')}</textarea>
+      </div>
+      <div class="doc-md-side">
+        <div class="doc-md-preview" data-doc-preview><div class="md"><span class="hint">开始打字就有预览。</span></div></div>
+        <div id="docNotesMount"></div>
+      </div>
+    </div>
+    <div class="doc-actions">
+      <button class="btn btn-sm btn-primary" type="button" data-doc-action="md-save">保存 Markdown</button>
+      <button class="btn btn-sm btn-ghost" type="button" data-doc-action="md-reload">重新拉取</button>
+      <span class="doc-hint" data-doc-md-status></span>
+    </div>
+    <div class="doc-hint">支持标题 / 段落 / 列表 / 代码围栏 / 表格 / $$公式$$ / 图片 / 引用 / [[双链]]，以及 \`\`\`doc:poll 这种结构化块（由结构化块自己写的会原样回来）。</div>
+  </div>`;
+}
+
+/**
+ * Markdown 模式的两件外挂：实时预览 + 现有的 AI 抽屉。
+ *
+ * 预览复用站点既有的 `POST /api/markdown/preview`（compose 的「预览」按钮走的就是
+ * 它，LaTeX 也在这一层渲染），只是这里改成**防抖自动跑**，不需要点按钮。
+ * AI 抽屉复用 `/notes-panel.js` 的 `window.NotesAgent.attach`（与 compose 同一份），
+ * 所以「AI 改文本」的能力是白捡的，没有第二份实现。
+ *
+ * 两个都**只做锦上添花**：拿不到就把原因写在状态里，绝不让编辑器本身挂掉。
+ */
+function mountMarkdownTools() {
+  const textarea = $('[data-doc-markdown]');
+  const box = $('[data-doc-preview] .md');
+  const status = $('[data-doc-md-status]');
+
+  if (textarea && box) {
+    const paint = async () => {
+      const text = textarea.value ?? '';
+      if (text.trim() === '') {
+        box.innerHTML = '<span class="hint">开始打字就有预览。</span>';
+        return;
+      }
+      try {
+        const { html } = await api('/api/markdown/preview', { method: 'POST', body: { content: text } });
+        box.innerHTML = html || '<span class="hint">（空内容）</span>';
+        // LaTeX 走的是站点原本那一套（离线 KaTeX，见 views/notes.js）。
+        // 服务端只吐 `$…$` 原文，公式得在 innerHTML 之后才排得出来。
+        ntRenderMath(box);
+      } catch (error) {
+        box.innerHTML = `<span class="hint">预览渲染失败：${esc(error.message)}</span>`;
+      }
+    };
+    if (typeof textarea.addEventListener === 'function') {
+      textarea.addEventListener('input', () => {
+        if (mdPreviewTimer) clearTimeout(mdPreviewTimer);
+        mdPreviewTimer = setTimeout(() => {
+          mdPreviewTimer = null;
+          paint();
+        }, 400);
+      });
+    }
+    paint();
+  }
+
+  const mount = document.getElementById('docNotesMount');
+  const host = document.getElementById('docMdHost');
+  const agent = typeof window === 'undefined' ? null : window.NotesAgent;
+  if (!mount || !agent || typeof agent.attach !== 'function' || typeof agent.createTextareaAdapter !== 'function') {
+    if (status) status.textContent = mount ? 'AI 抽屉没加载（/notes-panel.js 不在）' : '';
+    return;
+  }
+  try {
+    mdNotesPanel = agent.attach({ mount, editor: agent.createTextareaAdapter(host) });
+  } catch (error) {
+    console.warn('[notes-agent] 积木编辑器挂载失败：', error);
+    mdNotesPanel = null;
+    if (status) status.textContent = 'AI 抽屉挂载失败，Markdown 编辑照常能用';
+  }
+}
+
+function toolboxHtml(doc) {
+  return `<div class="card doc-panel">
+    <div class="card-head"><span class="card-title">🧰 工具箱</span></div>
+    <div class="doc-actions">
+      <select class="doc-input doc-select" data-doc-template>
+        <option value="">选一个模板…</option>
+        ${docState.templates.map((item) => `<option value="${esc(item.key)}">${esc(item.title)}</option>`).join('')}
+      </select>
+      <button class="btn btn-sm" type="button" data-doc-action="apply-template">套用模板（替换全部块）</button>
+      <button class="btn btn-sm" type="button" data-doc-action="revisions">修订记录</button>
+      <button class="btn btn-sm" type="button" data-doc-action="export">导出 JSON</button>
+      <button class="btn btn-sm" type="button" data-doc-action="import-toggle">导入 JSON</button>
+      ${doc.anchorPostId ? `<a class="btn btn-sm btn-ghost" href="#/post/${esc(doc.anchorPostId)}">互动锚点</a>` : ''}
+      <button class="btn btn-sm btn-ghost" type="button" data-doc-action="delete">删除这篇</button>
+    </div>
+    <form class="doc-new" data-doc-form="import" hidden>
+      <textarea class="doc-input doc-textarea" name="payload" rows="6" placeholder="把导出的 JSON 贴进来"></textarea>
+      <div class="doc-new-row">
+        <select class="doc-input doc-select" name="scope">${scopeOptionsHtml('private')}</select>
+        <button class="btn btn-sm btn-primary" type="submit">导入成新的一篇</button>
+      </div>
+    </form>
+  </div>`;
+}
+
+function renderEditor() {
+  const editor = docState.editor;
+  const doc = editor.data.doc ?? {};
+  const blocks = editor.data.blocks ?? [];
+  ui.app.innerHTML = `
+    <div class="card doc-panel">
+      <div class="card-head">
+        <span class="card-title">✏️ 编辑「${esc(doc.title || '无标题')}」</span>
+        <a class="tag" href="#/doc/${esc(doc.id)}">看阅读页</a>
+      </div>
+      <div class="doc-meta">
+        <label class="doc-field"><span class="doc-field-label">标题</span>
+          <input class="doc-input" data-doc-title maxlength="120" value="${esc(doc.title ?? '')}">
+        </label>
+        <label class="doc-field"><span class="doc-field-label">谁可以看</span>
+          <select class="doc-input doc-select" data-doc-scope>${scopeOptionsHtml(doc.scope)}</select>
+        </label>
+      </div>
+      <div class="doc-actions">
+        <button class="btn btn-sm btn-primary" type="button" data-doc-action="save-meta">保存标题与范围</button>
+      </div>
+      <div class="doc-tabs">
+        <button class="doc-tab${editor.mode === 'blocks' ? ' doc-tab-on' : ''}" type="button" data-doc-tab="blocks">🧱 积木模式</button>
+        <button class="doc-tab${editor.mode === 'markdown' ? ' doc-tab-on' : ''}" type="button" data-doc-tab="markdown">📝 Markdown 模式</button>
+      </div>
+    </div>
+    ${editor.mode === 'markdown' ? markdownEditorHtml(editor.markdown) : blocksEditorHtml(blocks)}
+    ${toolboxHtml(doc)}
+    <div class="card doc-revisions" data-doc-revisions hidden></div>`;
+  ensureDelegate();
+  if (editor.mode === 'markdown') mountMarkdownTools();
+}
+
+/** 保存一次之后统一用后端的新形状重画 —— 永不本地推定服务端状态。 */
+function absorb(data) {
+  docState.editor.data = data;
+  renderEditor();
+}
+
+async function saveMeta() {
+  const editor = docState.editor;
+  const title = $('[data-doc-title]')?.value ?? '';
+  const scope = $('[data-doc-scope]')?.value ?? 'public';
+  absorb(
+    await api(`/api/docs/${editor.id}`, {
+      method: 'PUT',
+      body: { title, scope, template: editor.data.doc?.template ?? '' },
+    }),
+  );
+  toast('标题和可见范围存好了');
+}
+
+/**
+ * 保存「源码」框里的 props JSON（进阶入口）。
+ *
+ * 与 `saveBlock` 的区别只有一处：值从源码框来，不从表单来。
+ * 坏 JSON **不清空、不静默** —— 报一条人话把用户的输入留在原地。
+ */
+async function saveBlockSource(blockId) {
+  const editor = docState.editor;
+  const card = $(`[data-doc-card="${blockId}"]`);
+  if (!editor || !card) return;
+  const props = Blocks.readSource(card);
+  if (props === null) {
+    toast('源码不是合法的 JSON 对象（要写成 { "字段": 值 } 这样）', 'error');
+    return;
+  }
+  const result = await api(`/api/docs/${editor.id}/blocks/${blockId}`, { method: 'PUT', body: { props } });
+  const fresh = (editor.data.blocks ?? []).map((item) => (item.blockId === blockId ? result.block : item));
+  absorb({ ...editor.data, blocks: fresh });
+  toast(`${blockId} 的源码存好了`);
+}
+
+async function saveBlock(blockId) {  const editor = docState.editor;
+  const card = $(`[data-doc-card="${blockId}"]`);
+  const block = (editor.data.blocks ?? []).find((item) => item.blockId === blockId);
+  if (!card || !block) return;
+  const def = typeDef(block.type);
+  const { props, problems } = Blocks.readForm(card, def);
+  if (problems.length > 0) {
+    toast(problems[0], 'error');
+    return; // 不静默丢掉用户敲进去的东西，让他自己改
+  }
+  const result = await api(`/api/docs/${editor.id}/blocks/${blockId}`, { method: 'PUT', body: { props } });
+  const fresh = (editor.data.blocks ?? []).map((item) => (item.blockId === blockId ? result.block : item));
+  absorb({ ...editor.data, blocks: fresh });
+  toast(`${blockId} 保存好了`);
+}
+
+async function moveBlock(blockId, direction) {
+  const editor = docState.editor;
+  const blocks = editor.data.blocks ?? [];
+  const index = blocks.findIndex((item) => item.blockId === blockId);
+  if (index < 0) return;
+  const neighbour = direction === 'up' ? blocks[index - 1] : blocks[index + 1];
+  if (!neighbour) return;
+  const body = direction === 'up' ? { before: neighbour.blockId } : { after: neighbour.blockId };
+  const result = await api(`/api/docs/${editor.id}/blocks/${blockId}/move`, { method: 'POST', body });
+  absorb({ ...editor.data, blocks: result.blocks ?? [] });
+}
+
+async function insertBlock() {
+  const editor = docState.editor;
+  const name = $('[data-doc-insert-type]')?.value ?? '';
+  const def = typeDef(name);
+  if (!def) {
+    toast('选一个块类型', 'error');
+    return;
+  }
+  const result = await api(`/api/docs/${editor.id}/blocks`, {
+    method: 'POST',
+    body: { type: name, props: Blocks.starterProps(def) },
+  });
+  absorb({ ...editor.data, blocks: result.blocks ?? [] });
+  toast('加了一块，填完记得保存本块');
+}
+
+async function loadMarkdown() {
+  const editor = docState.editor;
+  const data = await api(`/api/docs/${editor.id}/markdown`);
+  editor.markdown = data.markdown ?? '';
+  renderEditor();
+}
+
+async function saveMarkdown() {
+  const editor = docState.editor;
+  const markdown = $('[data-doc-markdown]')?.value ?? '';
+  absorb(await api(`/api/docs/${editor.id}/markdown`, { method: 'PUT', body: { markdown } }));
+  toast('整篇按 Markdown 重写了');
+}
+
+async function showRevisions() {
+  const id = docState.editor ? docState.editor.id : docState.viewing;
+  const data = await api(`/api/docs/${id}/revisions`);
+  const revisions = data.revisions ?? [];
+  const panel = $('[data-doc-revisions]');
+  if (!panel) return;
+  panel.hidden = false;
+  panel.innerHTML = `
+    <div class="card-head"><span class="card-title">🕓 修订记录</span><span class="hint">最近 ${revisions.length} 条</span></div>
+    <ul class="doc-revision-list">${revisions
+      .map(
+        (item) => `<li class="doc-revision">
+          <span class="doc-revision-head">r${esc(item.revision)} · ${esc(item.reasonLabel)} · ${esc(Fmt.timeAgo(item.createdAt))}${
+            item.author ? ` · ${esc(item.author.displayName)}` : ''
+          }</span>
+          <button class="btn btn-sm btn-ghost" type="button" data-doc-action="rollback" data-revision="${esc(item.revision)}">回滚到这一版</button>
+        </li>`,
+      )
+      .join('')}</ul>
+    <div class="doc-hint">回滚本身也会记一条修订，所以滚错了还能再滚回来。</div>`;
+  ensureDelegate();
+}
+
+async function rollback(revision) {
+  const editor = docState.editor;
+  if (!editor) return;
+  const data = await api(`/api/docs/${editor.id}/rollback`, { method: 'POST', body: { revision } });
+  absorb(data);
+  toast(`回到 r${revision} 了`);
+}
+
+async function exportDoc(id) {
+  const payload = await api(`/api/docs/${id}/export`);
+  download(`doc-${id}.json`, payload);
+}
+
+async function deleteDoc(id) {
+  if (!confirm('确定删掉这篇吗？影子帖子会一起软删，点赞收藏的数据不会丢。')) return;
+  await api(`/api/docs/${id}`, { method: 'DELETE' });
+  toast('删掉了');
+  navigate('/docs');
+}
+
+/** 编辑器：`#/doc/:id/edit`。 */
+async function viewDocEdit(id, query = new URLSearchParams()) {
+  leaveDocPage();
+  await loadMeta();
+  const data = await api(`/api/docs/${id}`);
+  if (!data.abilities?.canEdit) {
+    toast('只有作者和站务能编辑这篇文档', 'error');
+    return navigate(`/doc/${id}`);
+  }
+  docState.editor = { id, data, mode: query.get('mode') === 'markdown' ? 'markdown' : 'blocks', markdown: '' };
+  if (docState.editor.mode === 'markdown') return loadMarkdown();
+  renderEditor();
+}
+
+/* ------------------------------------------------------------------ */
+/* 块类型表                                                            */
+/* ------------------------------------------------------------------ */
+
+/** 块类型表：`#/blocks`。内置的只读，自定义的可以在这里注册。 */
+async function viewBlocks() {
+  leaveDocPage();
+  docState.editor = null;
+  await loadMeta(true);
+  const builtin = docState.types.filter((type) => type.builtin);
+  const custom = docState.types.filter((type) => !type.builtin);
+  const card = (type, mark) => `<div class="card doc-type-card">
+    <div class="card-head">
+      <span class="card-title">${esc(type.icon ?? '▢')} ${esc(type.label ?? type.name)}</span>
+      <span class="doc-badge">${mark} · v${esc(type.version ?? 1)} · ${esc(type.rendererKind ?? 'declarative')}</span>
+    </div>
+    <code class="doc-code">${esc(type.name)}</code>
+    ${Blocks.schemaHtml(type)}
+  </div>`;
+
+  ui.app.innerHTML = `
+    <div class="card doc-panel">
+      <div class="card-head"><span class="card-title">🧱 块类型表</span><span class="hint">${docState.types.length} 种</span></div>
+      <div class="doc-hint">新增一种块类型<strong>不用改核心代码</strong>：填一份 schema 就能在编辑器里出现，也能被文档引用。内置的 ${builtin.length} 种不可覆盖。</div>
+      <form class="doc-new" data-doc-form="register">
+        <div class="doc-new-row">
+          <input class="doc-input" name="name" maxlength="32" placeholder="类型名（小写字母开头，如 timeline）">
+          <input class="doc-input" name="label" maxlength="40" placeholder="中文名">
+          <input class="doc-input" name="icon" maxlength="8" placeholder="图标">
+          <select class="doc-input doc-select" name="rendererKind" data-doc-type-kind>
+            <option value="declarative">declarative（只靠 schema 渲染）</option>
+            <option value="sandbox">sandbox（在沙箱里跑代码）</option>
+          </select>
+        </div>
+        <label class="doc-field"><span class="doc-field-label">props schema（JSON）</span>
+          <textarea class="doc-input doc-textarea" name="propsSchema" data-doc-type-schema rows="5" spellcheck="false">{"text": {"type": "string", "required": true, "label": "内容"}}</textarea>
+        </label>
+        <label class="doc-field"><span class="doc-field-label">渲染模板（只对 declarative 生效，HTML，用 \`{{字段}}\` 取值）</span>
+          <textarea class="doc-input doc-textarea" name="renderer" data-doc-type-renderer rows="4" spellcheck="false" placeholder="&lt;h3 class=&quot;doc-tpl-title&quot;&gt;{{text}}&lt;/h3&gt;"></textarea>
+          <span class="doc-hint" data-doc-type-note></span>
+        </label>
+        <div class="doc-actions">
+          ${state.me ? '<button class="btn btn-sm btn-primary" type="submit">注册</button>' : '<a class="btn btn-sm" href="#/login">登录后可以注册</a>'}
+        </div>
+      </form>
+    </div>
+    ${guideHtml()}
+    <div class="doc-grid">${builtin.map((type) => card(type, '内置')).join('')}</div>
+    ${custom.length ? `<div class="doc-grid">${custom.map((type) => card(type, '自定义')).join('')}</div>` : ''}`;
+  ensureDelegate();
+  mountTypeForm();
+}
+
+/* 注册表单的两个默认值。差别只有一处：**沙箱类型必须声明一个 code 字段** ——
+ * `sandboxInner()` 就是读 `props.code` 来当程序正文的，schema 里没有它，
+ * 块建出来只会是一句「这个积木还没写代码」，用户看不出是哪里没填。 */
+const DECLARATIVE_SCHEMA_SAMPLE = `{
+  "text": { "type": "string", "required": true, "label": "内容" }
+}`;
+
+const SANDBOX_SCHEMA_SAMPLE = `{
+  "app": { "type": "string", "singleLine": true, "maxLength": 40, "label": "应用名" },
+  "code": { "type": "string", "maxLength": 20000, "label": "代码（HTML / JS）" }
+}`;
+
+const DECLARATIVE_NOTE =
+  '留空就渲染成「字段名 → 值」的表；填了就按模板出 HTML。取值一律转义，模板里的 script / 内联事件 / javascript: 会被剥掉 —— 模板会出现在每个访客的页面上。';
+
+const SANDBOX_NOTE =
+  '沙箱类型不用模板：上面 schema 里声明的那个 code 字段就是程序正文，它在访客浏览器的玻璃房里跑（沙箱 API 见下面那一节）。';
+
+/** 选 declarative / sandbox 时把默认值和说明换掉 —— 两条路的岔口就在这一个下拉框。 */
+function mountTypeForm() {
+  const select = $('[data-doc-type-kind]');
+  const schema = $('[data-doc-type-schema]');
+  const renderer = $('[data-doc-type-renderer]');
+  const note = $('[data-doc-type-note]');
+  const apply = () => {
+    const sandbox = String(select?.value ?? '') === 'sandbox';
+    if (schema) schema.value = sandbox ? SANDBOX_SCHEMA_SAMPLE : DECLARATIVE_SCHEMA_SAMPLE;
+    if (note) note.textContent = sandbox ? SANDBOX_NOTE : DECLARATIVE_NOTE;
+    if (renderer && sandbox) {
+      renderer.value = '';
+      renderer.disabled = true;
+    } else if (renderer) {
+      renderer.disabled = false;
+    }
+  };
+  apply();
+  if (typeof select?.addEventListener === 'function') select.addEventListener('change', apply);
+}
+
+/**
+ * 「怎么自己编一个块」—— 这一页存在的理由就是回答这个问题。
+ *
+ * 两条路，都要真的能跑：
+ *   声明式（schema + 渲染模板）＝ 把已有字段换个样子摆出来；
+ *   沙箱（sandbox + code）＝ 真的写一段程序，在访客浏览器的玻璃房里跑。
+ * 底下还摊开块的**底层形状**：要手写或程序化生成积木时，看到的就这三样。
+ */
+function guideHtml() {
+  return `<div class="card doc-panel doc-guide">
+    <div class="card-head"><span class="card-title">🧩 怎么自己编一个块</span><span class="hint">两条路，都在这个页面上能试</span></div>
+    <ol class="doc-guide-list">
+      <li><strong>声明式块</strong>：上面填一份 props schema（字段名 → 类型 / 必填 / 上限），再给一段渲染模板，HTML 里用 <code class="doc-code">{{字段名}}</code> 取值。
+        适合「把已有字段换个样子摆出来」——时间线、卡片、徽章都是这种。注册完在文档编辑器的「插入一块」里就能选到。</li>
+      <li><strong>沙箱块</strong>：<code class="doc-code">rendererKind</code> 选 sandbox，schema 里声明一个 <code class="doc-code">code</code> 字段，块里写的 HTML/JS 会在一个<strong>拿不到本站身份的 iframe</strong> 里跑
+        （<code class="doc-code">sandbox="allow-scripts"</code>，没有 <code class="doc-code">allow-same-origin</code>，CSP 是 <code class="doc-code">default-src 'none'</code>）。
+        <strong>这才是能写功能的那条路</strong>：JSON 只当数据，行为写在 JS 里（见下）。</li>
+    </ol>
+    <div class="doc-guide-code"><span class="doc-hint">沙箱里能用的全部东西（没有别的了）：</span>
+      <textarea class="doc-input doc-textarea doc-src-box" data-doc-guide-sample rows="9" spellcheck="false" readonly>${esc(GUIDE_SNIPPET)}</textarea>
+    </div>
+    <div class="doc-hint">沙箱 API 一览：<code class="doc-code">Sandbox.props</code>（本块字段）、<code class="doc-code">Sandbox.doc()</code>（文档元信息）、
+      <code class="doc-code">Sandbox.blocks()</code>（正文里其它块，按别的块算东西靠它）、<code class="doc-code">Sandbox.viewer()</code>（谁在看）、
+      <code class="doc-code">Sandbox.state.get() / set(value)</code>（<strong>存在服务端的持久状态</strong>，刷新、换个访客都还在）、
+      <code class="doc-code">Sandbox.value(v)</code>（交回宿主给联动用）、<code class="doc-code">Sandbox.resize()</code>。
+      这些全是 Promise；每次调用都是一次可审计的能力申请，宿主有权拒绝，被拒时 Promise 会 reject。</div>
+    <div class="doc-hint">块的底层形状就三样：<code class="doc-code">{ block_id: 'b3', type: '块类型名', version: 1, props: { … } }</code>。
+      它在 Markdown 里就是一围栏 —— <code class="doc-code">\`\`\`doc:块类型名</code> 后面跟一份 props JSON，导出再导入不会丢。
+      想让 A 块每次渲染都取 B 块的值，在 A 的 props 里写 <code class="doc-code">"bind": {"from": "b3", "field": "text"}</code>（或直接用块卡片上的「联动」两个框）。
+      任何一块都能在编辑器里展开「源码」直接改 JSON。</div>
+    <div class="doc-hint">写多页面 wiki 时，双链的写法是 <code class="doc-code">[[目标页]]</code> 或 <code class="doc-code">[[目标页|显示字]]</code>：<strong>独占一行</strong>会变成一个「双链」块，夹在句子中间就当场变成一个链接。
+      两种写法都会落到 <code class="doc-code">#/wiki/目标页</code> —— 还没建过的页也给一个「建这一页」，不是死链。</div>
+    <div class="doc-hint">不想要模板也行：<a href="#/docs">新建一篇</a>选「空白文档」，再在编辑器里「插入一块」选 <strong>⚙ 小应用</strong>，把代码填进去就是一篇从零写起的功能文档。</div>
+  </div>`;
+}
+
+const GUIDE_SNIPPET = `<!-- Sandbox.props 是这个块的全部字段；Sandbox.resize() 让宿主跟着内容长高。 -->
+<h3>打卡本</h3>
+<p id="who">…</p>
+<button id="ping">今天打一次卡</button>
+<ul id="log"></ul>
+<script>
+  (async () => {
+    // 想知道什么就申请什么 —— 沙箱是不透明源，自己读不到任何本站信息。
+    const me = await Sandbox.viewer();   // { loggedIn, username, displayName, staff }
+    const doc = await Sandbox.doc();     // { id, title, kind, author, updatedAt }
+    document.getElementById('who').textContent =
+      (me.loggedIn ? '@' + me.username : '（未登录：看得到，存不下）') + ' 正在看《' + doc.title + '》';
+
+    // 状态存在服务端（按「块 + 我」各一份），刷新页面、明天再来都还在。
+    let days = (await Sandbox.state.get()) || [];
+    const paint = () => {
+      document.getElementById('log').innerHTML = days.map((d) => '<li>' + d + '</li>').join('');
+      Sandbox.resize();
+    };
+    document.getElementById('ping').onclick = async () => {
+      const today = new Date().toISOString().slice(0, 10);
+      if (days.indexOf(today) >= 0) return;
+      days = days.concat([today]);
+      await Sandbox.state.set(days);
+      paint();
+    };
+    paint();
+  })();
+</script>`;
+
+/* ------------------------------------------------------------------ */
+/* 事件（挂在 ui.app 上，只挂一次）                                     */
+/* ------------------------------------------------------------------ */
+
+let delegated = false;
+
+function ensureDelegate() {
+  if (delegated) return;
+  delegated = true;
+  ui.app.addEventListener('click', onAppClick);
+  ui.app.addEventListener('submit', onAppSubmit);
+}
+
+function findAction(target) {
+  return typeof target?.closest === 'function' ? target.closest('[data-doc-action]') : null;
+}
+
+async function onAppClick(event) {
+  // Tab 切换先判：它不是一个「动作」，但它也是 click。
+  const tab = typeof event.target?.closest === 'function' ? event.target.closest('[data-doc-tab]') : null;
+  if (tab) return onTabClick(tab.dataset.docTab);
+  const node = findAction(event.target);
+  if (!node) return;
+  const action = node.dataset.docAction;
+  const blockId = node.dataset.blockId;
+  const editor = docState.editor;
+  const currentId = docState.editor ? docState.editor.id : docState.viewing;
+  const withBusy = (task) => withButtonBusy(node, task).catch((error) => toastError(error));
+
+  if (action === 'new') {
+    const panel = $('[data-doc-form="create"]');
+    if (panel) panel.hidden = false;
+    return;
+  }
+  if (action === 'pick-template') {
+    // 模板卡片只做两件事：点亮自己、把键写进隐藏框 —— 真正的「套模板」在提交时做。
+    const key = node.dataset.template ?? '';
+    const form = typeof node.closest === 'function' ? node.closest('[data-doc-form="create"]') : null;
+    const picks = typeof form?.querySelectorAll === 'function' ? form.querySelectorAll('[data-doc-action="pick-template"]') : [];
+    for (const item of picks) item.classList?.toggle('is-on', item === node);
+    const field = form?.querySelector?.('[name="template"]');
+    if (field) field.value = key;
+    return;
+  }
+  if (action === 'new-cancel') {
+    const panel = $('[data-doc-form="create"]');
+    if (panel) panel.hidden = true;
+    return;
+  }
+  if (action === 'import-toggle') {
+    const panel = $('[data-doc-form="import"]');
+    if (panel) panel.hidden = !panel.hidden;
+    return;
+  }
+  if (action === 'block-save') return withBusy(() => saveBlock(blockId));
+  if (action === 'source-save') return withBusy(() => saveBlockSource(blockId));
+  if (action === 'wiki-open') return withBusy(() => openWikiPage(node.dataset.wikiName));
+  if (action === 'wiki-new') {
+    const name = String($('[data-wiki-new-name]')?.value ?? '').trim();
+    if (!name) {
+      toast('先写一个页面标题', 'error');
+      return;
+    }
+    return withBusy(() => openWikiPage(name));
+  }
+  if (action === 'wiki-cat') {
+    const id = docState.viewing;
+    const category = String($('[data-wiki-category]')?.value ?? '');
+    return withBusy(async () => {
+      await api(`/api/docs/${id}/wiki`, { method: 'PUT', body: { category } });
+      toast(category ? `归到「${category}」了` : '取消分类了');
+      // 边栏顺序跟着分类变，整页重画最省事（nav 与正文是同一个响应里的东西）。
+      await viewDoc(id);
+    });
+  }
+  if (action === 'poll-vote') return withBusy(() => votePoll(node));
+  if (action === 'up') return withBusy(() => moveBlock(blockId, 'up'));
+  if (action === 'down') return withBusy(() => moveBlock(blockId, 'down'));
+  if (action === 'block-delete') {
+    if (!confirm(`删掉 ${blockId} 吗？`)) return;
+    return withBusy(async () => {
+      await api(`/api/docs/${currentId}/blocks/${blockId}`, { method: 'DELETE' });
+      absorb({ ...editor.data, blocks: (editor.data.blocks ?? []).filter((item) => item.blockId !== blockId) });
+    });
+  }
+  if (action === 'insert') return withBusy(insertBlock);
+  if (action === 'save-meta') return withBusy(saveMeta);
+  if (action === 'md-save') return withBusy(saveMarkdown);
+  if (action === 'md-reload') return withBusy(loadMarkdown);
+  if (action === 'apply-template') {
+    const key = $('[data-doc-template]')?.value ?? '';
+    if (!key) {
+      toast('先选一个模板', 'error');
+      return;
+    }
+    if (!confirm('套模板会把整篇现有的块换成模板的块（旧的会留在修订记录里）。继续吗？')) return;
+    return withBusy(async () => {
+      absorb(await api(`/api/docs/${currentId}/apply-template`, { method: 'POST', body: { key, mode: 'replace' } }));
+      toast('模板套好了');
+    });
+  }
+  if (action === 'revisions') return withBusy(() => showRevisions());
+  if (action === 'rollback') return withBusy(() => rollback(Number(node.dataset.revision)));
+  if (action === 'export') return withBusy(() => exportDoc(currentId));
+  if (action === 'delete') return withBusy(() => deleteDoc(currentId));
+}
+
+async function onAppSubmit(event) {
+  const form = event.target?.dataset?.docForm ? event.target : null;
+  if (!form) return;
+  event.preventDefault();
+  const values = formValues(form);
+  const button = form.querySelector('[type="submit"]');
+  await withButtonBusy(button, async () => {
+    try {
+      if (form.dataset.docForm === 'filter') {
+        const params = new URLSearchParams();
+        if (values.q) params.set('q', values.q);
+        if (values.kind) params.set('kind', values.kind);
+        if (values.mine) params.set('mine', '1');
+        return navigate(`/docs${params.toString() ? `?${params}` : ''}`);
+      }
+      if (form.dataset.docForm === 'create') {
+        const created = await api('/api/docs', {
+          method: 'POST',
+          body: { title: values.title, kind: values.kind, scope: values.scope, template: values.template },
+        });
+        toast('建好了，开始写吧');
+        return navigate(`/doc/${created.doc.id}/edit`);
+      }
+      if (form.dataset.docForm === 'import') {
+        let payload;
+        try {
+          payload = JSON.parse(values.payload ?? '');
+        } catch {
+          return toast('贴进来的不是合法 JSON', 'error');
+        }
+        const created = await api('/api/docs/meta/import', { method: 'POST', body: { payload, scope: values.scope } });
+        toast('导入好了');
+        return navigate(`/doc/${created.doc.id}/edit`);
+      }
+      if (form.dataset.docForm === 'register') {
+        let propsSchema;
+        try {
+          propsSchema = JSON.parse(values.propsSchema ?? '{}');
+        } catch {
+          return toast('props schema 不是合法 JSON', 'error');
+        }
+        // 渲染模板是可选的；写了就当 `renderer_json` 存下来（服务端会剥掉危险构造）。
+        const renderer = String(values.renderer ?? '').trim();
+        await api('/api/docs/meta/block-types', {
+          method: 'POST',
+          body: {
+            name: values.name,
+            label: values.label,
+            icon: values.icon,
+            rendererKind: values.rendererKind,
+            propsSchema,
+            renderer: renderer ? { html: renderer } : '',
+          },
+        });
+        toast('注册好了，去编辑器里就能用了');
+        return viewBlocks();
+      }
+      return undefined;
+    } catch (error) {
+      toastError(error);
+      return undefined;
+    }
+  });
+}
+
+/** 编辑器里的两个模式页签（切到 Markdown 时才真的去拉正文）。 */
+function onTabClick(mode) {
+  if (!docState.editor || docState.editor.mode === mode) return;
+  docState.editor.mode = mode;
+  if (mode === 'markdown') {
+    loadMarkdown().catch((error) => toastError(error));
+    return;
+  }
+  renderEditor();
+}
+
+// ── 导出 ──────────────────────────────────────────────────────────────
+export { viewDocs };
+export { viewDoc };
+export { viewWiki };
+export { viewDocEdit };
+export { viewBlocks };
+
+/* @hand-written */

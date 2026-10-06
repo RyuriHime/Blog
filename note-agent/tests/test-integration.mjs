@@ -5,7 +5,7 @@
  * 然后真起一次宿主服务，确认既有接口没被抢走、note-agent 的接口与面板脚本可用。
  */
 import { createChecker, toLocalPath } from './helpers/check.mjs';
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -13,10 +13,41 @@ import { spawn } from 'node:child_process';
 
 const { check, summary } = createChecker();
 const ROOT = new URL('../../', import.meta.url);
-const server = readFileSync(new URL('src/server.js', ROOT), 'utf8');
-const appJs = readFileSync(new URL('public/app.js', ROOT), 'utf8');
+
+/**
+ * 宿主源码/样式的**全部**内容，而不是某一个文件。
+ *
+ * v2 骨架把 `src/server.js`、`public/app.js`、`public/style.css` 拆成了薄壳
+ * （`style.css` 现在只有一串 `@import`），6 处胶水散到了各分片里。以前这里
+ * 分别只读那一个文件，于是断言要么查不到（红）、要么对着空文件（永远真）。
+ * 把整棵树拼起来，这些断言才回到它们本来的意思：**宿主里确实有这几行，
+ * 且没有第二份**。
+ */
+function readTree(dir, ext) {
+  const base = new URL(dir, ROOT);
+  let names = [];
+  try {
+    names = readdirSync(base, { recursive: true }).map(String);
+  } catch {
+    return '';
+  }
+  return names
+    .filter((name) => name.endsWith(ext))
+    .sort()
+    .map((name) => {
+      try {
+        return readFileSync(new URL(name.split('\\').join('/'), base), 'utf8');
+      } catch {
+        return '';
+      }
+    })
+    .join('\n');
+}
+
+const server = readTree('src/', '.js');
+const appJs = readTree('public/', '.js');
 const html = readFileSync(new URL('public/index.html', ROOT), 'utf8');
-const css = readFileSync(new URL('public/style.css', ROOT), 'utf8');
+const css = readTree('public/', '.css');
 
 check('server.js 只多了 1 行 note-agent import', (server.match(/from '\.\.\/note-agent\/src\/mount\.mjs'/g) ?? []).length === 1);
 check('server.js 挂载 note-agent 且排在 forum-ai 之后', server.indexOf('mountNoteAgent(') > server.indexOf('mountForumAi('));

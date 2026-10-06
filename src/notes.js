@@ -369,7 +369,15 @@ export function createNotes({
     const asset = await rawStatic(pathname);
     if (!asset) return false;
 
-    if (typeof resolveUser === 'function') {
+    /*
+     * `vendor/` 下全是第三方库（KaTeX / marked / turndown），是公开的库代码，
+     * 里面没有任何用户内容 —— 给它套登录门保护不了任何东西。
+     * 而动态首页是**公开**页面：未登录访客也要看到公式渲染，
+     * 所以这里放行 `/notes/vendor/**`，只对编辑器本体的资源维持登录门。
+     */
+    const isVendorAsset = pathname === `${prefix}/vendor` || pathname.startsWith(`${prefix}/vendor/`);
+
+    if (!isVendorAsset && typeof resolveUser === 'function') {
       let user = null;
       try {
         ({ user } = resolveUser(req));

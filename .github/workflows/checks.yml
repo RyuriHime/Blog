@@ -51,11 +51,36 @@ jobs:
       - name: 编码检查（中文有没有乱码 / U+FFFD）
         run: node scripts/check-encoding.mjs
 
+      # 骨架自检：五个业务模块能不能被单独拆掉、薄入口有没有变胖、
+      # 每张表是不是都有主。它会真的把模块目录临时改名再起一次服务器。
+      - name: 骨架自检（模块解耦 + 表归属 + 薄入口行数）
+        run: node scripts/check-skeleton.mjs
+
+      # 行为金标准：96 条固定请求的「状态码 + 响应结构」必须与 golden.json 一致。
+      # 这是重构/搬家时「用户能感知到的行为一个字都没变」的硬证据。
+      - name: 行为金标准（状态码 + 响应结构指纹）
+        run: node scripts/check-golden.mjs
+
       - name: 冒烟测试（起真服务，打一遍接口）
         run: node scripts/smoke.mjs
 
+      - name: AI 接口冒烟（AI_API_KEY 为空，只验状态码与结构）
+        run: node scripts/smoke-ai.mjs
+
+      # 动态（v2 的新形态）：可见范围四档、@提醒、配图校验、点赞、引用帖子、编辑与软删除。
+      # 这些是新增能力，不在金标准的覆盖范围内，所以单开一套。
+      - name: 动态接口冒烟（可见范围 / 配图 / 点赞 / 引用 / 编辑）
+        run: node scripts/feed-smoke.mjs
+
       - name: UI 契约检查（前端用到的元素和类名还在不在）
         run: node scripts/check-ui-contract.mjs
+
+      # 前端整页渲染冒烟：用最小 DOM 垫片 + 从真服务器采回来的假数据，
+      # 把 public/ 的入口 import 进来、把 21 个页面依次渲染一遍，
+      # 再模拟一次「编辑框重画」验证草稿 / 可见范围 / 引用编号没有丢。
+      # 它抓的是「搬家把函数体切坏了」「漏了一条 import」「状态没同步」这类只有真执行才炸的问题。
+      - name: 前端渲染冒烟（21 个页面 + 编辑框状态）
+        run: node scripts/check-frontend.mjs
 
       - name: 知识网络图 UI 检查
         run: node scripts/check-graph-ui.mjs

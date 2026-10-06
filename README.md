@@ -206,7 +206,7 @@ HOST=0.0.0.0 node src/server.js       # 允许局域网内其它设备访问
 | 跟随系统 | 按操作系统的深/浅色偏好自动选择，系统切换时页面实时跟随 |
 
 > 「黄色」有两种常见理解，所以一次给了两个：想要**暖黄深色**用「暖阳」，想要**亮黄/米黄浅色**用「奶黄」。
-> 不喜欢哪个直接从 `public/app.js` 的 `THEMES` 和 `public/style.css` 对应块里删掉即可。
+> 不喜欢哪个从 `public/core/theme.js` 的 `THEMES` 和 `public/css/00-themes.css` 的对应块里删掉即可。
 
 实现要点：
 
@@ -306,25 +306,44 @@ HOST=0.0.0.0 node src/server.js       # 允许局域网内其它设备访问
 forum/
 ├── start.cmd                    # Windows 一键启动（纯 ASCII + CRLF，见文末维护提示）
 ├── package.json                 # 只有 scripts / engines，没有 dependencies
+├── docs/
+│   ├── skeleton.md              # ★ 预铺骨架说明：目录布局 / 冻结契约 / 五路并行 / 怎么加功能
+│   └── superpowers/specs/       # 改造设计文档（spec）
 ├── src/
-│   ├── server.js                # HTTP 服务：路由、会话、鉴权、REST API、静态资源
+│   ├── server.js                # 薄入口（≤120 行）：装配 store / ctx / 模块 / 静态服务
 │   ├── store.js                 # 数据访问层（全部 SQL 集中在这里）
-│   ├── db.js                    # 建表 / 迁移 / 示例数据播种
-│   ├── dates.js                 # 自然周与日期工具（签到统计用）
-│   ├── markdown.js              # 服务端 Markdown 渲染（先转义再渲染，天然防 XSS）
-│   └── password.js              # scrypt 哈希与恒定时间比对
+│   ├── db.js                    # 门面：登记建表脚本 + 转出 openDatabase 与全部规则常量
+│   ├── core/                    # 框架层：路由表 / 上下文 / 守卫 / 响应形状 / 建表登记
+│   │   ├── router.js            #   route(method, pattern, handler) 注册表
+│   │   ├── context.js           #   ctx：模块能拿到的全部东西（唯一通信面）
+│   │   ├── tables.sql.js        #   18 张核心表的建表 SQL（与旧 SCHEMA 逐字节相同）
+│   │   ├── open-db.js           #   openDatabase()：建表 → 迁移 → 播种
+│   │   └── …                    #   http / guards / shape / static / sessions / paths
+│   └── modules/                 # 功能层：每个模块一个文件夹，互不 import
+│       ├── index.js             #   ★ 全仓库唯一列举模块的名册（MODULES）
+│       ├── core/                #   现有论坛本体（auth / posts / replies / 社交 / 管理）
+│       ├── feed/  doc/  ai/  team/  ui/   # 五路并行的空壳（见 docs/skeleton.md）
 ├── public/
 │   ├── index.html               # 页面外壳（顶栏 / 侧栏 / 挂载点）
-│   ├── style.css                # 深色主题、响应式布局、Markdown 排版
-│   └── app.js                   # 前端 SPA：hash 路由 + 视图渲染 + 交互
+│   ├── app.js                   # 薄入口（≤120 行）：只做 bootstrap
+│   ├── style.css                # 只剩 20 行 @import，按前缀顺序拼回原级联顺序
+│   ├── core/                    # 前端核心层：state / dom / api / router / theme / events …
+│   ├── views/                   # 页面：feed / user / post / compose / ai / admin / notes / graph …
+│   └── css/                     # 20 个样式分片（00-themes … 97-notes）
 ├── scripts/
 │   ├── smoke.mjs                # 后端端到端冒烟测试（242 项）
-│   ├── check-ui-contract.mjs    # 前端契约检查：CSS 类名 + API 字段 + 主题/头像/角色/私信结构（175 项）
+│   ├── check-golden.mjs         # ★ 行为金标准：96 条请求的状态码 + 响应结构指纹
+│   ├── check-skeleton.mjs       # ★ 骨架自检：模块解耦证明 + 薄入口行数
+│   ├── check-ui-contract.mjs    # 前端契约检查：CSS 类名 + API 字段 + 主题/头像/角色/私信结构
 │   ├── check-encoding.mjs       # 源码编码体检（BOM / 乱码 / 批处理换行与 ASCII）
+│   ├── check-graph-ui.mjs / check-notes-ui.mjs / notes-smoke.mjs / smoke-ai.mjs
 │   ├── fix-cmd.mjs              # 把 .cmd 规范化为 CRLF + 去 BOM
 │   └── reset-db.mjs             # 清库并重新播种（危险操作，必须加 --yes）
 └── data/forum.db                # SQLite 数据文件（首次运行自动生成）
 ```
+
+> 想动手改代码，先读 **[`docs/skeleton.md`](docs/skeleton.md)** —— 那里写清了冻结契约（模块怎么被装载、
+> 哪些表归谁、接口前缀怎么分、五个人怎么并行开工），以及「加一个新模块要动哪几行」。
 
 > **维护提示（踩过的坑）**：`start.cmd` 必须保持 **CRLF 换行 + 纯 ASCII + 无 BOM**。
 > cmd.exe 是按本地代码页逐行解析批处理的，如果脚本里写了 UTF-8 中文、或用了 LF 换行，
@@ -353,6 +372,12 @@ forum/
 | `#/search?q=关键词` | 全文搜索（标题 + 正文） |
 | `#/login`、`#/register` | 登录 / 注册 |
 | `#/admin` | 管理后台（仅管理员） |
+| `#/docs` | 积木广场：可编程帖子 / 笔记 / 主页文档的列表，支持 `?kind=` `?scope=` `?mine=1` `?q=` |
+| `#/doc/:id` | 积木阅读页：块渲染结果、降级警告、修订记录、导出/导入、赞/踩/投币/收藏（锚点走既有帖子接口） |
+| `#/doc/:id/edit` | 积木编辑器：逐块编辑、上下移动、Markdown 双向、`ops` 增量改动、套模板、回滚、沙箱开关 |
+| `#/doc/:id/blocks` | 同一个编辑器的高级入口（默认落在积木模式）：块列表 + 当前块的 props 表单 |
+| `#/blocks` | 块类型表：12 种内置块类型的声明式 schema 速查、「怎么自己编一个块」的指南 + 注册自己的块类型（可带渲染模板） |
+| `#/wiki/:name` | Wiki 多页面：`[[双链]]` 的落点；左侧是分类边栏（页内筛选 + 新建页，作者多一个「改分类」），有这一页就渲染它，没有就给「建这一页」（`?create=1` 一步进编辑器） |
 
 ---
 
@@ -410,6 +435,38 @@ forum/
 | POST | `/api/messages/:username` | 发私信（互关不限量 / 单向每天 1 条） | 登录 |
 | POST | `/api/admin/users/:id/role` | 任命 / 收回管理员（`role: 'admin'\|'member'`） | **仅站长** |
 | POST | `/api/admin/users/:id/ban` | 封禁 / 解封（立即踢掉该用户全部会话；不能封禁站长） | 站长/管理员 |
+| GET | `/api/docs` | 积木文档列表，支持 `kind` `scope` `mine=1` `q` `page` `limit` `sort` | 公开（按可见范围过滤） |
+| POST | `/api/docs` | 新建积木文档，body `{ title, kind, scope, template }`；`kind='profile'` 一个用户至多一份 | 登录 |
+| GET | `/api/docs/:id` | 文档详情：`{ doc, blocks, html, warnings, abilities }` | 按 scope |
+| PUT | `/api/docs/:id` | 改标题 / 可见范围 / 模板名 | 作者/管理员 |
+| DELETE | `/api/docs/:id` | 软删除文档并同步影子行 | 作者/管理员 |
+| POST | `/api/docs/:id/blocks` | 新增一块，body `{ type, props, after\|before\|position }` | 作者/管理员 |
+| PUT | `/api/docs/:id/blocks/:blockId` | 改一块的 props | 作者/管理员 |
+| DELETE | `/api/docs/:id/blocks/:blockId` | 删一块 | 作者/管理员 |
+| POST | `/api/docs/:id/blocks/:blockId/move` | 移动一块，body `{ after\|before }` | 作者/管理员 |
+| POST | `/api/docs/:id/reorder` | 整体重排，body `{ order: [blockId] }` | 作者/管理员 |
+| POST | `/api/docs/:id/ops` | 声明式增量改动，body `{ ops: [...] }`；返回 `{ applied, rejected }` | 作者/管理员 |
+| GET/PUT | `/api/docs/:id/markdown` | 文档 ⇄ Markdown（双向无损投影） | 读按 scope / 写作者 |
+| POST | `/api/docs/:id/apply-template` | 套模板，body `{ key, mode:'replace'\|'append' }` | 作者/管理员 |
+| GET | `/api/docs/:id/export` | 导出为 `forum-doc/1` 格式 JSON | 读按 scope |
+| GET | `/api/docs/:id/revisions` | 修订记录（保留最近 50 条） | 读按 scope |
+| POST | `/api/docs/:id/rollback` | 回滚到某一版，body `{ revision }` | 作者/管理员 |
+| POST | `/api/docs/:id/capabilities` | 沙箱块申请能力，body `{ blockId, capability, payload }`；能力限 `doc-meta` / `doc-blocks` / `viewer` / `state` 四种，放行与否都记审计 | 登录 |
+| GET | `/api/docs/:id/capabilities` | 沙箱能力调用审计（最近 `limit` 条） | 站长/管理员 |
+| POST | `/api/docs/:id/sandbox` | 开关沙箱，body `{ disabled }` | 站长/管理员 |
+| GET | `/api/docs/:id/polls` | 这篇文档里每个 `poll` 块的票数：`{ polls: { bN: { counts, total, voters, mine, multiple } } }`（0 票的块也有桶） | 读按 scope |
+| POST | `/api/docs/:id/blocks/:blockId/vote` | 投票，body `{ options: [...] }`（**提交完整选择集合**，不是增量）；再投即改票 | 登录 |
+| GET | `/api/docs/meta/templates` | 模板清单 + `kinds` + `scopes` 枚举（唯一真相） | 公开 |
+| GET | `/api/docs/meta/block-types` | 块类型清单（内置 12 种 ∪ 库里注册的），含声明式 schema | 公开 |
+| POST | `/api/docs/meta/block-types` | 注册自定义块类型（名字 `^[a-z][a-z0-9_]{0,31}$`，内置名与重名 409）；`rendererKind:'declarative'` 可带 `renderer:{html:'…{{字段}}…'}`（会剥掉 script/内联事件/`javascript:`），`'sandbox'` 则用 schema 里的 `code` 走玻璃房 | 登录 |
+| POST | `/api/docs/meta/import` | 按 `forum-doc/1` 格式导入一份新文档 | 登录 |
+| POST | `/api/docs/notes/import` | 把一篇笔记接成文档，body `{ name, title, markdown, scope }`；幂等 | 登录（只能导自己的） |
+| GET | `/api/docs/notes/lookup` | 按 `ownerId` + `name` 找笔记对应的文档；用 `{ found }` 标记而不是 404 | 按 scope |
+| GET | `/api/docs/profile/:username` | 按用户名找 `kind='profile'` 的主页文档；同样用 `{ found }` 标记 | 按 scope |
+| GET | `/api/docs/wiki` | wiki 目录：`{ pages, categories }`（只列当前用户看得见的页；没分类的排最后） | 公开（按可见范围过滤） |
+| GET | `/api/docs/wiki/:name` | 按标题找一页 wiki（`template='page'`），连同 `nav` 边栏一起回；看不见与不存在都回 `{ found:false }` | 按 scope |
+| POST | `/api/docs/wiki/:name` | 打开或**新建**一页 wiki（body `{ scope }`，默认 `public`）；返回 `created` 标记 | 登录 |
+| PUT | `/api/docs/:id/wiki` | 给一页 wiki 定分类与排序，body `{ category, sortOrder }`；回新的 `nav` | 作者/管理员 |
 
 ---
 
@@ -436,6 +493,20 @@ profile_categories(id, user_id, name, sort_order, created_at)
 moderation_logs(id, actor_id, action, target_type, target_id, target_label, reason, created_at)
 messages(id, sender_id, recipient_id, content, read_at, created_at)
 blocks(blocker_id, blocked_id, created_at)   -- 黑名单，主键 (blocker_id, blocked_id)
+
+-- 可编程帖子（积木，P2）：写在 src/modules/doc/，不放进 src/core/open-db-support.js
+documents(id, user_id, kind, title, scope, template, anchor_post_id,
+          sandbox_disabled, deleted, created_at, updated_at)   -- kind: post | note | profile
+document_blocks(id, document_id, block_id, type, type_version, position, props_json,
+                created_at, updated_at)   -- block_id 形如 b1，(document_id, block_id) 唯一；position 是 REAL，插中间取中点
+document_revisions(id, document_id, revision, blocks_json, reason, author_id, created_at)
+                    -- reason: create | edit | ops | template | import | rollback，每篇保留最近 50 条
+doc_block_types(name, version, label, icon, props_schema_json, renderer_kind, renderer_json,
+                created_by, created_at, updated_at)   -- 全局注册表，内置 12 种优先、不可被覆盖
+doc_capability_logs(id, document_id, block_id, capability, user_id, allowed, created_at)
+                    -- 沙箱能力调用的审计流水：被拒也记一行
+note_documents(user_id, note_name, document_id, created_at)
+                    -- 笔记子系统 ⇄ documents 的接线表，(user_id, note_name) 唯一
 ```
 
 设计要点：
@@ -447,6 +518,15 @@ blocks(blocker_id, blocked_id, created_at)   -- 黑名单，主键 (blocker_id, 
 - **投币/签到事务**：扣币、加币、记账包在 `BEGIN IMMEDIATE` 事务里，失败自动回滚。
 - **通知去重**：写通知前先查「同一 actor + 同一类型 + 同一对象 + 未读」是否存在，存在就跳过。
 - **分类归属校验**：只能把文章放进自己的分类，服务端逐次校验，前端下拉框只是便利。
+- **积木的影子行**：每份文档在 `posts` 里留一条只做互动锚点的行（`anchor_post_id`），赞/踩/投币/收藏/通知/价值榜因此**零改动**复用；`hidden` 由文档 scope 决定，`public` 的文档还会把标题与纯文本摘要同步过去，所以旧列表与搜索照样能用它。代价（已知短板）：`hidden=1` 的影子行对非站长非作者是 404，所以 `followers` / `team` 可见的文档，**别人点不了赞**。
+- **降级永不白屏**：块类型没注册、`props_json` 坏了、props 不合法、`bind` 成环、沙箱 2 秒没 `ready` —— 一律渲染成 `doc-block-unknown` 占位并往响应的 `warnings[]` 里记一条，绝不抛异常。
+- **沙箱是浏览器给的，不是自己写的**：`<iframe sandbox="allow-scripts">`（**不给** `allow-same-origin`）+ iframe 内 CSP `default-src 'none'`，服务端从不执行用户代码，只做转义与拼装；消息白名单只有 `ready` / `resize` / `value` / `request` 四种，能力调用逐条记审计。用户注册的沙箱块类型（`rendererKind:'sandbox'`）走的是同一个玻璃房，不是另一条路。
+- **JSON 是数据，JavaScript 才是行为**：`props` + schema 只负责「这块有哪些字段」（数据），凡是「这块要做什么」（行为）都写在 `app` 块的 `code` 里，跑在沙箱 iframe 中。沙箱里那套 `Sandbox` API 是真能落东西的：`Sandbox.props` / `inputs` / `value(v)` / `resize()` 之外，`Sandbox.doc()` 读文档元信息、`Sandbox.blocks()` 读正文里每一块（能「按别的块算点东西」）、`Sandbox.viewer()` 读正在看的人（不透明源里连「我登录了吗」都读不到，所以由宿主递进去）、`Sandbox.state.get(scope)` / `set(value, scope)` **把状态存到服务端**（`user` 作用域各人一份、`shared` 全站一份；写下要登录，读匿名也给）。每个 API 都是一次可审计的能力申请，白名单之外一律 403 且照样留一行 `allowed=0`。**记住 `request()` 成功时 resolve 的就是值本身**（失败才 reject），不要写 `if (r.ok)`。
+- **状态与内容分家**：投票的票落在 `doc_poll_votes`、沙箱状态落在 `doc_app_state`，**都不写回 `props`**。理由是同一条：`props` 是内容，改一次产生一条修订，把运行期数据写进去等于「作者改个选项 = 改掉所有人投的票」。两处都在块/文档被删时顺带清理，不留孤儿行。
+- **块是可编程的，而且是真能编的**：`POST /api/docs/meta/block-types` 注册的声明式类型如果带了 `renderer:{html:'…{{字段}}…'}`，渲染时就按它出 HTML（`{{字段}}` 一律转义，模板里的 `<script>` / 内联事件 / `javascript:` 在渲染那一步被剥掉——注册是登录用户就能做的，模板会出现在每个访客的页面上）；不带模板才退回「字段名 → 值」的表。块的底层形状只有三样：`{ block_id, type, version, props }`，Markdown 里就是一围栏 ` ```doc:<类型> `；每一块在编辑器里都能展开「源码」直接改 props JSON，`bind` 是唯一保留字段。
+- **Wiki 是有目录的多页面，不是一页带链接的帖子**：`template='page'` 标记「这一篇是 wiki 页」，`[[目标]]` 渲染成指向 `#/wiki/<标题>` 的真链接，`GET /api/docs/wiki/:name` 找页、`POST` 打开或**新建**（`[[还没写的页]]` 是正常用法），`PUT /api/docs/:id/wiki` 定分类与排序。`#/wiki/<标题>` 与 `#/doc/:id` 两个入口都会带回同一个 `nav` 边栏（分类分组 + 页内筛选 + 新建页；作者多一个「改分类」）——「有没有边栏」不该取决于用户从哪个链接点进来。边栏只列**当前用户看得见**的页：私有页不能因为名字出现在目录里而泄露存在性。双链在正文里怎么写都行：**独占一行**会被解析成一个 `wiki` 块（在 Markdown 往返里也是 `[[目标]]`），**夹在句子里**就是一个行内链接。
+- **投票块是真的能投的**：服务端把选项渲染成 `<button>` 而不是裸 `<li>`（键盘能 Tab、屏幕阅读器认得出这是一组选项），票数由 `GET /api/docs/:id/polls` 填、点击走 `POST …/vote`。提交的是**完整选择集合**而不是增量：单选换一个就是换掉原来那个，再点自己那项是撤销。
+- **公式复用站点原本那一套**：服务端只吐 `$…$` 原文，粘在积木页面与 Markdown 预览里的 `ntRenderMath(root)`（`public/views/notes.js` 的离线 KaTeX，`/notes/vendor/katex/**`）在 `innerHTML` 之后才排版 —— 与论坛动态那边完全同一条路，没有第二份数学渲染实现。**行间公式也一样**：`formula` 块渲染出 `$$…$$` 交给客户端 KaTeX，LaTeX 源码折叠在下面（排版失败时至少还看得到自己写了什么）。
 
 ### 从 v1.0 / v1.1 / v1.2 升级
 
@@ -478,14 +558,46 @@ blocks(blocker_id, blocked_id, created_at)   -- 黑名单，主键 (blocker_id, 
 ## 8. 测试
 
 ```bash
+node scripts/check-golden.mjs      # ★ 行为金标准：96 条请求的状态码 + 响应结构，一条都不能变
+node scripts/check-skeleton.mjs    # ★ 骨架自检：模块能不能独立拆掉、薄入口有没有变胖
+node scripts/check-frontend.mjs    # ★ 前端渲染冒烟：27 个页面全部渲染一遍 + 裸调用未定义名字的静态扫描
 node scripts/smoke.mjs             # 后端端到端：242 项（临时独立库+端口，跑完自动清理）
-node scripts/check-ui-contract.mjs # 前端契约：CSS 类名 + API 字段 + 主题/头像/角色/私信结构，175 项
+node scripts/smoke-ai.mjs          # AI 接口端到端：61 项
+node scripts/feed-smoke.mjs        # 动态流端到端：95 项
+node scripts/doc-smoke.mjs         # 积木（可编程帖子）端到端：392 项
+node scripts/check-ui-contract.mjs # 前端契约：CSS 类名 + API 字段 + 主题/头像/角色/私信结构
 node scripts/check-encoding.mjs    # 源码编码体检：BOM / 乱码 / 关键中文内容
+node scripts/check-graph-ui.mjs    # 知识网络图 UI
+node scripts/check-notes-ui.mjs    # 笔记 UI
+node scripts/notes-smoke.mjs       # 笔记接口
+node scripts/capture-fixtures.mjs  # 重采前端冒烟用的假数据（改了接口形状才需要跑）
 ```
 
 > ⚠️ `scripts/reset-db.mjs` **不属于测试流程**（它以前被列在上面这段里，容易照着复制粘贴）：它会删掉 `data/forum.db`（连带 `-wal` / `-shm`）再重新播种，用户、帖子、私信、签到记录全部**不可恢复**，`data/` 又不在版本库里。要清库请按「常见问题」里那条走，并且必须显式加 `--yes`。
 
-当前状态：**417 项全部通过**（242 + 175）。
+一次跑完（`npm test` 就是前 12 组）：
+
+```
+check-encoding 187 文件 / 77 断言 · check-skeleton 47 项 · check-golden 96 项 0 差异
+check-frontend 27 个页面 + 29 个模块静态扫描 · smoke 242 · smoke-ai 61 · feed-smoke 95
+doc-smoke 392 · check-ui-contract 210 · check-graph-ui 24 · check-notes-ui 33 · notes-smoke 44
+```
+
+另外四组在各自的包里，`npm test` 不带它们：
+
+```
+node note-studio/tests/run.mjs        # 学术笔记子系统
+node forum-ai/selftest.mjs            # AI 层：92 项
+node knowledge-pack/selftest.mjs      # 知识网络图计算：56 项
+npm run test:notes                    # AI 工作台抽屉：32 个文件 / 722 条断言
+```
+
+**`check-golden.mjs` 是这套测试里最该先跑的一个**：它把 96 条固定请求的「状态码 + 响应 JSON 的键结构」
+与 `scripts/golden.json` 逐条比对，**只管结构不管取值**（不会因为你发了一篇新帖就红）。
+重构、搬家、改前端时先跑它 —— 绿了才说明「用户能感知到的行为一个字都没变」。
+真的有意改了行为，用 `--write` 重采指纹，并在提交信息里说明为什么。
+（`--dump` 只打印不比对；指纹文件不存在时它会**直接报错退出**，因为「改造完再补采」等于没测。）
+
 
 覆盖范围：静态资源与 SPA 回落、注册登录登出、投币规则与上限与「不可投币的四种原因」、**取消每日补足（把 coin_refresh_at 改成一万小时前再登录，余额仍然是 0，仍然投不了币；文案也指向签到而不是"明天刷新"）**、签到（首次 +1、全勤补发 +3、同日重复签到 409 且不重复加币、日历结构）、主页分类（增删改查、上限、归属校验、按分类/未分类筛选）、主页置顶（上限 3 篇、取消置顶、越权 403）、**转发（成功计数、重复转发只改评语、撤销、不能自转、不能未登录转发、转发者列表、主页转发分类、通知原作者）**、**价值排行榜（权重常量下发、公式数值逐项验证、作者权重=Σ文章价值、降序、时间窗筛选、作者榜字段）**、账号设置（昵称签名校验、改密校验旧密码、改密后其它会话失效 / 当前会话保留 / 新旧密码登录）、重复用户名、会话保持、分页、全文搜索、Markdown 转义、赞踩互斥、收藏、关注与关注流、消息通知的收件人与去重、越权访问后台、封禁等。
 
@@ -515,7 +627,7 @@ node scripts/reset-db.mjs --yes
 Windows 上如果报文件被占用，说明服务或测试脚本还在跑，关掉再试。
 
 **Q：想调整规则数值？**
-都在 `src/db.js` 顶部：`COIN_SIGNUP_GRANT`（注册赠送币数）、`COIN_PER_POST_LIMIT`（单帖投币上限）、`CHECKIN_DAILY_REWARD`（签到奖励）、`CHECKIN_WEEKLY_BONUS`（全勤奖）、`PROFILE_PIN_LIMIT`（主页置顶数）、`PROFILE_CATEGORY_LIMIT`（分类数上限）、`VALUE_WEIGHTS`（价值公式里赞/币/藏/踩的权重、踩的软化系数、半饱和点）。
+都在 `src/db.js` 顶部（实体在 `src/core/open-db-support.js`）：`COIN_SIGNUP_GRANT`（注册赠送币数）、`COIN_PER_POST_LIMIT`（单帖投币上限）、`CHECKIN_DAILY_REWARD`（签到奖励）、`CHECKIN_WEEKLY_BONUS`（全勤奖）、`PROFILE_PIN_LIMIT`（主页置顶数）、`PROFILE_CATEGORY_LIMIT`（分类数上限）、`VALUE_WEIGHTS`（价值公式里赞/币/藏/踩的权重、踩的软化系数、半饱和点）。
 
 **Q：排行榜的分数怎么和我想的不一样？**
 价值分是**质量口径**（赞/币/藏/踩加权 + 饱和映射），不是热度。若想看热度，用首页的「🔥 最热」排序（`赞×4 + 币×5 + 回复×3 − 踩×2 + 浏览×0.1`）。价值分的完整推导和举例见上面「价值排行榜」一节。
@@ -527,4 +639,73 @@ Windows 上如果报文件被占用，说明服务或测试脚本还在跑，关
 把它挂在 Nginx/Caddy 后面即可（记得配 HTTPS 并把 Cookie 换成 `Secure`），单进程足够支撑小型社区；`data/forum.db` 记得做定时备份。上线的第一件事是**改掉 admin 的演示密码**（登录后到 `#/settings` 修改）。
 
 **Q：想扩展功能？**
-图片上传、私信、帖子标签、多级回复都是自然的下一步；数据层集中在 `src/store.js`，接口在 `src/server.js` 的 `route()` 注册，前端在 `public/app.js` 增加一个视图函数即可。新增通知类型只需调用 `store.createNotification()`，并在 `public/app.js` 的 `NOTIF_META` 里补一条文案。
+先读 [`docs/skeleton.md`](docs/skeleton.md)。现在的分工是：**表结构**由 `src/modules/<模块>/index.js` 的 `owns`
+声明、建表 SQL 用 `ctx.schema.add(...)` 登记；**接口**用 `ctx.routes.add(method, pattern, handler)` 注册，
+响应统一走 `ctx.http.ok()`；**权限**用 `ctx.guards.requireUser/requireStaff/…`；**前端页面**加一个
+`public/views/x.js` 并在 `public/core/router.js` 的 if 链里接一行。
+不要 import 隔壁模块的文件（模块之间只通过 `ctx` 通信，`check-skeleton.mjs` 会抓）。
+新增通知类型只需调用 `store.createNotification()`，并在 `public/core/session.js` 的 `NOTIF_META` 里补一条文案。
+**改完务必跑 `node scripts/check-golden.mjs`** —— 它保证你没顺手改坏现有页面。
+
+---
+
+## 10. 已知短板与还没做的
+
+这一节是**诚实的缺口清单**，不是路线图承诺。每条都写清现象和根因，方便想接手的人直接定位。
+
+### 10.1 积木帖子和帖子是两套东西，互动是断的（当前最大的缺口）
+
+**现象**：`#/doc/:id` 阅读页上**没有点赞 / 踩 / 投币 / 收藏 / 评论 / 转发**的按钮。
+只有一张卡片写着「👍 点赞 / 投币 / 收藏走的是它的互动锚点」，给一个「去帖子里互动」的链接，
+点过去会跳到 `#/post/:anchorPostId` —— 一个长得像旧帖子的页面，在那里才能互动。
+换句话说：**同一条内容有两个地址，一个是积木页（只能读），一个是帖子页（才能互动）。**
+
+**根因**：`documents` 和 `posts` 是两张表。所有互动（赞/踩/投币/收藏/通知/价值榜）都认 `posts.id`，
+所以建文档时会顺手插一条「影子行」当互动锚点（`src/modules/doc/anchor.js`）。
+但影子行有两条互相打架的硬约束：
+
+1. 它必须 `deleted = 0` —— 赞/踩走 `src/store.js` 的 `WHERE p.id = ? AND p.deleted = 0`，
+   投币走 `postRow` + `ensure(post && !post.deleted)`，`deleted = 1` 就找不到；
+2. 而 `deleted = 0` 的行**必然**被所有帖子列表收录（`src/store.js:412` 的 `buildFilter()` 第一句就是 `p.deleted = 0`），
+   只能靠 `hidden` 把自己藏起来，而 `hidden` 的语义是「非 staff 非作者 404」（`src/core/guards.js` 的 `assertPostVisible`）。
+
+于是 `src/modules/doc/anchor.js` 的 `anchorHidden(scope)` 只对 `scope === 'public'` 返回 0。
+**结果**：`followers` / `team` / `private` 可见的积木帖子，除了作者和 staff，**别人一点赞就 404**。
+这是登记在设计文档 §2.5 的已知短板，当时决定「不动 core」。
+
+**还有两个副作用**：
+
+- 公开的积木帖子会以「影子帖」的形态顺带出现在**首页动态流和全文搜索**里，标题与正文前 400 字是同步的
+  （`syncAnchor`）。所以同一篇内容在动态流里也能刷到，点进去却是帖子页而不是积木页。
+- 影子行的 `views` / `pinned` 是旧链路的财产，`syncAnchor` 刻意不重写这两列，
+  所以「积木页的阅读数」和「帖子页的阅读数」现在是两个不同的东西。
+
+**要修的话有两条路**（当时评估过，都没做）：
+
+- **改前端**（小）：在阅读页直接铺一条互动条，复用 `/api/posts/:id/like`、`/api/posts/:id/coin` 等既有接口，
+  拿 `doc.anchorPostId` 当目标。这解决「要跳页」，但**解决不了非公开档 404**。
+- **改 core**（大）：让 `buildFilter()` 与 `assertPostVisible()` 认识「文档的可见范围」，
+  或者干脆给非公开文档改成 `hidden = 1` 且允许作者以外的人对 `hidden = 1` 的行互动。
+  两条都会动到 `check-golden` 的 96 项指纹，所以必须谨慎重采。
+
+### 10.2 积木这一摊还没开发的
+
+按「影响从大到小」排：
+
+| 缺口 | 现状 |
+| --- | --- |
+| **积木没有自己的互动条** | 见 10.1；`#/docs` 广场、阅读页都没有赞/币/评/转入口 |
+| **AI 只在 Markdown 模式** | AI 抽屉挂在 Markdown 的 textarea 上（`createTextareaAdapter`）；块模式没有「让 AI 写一块」这种能力 |
+| **块类型撤不掉** | 注册接口 `POST /api/docs/meta/block-types` 对**所有登录用户**开放（记 `created_by`），但没有删除/停用接口，也没有管理后台界面 —— 注册错了只能改库 |
+| **沙箱能力只有四个** | 只有 `doc-meta` / `doc-blocks` / `viewer` / `state`。没有网络请求、没有跨文档读、也不能通过沙箱改文档内容（`POST /api/docs/:id/ops` 存在但沙箱没接） |
+| **块间联动只会取值** | `bind` 只支持「取另一块的某个字段来渲染」，没有条件、循环、计算 |
+| **保存没有冲突检测** | 保存是后写覆盖，没有 `If-Match` / 版本号；两个人同时编辑，后保存的那个赢 |
+| **没有实时协作** | 没有光标共享、没有在线状态、没有块级锁 |
+| **修订只有整体回滚** | `GET /api/docs/:id/revisions` 能列出历史，`POST .../rollback` 能整体回到某一版，但**没有逐行 diff 视图** |
+| **导入总是新建** | `POST /api/docs/meta/import` 每次都建一篇新文档，没有「按标题合并/覆盖」 |
+| **广场只有第一页** | 接口支持 `page` / `limit` / `sort`，前端只有搜索框 + 形态筛选 + 「只看我的」，**没有翻页器也没有排序选择器**（总篇数倒是显示了） |
+| **权限只到文档级** | 没有块级权限、没有「只允许某人编辑某一块」 |
+| **Wiki 还很薄** | 分类只有一级且不能重命名页面（改名 = 新建一页 + 软删旧的）、没有重定向、没有「谁链到我」的反向链接列表 |
+| **投票还很薄** | 没有截止时间、没有「投过才能看结果」的配置、没有匿名投票 |
+| **移动端只做了折行** | 窄屏是把两栏折成一栏，没有专门的小屏编辑体验 |
+

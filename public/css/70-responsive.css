@@ -1,0 +1,38 @@
+/* 70-responsive.css —— 响应式断点。⚠️ 手机端 375px 必须可用，这是验收项（FR-UI-08）。
+ *
+ * 本文件由 docs/tools/split-css.mjs 从原先的单体 public/style.css 切出来。
+ * 改样式请直接改这里；**不要**去改 public/style.css（它现在只是一个 @import 清单）。
+ */
+
+/* ---------------- 响应式 ---------------- */
+
+@media (max-width: 900px) {
+  .layout {
+    grid-template-columns: minmax(0, 1fr);
+    padding: 18px 14px 34px;
+  }
+
+  .sidebar {
+    position: static;
+  }
+
+  .brand-text {
+    display: none;
+  }
+
+  .topbar-inner {
+    padding: 10px 14px;
+    gap: 10px;
+  }
+
+  .post-row {
+    padding: 14px;
+  }
+
+  .post-excerpt {
+    -webkit-line-clamp: 3;
+  }
+}
+
+
+/* @hand-written */

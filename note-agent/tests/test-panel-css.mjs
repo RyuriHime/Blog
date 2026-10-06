@@ -13,7 +13,7 @@
  *      并且宿主 `style.css` 里**不该**再有第二份面板样式 —— 后一组要看宿主，
  *      包被单独拷走时自动跳过（`skip()`），不报红。
  */
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 import { createChecker } from './helpers/check.mjs';
 import { buildPanelCss } from '../scripts/sync-panel-css.mjs';
 
@@ -26,8 +26,29 @@ const read = (path) => {
   }
 };
 
+/**
+ * 宿主样式表的**全部**内容。
+ *
+ * 这里以前只读 `public/style.css`。v2 骨架把它拆成了只有 `@import` 的清单页
+ * （正文在各 `public/css/*.css` 分片里），于是「宿主为挂载点留了一条定义」
+ * 之类的断言变成了对空文件的断言 —— 永远成立，等于没测。
+ * 整棵树拼起来才恢复它本来的意思。
+ */
+const hostCss = (() => {
+  const dir = new URL('../../public/css/', import.meta.url);
+  let files = [];
+  try {
+    files = readdirSync(dir).filter((name) => name.endsWith('.css'));
+  } catch {
+    return '';
+  }
+  const shards = files
+    .sort()
+    .map((name) => read(`../../public/css/${name}`))
+    .join('\n');
+  return `${read('../../public/style.css')}\n${shards}`;
+})();
 const panelCss = read('../client/notes-panel.css');
-const hostCss = read('../../public/style.css');
 const mount = read('../src/mount.mjs');
 const client = read('../client/notes-panel.mjs');
 
