@@ -1,5 +1,5 @@
 // 学术笔记（#/notes）前端静态契约检查。
-// 跟 check-graph-ui.mjs 一个路子：只切「学术笔记」那一段代码来看，
+// 只切「学术笔记」那一段代码来看，
 // 免得把别的视图的类名 / id 算进来。
 //
 // 用法：node scripts/check-notes-ui.mjs
@@ -30,7 +30,7 @@ function check(label, condition, detail = '') {
 /* ---------------------------------------------------------------- */
 
 const start = app.indexOf('学术笔记（note-studio）');
-const end = app.indexOf('知识网络图（knowledge-pack）', start);
+const end = app.indexOf('/* 启动', start);
 const block = start >= 0 && end > start ? app.slice(start, end) : '';
 
 console.log('\n▶ 前端：学术笔记接线');
@@ -44,7 +44,7 @@ check(
   /href="#\/notes"/.test(app) && /first === 'notes'/.test(app),
 );
 check(
-  '笔记页要求登录（跟公开的知识网络图不一样）',
+  '笔记页要求登录',
   /if \(!state\.me\) \{[\s\S]{0,120}navigate\('\/login'\);/.test(block),
 );
 check('登录后会带着 redirect 回来', /state\.redirect = '\/notes'/.test(block));

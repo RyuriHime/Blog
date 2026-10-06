@@ -57,9 +57,6 @@ jobs:
       - name: UI 契约检查（前端用到的元素和类名还在不在）
         run: node scripts/check-ui-contract.mjs
 
-      - name: 知识网络图 UI 检查
-        run: node scripts/check-graph-ui.mjs
-
       # ---------------------------------------------------------------
       # note-studio（笔记）
       # ---------------------------------------------------------------

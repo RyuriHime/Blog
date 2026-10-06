@@ -81,7 +81,7 @@ AI_API_KEY=sk-xxxx AI_BASE_URL=https://api.deepseek.com AI_MODEL=deepseek-flash 
 
 两套实现的**请求形状与错误码逐条对齐**（有测试钉着：`tests/test-ai-fallback.mjs` 把同一组参数
 喂给两边，比对发出去的 HTTP 请求体），所以业务代码不需要知道自己跟谁说话。
-唯一的功能差异：`forum-ai` 附带的知识网络图那些能力与本包无关，兜底实现不提供 —— 本包用不到。
+唯一的功能差异：论坛站点自带的那些扩展能力与本包无关，兜底实现不提供 —— 本包用不到。
 
 没有 Node 22.5？把 `node -v` 的输出发我，存储层换 `better-sqlite3` 是唯一要改的地方。
 

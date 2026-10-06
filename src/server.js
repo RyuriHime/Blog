@@ -684,50 +684,6 @@ route('GET', '/api/site', async (ctx) => {
   });
 });
 
-/* ---------------- 知识网络图 ---------------- */
-
-/*
- * 图不是在这里现算的：scripts/build-graph.mjs 离线跑（导出语料 → knowledge-pack
- * 算关系网 → 清洗成 data/knowledge/graph.json），这里只负责把结果读出来。
- * 好处是访问很轻（读一个 JSON），而且重新部署不会动 data/。
- */
-const GRAPH_FILE = join(ROOT, 'data', 'knowledge', 'graph.json');
-const GRAPH_STATUS_FILE = join(ROOT, 'data', 'knowledge', 'status.json');
-
-async function readJsonFile(file) {
-  try {
-    return JSON.parse(await readFile(file, 'utf8'));
-  } catch {
-    return null;
-  }
-}
-
-route('GET', '/api/knowledge/graph', async (ctx) => {
-  const graph = await readJsonFile(GRAPH_FILE);
-  if (!graph) {
-    throw new HttpError(404, 'graph_not_built', '知识网络图还没有生成');
-  }
-  const status = await readJsonFile(GRAPH_STATUS_FILE);
-  ok(res_(ctx), { graph, status });
-});
-
-/** 原版的可视化页面（knowledge-pack 自己生成的单文件 viewer），给「打开原图」用。 */
-route('GET', '/api/knowledge/viewer', async (ctx) => {
-  let html;
-  try {
-    html = await readFile(join(ROOT, 'data', 'knowledge', 'out', 'viewer.html'), 'utf8');
-  } catch {
-    throw new HttpError(404, 'viewer_not_built', '还没有生成可视化页面');
-  }
-  const res = res_(ctx);
-  res.writeHead(200, {
-    'Content-Type': 'text/html; charset=utf-8',
-    'Content-Length': Buffer.byteLength(html),
-    'X-Content-Type-Options': 'nosniff',
-  });
-  res.end(html);
-});
-
 /* ---------------- 帖子 ---------------- */
 
 function resolveListView(ctx) {
