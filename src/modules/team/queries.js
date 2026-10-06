@@ -24,23 +24,31 @@ const BLOCKED_AUTHOR_SQL = `p.user_id NOT IN (
 /**
  * 团队的列表/详情共用列。
  *
- * ⚠️ 前两个 `?` 在 SELECT 列表里（my_role / joined，都是「当前浏览者」），
- * **排在整个语句最前面**，拼参数时务必先放这两个，再放 WHERE 的。
+ * ⚠️ 前五个 `?` 都在 SELECT 列表里（my_role / joined / 我的申请 id / 状态 / 提交时间，
+ * 全是「当前浏览者」视角），**排在整个语句最前面**，拼参数时务必先放这几个，再放 WHERE 的。
  * 所以 `list()` / `byId()` 把「选择列参数」与「WHERE 参数」拆成两个常量再拼接，
  * 不靠人肉排列。
  */
 const TEAM_COLUMNS = `
-      t.id, t.slug, t.name, t.intro, t.owner_id, t.join_policy, t.created_at, t.updated_at,
+      t.id, t.slug, t.name, t.intro, t.owner_id, t.join_policy, t.listed, t.created_at, t.updated_at,
       t.join_code, t.announcement, t.announcement_by, t.announcement_at,
       ou.username AS owner_username, ou.display_name AS owner_display, ou.avatar AS owner_avatar,
       au.username AS announcer_username, au.display_name AS announcer_display,
       (SELECT COUNT(*) FROM team_members m WHERE m.team_id = t.id) AS member_count,
       (SELECT COUNT(*) FROM team_posts tp WHERE tp.team_id = t.id AND tp.deleted = 0) AS post_count,
       (SELECT m.role FROM team_members m WHERE m.team_id = t.id AND m.user_id = ?) AS my_role,
-      EXISTS (SELECT 1 FROM team_members m WHERE m.team_id = t.id AND m.user_id = ?) AS joined`;
+      EXISTS (SELECT 1 FROM team_members m WHERE m.team_id = t.id AND m.user_id = ?) AS joined,
+      (SELECT jr.id FROM team_join_requests jr
+        WHERE jr.team_id = t.id AND jr.user_id = ? ORDER BY jr.id DESC LIMIT 1) AS my_request_id,
+      (SELECT jr.status FROM team_join_requests jr
+        WHERE jr.team_id = t.id AND jr.user_id = ? ORDER BY jr.id DESC LIMIT 1) AS my_request_status,
+      (SELECT jr.created_at FROM team_join_requests jr
+        WHERE jr.team_id = t.id AND jr.user_id = ? ORDER BY jr.id DESC LIMIT 1) AS my_request_at,
+      (SELECT COUNT(*) FROM team_join_requests jr
+        WHERE jr.team_id = t.id AND jr.status = 'pending') AS pending_request_count`;
 
-/** `TEAM_COLUMNS` 里那两个 `?` 的实参（总是同一个浏览者 id，放两次）。 */
-const teamColumnParams = (viewerId) => [viewerId, viewerId];
+/** `TEAM_COLUMNS` 里那几个 `?` 的实参（总是同一个浏览者 id，放五次）。 */
+const teamColumnParams = (viewerId) => [viewerId, viewerId, viewerId, viewerId, viewerId];
 
 const TEAM_FROM = `
     FROM teams t
@@ -126,6 +134,24 @@ const MESSAGE_FROM = `
     JOIN users u ON u.id = m.user_id`;
 
 /**
+ * 加入申请的共用列。
+ *
+ * 这里**没有** `?`：申请人、审批人的昵称头像都靠 JOIN 出来，与「谁在看」无关
+ * （能看这份列表的只有本团队的管理员，判定在 routes.js，不在 SQL 里）。
+ * `decider_*` 是 LEFT JOIN —— 还没批的申请没有审批人，那两列就是空。
+ */
+const JOIN_REQUEST_COLUMNS = `
+      jr.id, jr.team_id, jr.user_id, jr.message, jr.status, jr.decided_by, jr.decided_at,
+      jr.created_at, jr.updated_at,
+      u.username, u.display_name, u.avatar,
+      du.username AS decider_username, du.display_name AS decider_display`;
+
+const JOIN_REQUEST_FROM = `
+    FROM team_join_requests jr
+    JOIN users u ON u.id = jr.user_id
+    LEFT JOIN users du ON du.id = jr.decided_by`;
+
+/**
  * @param {object} db  node:sqlite 的 DatabaseSync
  */
 export function createTeamQueries(db) {
@@ -191,6 +217,15 @@ export function createTeamQueries(db) {
     if (mine) {
       parts.push({
         sql: `EXISTS (SELECT 1 FROM team_members m WHERE m.team_id = t.id AND m.user_id = ?)`,
+        params: [viewerId],
+      });
+    } else {
+      // 团队广场只列「愿意被列出来」的团队。团长把团队设成不出现（`listed = 0`）之后，
+      // 它就不在广场上，但团队主页、团队号、帖子链接照旧能用 —— 藏的是**被发现**，
+      // 不是入口。自己已经加入的团队仍然列给自己看：否则团长一点「隐藏」，
+      // 自己下次来广场也会以为团队没了。
+      parts.push({
+        sql: `(t.listed = 1 OR EXISTS (SELECT 1 FROM team_members m WHERE m.team_id = t.id AND m.user_id = ?))`,
         params: [viewerId],
       });
     }
@@ -282,12 +317,26 @@ export function createTeamQueries(db) {
       return Number(result.lastInsertRowid);
     },
 
+    /**
+     * 改团队设置。`listed` 单独走 `setTeamListed`：它只有创建者能改，
+     * 与「团队名 / 简介 / 加入方式」（团长与管理员都能改）不是同一条权限线。
+     */
     updateTeam({ id, name, intro, joinPolicy, now = Date.now() }) {
       const result = bind(
         `UPDATE teams SET name = ?, intro = ?, join_policy = ?, updated_at = ?
      WHERE id = ? AND deleted = 0`,
         [name, intro, joinPolicy, now, id],
       ).run();
+      return Number(result.changes) > 0;
+    },
+
+    /** 团队要不要出现在广场上（只有创建者能改，判定在 routes.js）。 */
+    setTeamListed({ id, listed, now = Date.now() }) {
+      const result = bind('UPDATE teams SET listed = ?, updated_at = ? WHERE id = ? AND deleted = 0', [
+        listed ? 1 : 0,
+        now,
+        id,
+      ]).run();
       return Number(result.changes) > 0;
     },
 
@@ -377,6 +426,107 @@ export function createTeamQueries(db) {
 
     removeMember(teamId, userId) {
       const result = bind('DELETE FROM team_members WHERE team_id = ? AND user_id = ?', [teamId, userId]).run();
+      return Number(result.changes) > 0;
+    },
+
+    /* ── 加入申请 ───────────────────────────────────────────────────── */
+
+    /**
+     * 我的申请。`user_id = ?` 是「我递的」—— 团队主页靠它决定按钮画哪一个：
+     * 没申请过画「申请加入」，待审画「等待审核」（还能撤回），被拒画「再申请一次」。
+     */
+    myJoinRequest({ teamId, userId }) {
+      return bind(
+        `SELECT ${JOIN_REQUEST_COLUMNS}
+    ${JOIN_REQUEST_FROM}
+    WHERE jr.team_id = ? AND jr.user_id = ?
+    ORDER BY jr.id DESC
+    LIMIT 1`,
+        [teamId, userId],
+      ).get();
+    },
+
+    /** 按 id 取一条申请，**同时限定团队**（跨团队的 id 一律当作不存在）。 */
+    joinRequestById({ id, teamId }) {
+      return bind(
+        `SELECT ${JOIN_REQUEST_COLUMNS}
+    ${JOIN_REQUEST_FROM}
+    WHERE jr.id = ? AND jr.team_id = ?`,
+        [id, teamId],
+      ).get();
+    },
+
+    /**
+     * 递一条申请。
+     *
+     * 幂等交给**唯一的部分索引**（`team_id, user_id WHERE status='pending'`）：
+     * 同一个人对同一个团队连着点两次「申请加入」，第二次会撞索引抛错 ——
+     * 调用方（routes.js）先查 `myJoinRequest` 再决定，撞上也只是重复，
+     * 但真撞上了说明有人绕过检查，让它当场炸比静默堆两条好。
+     */
+    createJoinRequest({ teamId, userId, message = '', now = Date.now() }) {
+      const result = bind(
+        `INSERT INTO team_join_requests (team_id, user_id, message, status, created_at, updated_at)
+     VALUES (?, ?, ?, 'pending', ?, ?)`,
+        [teamId, userId, message, now, now],
+      ).run();
+      return Number(result.lastInsertRowid);
+    },
+
+    /** 管理面板的申请列表。`status='all'` 表示「批过的也要看」。 */
+    listJoinRequests({ teamId, status = 'pending', limit = 20, offset = 0 }) {
+      const where = buildWhere([
+        { sql: 'jr.team_id = ?', params: [teamId] },
+        ...(status === 'all' ? [] : [{ sql: 'jr.status = ?', params: [status] }]),
+      ]);
+      return bind(
+        `SELECT ${JOIN_REQUEST_COLUMNS}
+    ${JOIN_REQUEST_FROM}
+    WHERE ${where.sql}
+    ORDER BY jr.created_at DESC, jr.id DESC
+    LIMIT ? OFFSET ?`,
+        [...where.params, limit, offset],
+      ).all();
+    },
+
+    countJoinRequests({ teamId, status = 'pending' }) {
+      const where = buildWhere([
+        { sql: 'jr.team_id = ?', params: [teamId] },
+        ...(status === 'all' ? [] : [{ sql: 'jr.status = ?', params: [status] }]),
+      ]);
+      const row = bind(
+        `SELECT COUNT(*) AS n
+    FROM team_join_requests jr
+    WHERE ${where.sql}`,
+        [...where.params],
+      ).get();
+      return Number(row?.n) || 0;
+    },
+
+    /**
+     * 批准 / 拒绝。
+     *
+     * `AND status = 'pending'` 是**并发保护**：两个管理员同时点「批准」，
+     * 只有一个人能改到这一行，另一个人拿到 0 条变更 → 路由回 400，
+     * 而不是「静默地又批一次」（那会重复发通知、重复加入）。
+     */
+    decideJoinRequest({ id, status, decidedBy, now = Date.now() }) {
+      const result = bind(
+        `UPDATE team_join_requests SET status = ?, decided_by = ?, decided_at = ?, updated_at = ?
+     WHERE id = ? AND status = 'pending'`,
+        [status, decidedBy, now, now, id],
+      ).run();
+      return Number(result.changes) > 0;
+    },
+
+    /**
+     * 删掉一条申请：申请人自己「撤回」、或者管理员清掉一条。
+     *
+     * 直接删行而不是标记成第四种状态：撤回等于没申请过，留一行 `withdrawn`
+     * 只会让管理面板多一个永远不用看的分类。
+     */
+    deleteJoinRequest(id) {
+      const result = bind('DELETE FROM team_join_requests WHERE id = ?', [id]).run();
       return Number(result.changes) > 0;
     },
 

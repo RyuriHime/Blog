@@ -21,7 +21,7 @@
 ├── 背景主题 ── 🎨 暗夜 / 极夜 / 明亮 / 暖阳 / 奶黄 / 森林 / 暮紫 + 跟随系统，选择记在本地
 ├── 个性头像 ── 🖼️ 12 个预设表情或上传图片（客户端压缩、服务端校验落盘）
 ├── 角色权限 ── 👑 站长（唯一，可任命管理员）/ 🛡️ 管理员 / 成员，三级权限
-├── 团队 ── 🎽 团队广场与团队主页：成员名单、团长任命管理员 / 踢人、**6 位团队号凭号加入**、成员协作编辑同一条帖子不互相覆盖
+├── 团队 ── 🎽 团队广场与团队主页：成员名单、团长任命管理员 / 踢人、**加入方式（谁都能加入 / 需要申请）与加入审核**、**可以把团队从广场藏起来**、**6 位团队号凭号加入**、成员协作编辑同一条帖子不互相覆盖
 ├── 团队帖 ── 📄 帖子点得进独立详情页（`#/team/<slug>/post/<id>`），帖子下面能回复、能删自己的回复，正文与回复都支持 Markdown + LaTeX 公式
 ├── 团队空间 ── 📢 团队公告（团长 / 管理员可改，保存后全队各收一条通知）+ 📁 文件柜（成员上传下载，单文件 4 MB，一律按附件下发）+ 🗨️ 群聊（5 秒增量拉取），未登录 401、非成员 403
 ├── 内容管理 ── 管理团队可**隐藏**（可逆，访客 404）或**删除**任何文章，全程留痕
@@ -309,15 +309,30 @@ HOST=0.0.0.0 node src/server.js       # 允许局域网内其它设备访问
 - **删除只认作者和团队管理员**，路径里带着 `:postId`（一条回复属于哪篇帖子写在 URL 里，拿别条帖子下的回复 id 来删直接 404）。**重复删返回成功**（0 行改动也是「它现在没了」），前端重试一次不该看到报错；删除响应顺带把最新的 `replyCount` 带回来，详情页删完不用再问一次「现在几条了」。
 - **`canDelete` 由服务端算**（作者本人 ∨ 团队 owner / admin），前端只是照着画按钮 —— 权限不在浏览器里判。
 
-**每个团队都有一个 6 位团队号**，建队时自动生成。字母表去掉了 `I` / `L` / `O` / `U` —— 念错、听错、抄错基本都从这几个字符来（`1`/`l`/`I` 都当 `1`，`0`/`O` 都当 `0`）。在团队广场填上号就能加入，**不看有没有被邀请**：写着「需要邀请」的团队也走这里，号本身就是那封邀请函。号**只给成员看**（给外人就等于把「需要邀请」这个设置作废了）；抄成小写、带空格或短横线都不讲究，服务端统一折叠。团队号旁边的「**复制**」走三段退：`navigator.clipboard` → 临时 `textarea` + `execCommand('copy')` → 弹窗让你手抄 —— 剪贴板 API 只在**安全上下文**（https 或 `localhost`）存在，局域网 `http://192.168.x.x:3000` 上它是 `undefined`，只赌它就会「点了没反应」。
+**每个团队都有一个 6 位团队号**，建队时自动生成。字母表去掉了 `I` / `L` / `O` / `U` —— 念错、听错、抄错基本都从这几个字符来（`1`/`l`/`I` 都当 `1`，`0`/`O` 都当 `0`）。在团队广场填上号就能加入，**不看这个团队要不要申请**：写着「需要申请」的团队也走这里，号本身就是那封邀请函。号**只给成员看**；抄成小写、带空格或短横线都不讲究，服务端统一折叠。团队号旁边的「**复制**」走三段退：`navigator.clipboard` → 临时 `textarea` + `execCommand('copy')` → 选中号 + 一句「按 Ctrl+C」—— 剪贴板 API 只在**安全上下文**（https 或 `localhost`）存在，局域网 `http://192.168.x.x:3000` 上它是 `undefined`，只赌它就会「点了没反应」。
+
+**加入方式：谁都能加入 / 需要申请**，以及随之而来的审核：
+
+- 每个团队有两档：`open`（谁都能加入）与 `apply`（需要申请）。**改这一档是团长和管理员都能做的**（和改队名、简介同一条线）。
+- 申请式团队的路人在团队主页上看到的是「申请加入」（被拒过就是「再申请一次」），点开写一句理由（可以留空，≤ 200 字）再递；递出去之后顶部变成「⏳ 申请审核中」，可以自己撤回。
+- 团长和管理员点「📨 加入申请」打开审批面板：待审 / 已批准 / 已拒绝 / 全部 四档页签，批准就入队（成员数立刻 +1），拒绝只是不让他进 —— **被拒之后还能再申请一次**（新建一条，旧的那条留作记录）。
+- **同一人对同一团队同时只能有一条待审申请**：靠 `team_join_requests` 上的部分唯一索引（`WHERE status = 'pending'`）挡住，不靠应用层判重。两个管理员同时点「批准」只有一个能成功，另一个拿到「这条申请已经处理过了」。
+- **团队号照样绕过申请**：号本身就是邀请函。所以「需要申请」挡的是「在广场上逛到就能进」，不是挡「被人请进来」。
+- 这一段是**替代「拉进团队」的**：原来团长 / 管理员敲一个用户名就能把人拽进来，当事人连知都不知道、也没有拒绝的机会，现在那条路整个删掉了（`POST /api/teams/:id/members` 只留下 GET）。
+- 通知：有人递申请 → 全体团长 / 管理员各一条（**走去重**，同一个人反复递只有一条未读，和公告的 `dedupe:false` 正相反）；批准 / 拒绝 → 申请人一条。三种类型分别是 `team_join_request` / `team_join_approved` / `team_join_rejected`。
+
+**团队要不要出现在团队广场上**：
+
+- 创建者可以在团队设置里选「出现」还是「不显示」。这是**创建者独有**的一条线（管理员带着 `listed` 去改会拿到 403）——和「解散团队」同一条线。
+- 藏起来只是「不被发现」：广场列表里不再出现它，但**团队主页、团队号、帖子链接照旧能用**；已经加入的成员在自己的广场列表里仍然看得到自己那个隐藏团队（卡片上标一个 🙈「已隐藏」），不然他连怎么回队里都不知道。
 
 **团队里的角色**（`team_members.role`，和全站三级角色是两套东西）：
 
 | 角色 | 怎么来的 | 能做什么 |
 | --- | --- | --- |
-| 🎽 **创建者 owner** | 建团队的人，全队唯一 | 改团队设置、**任命/撤销管理员**、踢人、**写团队公告**、删任何团队帖 / 回复 / 文件、解散团队；**不能退出自己的团队**（只能解散） |
-| 🛡️ **管理员 admin** | 由创建者任命 | 拉人进「需要邀请」的团队、**踢人**、**写团队公告**、删任何团队帖 / 回复 / 文件 |
-| 成员 member | 加入或被拉进来 | 发帖、**回复**、传/下文件、群聊 |
+| 🎽 **创建者 owner** | 建团队的人，全队唯一 | 改团队设置（含**加入方式**）、**决定团队要不要出现在团队广场上**、**任命/撤销管理员**、踢人、**写团队公告**、**审核加入申请**、删任何团队帖 / 回复 / 文件、解散团队；**不能退出自己的团队**（只能解散） |
+| 🛡️ **管理员 admin** | 由创建者任命 | 改团队设置（含**加入方式**）、**审核加入申请**、**踢人**、**写团队公告**、删任何团队帖 / 回复 / 文件；**不能**改「要不要出现在广场上」（那条线只归创建者） |
+| 成员 member | 凭团队号直接加入，或递申请被团长 / 管理员批准 | 发帖、**回复**、传/下文件、群聊 |
 
 站长在团队里**没有任何后门**（原因见 API 一节）。踢人是管理员就行，**改角色只有创建者能做** —— 服务端与前端按钮是同一口径。
 
@@ -412,8 +427,8 @@ forum/
 | `#/doc/:id/blocks` | 同一个编辑器的高级入口（默认落在积木模式）：块列表 + 当前块的 props 表单 |
 | `#/blocks` | 块类型表：12 种内置块类型的声明式 schema 速查、「怎么自己编一个块」的指南 + 注册自己的块类型（可带渲染模板） |
 | `#/wiki/:name` | Wiki 多页面：`[[双链]]` 的落点；左侧是分类边栏（页内筛选 + 新建页，作者多一个「改分类」），有这一页就渲染它，没有就给「建这一页」（`?create=1` 一步进编辑器） |
-| `#/teams` | 团队列表：公开团队广场，`?mine=1` 只看我加入的，`?page=` 翻页；未登录也能看。顶上是「🔑 用团队号加入」，填 6 位号直接进队（登录后才显示） |
-| `#/team/:slug` | 团队主页：最上面是**团队公告**（只有成员看得见）与团队号（点「复制」发给要拉的人）、团队简介与成员、发帖框、帖子列表（按四档可见范围过滤，标题点进详情页，右侧显示「💬 N 条回复」）；成员在这里一起编辑同一条帖子。三个页签 `?tab=discuss`（默认）/ `?tab=files`（文件柜）/ `?tab=chat`（群聊）；`?page=` 翻帖子、`?fpage=` 翻文件 |
+| `#/teams` | 团队列表：公开团队广场（**被创建者藏起来的团队不出现**），`?mine=1` 只看我加入的，`?page=` 翻页；未登录也能看。顶上是「🔑 用团队号加入」，填 6 位号直接进队（登录后才显示） |
+| `#/team/:slug` | 团队主页：最上面是**团队公告**（只有成员看得见）与团队号（点「复制」发给要拉的人）、团队简介与成员、发帖框、帖子列表（按四档可见范围过滤，标题点进详情页，右侧显示「💬 N 条回复」）；成员在这里一起编辑同一条帖子。三个页签 `?tab=discuss`（默认）/ `?tab=files`（文件柜）/ `?tab=chat`（群聊）；`?page=` 翻帖子、`?fpage=` 翻文件。没加入的人看到的是「加入团队」（`open`）或「申请加入」（`apply`，被拒过就是「再申请一次」），递过申请是「⏳ 申请审核中 + 撤回申请」；团长 / 管理员多一个「📨 加入申请」面板（批准 / 拒绝 / 撤销），创建者的团队设置里多一个「出现在团队广场」开关 |
 | `#/team/:slug/post/:postId` | **团队帖详情页**：面包屑 + 帖子正文（Markdown + LaTeX）与回复数，下面是一串回复（时间正序，`?rpage=` 翻页）与回复框（未登录给「去登录」、非成员给加入提示）。管理员的删除按钮只画在自己能删的那条上 |
 
 ---
@@ -507,14 +522,16 @@ forum/
 | GET | `/api/teams` | 团队列表，支持 `mine=1`（我加入的）`page` `perPage`；未登录也能看 | 公开 |
 | POST | `/api/teams` | 建团队，body `{ name, slug?, intro?, joinPolicy? }`；中文名派生不出 slug 时自动生成 `team-xxxx`；**建好就带一个 6 位团队号，之后不会变** | 登录（每小时 5 个） |
 | GET | `/api/teams/:id` | 团队详情（`:id` 可以是数字 id 或 slug）：`{ team, members, memberTotal, scopes }`；`team.joinCode` 与 `team.announcement` **只对成员给值**，外人拿到 `null` | 公开 |
-| PUT | `/api/teams/:id` | 改名字 / 简介 / 加入方式 | 团队管理员 |
+| PUT | `/api/teams/:id` | 改名字 / 简介 / **加入方式**；body 里再带 `listed`（`'1'` / `'0'`）时还改「要不要出现在团队广场」——这一项**只有创建者**能动，管理员带上它会 403；`listed` 取值不是是/否 → 400 `bad_flag` | 团队管理员（`listed` 仅创建者） |
 | PUT | `/api/teams/:id/announcement` | 写 / 改团队公告，body `{ announcement }`（≤ 2000 字，空串 = 撤下）；正文非空时给全体成员各发一条 `team_announcement` 通知，返回 `{ team, notified }`（`notified` = 实际收到的人数） | 团队管理员（每 10 分钟 10 次） |
 | DELETE | `/api/teams/:id` | 解散团队（软删除） | **仅创建者** |
-| GET | `/api/teams/:id/members` | 成员列表（创建者 → 管理员 → 成员，同类按加入时间） | 公开 |
-| POST | `/api/teams/join-by-code` | 凭 6 位团队号加入，body `{ code }`。**故意不看 `join_policy`**：号就是「需要邀请」团队的入口。号错 → 404 `team_not_found`，位数不对 → 400 `bad_join_code`；已经是成员就幂等返回 | 登录（每 10 分钟 20 次） |
-| POST | `/api/teams/:id/join` | 加入团队；`join_policy='invite'` 的团队会 403（走团队号那条路才能进） | 登录 |
+| GET | `/api/teams/:id/members` | 成员列表（创建者 → 管理员 → 成员，同类按加入时间）。**拉人进团队的 `POST` 已经删掉**，成员只能自己加入、递申请或凭团队号进来 | 公开 |
+| POST | `/api/teams/join-by-code` | 凭 6 位团队号加入，body `{ code }`。**故意不看加入方式**：号就是邀请函，`apply` 的团队也走这里。号错 → 404 `team_not_found`，位数不对 → 400 `bad_join_code`；已经是成员就幂等返回 | 登录（每 10 分钟 20 次） |
+| POST | `/api/teams/:id/join` | 加入团队。`open` 直接进（`joined:true`）；`apply` 递一条申请（body `{ message? }` ≤ 200 字，回 `requested:true` + `request`，同时给全体团长 / 管理员发 `team_join_request` 通知，已在待审就返回原来那条、不重复发）； | 登录 |
 | POST | `/api/teams/:id/leave` | 退出团队；创建者不能退出（只能解散或转交） | 登录 |
-| POST | `/api/teams/:id/members` | 拉人进来，body `{ username, role? }` | 团队管理员 |
+| GET | `/api/teams/:id/join-requests` | 加入申请列表，`?status=pending`（默认）/`approved`/`rejected`/`all`，`?page=`；回 `{ items, page, perPage, total, totalPages, status, pendingTotal }`，每条带申请人的用户名 / 头像与 `canDecide` | 团队管理员 |
+| PUT | `/api/teams/:id/join-requests/:requestId` | 批 / 拒，body `{ action: 'approve' \| 'reject' }`。批准顺便入队并给申请人发 `team_join_approved`，拒绝发 `team_join_rejected`，回 `{ request, member, team }`；已经处理过的 → 400 `join_request_decided`，`action` 不认识 → 400 `bad_action` | 团队管理员 |
+| DELETE | `/api/teams/:id/join-requests/:requestId` | 撤销 / 清掉一条申请记录 | 申请人本人或团队管理员 |
 | PUT | `/api/teams/:id/members/:userId` | 改成员角色（只能设 `admin` / `member`） | 仅创建者 |
 | DELETE | `/api/teams/:id/members/:userId` | 踢人，或自己退自己；创建者不可被移出 | 团队管理员 |
 | GET | `/api/teams/:id/posts` | 团队帖子列表；未登录只会看到 `public` 的那几条 | 按 scope |
@@ -534,7 +551,7 @@ forum/
 | DELETE | `/api/teams/:id/messages/:messageId` | 删消息 | 作者 / 团队管理员 |
 
 > **团队为什么没有站长后门**：团队管理只认 `team_members` 里的 owner / admin，站长（`role='owner'`）也不例外。
-> 一旦站长能管理任意团队，他就能把自己加进一个「需要邀请」的团队然后读到里面的帖子 —— 那是一条提权通道。
+> 一旦站长能管理任意团队，他就能把自己加进一个「需要申请」的团队然后读到里面的帖子 —— 那是一条提权通道。
 > 读取侧同理：少给一个后门最多是管理员看不到，多给一个就是一次不可逆的泄露（内容还会被搜索、被 AI 索引）。
 >
 > **上传为什么走 JSON + base64**：全站零依赖、不引 npm，手写 multipart 解析要处理 boundary、分片、多文件、
@@ -546,17 +563,31 @@ forum/
 > 两条都只认 `team_members`：未登录 401，登录了但不是成员 403（团队主页本身公开，装 404 没意义，要守的是里面的东西）。
 > 下载一律按附件下发：即使有人传 `.html` / `.svg`，也不会在本站源里被当成页面渲染（存储型 XSS 的常见入口）。
 >
-> **团队号为什么只发给成员**：团队号能进「需要邀请」的团队，等于一张万能门票 ——
-> 泄露给外人，`join_policy='invite'` 这个设置就作废了。所以 `shapeTeam` 里它与公告同一道门：
+> **团队号为什么只发给成员**：团队号能直接进队、绕过「需要申请」，等于一张万能门票 ——
+> 泄露给外人，`join_policy='apply'` 这个设置就作废了。所以 `shapeTeam` 里它与公告同一道门：
 > `joined || canManage` 才给值，否则一律 `null`（连「有没有号」都看不出来）。
-> 凭号加入**不受 `join_policy` 限制**是故意的：号就是那封邀请函，再叠一层设置只会让人卡在门口。
+> 凭号加入**不受加入方式限制**是故意的：号就是那封邀请函，再叠一层设置只会让人卡在门口。
 > 号用 `crypto.randomInt` 生成、建队时定死没有「换号」操作，配合部分唯一索引（`WHERE join_code <> ''`）
 > 与启动时的幂等回填 —— 老库的团队也能补上号，空串不参与唯一性，所以补列、补号、建索引的先后顺序不会打架。
+>
+> **为什么把「拉进团队」删掉**：原来团长 / 管理员敲一个用户名就能把人拽进来，当事人连知都不知道、
+> 也没有拒绝的机会；而且被拉进来的人不需要任何同意，等于把「谁能进」这件事整个交给了别人。
+> 现在的两条路都要当事人自己动手：**凭团队号加入**（号 = 邀请函）或**递申请被批准**。
+> 顺带一个好处：把「加入方式」设成 `apply` 之后，审核记录（谁在什么时候申请、写了什么理由、谁批的）
+> 全部留在 `team_join_requests` 里，出事能查；拉人那条路是查不出痕迹的。
+> 旧库的 `join_policy='invite'` 在重建表时翻译成 `'apply'`（语义一样：都得有人批），迁移是幂等的。
+> 「要不要出现在团队广场」是**创建者独有**的一条线（和「解散团队」同级）：管理员能改队名 / 简介 / 加入方式，
+> 但带 `listed` 去改会 403 —— 藏不藏一个团队是它的身份问题，不是日常运营。
+> 隐藏只是「不被发现」：广场列表不再列它，团队主页、团队号、帖子链接照旧能用，
+> 已加入的成员在自己的列表里还看得见（否则他连怎么回队里都不知道）。
 >
 > **公告为什么不合并通知**：其余通知都靠「同一 actor + 同一类型 + 同一对象 + 未读只留一条」防打扰，
 > 公告是**一次广播**，改一次就该响一次，所以 `createNotification` 为此多了一个 `dedupe: false`。
 > 清空公告（空串）不发通知 —— 没有正文可看，把人叫来只看一条「公告撤了」是打扰。
 > 写公告的人自己不算收件人（`createNotification` 本来就不给自己发），所以 `notified` = 成员数 − 1。
+> 加入申请**走默认去重**：同一个人反复递申请（被拒 → 再申请）只会留一条未读，
+> 团长不需要看十条一模一样的「有人想加入」。三条通知（`team_join_request` / `team_join_approved` /
+> `team_join_rejected`）都跳 `#/team/<slug>`，点进去就是那个团队。
 
 ---
 
@@ -601,9 +632,13 @@ note_documents(user_id, note_name, document_id, created_at)
                     -- 笔记子系统 ⇄ documents 的接线表，(user_id, note_name) 唯一
 
 -- 团队（P4）：写在 src/modules/team/，不放进 src/core/open-db-support.js
-teams(id, slug, name, intro, owner_id, join_policy, join_code, announcement,
+teams(id, slug, name, intro, owner_id, join_policy, listed, join_code, announcement,
       announcement_by, announcement_at, deleted, created_at, updated_at)
-                    -- slug 唯一（团队地址，如 #/team/wenlan）；join_policy: open | invite
+                    -- slug 唯一（团队地址，如 #/team/wenlan）；join_policy: open | apply
+                    --   open = 谁都能加入；apply = 递申请、由团长 / 管理员批准
+                    --   （老库的 invite 在重建表时翻译成 apply，只是改名的等价语义）
+                    -- listed: 1 | 0 —— 要不要出现在团队广场上，**只有创建者**能改；
+                    --   0 只是「不被发现」，团队主页 / 团队号 / 帖子链接照旧可用
                     -- join_code 是 6 位团队号：部分唯一索引 WHERE join_code <> ''（空串不参与唯一性，
                     -- 老行才能先补列、再补号、最后建索引）；索引不写在核心建表脚本里，
                     -- 因为老库执行那段 SQL 时这一列还不存在
@@ -611,6 +646,14 @@ teams(id, slug, name, intro, owner_id, join_policy, join_code, announcement,
 team_members(team_id, user_id, role, joined_at)
                     -- 主键 (team_id, user_id)：一个人在一个团队只有一行
                     -- role: owner | admin | member，owner 唯一且不可退出
+team_join_requests(id, team_id, user_id, message, status, decided_by, decided_at,
+                   created_at, updated_at)
+                    -- 加入申请：status: pending | approved | rejected（拒绝后可以再申请一条新的，
+                    -- 旧的那条留着当记录）；message 是申请理由，≤ 200 字，可空
+                    -- decided_by / decided_at 记「谁在什么时候批的」，出事能查
+                    -- 部分唯一索引 idx_team_join_requests_pending(team_id, user_id)
+                    --   WHERE status = 'pending'：同一人对同一团队同时只能有一条待审，
+                    --   靠数据库挡并发，不靠应用层先查后写（两个管理员同时点批准只有一个能成功）
 team_posts(id, team_id, user_id, title, content, scope, version, updated_by,
            deleted, created_at, updated_at)
                     -- scope 与 feed / documents 共用同一套四档枚举
@@ -681,13 +724,13 @@ team_messages(id, team_id, user_id, content, deleted, created_at)
 ```bash
 node scripts/check-golden.mjs      # ★ 行为金标准：96 条请求的状态码 + 响应结构，一条都不能变
 node scripts/check-skeleton.mjs    # ★ 骨架自检：模块能不能独立拆掉、薄入口有没有变胖
-node scripts/check-frontend.mjs    # ★ 前端渲染冒烟：36 个页面全部渲染一遍 + 团队的文件柜/群聊/成员名单/团队号/公告/帖子预览与详情回复交互 + 裸调用未定义名字的静态扫描
+node scripts/check-frontend.mjs    # ★ 前端渲染冒烟：38 个页面全部渲染一遍 + 团队的文件柜/群聊/成员名单/团队号/公告/加入申请与审核/隐藏开关/帖子预览与详情回复交互 + 裸调用未定义名字的静态扫描
 node scripts/smoke.mjs             # 后端端到端：253 项（临时独立库+端口，跑完自动清理）
 node scripts/smoke-ai.mjs          # AI 接口端到端：61 项
 node scripts/feed-smoke.mjs        # 动态流端到端：95 项
 node scripts/doc-smoke.mjs         # 积木（可编程帖子）端到端：469 项
-node scripts/team-smoke.mjs        # 团队端到端：233 项（可见范围 / 越权 / 版本冲突 / 文件柜 / 群聊 / 团队号 / 公告通知 / Markdown 与公式 / 帖子回复）
-node scripts/check-ui-contract.mjs # 前端契约：CSS 类名 + API 字段 + 主题/头像/角色/私信/团队号/公告/剪贴板/公式/详情与回复结构（通过项数不下降哨兵：269）
+node scripts/team-smoke.mjs        # 团队端到端：271 项（可见范围 / 越权 / 版本冲突 / 文件柜 / 群聊 / 团队号 / 公告通知 / Markdown 与公式 / 帖子回复 / 加入申请与审核 / 隐藏团队）
+node scripts/check-ui-contract.mjs # 前端契约：CSS 类名 + API 字段 + 主题/头像/角色/私信/团队号/公告/剪贴板/公式/详情与回复/申请与隐藏结构（通过项数不下降哨兵：287）
 node scripts/check-encoding.mjs    # 源码编码体检：BOM / 乱码 / 关键中文内容
 node scripts/check-notes-ui.mjs    # 笔记 UI
 node scripts/notes-smoke.mjs       # 笔记接口
@@ -700,8 +743,8 @@ node scripts/capture-fixtures.mjs  # 重采前端冒烟用的假数据（改了�
 
 ```
 check-encoding 194 文件 / 87 断言 · check-skeleton 47 项 · check-golden 96 项 0 差异
-check-frontend 36 个页面 + 32 个模块静态扫描 · smoke 253 · smoke-ai 61 · feed-smoke 95
-doc-smoke 469 · team-smoke 233 · check-ui-contract 269 · check-notes-ui 33 · notes-smoke 44
+check-frontend 38 个页面 + 32 个模块静态扫描 · smoke 253 · smoke-ai 61 · feed-smoke 95
+doc-smoke 469 · team-smoke 271 · check-ui-contract 287 · check-notes-ui 33 · notes-smoke 44
 ```
 
 > 知识网络图（`knowledge-pack/` + `#/graph` + `/api/knowledge/*`）已在 2026-10 整条链路删除：

@@ -19,6 +19,11 @@ const NOTIF_META = {
   following_post: { icon: '🆕', text: '发布了新帖子' },
   // 团队公告：团队成员才会收到（发给全队时一个人一条，不做未读合并）。
   team_announcement: { icon: '🎽', text: '发布了团队公告' },
+  // 加入申请这三条：「需要申请」的团队才有。
+  // 申请那条是发给团长和管理员的（申请人是 actor），批/拒那两条发给申请人（审批人是 actor）。
+  team_join_request: { icon: '🙋', text: '申请加入你的团队' },
+  team_join_approved: { icon: '✅', text: '通过了你的加入申请' },
+  team_join_rejected: { icon: '🚫', text: '拒绝了你的加入申请' },
   moderation: { icon: '🛡️', text: '管理操作' },
   message: { icon: '✉️', text: '给你发了私信' },
   system: { icon: '📢', text: '系统消息' },
@@ -29,6 +34,14 @@ function notifTarget(item) {
   if (item.type === 'follow' && item.actor) return `#/u/${encodeURIComponent(item.actor.username)}`;
   // 团队公告点进团队主页（公告就挂在主页上）。团队已被解散就不跳了，退回发公告的人的主页。
   if (item.type === 'team_announcement' && item.team && !item.team.deleted) {
+    return `#/team/${encodeURIComponent(item.team.slug)}`;
+  }
+  // 加入申请这三条也跳团队主页：申请人进去看「⏳ 申请审核中」，管理员进去审。
+  if (
+    (item.type === 'team_join_request' || item.type === 'team_join_approved' || item.type === 'team_join_rejected') &&
+    item.team &&
+    !item.team.deleted
+  ) {
     return `#/team/${encodeURIComponent(item.team.slug)}`;
   }
   if (item.post && !item.post.deleted) return `#/post/${item.post.id}`;
@@ -51,6 +64,7 @@ function notifHtml(item) {
       </div>
       ${
         item.type === 'moderation' || item.type === 'system' || item.type === 'post_coin' || item.type === 'message' || item.type === 'team_announcement'
+          || item.type === 'team_join_request' || item.type === 'team_join_approved' || item.type === 'team_join_rejected'
           ? item.excerpt
             ? `<div class="notif-excerpt">${esc(item.excerpt)}</div>`
             : ''

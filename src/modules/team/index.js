@@ -1,7 +1,8 @@
 // 团队模块（P4）：让一群人有一块公共地方 —— 团队主页上能发帖，
 // 帖子能设「只有本团队看得见」，成员能一起编辑**且不互相覆盖**。
 //
-//   owns  teams / team_members / team_posts / team_files / team_messages
+//   owns  teams / team_members / team_posts / team_replies / team_files / team_messages
+//         / team_join_requests
 //   api   /api/teams/*                        —— 前缀不与任何已有接口重叠
 //         （外加一条 /api/team-files/:id 下载，理由见 routes.js 里那段注释）
 //
@@ -24,7 +25,7 @@
 // 可见性 / 版本号 / 软删除全部留在本目录里，改它不碰任何人。
 //
 // ── 为什么没有任何 staff 后门 ──
-// 如果站长能管理任意团队，他就能把自己加进一个「需要邀请」的团队然后读到团队帖 ——
+// 如果站长能管理任意团队，他就能把自己加进一个「需要申请」的团队然后读到团队帖 ——
 // 那是一条提权通道。能管理团队的只有 `team_members` 里的 owner / admin，
 // 能看见团队帖的只有团队成员、作者本人、以及被标成 public 的那些。
 // 少给一个后门最多是管理员看不到；多给一个就是一次不可逆的泄露，
@@ -42,11 +43,12 @@ export default {
   name: 'team',
   apiPrefix: '/api/teams',
   /**
-   * 本模块**拥有**的表。五张都是新增表，v1 的表一张都不动。
+   * 本模块**拥有**的表。七张都是新增表，v1 的表一张都不动。
    * `team_files` / `team_messages` 是「文件柜 + 群聊」那一轮加的：
    * 表由本模块建、也只有本模块读写，登记在这里才不会被骨架自检当成无主表。
+   * `team_join_requests` 是「申请加入 + 审核」那一轮加的，同理。
    */
-  owns: ['teams', 'team_members', 'team_posts', 'team_replies', 'team_files', 'team_messages'],
+  owns: ['teams', 'team_members', 'team_posts', 'team_replies', 'team_files', 'team_messages', 'team_join_requests'],
   /**
    * 会读、但不拥有的表（只读，绝不写）。
    * `users` 用来把用户名换成 id、给帖子和成员填作者信息；
