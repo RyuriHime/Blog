@@ -26,7 +26,7 @@ const TARGETS = ['src', 'public', 'scripts', 'forum-ai/src', 'note-agent/src', '
  * 可编程帖子（P2）落地后实测 187，抬到 187。
  * 这个数字存在的意义：前端文件被搬走却没同步检查脚本时，哨兵必须响。
  */
-const MIN_CHECKED = Number(process.env.MIN_CHECKED || 187);
+const MIN_CHECKED = Number(process.env.MIN_CHECKED || 190);
 
 /** 新布局里必须存在的关键文件。少一个就说明有人把文件搬走却没同步这份检查。 */
 const REQUIRED_FILES = [
@@ -89,6 +89,9 @@ const REQUIRED_FILES = [
   'scripts/check-golden.mjs',
   'scripts/check-skeleton.mjs',
   'scripts/feed-smoke.mjs',
+  'scripts/ai-smoke.mjs',
+  'src/modules/ai/schema.js',
+  'src/modules/ai/routes.js',
   // 可编程帖子（P2，积木）：后端模块、块引擎、沙箱、页面、样式与它自己的冒烟脚本。
   'src/modules/doc/schema.js',
   'src/modules/doc/queries.js',

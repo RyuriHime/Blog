@@ -38,8 +38,7 @@ const PLANNED_EMPTY = new Set([
   // documents / document_blocks / document_revisions / doc_block_types
   //   已由 P2（积木帖子）落地建表，2026-10 从这里移除。
   // 你要是看到这张清单少了什么，说明那块功能已经真的开工了 —— 这是设计如此。
-  'ai_capability_grants',
-  'ai_op_logs',
+  // ai_capability_grants / ai_op_logs 已由 P3（AI 能力层）落地建表，2026-10 从这里移除。
   'teams',
   'team_members',
 ]);
