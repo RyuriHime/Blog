@@ -29,7 +29,7 @@ const PORT = Number(process.env.CONTRACT_PORT || 3412);
 const BASE = `http://127.0.0.1:${PORT}`;
 
 /** 不下降哨兵：接手的模块只允许加，不允许把这些数字改小。 */
-const MIN_CHECKS = Number(process.env.MIN_UI_CHECKS || 258);
+const MIN_CHECKS = Number(process.env.MIN_UI_CHECKS || 269);
 
 /**
  * 前端源码入口清单。搬家前这三份文件在 public/ 根目录；骨架会把它们拆进
@@ -419,6 +419,74 @@ check(
 check(
   '团队号 6 位、去掉 I/L/O/U 这些抄错念错的字符',
   /TEAM_JOIN_CODE_LENGTH = 6/.test(serverJs) && /TEAM_JOIN_CODE_ALPHABET = '0123456789ABCDEFGHJKMNPQRSTVWXYZ'/.test(serverJs),
+);
+
+/* 团队第四批（帖子详情 + 回复 + 公式 + 复制）的契约。
+ * 这批守的是四件事：
+ *  ① 列表页的帖子标题必须是**链接** —— 不然「点进去看详情」这件事根本没有入口，
+ *     而页面照渲染、一点毛病都看不出来；
+ *  ② 详情页要有回复串与回复框，删除按钮只画在「自己能删的那一条」上；
+ *  ③ 公式渲染必须在 innerHTML **之后**（renderMathInElement 只处理已经在 DOM 里的节点）；
+ *  ④ 团队号的「复制」不能只赌 navigator.clipboard —— 它在 http + 局域网地址下是 undefined，
+ *     那边点下去什么都不发生，正是这个 bug 的形状。
+ */
+check(
+  '团队帖标题是进详情页的链接，不是一段死文字',
+  /class="team-post-title-link" href="\$\{href\}"/.test(appJs) && /\/post\/\$\{post\.id\}/.test(appJs),
+);
+check(
+  '详情页路由写在团队主页那条之前（顺序反了，`/team/x/post/1` 会被当成 slug 为 x/post/1 的团队）',
+  (() => {
+    const detailAt = appJs.indexOf("parts[2] === 'post' && parts[3]");
+    const homeAt = appJs.indexOf("first === 'team' && second)");
+    return detailAt !== -1 && homeAt !== -1 && detailAt < homeAt;
+  })(),
+);
+check(
+  '详情页有回复串与回复框，成员能就地回复',
+  /data-team-action="create-reply"/.test(appJs) &&
+    /data-team-field="reply"/.test(appJs) &&
+    /data-team-replies>/.test(appJs),
+);
+check(
+  '回复的「删除」只画给自己能删的那一条（canDelete 由服务端判）',
+  /reply\.canDelete\b/.test(appJs) &&
+    /data-team-action="delete-reply"/.test(appJs) &&
+    /data-team-reply="\$\{reply\.id\}"/.test(appJs),
+);
+check(
+  '团队帖正文与回复都在 innerHTML 之后渲染公式',
+  /ntRenderMath\(box\)/.test(appJs) &&
+    /ntRenderMath\(detailBox\)/.test(appJs) &&
+    /import \{ ntRenderMath \} from '\.\/notes\.js'/.test(appJs),
+);
+check(
+  '服务端：回复可见性跟着帖子走，非成员回帖是 403 且限流独立',
+  /team:reply:/.test(serverJs) && /加入这个团队之后才能回复/.test(serverJs),
+);
+check(
+  '服务端：删回复只认作者与团队管理员，且重复删是幂等的',
+  /只有作者或团队管理员可以删这条回复/.test(serverJs) && /softDeleteReply/.test(serverJs),
+);
+check(
+  '服务端：team_replies 被 team 模块 owns 认领（没人认领的话 check-skeleton 会红）',
+  /'team_replies'/.test(serverJs),
+);
+check(
+  '回复长度上限与 core 的回复同一个口径（5000）',
+  /MAX_TEAM_REPLY_CONTENT = 5000/.test(serverJs),
+);
+check(
+  '回复按时间正序（回复是对话，倒序等于倒放录音）',
+  /ORDER BY r\.created_at ASC/.test(serverJs),
+);
+check(
+  // 剪贴板本身由上面那六条（「剪贴板只在 core/dom.js 一处碰」那段）钉住，
+  // 这里只管一件事：回复翻页是**地址栏参数** `rpage`，不是就地换页 ——
+  // 刷新 / 后退 / 把链接发给别人，看到的必须是同一页回复。
+  '回复翻页走地址栏的 rpage 参数',
+  /params\.get\('rpage'\)/.test(appJs) &&
+    /`\/team\/\$\{slug\}\/post\/\$\{postId\}`, params, \{ rpage:/.test(appJs),
 );
 
 /* ---------- 1b. 背景主题契约 ---------- */

@@ -52,12 +52,16 @@ const TEAM_FROM = `
  *
  * `my_role` 也要按**帖所属团队**取一遍：一条帖能不能改，取决于我在**这个团队**里
  * 是 owner / admin 还是普通成员，跟我在别的团队里的身份无关。
+ *
+ * `reply_count` 顺手带出来：列表里每条帖子都要显示「N 条回复」，
+ * 不为这个数字再发一轮请求 —— 它只是个 COUNT，跟着列表一起走最省事。
  */
 const POST_COLUMNS = `
       p.id, p.team_id, p.user_id, p.title, p.content, p.scope, p.version, p.updated_by,
       p.created_at, p.updated_at,
       u.username, u.display_name, u.avatar, u.role,
       eu.username AS editor_username, eu.display_name AS editor_display,
+      (SELECT COUNT(*) FROM team_replies tr WHERE tr.post_id = p.id AND tr.deleted = 0) AS reply_count,
       (SELECT m.role FROM team_members m WHERE m.team_id = p.team_id AND m.user_id = ?) AS my_role`;
 
 const postColumnParams = (viewerId) => [viewerId];
@@ -66,6 +70,23 @@ const POST_FROM = `
     FROM team_posts p
     JOIN users u ON u.id = p.user_id
     LEFT JOIN users eu ON eu.id = p.updated_by`;
+
+/**
+ * 回复的列表/详情共用列。
+ *
+ * 同样带一份「我在这个团队里是什么角色」，给界面上的删除按钮用（服务端每次都会重判）。
+ * 回复没有自己的 scope：它跟着帖子走，帖子看得见就看得见（见 schema.js 里那段注释）。
+ */
+const REPLY_COLUMNS = `
+      r.id, r.post_id, r.team_id, r.user_id, r.content, r.created_at,
+      u.username, u.display_name, u.avatar, u.role,
+      (SELECT m.role FROM team_members m WHERE m.team_id = r.team_id AND m.user_id = ?) AS my_role`;
+
+const replyColumnParams = (viewerId) => [viewerId];
+
+const REPLY_FROM = `
+    FROM team_replies r
+    JOIN users u ON u.id = r.user_id`;
 
 /**
  * 文件柜的列表/详情共用列。
@@ -470,6 +491,49 @@ export function createTeamQueries(db) {
         now,
         id,
       ]).run();
+      return Number(result.changes) > 0;
+    },
+
+    /* ── 帖子下面的回复 ─────────────────────────────────────────────── */
+
+    /**
+     * 一条帖子的回复，**时间正序**（最早的在上）：
+     * 回复是一段对话，倒着排读起来是倒放的录音；帖子列表倒序是因为那是「新鲜事」。
+     */
+    listReplies({ postId, viewerId, limit, offset }) {
+      return bind(
+        `SELECT${REPLY_COLUMNS}${REPLY_FROM}
+     WHERE r.deleted = 0 AND r.post_id = ?
+     ORDER BY r.created_at ASC, r.id ASC
+     LIMIT ? OFFSET ?`,
+        [...replyColumnParams(viewerId), postId, limit, offset],
+      ).all();
+    },
+
+    countReplies(postId) {
+      const row = bind('SELECT COUNT(*) AS total FROM team_replies WHERE post_id = ? AND deleted = 0', [postId]).get();
+      return Number(row?.total) || 0;
+    },
+
+    /**
+     * 单条回复（要带上「我」的视角，才能判删除）。
+     * 软删过的行也返回 —— 路由要用它区分「不存在」和「已经删过了」。
+     */
+    replyById({ id, viewerId }) {
+      return bind(`SELECT${REPLY_COLUMNS}${REPLY_FROM}\n     WHERE r.id = ?`, [...replyColumnParams(viewerId), id]).get() ?? null;
+    },
+
+    createReply({ postId, teamId, userId, content, now = Date.now() }) {
+      const result = bind(
+        `INSERT INTO team_replies (post_id, team_id, user_id, content, deleted, created_at)
+     VALUES (?, ?, ?, ?, 0, ?)`,
+        [postId, teamId, userId, content, now],
+      ).run();
+      return Number(result.lastInsertRowid) || 0;
+    },
+
+    softDeleteReply(id) {
+      const result = bind('UPDATE team_replies SET deleted = 1 WHERE id = ? AND deleted = 0', [id]).run();
       return Number(result.changes) > 0;
     },
 

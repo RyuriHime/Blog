@@ -98,6 +98,7 @@ function makeElement(tag = 'div') {
     // 表现是「脚本跑到一半就没了、exit=0、什么错都不报」，非常难查。别改回箭头函数。
     matches(selector) { this._lastMatch = selector; return false; },
     focus() {}, blur() {}, click() {}, scrollTo() {},
+    select() {},
     getBoundingClientRect: () => ({ width: 800, height: 600, top: 0, left: 0, right: 800, bottom: 600 }),
     getContext: () => ({
       clearRect() {}, fillRect() {}, beginPath() {}, moveTo() {}, lineTo() {}, stroke() {}, fill() {},
@@ -154,11 +155,27 @@ const settle = () => new Promise((resolve) => setTimeout(resolve, 30));
 const documentElement = makeElement('html');
 const app = makeElement('main');
 SHELL = app;
+/**
+ * `document.execCommand('copy')` 的调用记录。
+ *
+ * 非安全上下文（http + 局域网 IP）里 `navigator.clipboard` 是 undefined，团队号的
+ * 「复制」按钮只能靠 textarea + execCommand 这一档 —— 这个数组就是那条路走没走通的证据。
+ * 见 `public/core/dom.js` 的 `copyText()`。
+ */
+const execCommands = [];
 const root = {
   documentElement,
   body: makeElement('body'),
   createElement: (tag) => makeElement(tag),
   createTextNode: (text) => ({ textContent: text }),
+  execCommand: (command) => { execCommands.push(command); return true; },
+  /**
+   * `copyText()` 的 execCommand 那一档会先读一次「用户原本的选区」，复制完再还回去
+   * （见 `public/core/dom.js` 的 `execCommandCopy`）。假 DOM 里没有选区，
+   * 给一个空选区就够了：那条路照常走到 `execCommand('copy')`。
+   */
+  getSelection: () => null,
+  createRange: () => ({ selectNodeContents() {}, setStart() {}, setEnd() {} }),
   querySelector: (selector) => {
     if (selector === '#app') return app;
     return registered(selector);
@@ -275,12 +292,97 @@ const OUTSIDER_TEAM_FIXTURE = {
   announcement: null,
 };
 
+/**
+ * 团队帖详情页与列表页共用的一条帖子。
+ *
+ * 服务端两个接口下发的是同一个 shape（`shapeTeamPost`），所以夹具也只留一份 ——
+ * 哪天 `replyCount` 之类的字段改了名，这里改一处，列表页和详情页一起跟着变。
+ */
+const TEAM_POST_FIXTURE = {
+  id: 1,
+  teamId: 1,
+  team: { id: 1, slug: 'frontend-group', name: '前端小组' },
+  title: '团队第一条帖子',
+  content: '大家好，这里是团队的地盘。',
+  contentHtml: '<p>大家好，这里是团队的地盘。</p>',
+  scope: 'team',
+  scopeLabel: '仅团队',
+  scopeIcon: '🎽',
+  version: 2,
+  // 列表页上那个「💬 N 条回复」徽标读的就是它。
+  replyCount: 2,
+  author: { id: 1, username: FIXTURE_USERNAME, displayName: '站长', avatar: null, role: 'owner' },
+  editor: { id: 1, username: FIXTURE_USERNAME, displayName: '站长' },
+  canEdit: true,
+  canDelete: true,
+  createdAt: Date.now() - 7200000,
+  updatedAt: Date.now() - 3600000,
+  edited: true,
+};
+
+/**
+ * 帖子下面的两条回复：第一条是站长自己写的（能删），第二条是别人写的（删不了）。
+ * 「只给作者和管理员画删除按钮」这条规矩就靠第二条来验。
+ */
+const TEAM_REPLY_FIXTURES = [
+  {
+    id: 11,
+    postId: 1,
+    teamId: 1,
+    content: '那我把接口先定下来，晚上发群里。',
+    contentHtml: '<p>那我把接口先定下来，晚上发群里。</p>',
+    author: { id: 1, username: FIXTURE_USERNAME, displayName: '站长', avatar: null, role: 'owner' },
+    canDelete: true,
+    createdAt: Date.now() - 1800000,
+  },
+  {
+    id: 12,
+    postId: 1,
+    teamId: 1,
+    content: '接口清单我补了两条，见文件柜。',
+    contentHtml: '<p>接口清单我补了两条，见文件柜。</p>',
+    author: { id: 2, username: FIXTURE_PEER, displayName: '小狐', avatar: null, role: 'member' },
+    canDelete: false,
+    createdAt: Date.now() - 600000,
+  },
+];
+
 const EXTRA = {
   '/api/markdown/preview': { html: '<p>ok</p>' },
   '/api/ai/site': { configured: false, ready: false },
   // 非成员视角的团队主页：详情里没有团队号、也没有公告（服务端就不给）。
   '/api/teams/outsider-group': { team: OUTSIDER_TEAM_FIXTURE, members: [], memberTotal: 0, scopes: SCOPES },
   '/api/teams/outsider-group/posts': { items: [], page: 1, perPage: 20, total: 0, totalPages: 0, sort: 'new' },
+  // 团队帖详情 `#/team/<slug>/post/<id>`：一条帖子 + 它下面的回复。
+  // 这两条的路径要写在 `/posts` 那一条**后面**（pickFixture 取最后一个匹配）。
+  '/api/teams/frontend-group/posts/1': { post: TEAM_POST_FIXTURE },
+  '/api/teams/frontend-group/posts/1/replies': {
+    items: TEAM_REPLY_FIXTURES,
+    page: 1,
+    perPage: 20,
+    total: 2,
+    totalPages: 1,
+  },
+  // 非成员点进一篇公开帖：帖子看得见，回复框只剩一句「加入之后才能回复」。
+  '/api/teams/outsider-group/posts/1': {
+    post: {
+      ...TEAM_POST_FIXTURE,
+      team: { id: 2, slug: 'outsider-group', name: '路过的团队' },
+      scope: 'public',
+      scopeLabel: '公开',
+      scopeIcon: '🌍',
+      canEdit: false,
+      canDelete: false,
+      replyCount: 1,
+    },
+  },
+  '/api/teams/outsider-group/posts/1/replies': {
+    items: [TEAM_REPLY_FIXTURES[0]],
+    page: 1,
+    perPage: 20,
+    total: 1,
+    totalPages: 1,
+  },
   // 积木（doc 模块）的四个页面要用的接口。采集器还没采这几条 ——
   // 手工给一小份真形状，渲染得出来就够了；接口形状改了就跟着改这里。
   '/api/docs/meta/block-types': {
@@ -446,27 +548,7 @@ const EXTRA = {
     scopes: SCOPES,
   },
   '/api/teams/frontend-group/posts': {
-    items: [
-      {
-        id: 1,
-        teamId: 1,
-        team: { id: 1, slug: 'frontend-group', name: '前端小组' },
-        title: '团队第一条帖子',
-        content: '大家好，这里是团队的地盘。',
-        contentHtml: '<p>大家好，这里是团队的地盘。</p>',
-        scope: 'team',
-        scopeLabel: '仅团队',
-        scopeIcon: '🎽',
-        version: 2,
-        author: { id: 1, username: FIXTURE_USERNAME, displayName: '站长', avatar: null, role: 'owner' },
-        editor: { id: 1, username: FIXTURE_USERNAME, displayName: '站长' },
-        canEdit: true,
-        canDelete: true,
-        createdAt: Date.now() - 7200000,
-        updatedAt: Date.now() - 3600000,
-        edited: true,
-      },
-    ],
+    items: [TEAM_POST_FIXTURE],
     page: 1,
     perPage: 20,
     total: 1,
@@ -606,6 +688,23 @@ globalThis.fetch = async (url, options = {}) => {
       },
       notified: 3,
     };
+  } else if (method === 'POST' && /^\/api\/teams\/[^/]+\/posts\/\d+\/replies$/.test(bare)) {
+    // 发回复：服务端回「刚建好的那一条」，前端拿到之后照样重拉整段列表 ——
+    // 顺序和条数只由服务端说了算（这里是唯一能看到请求体对不对的地方）。
+    data = {
+      reply: {
+        id: 33,
+        postId: 1,
+        teamId: 1,
+        content: payload?.content ?? '',
+        contentHtml: `<p>${payload?.content ?? ''}</p>`,
+        author: { id: 1, username: FIXTURE_USERNAME, displayName: '站长', avatar: null, role: 'owner' },
+        canDelete: true,
+        createdAt: Date.now(),
+      },
+    };
+  } else if (method === 'DELETE' && /^\/api\/teams\/[^/]+\/posts\/\d+\/replies\/\d+$/.test(bare)) {
+    data = { deleted: true, id: 11, replyCount: 1 };
   } else if (method === 'POST' && bare === '/api/teams/frontend-group/files') data = uploaded;
   else if (method === 'POST' && bare === '/api/teams/frontend-group/messages') data = sent;
   else data = pickFixture(raw);
@@ -688,6 +787,10 @@ const CASES = [
   ['团队·群聊页签', 'team.js', 'viewTeam', ['frontend-group', new Map([['tab', 'chat']])]],
   // 非成员视角：团队号与公告都是 null，页面上这两块必须整个不出现。
   ['团队主页·非成员', 'team.js', 'viewTeam', ['outsider-group', new Map()]],
+  // 团队帖详情 `#/team/<slug>/post/<id>`：点标题进去看的那一页（帖子 + 回复串 + 回复框）。
+  ['团队帖详情', 'team.js', 'viewTeamPost', ['frontend-group', 1, new Map()]],
+  // 非成员进公开帖：帖子看得见，回复框要变成「加入之后才能回复」。
+  ['团队帖详情·非成员', 'team.js', 'viewTeamPost', ['outsider-group', 1, new Map()]],
 ];
 
 let rendered = 0;
@@ -1131,6 +1234,108 @@ if (!state.theme) problems.push('state.theme 没被初始化');
   } catch (error) {
     problems.push(`团队号 / 公告交互测试自身崩了：${error?.stack || error}`);
     console.log('  ❌ 交互：凭团队号加入会跳队，公告能改能存，非成员看不到号与公告');
+  }
+}
+
+/* ---- 交互：团队帖详情页与回复 ----------------------------------------------------
+ *
+ * 为什么单独测这一条：点标题进详情、发回复、删回复、点「复制」抄团队号 ——
+ * 这四件事全都只在**用户点了按钮**之后才发生，渲染类断言一个都看不见。
+ * 团队号的「复制」之前就是这种坏法：按钮在、样式也在，点下去却什么也没发生。
+ */
+{
+  try {
+    const team = await view('team.js');
+    const detail = registered('[data-team-post-detail]');
+    const replies = registered('[data-team-replies]');
+    const form = registered('[data-team-reply-form]');
+
+    // 地址要真的落在详情页上：发回复 / 删回复走的都是 `currentSlug()`（从地址里现取），
+    // 停在上一场的团队上就会把回复发到别的团队去。
+    window.location.hash = '#/team/frontend-group/post/1';
+    await team.viewTeamPost('frontend-group', 1, new Map());
+    await settle();
+
+    /* ① 详情页把帖子与回复都画出来了 */
+    const detailHtml = String(detail.innerHTML);
+    if (!detailHtml.includes('团队第一条帖子')) problems.push('详情页上没有帖子标题');
+    if (!detailHtml.includes('大家好，这里是团队的地盘。')) problems.push('详情页上没有帖子正文');
+    if (!detailHtml.includes('data-team-reply-count')) problems.push('详情页上没有「N 条回复」那一行');
+    if (detailHtml.includes('data-team-action="edit-post"')) {
+      problems.push('详情页上画了「编辑」：编辑流程收尾会 refreshTeam()，在详情页点会把人甩回团队主页');
+    }
+
+    const replyHtml = String(replies.innerHTML);
+    if (!replyHtml.includes('那我把接口先定下来')) problems.push('详情页上没有画出已有的回复');
+    if (!replyHtml.includes('小狐')) problems.push('详情页上没有画出别人的回复');
+    const deleteButtons = (replyHtml.match(/data-team-action="delete-reply"/g) ?? []).length;
+    if (deleteButtons !== 1) {
+      problems.push(`回复上的「删除」只该出现在自己能删的那一条上，实际画了 ${deleteButtons} 个`);
+    }
+    if (!String(form.innerHTML).includes('data-team-field="reply"')) problems.push('成员在详情页上没有回复框');
+
+    /* ② 写一条回复发出去：请求体、输入框清空、列表重拉 */
+    const box = registered('[data-team-field="reply"]');
+    box.dataset.teamField = 'reply';
+    // 委托读的是 `event.target.closest('[data-team-field]')`（不是 matches），见上面团队号那一段。
+    box.closest = (selector) => (selector === '[data-team-field]' ? box : null);
+    box.value = '接口我今晚发到群里。';
+    dispatch(app, 'input', box);
+
+    // 真浏览器里这两个属性在同一个 textarea 上；假 DOM 是按选择器各发一个元素，
+    // 所以「清空」这一条要盯着视图真正去取的那个（`[data-team-reply-field]`）。
+    const replyField = registered('[data-team-reply-field]');
+    replyField.value = '接口我今晚发到群里。';
+
+    const replyNode = { dataset: { teamAction: 'create-reply', teamPost: '1' }, disabled: false, matches: () => false };
+    replyNode.closest = (selector) => (selector === '[data-team-action]' ? replyNode : null);
+    REQUESTS.length = 0;
+    dispatch(app, 'click', replyNode);
+    await settle();
+    const replyReq = REQUESTS.find(
+      (item) => item.method === 'POST' && item.url.split('?')[0] === '/api/teams/frontend-group/posts/1/replies',
+    );
+    if (!replyReq) problems.push('点「回复」之后没有发出 POST …/posts/1/replies');
+    else if (replyReq.body?.content !== '接口我今晚发到群里。') {
+      problems.push(`回复内容发出去不对：${JSON.stringify(replyReq.body?.content)}（草稿没从输入框同步进 teamState.draft？）`);
+    }
+    if (replyField.value !== '') problems.push('发完回复之后输入框没有清空');
+    if (!REQUESTS.some((item) => item.method === 'GET' && item.url.split('?')[0] === '/api/teams/frontend-group/posts/1/replies')) {
+      problems.push('发完回复之后没有重拉回复列表（顺序与条数应该由服务端说了算）');
+    }
+
+    /* ③ 删一条回复 */
+    const deleteNode = {
+      dataset: { teamAction: 'delete-reply', teamPost: '1', teamReply: '11' },
+      disabled: false,
+      matches: () => false,
+    };
+    deleteNode.closest = (selector) => (selector === '[data-team-action]' ? deleteNode : null);
+    REQUESTS.length = 0;
+    dispatch(app, 'click', deleteNode);
+    await settle();
+    if (!REQUESTS.some((item) => item.method === 'DELETE' && item.url.split('?')[0] === '/api/teams/frontend-group/posts/1/replies/11')) {
+      problems.push('点回复上的「删除」没有发出 DELETE …/replies/11');
+    }
+
+    /* ④ 团队号的「复制」在非安全上下文里也要真的复制 */
+    // Node 里本来就没有剪贴板；真有的话这一段测的就不是「退到 execCommand」那条路了。
+    if (globalThis.navigator?.clipboard?.writeText) {
+      problems.push('测试环境居然有 navigator.clipboard —— 这一条就没在测非安全上下文那条路');
+    }
+    const copyNode = { dataset: { teamAction: 'copy-join-code', code: 'K7M2QP' }, disabled: false, matches: () => false };
+    copyNode.closest = (selector) => (selector === '[data-team-action]' ? copyNode : null);
+    execCommands.length = 0;
+    dispatch(app, 'click', copyNode);
+    await settle();
+    if (!execCommands.includes('copy')) {
+      problems.push('非安全上下文里点「复制团队号」没有走到 execCommand 那一档（clipboard API 在 http + 局域网地址下是 undefined）');
+    }
+
+    console.log(`  ${problems.length ? '❌' : '✅'} 交互：帖子点得进详情、回复发得出删得掉、团队号在非安全上下文也能复制`);
+  } catch (error) {
+    problems.push(`团队帖详情 / 回复交互测试自身崩了：${error?.stack || error}`);
+    console.log('  ❌ 交互：帖子点得进详情、回复发得出删得掉、团队号在非安全上下文也能复制');
   }
 }
 

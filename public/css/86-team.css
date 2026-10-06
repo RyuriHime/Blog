@@ -828,3 +828,127 @@
   gap: 8px;
   flex-wrap: wrap;
 }
+
+/* ================= 帖子详情与回复 ================= */
+
+/* 详情页顶部：只说明「这是哪个团队」，比主页那块 hero 矮一大截。 */
+.team-detail-hero {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.team-detail-team {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.team-detail-name {
+  font-size: 15px;
+  font-weight: 600;
+}
+
+/* 列表页里帖子的标题就是详情页入口：平时安静，鼠标上来才变色。 */
+.team-post-title-link {
+  color: inherit;
+}
+
+.team-post-title-link:hover {
+  color: var(--accent);
+  text-decoration: none;
+}
+
+/* 「N 条回复」。详情页里是 <span>（人已经在这一页了），列表页里是 <a>。 */
+.team-post-replies {
+  padding: 1px 7px;
+  border-radius: 999px;
+  border: 1px solid var(--border-soft);
+  background: var(--bg-soft);
+  color: var(--text-dim);
+  font-size: 11px;
+  line-height: 1.8;
+}
+
+/* 回复列表自己是一张卡片（外壳上带 .card），里面每条用一条上边框分开。 */
+.team-replies {
+  display: flex;
+  flex-direction: column;
+}
+
+.team-reply {
+  display: flex;
+  gap: 10px;
+  padding: 10px 0;
+  border-top: 1px solid var(--border-soft);
+}
+
+.team-reply:first-child {
+  padding-top: 0;
+  border-top: none;
+}
+
+.team-reply-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.team-reply-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  font-size: 12px;
+}
+
+.team-reply-author {
+  color: var(--text-dim);
+  font-weight: 600;
+}
+
+.team-reply-author:hover {
+  color: var(--accent);
+  text-decoration: none;
+}
+
+.team-reply-body {
+  color: var(--text-dim);
+  font-size: 14px;
+  line-height: 1.7;
+  overflow-wrap: anywhere;
+}
+
+.team-reply-form {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+/* 未登录 / 没加入：一行说明 + 一个按钮，不摆一个按不动的输入框。 */
+.team-reply-form-guest {
+  flex-direction: row;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.team-reply-input {
+  resize: vertical;
+  min-height: 76px;
+  line-height: 1.7;
+}
+
+.team-reply-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+}

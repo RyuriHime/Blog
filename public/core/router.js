@@ -119,6 +119,12 @@ async function route() {
     // 第二段传的是 **slug 字符串**（后端两种都收，但地址里露出来的应该是 slug），
     // 不再解一次码 —— parseHash 已经把整条 hash 解过了。
     if (first === 'teams') return await Team.viewTeams(query);
+    // 团队帖子详情：`#/team/<slug>/post/<id>`。**必须排在上面那行之前**，
+    // 否则整条地址会被当成「slug 叫 xxx/post/12 的团队主页」（多余的两段直接丢掉，
+    // 症状是点进详情却渲染出团队主页，而且看不出哪里错了）。
+    if (first === 'team' && second && parts[2] === 'post' && parts[3]) {
+      return await Team.viewTeamPost(second, Number(parts[3]), query);
+    }
     if (first === 'team' && second) return await Team.viewTeam(second, query);
     // `#/wiki`：所有看得见的站（一个帖子一个 wiki 里的「一个帖子」列表）。
     if (first === 'wiki') return await Doc.viewWikiIndex();

@@ -773,11 +773,122 @@ try {
     JSON.stringify((ownerInbox.data?.items ?? []).map((item) => item.type)),
   );
 
+  /* ── 帖子下面的回复：发得出、看得见、删得掉，以及谁都别越权 ─────── */
+  // 这里的 `post` 是 teamowner 发的那篇「仅团队」的帖子（scope='team'），
+  // 所以它正好能同时验两件事：成员读得到，路人与未登录读不到。
+  const repliesPath = `${teamPath}/posts/${postId}/replies`;
+
+  const emptyReplies = await owner.client.call(repliesPath);
+  check('还没人回复时列表是空的', emptyReplies.status === 200 && (emptyReplies.data?.items ?? []).length === 0, JSON.stringify(emptyReplies.error ?? emptyReplies.data));
+  check(
+    '空列表也把分页壳给全（page/perPage/total/totalPages）',
+    emptyReplies.data?.page === 1 && emptyReplies.data?.total === 0 && emptyReplies.data?.totalPages === 1,
+    JSON.stringify(emptyReplies.data),
+  );
+  const postsBeforeReply = await owner.client.call(`${teamPath}/posts`);
+  check('帖子列表里的 replyCount 一开始是 0', (postsBeforeReply.data?.items ?? []).find((item) => item.id === postId)?.replyCount === 0, JSON.stringify((postsBeforeReply.data?.items ?? []).find((item) => item.id === postId)?.replyCount));
+
+  const firstReply = await owner.client.call(repliesPath, { method: 'POST', body: { content: '周五我可能迟到十分钟。' } });
+  check('团队成员能回复', firstReply.status === 200, JSON.stringify(firstReply.error ?? firstReply.body));
+  const firstReplyId = firstReply.data?.reply?.id;
+  check('回复正文原样回来', firstReply.data?.reply?.content === '周五我可能迟到十分钟。', String(firstReply.data?.reply?.content));
+  check('回复带 contentHtml（Markdown 由服务端渲染，前端不再加工）', /^<p>/.test(String(firstReply.data?.reply?.contentHtml ?? '')), String(firstReply.data?.reply?.contentHtml));
+  check('回复带回作者与时间', firstReply.data?.reply?.author?.username === 'teamowner' && Number(firstReply.data?.reply?.createdAt) > 0);
+  check('自己发的回复自己能删（canDelete）', firstReply.data?.reply?.canDelete === true, String(firstReply.data?.reply?.canDelete));
+
+  const mateReply = await mate.client.call(repliesPath, { method: 'POST', body: { content: '我把材料带过去。' } });
+  check('管理员也是团队成员，能回复', mateReply.status === 200, JSON.stringify(mateReply.error ?? mateReply.body));
+
+  const outsiderReply = await outsider.client.call(repliesPath, { method: 'POST', body: { content: '收到。' } });
+  check('普通成员能回复', outsiderReply.status === 200, JSON.stringify(outsiderReply.error ?? outsiderReply.body));
+  const outsiderReplyId = outsiderReply.data?.reply?.id;
+
+  const replyList = await owner.client.call(repliesPath);
+  const replyListIds = (replyList.data?.items ?? []).map((item) => item.id);
+  check('回复按时间正序（先发的排在前面，倒序就是倒放录音）', replyListIds[0] === firstReplyId && replyListIds.length === 3, JSON.stringify(replyListIds));
+  check('回复列表带 total', replyList.data?.total === 3, String(replyList.data?.total));
+  check('分页壳里的 perPage 是正的', Number(replyList.data?.perPage) > 0, String(replyList.data?.perPage));
+
+  const asOutsider = await outsider.client.call(repliesPath);
+  const ownerReplySeenByOutsider = (asOutsider.data?.items ?? []).find((item) => item.id === firstReplyId);
+  check('普通成员看别人的回复：canDelete 是 false', ownerReplySeenByOutsider?.canDelete === false, JSON.stringify(ownerReplySeenByOutsider?.canDelete));
+  check('普通成员看自己的回复：canDelete 是 true', (asOutsider.data?.items ?? []).find((item) => item.id === outsiderReplyId)?.canDelete === true);
+  const asMate = await mate.client.call(repliesPath);
+  check('管理员看别人的回复：canDelete 是 true（管理员能管）', (asMate.data?.items ?? []).find((item) => item.id === firstReplyId)?.canDelete === true);
+
+  const postsAfterReply = await owner.client.call(`${teamPath}/posts`);
+  check('帖子列表里的 replyCount 跟着涨到 3', (postsAfterReply.data?.items ?? []).find((item) => item.id === postId)?.replyCount === 3, String((postsAfterReply.data?.items ?? []).find((item) => item.id === postId)?.replyCount));
+  const detailAfterReply = await owner.client.call(`${teamPath}/posts/${postId}`);
+  check('帖子详情也带 replyCount（详情页靠它显示条数）', detailAfterReply.data?.post?.replyCount === 3, String(detailAfterReply.data?.post?.replyCount));
+
+  // 可见性完全跟着帖子：成员读得到，路人与未登录读不到。
+  const strangerReplies = await stranger.client.call(repliesPath);
+  check('非成员读「仅团队」帖子的回复：404（不能隔墙猜出帖子存在）', strangerReplies.status === 404, String(strangerReplies.status));
+  check('这个 404 的代号还是 team_post_not_found', strangerReplies.error?.code === 'team_post_not_found', String(strangerReplies.error?.code));
+  const anonReplies = await anon.call(repliesPath);
+  check('未登录读「仅团队」帖子的回复：401 而不是 404', anonReplies.status === 401, String(anonReplies.status));
+
+  // 写权限：非成员 403（且是「先判帖子、再判成员」的顺序），未登录 401。
+  // 注意 403 那句提示只在「路人看得见的帖子」上才出得来 ——
+  // 「仅团队」的帖子上，loadPost 先一步回 404，压根走不到成员判定。
+  const strangerWritesHidden = await stranger.client.call(repliesPath, { method: 'POST', body: { content: '隔着墙问一句。' } });
+  check('非成员回复「仅团队」的帖子：404（不能回，也不告诉你帖子存在）', strangerWritesHidden.status === 404, String(strangerWritesHidden.status));
+
+  const openPost = await owner.client.call(`${teamPath}/posts`, {
+    method: 'POST',
+    body: { title: '公开协商帖', content: '这篇是公开的，路人也能看。', scope: 'public' },
+  });
+  check('（前置）建一篇公开帖，用来试「看得见但不能回」', openPost.status === 200 && openPost.data?.post?.scope === 'public', JSON.stringify(openPost.error ?? openPost.body));
+  const openRepliesPath = `${teamPath}/posts/${openPost.data?.post?.id}/replies`;
+  const openReply = await owner.client.call(openRepliesPath, { method: 'POST', body: { content: '公开帖下面也能回。' } });
+  check('公开帖下面成员能回', openReply.status === 200, JSON.stringify(openReply.error ?? openReply.body));
+  const strangerReadsOpen = await stranger.client.call(openRepliesPath);
+  check('非成员读公开帖的回复：200（回复的可见性就是帖子的可见性，这是设计不是漏）', strangerReadsOpen.status === 200 && (strangerReadsOpen.data?.items ?? []).length === 1, `${strangerReadsOpen.status} ${JSON.stringify((strangerReadsOpen.data?.items ?? []).length)}`);
+  check('公开帖的回复里 canDelete 对路人一律 false', (strangerReadsOpen.data?.items ?? []).every((item) => item.canDelete === false), JSON.stringify((strangerReadsOpen.data?.items ?? []).map((item) => item.canDelete)));
+
+  const strangerWritesReply = await stranger.client.call(openRepliesPath, { method: 'POST', body: { content: '我也说两句。' } });
+  check('非成员回复看得见的帖子：403', strangerWritesReply.status === 403, String(strangerWritesReply.status));
+  check('403 的提示是「加入这个团队之后才能回复」', strangerWritesReply.error?.message === '加入这个团队之后才能回复', String(strangerWritesReply.error?.message));
+  const anonWritesReply = await anon.call(repliesPath, { method: 'POST', body: { content: '路人甲。' } });
+  check('未登录回复是 401（先问登录，再问成员）', anonWritesReply.status === 401, String(anonWritesReply.status));
+
+  const emptyReply = await owner.client.call(repliesPath, { method: 'POST', body: { content: '   ' } });
+  check('空回复被拒 400', emptyReply.status === 400, String(emptyReply.status));
+  const longReply = await owner.client.call(repliesPath, { method: 'POST', body: { content: '啊'.repeat(5001) } });
+  check('超过 5000 字的回复被拒 400', longReply.status === 400, String(longReply.status));
+
+  // 删除：作者或管理员，别人不行；重复删是幂等的。
+  const outsiderDeletes = await outsider.client.call(`${repliesPath}/${firstReplyId}`, { method: 'DELETE' });
+  check('普通成员删别人的回复被拒 403', outsiderDeletes.status === 403, String(outsiderDeletes.status));
+  check('403 的提示是「只有作者或团队管理员可以删这条回复」', outsiderDeletes.error?.message === '只有作者或团队管理员可以删这条回复', String(outsiderDeletes.error?.message));
+
+  const missingReply = await owner.client.call(`${repliesPath}/99999999`, { method: 'DELETE' });
+  check('删一条不存在的回复：404 team_reply_not_found', missingReply.status === 404 && missingReply.error?.code === 'team_reply_not_found', `${missingReply.status} ${missingReply.error?.code}`);
+
+  // 跨帖：把别条帖子下的回复 id 拼到这条帖子路径上 —— 路径里的帖子说了算。
+  const secondPost = await owner.client.call(`${teamPath}/posts`, { method: 'POST', body: { title: '另一篇帖子', content: '专门用来试跨帖的路径。', scope: 'team' } });
+  check('（前置）另建一篇帖子用来试跨帖', secondPost.status === 200, JSON.stringify(secondPost.error ?? secondPost.body));
+  const crossPost = await owner.client.call(`${teamPath}/posts/${secondPost.data?.post?.id}/replies/${firstReplyId}`, { method: 'DELETE' });
+  check('拿别条帖子下的回复 id 来删：404', crossPost.status === 404, String(crossPost.status));
+  const stillThere = await owner.client.call(repliesPath);
+  check('跨帖删失败之后那条回复还在（没被顺手删掉）', (stillThere.data?.items ?? []).some((item) => item.id === firstReplyId));
+
+  const deletedReply = await owner.client.call(`${repliesPath}/${firstReplyId}`, { method: 'DELETE' });
+  check('作者能删自己的回复', deletedReply.status === 200 && deletedReply.data?.deleted === true, JSON.stringify(deletedReply.error ?? deletedReply.body));
+  check('删除响应里带回最新的条数（少了一条）', deletedReply.data?.replyCount === 2, String(deletedReply.data?.replyCount));
+  const deletedAgain = await owner.client.call(`${repliesPath}/${firstReplyId}`, { method: 'DELETE' });
+  check('重复删同一条：仍然 200 且条数不变（幂等，前端重试不该看到报错）', deletedAgain.status === 200 && deletedAgain.data?.replyCount === 2, `${deletedAgain.status} ${deletedAgain.data?.replyCount}`);
+  const repliesAfterDelete = await owner.client.call(repliesPath);
+  check('删掉的回复不再出现在列表里', !(repliesAfterDelete.data?.items ?? []).some((item) => item.id === firstReplyId), JSON.stringify((repliesAfterDelete.data?.items ?? []).map((item) => item.id)));
+  check('删掉之后 total 也少一个', repliesAfterDelete.data?.total === 2, String(repliesAfterDelete.data?.total));
+
   /* ── 退出与解散 ─────────────────────────────────────────────────── */
   const left = await outsider.client.call(`${teamPath}/leave`, { method: 'POST' });
   check('普通成员能自己退出团队', left.status === 200, JSON.stringify(left.error ?? left.body));
   const afterLeave = await outsider.client.call(`${teamPath}/posts/${postId}`);
   check('退出之后立刻又看不到了（404）', afterLeave.status === 404, String(afterLeave.status));
+  const afterLeaveReplies = await outsider.client.call(repliesPath);
+  check('退出之后回复也跟着看不见（回复的可见性就是帖子的可见性）', afterLeaveReplies.status === 404, String(afterLeaveReplies.status));
 
   const notOwnerDelete = await mate.client.call(teamPath, { method: 'DELETE' });
   check('不是创建者不能解散团队（403）', notOwnerDelete.status === 403, String(notOwnerDelete.status));

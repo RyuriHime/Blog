@@ -46,7 +46,7 @@ export default {
    * `team_files` / `team_messages` 是「文件柜 + 群聊」那一轮加的：
    * 表由本模块建、也只有本模块读写，登记在这里才不会被骨架自检当成无主表。
    */
-  owns: ['teams', 'team_members', 'team_posts', 'team_files', 'team_messages'],
+  owns: ['teams', 'team_members', 'team_posts', 'team_replies', 'team_files', 'team_messages'],
   /**
    * 会读、但不拥有的表（只读，绝不写）。
    * `users` 用来把用户名换成 id、给帖子和成员填作者信息；

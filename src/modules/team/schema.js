@@ -1,6 +1,8 @@
 // 团队（P4）的数据表。
 //
-// 三张表全是新增的，不动 v1 / core 的任何一张表 —— 迁移是纯加法，线上老数据一个字都不用改。
+// 六张表全是新增的，不动 v1 / core 的任何一张表 —— 迁移是纯加法，线上老数据一个字都不用改。
+// 老库开库时这几条 `CREATE TABLE IF NOT EXISTS` 会照跑一遍：新加的 `team_replies`
+// 因此在任何老库上都是自动建出来的，migrate.js 只管「老表补列」那种改不动的情况。
 //
 // 建表顺序 = 别的模块 import 这个文件时登记的顺序；`addScript` 会按「括号深度为 0 的分号」
 // 切开逐条登记，索引语句照旧执行但不进表名册（否则索引名会被当成表名，归属检查会误报）。
@@ -44,6 +46,9 @@ export const MAX_TEAM_POST_TITLE = 120;
 
 /** 团队帖正文上限。与帖子同一个口径（core 的帖子也是 20000）。 */
 export const MAX_TEAM_POST_CONTENT = 20000;
+
+/** 一条回复的字数上限。与 core 的回复同一个口径（那边也是 5000）。 */
+export const MAX_TEAM_REPLY_CONTENT = 5000;
 
 /** 一个团队主页一页显示多少条帖子。 */
 export const TEAM_PAGE_MAX = 50;
@@ -151,6 +156,32 @@ CREATE TABLE IF NOT EXISTS team_posts (
 );
 CREATE INDEX IF NOT EXISTS idx_team_posts_team ON team_posts (team_id, created_at DESC, id DESC);
 CREATE INDEX IF NOT EXISTS idx_team_posts_user ON team_posts (user_id, created_at DESC);
+
+-- 团队帖的回复。
+--
+-- ⚠️ 回复**没有自己的可见范围**：跟着帖子走。「帖子看得见」= 「回复看得见」（见 routes.js 里的
+-- loadPost），一条回复单独设 scope 只会让「这段对话谁看得见哪半段」变成谜。
+-- 于是作者把帖子标成 public 时，路过的读者能看见、也能读完这串回复 —— 这正是 public 的意思。
+--
+-- 写回复则收紧到**团队成员**（路由里判）：回复是队内讨论，路过的人看完就走。
+--
+-- team_id 是**故意冗余**的一份：权限判定要问「我在这个团队里是什么角色」，
+-- 有它就不用绕道 team_posts，写法与 team_messages / team_files 一致。
+-- 写入时从帖子取，此后不变（帖子不会转会到别的团队）。
+--
+-- deleted 是软删除：作者本人或团队管理员能删（routes.js），删完留一行壳，编号不乱。
+CREATE TABLE IF NOT EXISTS team_replies (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  post_id    INTEGER NOT NULL REFERENCES team_posts(id),
+  team_id    INTEGER NOT NULL REFERENCES teams(id),
+  user_id    INTEGER NOT NULL REFERENCES users(id),
+  content    TEXT    NOT NULL DEFAULT '',
+  deleted    INTEGER NOT NULL DEFAULT 0,
+  created_at INTEGER NOT NULL
+);
+-- 回复永远按「某条帖子、时间正序」取，所以索引里 post_id 在前、created_at 升序。
+CREATE INDEX IF NOT EXISTS idx_team_replies_post ON team_replies (post_id, deleted, created_at, id);
+CREATE INDEX IF NOT EXISTS idx_team_replies_user ON team_replies (user_id, created_at DESC);
 
 -- 团队文件柜。
 --

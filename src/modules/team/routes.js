@@ -17,6 +17,7 @@ import {
   MAX_TEAM_NAME,
   MAX_TEAM_POST_CONTENT,
   MAX_TEAM_POST_TITLE,
+  MAX_TEAM_REPLY_CONTENT,
   MAX_TEAM_SLUG,
   TEAM_FILE_BODY_LIMIT,
   TEAM_FILE_PAGE_MAX,
@@ -27,7 +28,7 @@ import {
   TEAM_SCOPES,
 } from './schema.js';
 import { pickJoinCode, readJoinCode } from './join-code.js';
-import { SCOPE_OPTIONS, shapeFile, shapeMember, shapeMessage, shapeTeam, shapeTeamPost } from './shape.js';
+import { SCOPE_OPTIONS, shapeFile, shapeMember, shapeMessage, shapeTeam, shapeTeamPost, shapeTeamReply } from './shape.js';
 import {
   attachmentHeaders,
   extensionOf,
@@ -524,6 +525,79 @@ export function registerTeamRoutes(ctx, { queries }) {
     ensure(canDelete, 403, 'forbidden', '只有作者或团队管理员可以删这篇帖子');
     queries.softDeletePost(row.id);
     ok(reqCtx.res, { deleted: true, id: row.id });
+  });
+
+  /* ── 帖子下面的回复 ─────────────────────────────────────────────── */
+
+  /**
+   * 回复的可见性**完全跟着帖子**：`loadPost` 已经判过「这篇帖子你看不看得见」，
+   * 这里不再判第二遍。所以「路人看得见公开帖，也就读得到它下面的回复」是设计，
+   * 不是漏洞 —— 作者把帖子标成公开，要的就是这个效果。
+   */
+  add('GET', '/api/teams/:id/posts/:postId/replies', async (reqCtx) => {
+    const teamRow = loadTeam(reqCtx, queries);
+    const post = loadPost(reqCtx, queries, teamRow);
+    const viewerId = viewerIdOf(reqCtx.user);
+    const { page, perPage, offset } = readPage(reqCtx.query);
+    const total = queries.countReplies(post.id);
+    const rows = queries.listReplies({ postId: post.id, viewerId, limit: perPage, offset });
+    ok(reqCtx.res, {
+      items: rows.map((row) => shapeTeamReply(row, { viewer: reqCtx.user })),
+      page,
+      perPage,
+      total,
+      totalPages: Math.max(1, Math.ceil(total / perPage)),
+    });
+  });
+
+  add('POST', '/api/teams/:id/posts/:postId/replies', async (reqCtx) => {
+    const teamRow = loadTeam(reqCtx, queries);
+    // 顺序要紧：先判「这篇帖子你看不看得见」，再判「你是不是成员」。
+    // 反过来的话，一条只给团队看的帖子会对陌生访客回 403「你不是成员」——
+    // 那等于隔着一堵墙告诉他「这篇帖子确实存在」。
+    const post = loadPost(reqCtx, queries, teamRow);
+    const user = requireUser(reqCtx);
+    ensure(
+      Boolean(queries.memberOf(teamRow.id, user.id)),
+      403,
+      'forbidden',
+      '加入这个团队之后才能回复',
+    );
+    rateLimit(`team:reply:${user.id}`, 60, 10 * 60 * 1000);
+    const content = field((reqCtx.body ?? {}).content ?? '', {
+      label: '回复',
+      min: 1,
+      max: MAX_TEAM_REPLY_CONTENT,
+    });
+    const id = queries.createReply({ postId: post.id, teamId: teamRow.id, userId: user.id, content });
+    const row = queries.replyById({ id, viewerId: user.id });
+    ok(reqCtx.res, { reply: shapeTeamReply(row, { viewer: user }) });
+  });
+
+  /**
+   * 删一条回复。路径里带上 `:postId` 是故意的：一条回复属于哪篇帖子写在 URL 里，
+   * 就不用靠「回复 id 恰好对得上」这种巧合来判断，`loadPost` 那套可见性判定也直接复用。
+   *
+   * 重复删同一条回复返回成功（0 行改动也是「它现在没了」），不做 404 ——
+   * 前端重试一次不该看到报错。
+   */
+  add('DELETE', '/api/teams/:id/posts/:postId/replies/:replyId', async (reqCtx) => {
+    const teamRow = loadTeam(reqCtx, queries);
+    const post = loadPost(reqCtx, queries, teamRow);
+    const user = requireUser(reqCtx);
+    const row = queries.replyById({ id: readId(reqCtx.params.replyId, '回复'), viewerId: user.id });
+    // 「不属于这篇帖子」和「压根没有这一行」都给 404：对调用方来说都是「没了」。
+    ensure(
+      row && Number(row.post_id) === Number(post.id) && Number(row.team_id) === Number(teamRow.id),
+      404,
+      'team_reply_not_found',
+      '这条回复不存在',
+    );
+    const canDelete = row.user_id === user.id || isTeamManager(queries, teamRow.id, user.id);
+    ensure(canDelete, 403, 'forbidden', '只有作者或团队管理员可以删这条回复');
+    queries.softDeleteReply(row.id);
+    // 顺手把最新的条数带回去：详情页删完不用再发一次请求问「现在几条了」。
+    ok(reqCtx.res, { deleted: true, id: row.id, replyCount: queries.countReplies(post.id) });
   });
 
   /* ── 文件柜 ─────────────────────────────────────────────────────── */

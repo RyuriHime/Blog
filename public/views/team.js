@@ -29,6 +29,7 @@ import { paginationHtml } from '../core/widgets.js';
 // 动态流、积木页用的都是它 —— 这里没有第二份数学渲染实现。
 // 服务端 renderMarkdown **从不排公式**，只把 `$…$` / `$$…$$` 原样吐出来，
 // 所以团队帖的正文必须在这儿补一次，否则 `$E=mc^2$` 就是一段等宽源码。
+// 帖子详情页与回复是后来加的，走的是同一个 ntRenderMath，且都在 innerHTML 之后调用。
 import { ntRenderMath } from './notes.js';
 
 /** 兜底的四档可见范围：正常情况用服务端返回的 SCOPE_OPTIONS 覆盖它。 */
@@ -61,6 +62,8 @@ const teamState = {
     // ⚠️ 新加的 key 必须写在这里：下面的 input/change 委托只认 draft 里已有的键。
     code: '',
     announcement: '',
+    // 帖子详情页的回复框（同上：不加在这里，敲的字永远进不了状态）。
+    reply: '',
   },
   editing: null,
   conflict: null,
@@ -482,12 +485,31 @@ function conflictHtml(conflict) {
   </div>`;
 }
 
-function teamPostHtml(post) {
+/**
+ * 一条团队帖。
+ *
+ * `detail` 是详情页（`#/team/<slug>/post/<id>`）用的：那边标题不再当链接（人已经在了），
+ * 编辑/删除按钮也不画 —— 编辑那条流程收尾时要整页重画**团队主页**（`refreshTeam`），
+ * 在详情页点它会把人莫名送回主页。要改帖子，回团队主页改。
+ */
+function teamPostHtml(post, { detail = false } = {}) {
   const editing = teamState.editing === post.id;
   const conflict = teamState.conflict?.postId === post.id ? teamState.conflict : null;
   const editor = post.editor && post.edited
     ? `<span class="hint">最后由 ${esc(post.editor.displayName)} 改过</span>`
     : '';
+  const slug = post.team?.slug ?? currentSlug();
+  const href = `#/team/${encodeURIComponent(slug)}/post/${post.id}`;
+  const replyTotal = Number(post.replyCount) || 0;
+  // 列表页把「N 条回复」也做成入口：一串已经在进行的讨论，比一句话更值得点进去。
+  const replies = detail
+    ? `<span class="team-post-replies" data-team-reply-count>💬 ${Fmt.fmtNum(replyTotal)} 条回复</span>`
+    : replyTotal > 0
+      ? `<a class="team-post-replies" href="${href}">💬 ${Fmt.fmtNum(replyTotal)} 条回复</a>`
+      : '';
+  const title = detail
+    ? esc(post.title)
+    : `<a class="team-post-title-link" href="${href}">${esc(post.title)}</a>`;
 
   const body = editing
     ? `<div class="team-post-edit" data-team-editor>
@@ -505,12 +527,12 @@ function teamPostHtml(post) {
     : `<div class="team-post-body md">${post.contentHtml ?? ''}</div>`;
 
   const tools = [];
-  if (post.canEdit) tools.push(`<button class="team-mini" data-team-action="edit-post" data-team-post="${post.id}">编辑</button>`);
-  if (post.canDelete) tools.push(`<button class="team-mini team-mini-danger" data-team-action="delete-post" data-team-post="${post.id}">删除</button>`);
+  if (!detail && post.canEdit) tools.push(`<button class="team-mini" data-team-action="edit-post" data-team-post="${post.id}">编辑</button>`);
+  if (!detail && post.canDelete) tools.push(`<button class="team-mini team-mini-danger" data-team-action="delete-post" data-team-post="${post.id}">删除</button>`);
 
   return `<article class="card team-post" data-team-post-card="${post.id}">
     <div class="team-post-head">
-      <h2 class="team-post-title">${esc(post.title)}</h2>
+      <h2 class="team-post-title">${title}</h2>
       <span class="team-post-scope" title="${esc(post.scopeLabel)}">${SCOPE_ICON[post.scope] ?? '🎽'} ${esc(post.scopeLabel)}</span>
     </div>
     <div class="team-post-meta">
@@ -519,6 +541,7 @@ function teamPostHtml(post) {
       <span class="hint">${Fmt.timeAgo(post.createdAt)}</span>
       <span class="team-post-version">第 ${Fmt.fmtNum(post.version)} 版</span>
       ${editor}
+      ${replies}
       ${tools.length ? `<span class="team-post-tools">${tools.join('')}</span>` : ''}
     </div>
     ${body}
@@ -847,6 +870,8 @@ async function renderTeamPosts(team, query) {
   box.innerHTML = items.length
     ? items.map(teamPostHtml).join('')
     : `<div class="card">${emptyHtml('📝', '这个团队还没发过帖子', team.joined ? '上面就是输入框，写第一条吧' : '加入之后你也能发')}</div>`;
+  // 正文里的 LaTeX（$…$ / $$…$$）交给 KaTeX 就地渲染。必须在 innerHTML 之后。
+  ntRenderMath(box);
 
   const pager = $('[data-team-pager]');
   if (pager) {
@@ -867,6 +892,189 @@ function repaintPost(post) {
   node.outerHTML = teamPostHtml(post);
   // ⚠️ 上面那句把 `node` 换掉了：旧引用当场变成游离节点，公式得挂到**新的**那张卡上。
   ntRenderMath($(`[data-team-post-card="${post.id}"]`));
+}
+
+/* ── 帖子详情：一条帖子 + 它下面的一串回复 ─────────────────────────── */
+
+/** 详情页顶部：只回答「这是哪个团队」。加入/设置/公告那些留在团队主页。 */
+function detailHeroHtml(team) {
+  const back = `#/team/${encodeURIComponent(team.slug)}`;
+  return `<div class="card team-detail-hero">
+    <div class="team-detail-team">
+      <a class="team-detail-name" href="${back}">🎽 ${esc(team.name)}</a>
+      <span class="hint">团队讨论</span>
+    </div>
+    <a class="btn btn-sm" href="${back}">← 回团队</a>
+  </div>`;
+}
+
+/**
+ * 一条回复。
+ *
+ * `contentHtml` 是服务端渲染好的（`shapeTeamReply` 里 renderMarkdown），前端**不再加工**：
+ * 再动一次只会把已经转义好的内容弄坏 —— 那正是 XSS 唯一的入口。
+ */
+function teamReplyHtml(reply) {
+  const tools = reply.canDelete
+    ? `<button class="team-mini team-mini-danger" data-team-action="delete-reply" data-team-post="${reply.postId}" data-team-reply="${reply.id}">删除</button>`
+    : '';
+  return `<div class="team-reply" data-team-reply-card="${reply.id}">
+    ${Avatar.avatarHtml(reply.author, 'avatar-sm')}
+    <div class="team-reply-main">
+      <div class="team-reply-head">
+        <a class="team-reply-author" href="#/u/${encodeURIComponent(reply.author.username ?? '')}">${esc(reply.author.displayName ?? reply.author.username ?? '未知')}</a>
+        <span class="hint">${Fmt.timeAgo(reply.createdAt)}</span>
+        ${tools}
+      </div>
+      <div class="team-reply-body">${reply.contentHtml ?? ''}</div>
+    </div>
+  </div>`;
+}
+
+/**
+ * 回复框。
+ *
+ * 未登录 / 没加入的人看到的是**说明**而不是输入框：「能看见」（公开帖谁都看得见）与
+ * 「能回复」（要是团队成员）是两件事，把输入框摆在那儿再让人吃一个 403 最招人烦。
+ */
+function replyFormHtml(team, postId) {
+  if (!state.me) {
+    return `<div class="card team-reply-form team-reply-form-guest">
+      <div class="hint">登录之后就能回复这篇帖子。</div>
+      <a class="btn btn-sm" href="#/login">去登录</a>
+    </div>`;
+  }
+  if (!team.joined) {
+    const hint = team.joinPolicy === 'invite'
+      ? '这个团队需要邀请才能加入，加入之后才能回复。'
+      : '加入这个团队之后就能回复了。';
+    return `<div class="card team-reply-form team-reply-form-guest">
+      <div class="hint">${esc(hint)}</div>
+    </div>`;
+  }
+  return `<div class="card team-reply-form">
+    <textarea class="input team-reply-input" data-team-field="reply" data-team-reply-field rows="3" maxlength="5000" placeholder="回复这篇帖子…（支持 $E=mc^2$ 这样的公式）">${esc(teamState.draft.reply)}</textarea>
+    <div class="team-reply-bar">
+      <span class="hint">支持 Markdown 与 LaTeX 公式</span>
+      <button class="btn btn-primary" data-team-action="create-reply" data-team-post="${postId}">回复</button>
+    </div>
+  </div>`;
+}
+
+/**
+ * 拉一遍回复并画出来。发完 / 删完都走这里 —— 顺序只由服务端说了算。
+ *
+ * `slug` 默认从地址里现取（发回复、删回复两条路径都在详情页上），详情页则把
+ * 手里那个 team.slug 传进来：渲染测试直接调 `viewTeamPost('x', 1, …)` 时地址栏
+ * 可能还停在别处，靠 currentSlug() 会请求到上一个团队去。
+ */
+async function renderReplies(postId, query = null, slug = currentSlug()) {
+  const box = $('[data-team-replies]');
+  if (!box) return;
+  const params = query ?? currentQuery();
+  const page = Number(params.get('rpage')) || 1;
+  let data;
+  try {
+    data = await api(`/api/teams/${encodeURIComponent(slug)}/posts/${postId}/replies?page=${page}`);
+  } catch (error) {
+    if (error?.aborted) return;
+    const text = apiErrorText(error);
+    if (!text) return;
+    box.innerHTML = emptyHtml('😵', esc(text));
+    return;
+  }
+  const items = Array.isArray(data.items) ? data.items : [];
+  // 列表容器自己就是一张卡片（外壳里带着 .card），所以空态不再套一层，免得卡里套卡。
+  box.innerHTML = items.length
+    ? items.map(teamReplyHtml).join('')
+    : emptyHtml('💬', '还没有人回复', '底下就是回复框，说点什么吧');
+  // 公式渲染必须在 innerHTML 之后：renderMathInElement 只处理已经在 DOM 里的节点。
+  ntRenderMath(box);
+
+  const chip = $('[data-team-reply-count]');
+  if (chip) chip.textContent = `💬 ${Fmt.fmtNum(Number(data.total) || 0)} 条回复`;
+
+  const pager = $('[data-team-replies-pager]');
+  if (pager) {
+    pager.innerHTML = paginationHtml(page, Number(data.totalPages) || 1, (target) =>
+      routeQuery(`/team/${slug}/post/${postId}`, params, { rpage: target === 1 ? null : String(target) }),
+    );
+  }
+}
+
+/**
+ * 团队帖子详情 `#/team/<slug>/post/<id>`。
+ *
+ * 这里**故意不**画团队主页那一整套（成员名单 / 文件柜 / 群聊）：详情页要的是「读完这段讨论」，
+ * 把主页搬过来只会把人埋在中间找不到回复框。回团队的路留了两条（面包屑 + 顶部按钮）。
+ */
+async function viewTeamPost(handle, postId, query) {
+  bindTeamOnce();
+  stopChatPolling();
+  const key = String(handle ?? '');
+  if (teamState.handle !== key) {
+    resetTransient();
+    teamState.handle = key;
+    postCache.clear();
+  }
+
+  ui.app.innerHTML = `<div class="team-page">
+    <div class="team-crumb"><a href="#/teams">← 所有团队</a></div>
+    <div data-team-hero>${loadingHtml()}</div>
+    <div data-team-post-detail>${loadingHtml()}</div>
+    <div class="card team-replies" data-team-replies></div>
+    <div data-team-replies-pager></div>
+    <div data-team-reply-form></div>
+  </div>`;
+
+  let team;
+  try {
+    team = (await api(`/api/teams/${encodeURIComponent(key)}`)).team;
+  } catch (error) {
+    if (error?.aborted) return;
+    const text = apiErrorText(error);
+    const hero = $('[data-team-hero]');
+    if (!text || !hero) return;
+    const hint = error?.status === 404 ? '这个团队不存在，或者已经被解散了' : '可能是网络断了，刷新一下再试';
+    hero.innerHTML = `<div class="card team-gone">${emptyHtml('🧭', esc(text), hint)}<div class="team-gone-bar"><a class="btn" href="#/teams">← 返回团队广场</a></div></div>`;
+    const loading = $('[data-team-post-detail]');
+    if (loading) loading.innerHTML = '';
+    return;
+  }
+  if (!team) {
+    const hero = $('[data-team-hero]');
+    if (hero) hero.innerHTML = `<div class="card team-gone">${emptyHtml('🧭', '团队不存在')}<div class="team-gone-bar"><a class="btn" href="#/teams">← 返回团队广场</a></div></div>`;
+    return;
+  }
+  teamState.team = team;
+  const heroBox = $('[data-team-hero]');
+  if (!heroBox) return; // 期间用户又点了别处
+  heroBox.innerHTML = detailHeroHtml(team);
+
+  const backHref = `#/team/${encodeURIComponent(team.slug)}`;
+  let post;
+  try {
+    post = (await api(`/api/teams/${encodeURIComponent(team.slug)}/posts/${postId}`)).post;
+  } catch (error) {
+    if (error?.aborted) return;
+    const text = apiErrorText(error);
+    const box = $('[data-team-post-detail]');
+    if (!text || !box) return;
+    // 看不见 / 已被删：分开说不清就一起说，并留一条回团队的路 —— 别把人扔在空白页上。
+    box.innerHTML = `<div class="card team-gone">${emptyHtml('🧭', esc(text), '它可能已经被删了，也可能本来就不给你看')}<div class="team-gone-bar"><a class="btn" href="${backHref}">← 回「${esc(team.name)}」</a></div></div>`;
+    return;
+  }
+  postCache.set(post.id, post);
+
+  const detailBox = $('[data-team-post-detail]');
+  if (!detailBox) return;
+  detailBox.innerHTML = teamPostHtml(post, { detail: true });
+  ntRenderMath(detailBox);
+
+  const formBox = $('[data-team-reply-form]');
+  if (formBox) formBox.innerHTML = replyFormHtml(team, post.id);
+
+  await renderReplies(post.id, query, team.slug);
 }
 
 /* ── 事件 ──────────────────────────────────────────────────────────── */
@@ -1006,6 +1214,38 @@ async function handleAction(action, node) {
     // 页面上的团队号本来就在旁边，选中它比让用户照着念一遍有用得多。
     selectText($('[data-team-code]'));
     return toast('已选中团队号，按 Ctrl+C 复制', 'success');
+  }
+  if (action === 'create-reply') {
+    const slug = currentSlug();
+    const content = String(teamState.draft.reply || '').trim();
+    if (!content) {
+      toast('先写点什么再回复', 'error');
+      return;
+    }
+    return withButtonBusy(node, async () => {
+      await api(`/api/teams/${encodeURIComponent(slug)}/posts/${postId}/replies`, {
+        method: 'POST',
+        body: { content },
+      });
+      teamState.draft = { ...teamState.draft, reply: '' };
+      const field = $('[data-team-reply-field]');
+      if (field) field.value = '';
+      toast('回复好了', 'success');
+      // 重拉一遍，而不是把新回复拼到列表末尾：顺序和「N 条回复」都由服务端说了算，
+      // 前端自己算一份顺序，就多一处可能对不上的地方。
+      await renderReplies(postId);
+    });
+  }
+  if (action === 'delete-reply') {
+    const slug = currentSlug();
+    const replyId = Number(node.dataset.teamReply);
+    if (!Number.isInteger(replyId)) return;
+    if (!window.confirm('删掉这条回复吗？')) return;
+    return withButtonBusy(node, async () => {
+      await api(`/api/teams/${encodeURIComponent(slug)}/posts/${postId}/replies/${replyId}`, { method: 'DELETE' });
+      toast('回复已删掉了', 'success');
+      await renderReplies(postId);
+    });
   }
   if (action === 'edit-announcement' || action === 'cancel-announcement') {
     const editing = action === 'edit-announcement';
@@ -1250,5 +1490,6 @@ function bindTeamOnce() {
 // ── 导出 ──────────────────────────────────────────────────────────────
 export { viewTeams };
 export { viewTeam };
+export { viewTeamPost };
 
 /* @hand-written */

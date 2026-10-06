@@ -148,7 +148,7 @@ ctx.log       日志
 | `feed_items` `feed_reactions` | 🅿️ P1 |
 | `documents` `document_blocks` `document_revisions` `doc_block_types` `doc_capability_logs` `note_documents` | 🅿️ P2 |
 | `ai_capability_grants` `ai_op_logs` | 🅿️ P3 |
-| `teams` `team_members` `team_posts` | 🅿️ P4 |
+| `teams` `team_members` `team_posts` `team_replies` `team_files` `team_messages` | 🅿️ P4 |
 
 **`boards` 是 `posts.board_id` 的外键目标，`checkin_bonuses` / `documents` 这些也都要参与外键，
 所以建表顺序必须由 core 统一控制**，不许模块自己抢跑。
@@ -162,7 +162,7 @@ ctx.log       日志
 | P1 动态 | `/api/feed/*` | `src/modules/feed/` | 3511 | `feed_items` `feed_reactions` | `public/views/feed2.js` 之类新文件 + `public/css/31-feed2.css` |
 | P2 可编程帖子 | `/api/docs/*` | `src/modules/doc/` | 3492 | `documents` `document_blocks` `document_revisions` `doc_block_types` `doc_capability_logs` `note_documents` | `public/views/doc.js` + `public/css/41-doc.css` |
 | P3 AI | `/api/ai/*` | `src/modules/ai/` | 3513 | `ai_capability_grants` `ai_op_logs` | `public/views/ai-edit.js` + `public/css/94-ai-edit.css` |
-| P4 团队 | `/api/teams/*` | `src/modules/team/` | 3514 | `teams` `team_members` `team_posts` | `public/views/team.js` + `public/css/86-team.css` |
+| P4 团队 | `/api/teams/*` | `src/modules/team/` | 3514 | `teams` `team_members` `team_posts` `team_replies` `team_files` `team_messages` | `public/views/team.js` + `public/css/86-team.css` |
 | P5 界面 | 不新增 | `src/modules/ui/` | 3515 | 无 | 随便改 `public/css/*`（**新功能别改，只改现有观感**） |
 
 **四条底线：**
@@ -178,7 +178,9 @@ ctx.log       日志
 > P3（AI）与 P5（界面）的目录仍是空壳。
 >
 > **团队（P4）与这份规格有一处出入**：团队帖没有放进 `posts`，也没有复用 P2 的 `documents`，
-> 而是自建了第三张表 `team_posts`。理由写在 `src/modules/team/schema.js` 的文件头：
+> 而是自建了第三张表 `team_posts`（后来和 `team_replies` / `team_files` / `team_messages` 一起，
+> 团队模块一共自己管六张表 —— 都能在 `src/modules/team/index.js` 的 `owns` 里看到，
+> `check-skeleton.mjs` 会盯着「每张自建表都得有人认领」）。理由写在 `src/modules/team/schema.js` 的文件头：
 > 挂进 `posts` 就得凭空造一个「团队」板块、还会漂进首页与全文搜索，用 `hidden` 藏又会撞上
 > `assertPostVisible` 的「非 staff 非作者一律 404」；而 `documents` 没有 `team_id` 也没有
 > `version`，表达不了「这一篇属于哪个团队」、也撑不起「一起编辑且不互相覆盖」。
@@ -232,11 +234,11 @@ scope = 'public' | 'followers' | 'team' | 'private'
 | --- | --- | --- |
 | `check-golden.mjs` | **行为金标准**：96 条固定请求的状态码 + 响应结构 | 96 项 0 差异 |
 | `check-skeleton.mjs` | 骨架本身：模块解耦证明 + 薄入口行数 + 表归属 | 47 项 |
-| `check-frontend.mjs` | **前端整页渲染**：最小 DOM 垫片 + 真响应假数据，34 个页面全渲染 | 34/34 |
+| `check-frontend.mjs` | **前端整页渲染**：最小 DOM 垫片 + 真响应假数据，36 个页面全渲染（含团队帖详情页与非成员视角） | 36/36 |
 | `smoke.mjs` | 后端端到端（起真服务打接口） | 253 项 |
 | `smoke-ai.mjs` | AI 接口端到端 | 61 项 |
-| `feed-smoke.mjs` / `doc-smoke.mjs` / `team-smoke.mjs` | 动态流 / 积木 / 团队的接口端到端 | 95 / 469 / 190 项 |
-| `check-ui-contract.mjs` | 前端类名 / API 字段 / 主题 / 头像 / 角色 / 私信 / 团队 / 剪贴板 / 公式结构 | 258 项 |
+| `feed-smoke.mjs` / `doc-smoke.mjs` / `team-smoke.mjs` | 动态流 / 积木 / 团队的接口端到端 | 95 / 469 / 233 项 |
+| `check-ui-contract.mjs` | 前端类名 / API 字段 / 主题 / 头像 / 角色 / 私信 / 团队号与公告 / 剪贴板 / 公式 / 团队帖详情与回复结构 | 269 项 |
 | `check-encoding.mjs` | 编码体检（BOM / 乱码 / 关键中文片段） | 194 文件 / 87 断言 |
 | `check-notes-ui.mjs` | 笔记的前端结构 | 33 项 |
 | `notes-smoke.mjs` / `forum-ai/selftest.mjs` / `note-studio/tests/run.mjs` | 子系统 | 44 / 92 / — |

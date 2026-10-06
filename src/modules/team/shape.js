@@ -145,6 +145,8 @@ export function shapeTeamPost(row, { viewer = null, team = null } = {}) {
     scopeLabel: SCOPE_LABELS[row.scope] ?? SCOPE_LABELS.team,
     scopeIcon: { public: '🌍', followers: '👥', team: '🎽', private: '🔒' }[row.scope] ?? '🎽',
     version: Number(row.version) || 1,
+    // 列表里显示「N 条回复」用；详情页的回复本身另走 /replies。
+    replyCount: Number(row.reply_count) || 0,
     author: {
       id: row.user_id,
       username: row.username,
@@ -171,6 +173,41 @@ export function shapeTeamPost(row, { viewer = null, team = null } = {}) {
 
 export function shapeTeamPosts(rows, options = {}) {
   return (rows ?? []).map((row) => shapeTeamPost(row, options));
+}
+
+/**
+ * 一条回复的对外形状。
+ *
+ * 比帖子少了 `scope` / `version` / `editor`：回复不单独设可见范围（跟着帖子走），
+ * 也不做协同编辑与版本比对 —— 它是一句话，不是一篇文档。
+ * `canDelete` 与帖子同一条口径：作者本人，或这个团队的管理员（服务端重判）。
+ */
+export function shapeTeamReply(row, { viewer = null } = {}) {
+  if (!row) return null;
+  const content = String(row.content ?? '');
+  const isAuthor = Boolean(viewer) && viewer.id === row.user_id;
+  const myRole = TEAM_ROLES.includes(row.my_role) ? row.my_role : null;
+
+  return {
+    id: row.id,
+    postId: row.post_id,
+    teamId: row.team_id,
+    content,
+    contentHtml: renderMarkdown(content),
+    author: {
+      id: row.user_id,
+      username: row.username,
+      displayName: row.display_name || row.username,
+      avatar: row.avatar ?? null,
+      role: row.role ?? 'member',
+    },
+    canDelete: isAuthor || myRole === 'owner' || myRole === 'admin',
+    createdAt: row.created_at,
+  };
+}
+
+export function shapeTeamReplies(rows, options = {}) {
+  return (rows ?? []).map((row) => shapeTeamReply(row, options));
 }
 
 /**
