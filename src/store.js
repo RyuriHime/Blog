@@ -1357,7 +1357,7 @@ export function createStore(db) {
                   (SELECT COUNT(*) FROM replies r WHERE r.post_id = p.id AND r.deleted = 0) AS reply_count,
                   (SELECT COUNT(*) FROM reactions rx WHERE rx.post_id = p.id AND rx.kind = 'like') AS like_count,
                   (SELECT COALESCE(SUM(c.amount), 0) FROM coins c WHERE c.post_id = p.id) AS coin_count
-           FROM posts p WHERE p.deleted = 0
+           FROM posts p WHERE p.deleted = 0 AND p.hidden = 0
            ORDER BY (like_count * 4 + coin_count * 5) DESC, p.created_at DESC LIMIT ?`,
         )
         .all(limit);
