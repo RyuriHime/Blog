@@ -680,13 +680,12 @@ export function registerTeamRoutes(ctx, { queries }) {
     const teamRow = loadTeam(reqCtx, queries);
     const user = requireUser(reqCtx);
     const row = loadPost(reqCtx, queries, teamRow);
-    // 一起编辑是 P4 的核心需求：团队帖是**大家的东西**，不是作者一个人的私有物。
-    // 所以「能看见」就「能改」—— 而「能不能看见」已经在 loadPost 里按四档可见范围判过了，
-    // 别人标了「仅自己」的草稿根本走不到这一行（那一条会先在 loadPost 里返回 404）。
-    // 删除是另一回事：不可逆的破坏性操作只留给作者和团队管理员（见下面的 DELETE）。
+    // 只有作者本人能改自己这篇。早先这里是「一起编辑」——「看得见就能改」，
+    // 后来收紧了：替别人改稿既不打招呼也不留痕，谁在什么时候改了什么说不清。
+    // 想补充内容就回一条，别动别人的字。
+    // （别人标了「仅自己」的草稿连这一行都走不到 —— loadPost 早就 404 了。）
     const isAuthor = row.user_id === user.id;
-    const isMember = Boolean(queries.memberOf(teamRow.id, user.id));
-    ensure(isAuthor || isMember, 403, 'forbidden', '只有团队成员可以改这篇帖子');
+    ensure(isAuthor, 403, 'forbidden', '只有作者本人可以编辑这篇帖子');
 
     const body = reqCtx.body ?? {};
     const title = field(body.title ?? row.title, { label: '标题', min: 1, max: MAX_TEAM_POST_TITLE });

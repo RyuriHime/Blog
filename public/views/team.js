@@ -386,37 +386,6 @@ function teamHeroHtml(team, memberTotal) {
   }
   if (team.myRole === 'owner') buttons.push(`<button class="btn btn-danger" data-team-action="disband-team">解散团队</button>`);
 
-  // 「要不要出现在广场上」只有创建者能改，所以这一段只画给创建者；
-  // 管理员带着 listed 去请求会拿到 403（服务端那一条 ensure 就是干这个的）。
-  const listedField = team.myRole === 'owner'
-    ? `<label class="team-field"><span class="team-field-label">出现在团队广场</span>
-        <select class="input" data-team-field="listed">
-          <option value="1" ${teamListedValue(team) === '1' ? 'selected' : ''}>显示在广场上</option>
-          <option value="0" ${teamListedValue(team) === '0' ? 'selected' : ''}>不显示（只有成员和拿到团队号的人找得到）</option>
-        </select>
-        <span class="hint">藏起来之后团队主页、团队号和帖子链接照旧能用，只是广场上不再列出来。</span></label>`
-    : '';
-
-  const settings = teamState.panel === 'settings' && team.canManage
-    ? `<div class="card team-form">
-        <div class="team-form-title">团队设置</div>
-        <label class="team-field"><span class="team-field-label">团队名</span>
-          <input class="input" data-team-field="name" maxlength="40" value="${esc(teamState.draft.name || team.name)}" /></label>
-        <label class="team-field"><span class="team-field-label">简介</span>
-          <textarea class="input" data-team-field="intro" rows="2" maxlength="300">${esc(teamState.draft.intro || team.intro)}</textarea></label>
-        <label class="team-field"><span class="team-field-label">谁能加入</span>
-          <select class="input" data-team-field="joinPolicy">
-            <option value="open" ${teamState.draft.joinPolicy === 'open' ? 'selected' : ''}>谁都能加入</option>
-            <option value="apply" ${teamState.draft.joinPolicy === 'apply' ? 'selected' : ''}>需要申请（团长和管理员审核）</option>
-          </select></label>
-        ${listedField}
-        <div class="team-form-bar">
-          <button class="btn btn-primary" data-team-action="save-settings">保存设置</button>
-          <button class="btn" data-team-action="close-panel">取消</button>
-        </div>
-      </div>`
-    : '';
-
   // 申请加入的这一步：先写一句理由（可留空）再递，递出去之后顶部会变成「⏳ 申请审核中」。
   const applyPanel = teamState.panel === 'apply' && team.canApply
     ? `<div class="card team-apply" data-team-apply>
@@ -459,8 +428,74 @@ function teamHeroHtml(team, memberTotal) {
     </div>
     ${code}
     ${noticeHtml(team)}
-    ${settings}
     ${applyPanel}
+  </div>`;
+}
+
+/**
+ * 团队设置的**表单本体**（只画给团长 / 管理员）。
+ *
+ * 这段以前是塞在 hero 里的一张小卡：点开之后整个主页被顶下去一截，
+ * 边上还在轮询群聊、重画公告，填到一半被整块 innerHTML 换掉是常事。
+ * 现在它住在右侧抽屉里（见 `drawerHtml`），hero 只管画「设置」那个按钮。
+ */
+function settingsFormHtml(team) {
+  // 「要不要出现在广场上」只有创建者能改，所以这一段只画给创建者；
+  // 管理员带着 listed 去请求会拿到 403（服务端那一条 ensure 就是干这个的）。
+  const listedField = team.myRole === 'owner'
+    ? `<label class="team-field"><span class="team-field-label">出现在团队广场</span>
+        <select class="input" data-team-field="listed">
+          <option value="1" ${teamListedValue(team) === '1' ? 'selected' : ''}>显示在广场上</option>
+          <option value="0" ${teamListedValue(team) === '0' ? 'selected' : ''}>不显示（只有成员和拿到团队号的人找得到）</option>
+        </select>
+        <span class="hint">藏起来之后团队主页、团队号和帖子链接照旧能用，只是广场上不再列出来。</span></label>`
+    : '';
+
+  return `<div class="team-form">
+    <label class="team-field"><span class="team-field-label">团队名</span>
+      <input class="input" data-team-field="name" maxlength="40" value="${esc(teamState.draft.name || team.name)}" /></label>
+    <label class="team-field"><span class="team-field-label">简介</span>
+      <textarea class="input" data-team-field="intro" rows="2" maxlength="300">${esc(teamState.draft.intro || team.intro)}</textarea></label>
+    <label class="team-field"><span class="team-field-label">谁能加入</span>
+      <select class="input" data-team-field="joinPolicy">
+        <option value="open" ${teamState.draft.joinPolicy === 'open' ? 'selected' : ''}>谁都能加入</option>
+        <option value="apply" ${teamState.draft.joinPolicy === 'apply' ? 'selected' : ''}>需要申请（团长和管理员审核）</option>
+      </select></label>
+    ${listedField}
+    <div class="team-form-bar">
+      <button class="btn btn-primary" data-team-action="save-settings">保存设置</button>
+      <button class="btn" data-team-action="close-panel">取消</button>
+    </div>
+  </div>`;
+}
+
+/**
+ * 右侧抽屉：团队设置与加入申请审核都从这里滑出来，不再摊在主页里。
+ *
+ * 两条规矩：
+ *  1. 只有 `settings` / `requests` 两个 panel 走抽屉（递申请那张小卡还留在页面里 ——
+ *     它只有两个输入框，弹个抽屉反而多一步）。
+ *  2. 抽屉内容由 `teamState.panel` 决定，所以 `refreshTeam()`（= 重画整个 viewTeam）
+ *     天然就能把它关掉或换掉，不需要额外的开关状态。
+ */
+function drawerHtml(team) {
+  const panel = teamState.panel;
+  if (!team || !team.canManage || (panel !== 'settings' && panel !== 'requests')) return '';
+  const title = panel === 'settings' ? '团队设置' : '📨 加入申请';
+  // 申请列表要等接口回来，先摆一个转圈；设置那张是纯表单，直接画。
+  const body = panel === 'settings'
+    ? `<div class="team-drawer-body" data-team-drawer-body>${settingsFormHtml(team)}</div>`
+    : `<div class="team-drawer-body" data-team-drawer-body>${loadingHtml()}</div>`;
+
+  return `<div class="team-drawer" data-team-drawer-panel="${panel}">
+    <div class="team-drawer-mask" data-team-action="close-panel"></div>
+    <aside class="team-drawer-box" role="dialog" aria-modal="true" aria-label="${esc(title)}">
+      <div class="team-drawer-head">
+        <span class="team-drawer-title">${title}</span>
+        <button class="team-mini" data-team-action="close-panel">关闭</button>
+      </div>
+      ${body}
+    </aside>
   </div>`;
 }
 
@@ -509,20 +544,18 @@ function joinRequestsHtml(team, data) {
         .join('')
     : `<div class="team-request-empty"><span class="hint">${status === 'pending' ? '现在没有人等着进来。' : '这一档里还没有申请。'}</span></div>`;
 
-  return `<div class="card team-requests" data-team-requests-list>
+  return `<div class="team-requests" data-team-requests-list>
     <div class="team-requests-head">
-      <span class="team-requests-title">📨 加入申请</span>
       <span class="hint">这一档共 ${Fmt.fmtNum(Number(data.total) || 0)} 条</span>
-      <button class="team-mini" data-team-action="toggle-requests">收起</button>
     </div>
     <div class="team-tabs team-requests-tabs">${tabs}</div>
     ${rows}
   </div>`;
 }
 
-/** 拉一次申请列表并画出来。只有管理面板开着、且当前用户能管这个团队时才动手。 */
+/** 拉一次申请列表并画进抽屉。只有抽屉开着、且当前用户能管这个团队时才动手。 */
 async function renderJoinRequests(team) {
-  const box = $('[data-team-requests]');
+  const box = $('[data-team-drawer-body]');
   if (!box || !team || !team.canManage || teamState.panel !== 'requests') return;
   box.innerHTML = loadingHtml();
   let data;
@@ -534,11 +567,11 @@ async function renderJoinRequests(team) {
     if (error?.aborted) return;
     const text = apiErrorText(error);
     if (!text) return;
-    box.innerHTML = `<div class="card">${emptyHtml('😵', esc(text))}</div>`;
+    box.innerHTML = emptyHtml('😵', esc(text));
     return;
   }
   teamState.requests = Array.isArray(data.items) ? data.items : [];
-  const live = $('[data-team-requests]');
+  const live = $('[data-team-drawer-body]');
   if (live) live.innerHTML = joinRequestsHtml(team, data);
 }
 
@@ -670,8 +703,14 @@ function teamPostHtml(post, { detail = false } = {}) {
     : `<div class="team-post-body md">${post.contentHtml ?? ''}</div>`;
 
   const tools = [];
+  // 「💬 回复」列表页和详情页都画：
+  //   列表上 —— 点进去就是详情页的回复框（带上 `?reply=1`，见 handleAction）；
+  //   详情上 —— 把光标直接送进回复框，读到底不用自己往下滚。
+  tools.push(`<button class="team-mini" data-team-action="reply-post" data-team-post="${post.id}" title="回复这篇帖子">💬 回复</button>`);
   if (!detail && post.canEdit) tools.push(`<button class="team-mini" data-team-action="edit-post" data-team-post="${post.id}">编辑</button>`);
   if (!detail && post.canDelete) tools.push(`<button class="team-mini team-mini-danger" data-team-action="delete-post" data-team-post="${post.id}">删除</button>`);
+  // 「只有作者本人能编辑」在界面上也要看得出来：canEdit 是服务端算好的（shapeTeamPost）。
+  // 详情页不画编辑/删除 —— 那条编辑流程收尾时要整页重画团队主页，在详情页点它会把人送回去。
 
   return `<article class="card team-post" data-team-post-card="${post.id}">
     <div class="team-post-head">
@@ -931,7 +970,7 @@ async function viewTeam(handle, query) {
   ui.app.innerHTML = `<div class="team-page">
     <div class="team-crumb"><a href="#/teams">← 所有团队</a></div>
     <div data-team-hero>${loadingHtml()}</div>
-    <div data-team-requests></div>
+    <div data-team-drawer></div>
     <div data-team-members></div>
     <div data-team-tabs></div>
     <div data-team-composer></div>
@@ -981,7 +1020,12 @@ async function viewTeam(handle, query) {
 
   repaintMembers();
   if (teamState.membersExpanded) await reloadMembers(team);
-  // 管理面板开着就顺手把申请列表拉回来（在页签判断之前：它在页签外面，哪个页签都显示）。
+  // 抽屉（团队设置 / 加入申请）跟 hero 一起画。panel 是模块级状态、整页重画不会丢，
+  // 所以「保存完 / 批完申请」这类 refreshTeam 走一遍，抽屉还留在原地。
+  // ⚠️ 必须排在草稿同步**之后**：设置表单显示的是 teamState.draft 里的值。
+  const drawerBox = $('[data-team-drawer]');
+  if (drawerBox) drawerBox.innerHTML = drawerHtml(team);
+  // 申请列表要等接口：抽屉一画出来就去拉（它不受页签影响，哪个页签都看得见）。
   if (teamState.panel === 'requests') await renderJoinRequests(team);
   const tabsBox = $('[data-team-tabs]');
   if (tabsBox) tabsBox.innerHTML = teamTabsHtml(team, tab, query);
@@ -1234,7 +1278,25 @@ async function viewTeamPost(handle, postId, query) {
   const formBox = $('[data-team-reply-form]');
   if (formBox) formBox.innerHTML = replyFormHtml(team, post.id);
 
+  // 列表上那个「💬 回复」按钮是带 `?reply=1` 进来的：画完就把光标送进框里。
+  // 放在这里是因为要等 `teamPostHtml` 与回复表单都落进 DOM —— 提前聚焦等于对空气调 focus()。
+  if (query?.get('reply') === '1') focusReplyField();
+
   await renderReplies(post.id, query, team.slug);
+}
+
+/**
+ * 把光标送进详情页的回复框，并把它滚到眼前。
+ *
+ * 两处调它：列表上点「💬 回复」跳进详情页（`?reply=1`），
+ * 以及已经在详情页时再点一次（不重画页面，只挪光标）。
+ * 框不在（未登录、没加入团队时那里只有一句提示）就安静地什么都不做。
+ */
+function focusReplyField() {
+  const box = $('[data-team-reply-field]');
+  if (!box) return;
+  if (typeof box.focus === 'function') box.focus();
+  if (typeof box.scrollIntoView === 'function') box.scrollIntoView({ block: 'center' });
 }
 
 /* ── 事件 ──────────────────────────────────────────────────────────── */
@@ -1354,6 +1416,16 @@ async function handleAction(action, node) {
       toast('团队设置已保存', 'success');
       await refreshTeam();
     });
+  }
+  if (action === 'reply-post') {
+    const slug = currentSlug();
+    // 已经在详情页：直接把人送到回复框，别把页面重画一遍（读到这里的位置就没了）。
+    if ((window.location.hash || '').includes(`/post/${postId}`)) return focusReplyField();
+    // 从列表点进详情：用 `?reply=1` 表达「进来就是要回复」。
+    // 让路由把详情页画完、viewTeamPost 读到这个参数再聚焦 ——
+    // 比在这里 setTimeout 去猜渲染时机可靠（接口还没回来时 setTimout 一定抢跑）。
+    navigate(`/team/${encodeURIComponent(slug)}/post/${postId}?reply=1`);
+    return;
   }
   if (action === 'join-team' || action === 'submit-apply') {
     const slug = currentSlug();
@@ -1705,6 +1777,17 @@ function bindTeamOnce() {
     if (!picker) return;
     uploadTeamFile(picker).catch((error) => toastError(error));
   });
+
+  // 抽屉开着时按 ESC 关掉（和点遮罩、点「关闭」走同一条 close-panel）。
+  // 两个小让步：正在某个输入框里按 ESC 不关（改团队设置改到一半不该被一键抹掉）；
+  // 挂之前先问一句 document.addEventListener 在不在 —— check-frontend 的假 DOM 没有它。
+  if (typeof document.addEventListener === 'function') {
+    document.addEventListener('keydown', (event) => {
+      if (event.key !== 'Escape' || !teamState.panel) return;
+      if (event.target?.closest?.('[data-team-field]')) return;
+      handleAction('close-panel', event.target).catch((error) => toastError(error));
+    });
+  }
 }
 
 // ── 导出 ──────────────────────────────────────────────────────────────

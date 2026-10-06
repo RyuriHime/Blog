@@ -29,7 +29,7 @@ const PORT = Number(process.env.CONTRACT_PORT || 3412);
 const BASE = `http://127.0.0.1:${PORT}`;
 
 /** 不下降哨兵：接手的模块只允许加，不允许把这些数字改小。 */
-const MIN_CHECKS = Number(process.env.MIN_UI_CHECKS || 292);
+const MIN_CHECKS = Number(process.env.MIN_UI_CHECKS || 303);
 
 /**
  * 前端源码入口清单。搬家前这三份文件在 public/ 根目录；骨架会把它们拆进
@@ -598,6 +598,64 @@ check(
 check(
   '申请通知走去重（同一个人反复递只有一条未读），与公告的 dedupe:false 相反',
   /type: 'team_join_request'/.test(serverJs) && !/type: 'team_join_request'[\s\S]{0,200}dedupe: false/.test(serverJs),
+);
+
+/* 团队第六批（编辑权只归作者 + 「💬 回复」按钮 + 设置/申请改侧边抽屉）的契约。 */
+check(
+  '团队帖的编辑权只给作者本人（canEdit 直接绑 isAuthor）',
+  /canEdit: isAuthor,/.test(serverJs) && !/canEdit: isAuthor \|\|/.test(serverJs),
+);
+check(
+  '服务端自己也挡一次：不是作者就 403（旧文案「只有团队成员可以改」已经删掉）',
+  /const isAuthor = row\.user_id === user\.id;/.test(serverJs) &&
+    /只有作者本人可以编辑这篇帖子/.test(serverJs) &&
+    !/只有团队成员可以改这篇帖子/.test(serverJs),
+);
+check(
+  '删除那条线没跟着收紧 —— 仍然是「作者或团队管理员」',
+  /canDelete: isAuthor \|\| canManageTeam,/.test(serverJs) && /只有作者或团队管理员可以删这篇帖子/.test(serverJs),
+);
+check(
+  '「💬 回复」按钮排在编辑 / 删除前面，两种视图都画',
+  /data-team-action="reply-post"[\s\S]{0,400}data-team-action="edit-post"/.test(appJs),
+);
+check(
+  '列表上点「回复」是带着 ?reply=1 落进详情页的（不靠 setTimeout 猜渲染时机）',
+  /\/team\/\$\{encodeURIComponent\(slug\)\}\/post\/\$\{postId\}\?reply=1/.test(appJs),
+);
+check(
+  '详情页读到 ?reply=1（或原地再点一次）就把光标送进回复框',
+  /function focusReplyField\(\)/.test(appJs) &&
+    /query\?\.get\('reply'\) === '1'\) focusReplyField\(\)/.test(appJs) &&
+    /return focusReplyField\(\)/.test(appJs),
+);
+check(
+  '团队设置与加入申请都从右侧抽屉弹出',
+  /function drawerHtml\(team\)/.test(appJs) &&
+    /data-team-drawer-panel="\$\{panel\}"/.test(appJs) &&
+    /team-drawer-mask/.test(appJs) &&
+    /data-team-action="close-panel"/.test(appJs) &&
+    /data-team-drawer-body/.test(appJs),
+);
+check(
+  '设置表单被抽成 settingsFormHtml，住进抽屉（hero 里不再贴它）',
+  /function settingsFormHtml\(team\)/.test(appJs) &&
+    /data-team-drawer-body>[\s\S]{0,120}settingsFormHtml\(team\)/.test(appJs),
+);
+check(
+  '申请列表写进抽屉的 body，页面里那个 `[data-team-requests]` 盒子已经没了',
+  /const box = \$\('\[data-team-drawer-body\]'\)/.test(appJs) && !/data-team-requests\]/.test(appJs),
+);
+check(
+  '抽屉那几个类有定义（fixed 一层盖在页面上，而不是把主页顶下去）',
+  /\.team-drawer\s*\{[\s\S]{0,220}position: fixed/.test(styleCss) &&
+    /\.team-drawer-mask\s*\{/.test(styleCss) &&
+    /\.team-drawer-box\s*\{/.test(styleCss) &&
+    /\.team-drawer-body\s*\{/.test(styleCss),
+);
+check(
+  '抽屉能用 ESC 关掉（挂监听前先问 document.addEventListener 在不在）',
+  /typeof document\.addEventListener === 'function'/.test(appJs) && /event\.key !== 'Escape'/.test(appJs),
 );
 
 /* ---------- 1b. 背景主题契约 ---------- */

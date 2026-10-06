@@ -329,7 +329,7 @@ try {
   });
   check('加入之后成员就能发帖', mateOk.status === 200, JSON.stringify(mateOk.error ?? mateOk.body));
 
-  /* ── 验收⑤：不互相覆盖（版本号 + 冲突提示） ───────────────────── */
+  /* ── 验收⑤：改自己的帖也不静默覆盖（版本号 + 冲突提示；换人改是 403，不是 409） ── */
   const stale = await owner.client.call(`${teamPath}/posts/${postId}`);
   const seenVersion = stale.data?.post?.version;
   const goodSave = await owner.client.call(`${teamPath}/posts/${postId}`, {
@@ -339,9 +339,11 @@ try {
   check('验收⑤：带着正确版本号保存成功', goodSave.status === 200, JSON.stringify(goodSave.error ?? goodSave.body));
   check('保存之后版本号加一', goodSave.data?.post?.version === seenVersion + 1, `${seenVersion} → ${goodSave.data?.post?.version}`);
 
-  const conflict = await outsider.client.call(`${teamPath}/posts/${postId}`, {
+  // 冲突这一路得由**作者本人**制造了：现在只有作者能改自己的帖，
+  // 拿一个旧版本号再存一次，等价于「同一个人的两个标签页」。
+  const conflict = await owner.client.call(`${teamPath}/posts/${postId}`, {
     method: 'PUT',
-    body: { content: '我也改了，但我手上是旧版本。', version: seenVersion },
+    body: { content: '我在另一个标签页里也改了，但我手上是旧版本。', version: seenVersion },
   });
   check('验收⑤：拿旧版本保存返回 409 冲突', conflict.status === 409, String(conflict.status));
   check('验收⑤：冲突的错误代号是 conflict', conflict.error?.code === 'conflict', String(conflict.error?.code));
@@ -353,10 +355,10 @@ try {
     String(conflict.error?.message),
   );
 
-  const stillOld = await outsider.client.call(`${teamPath}/posts/${postId}`);
+  const stillOld = await owner.client.call(`${teamPath}/posts/${postId}`);
   check('冲突被拒之后正文没有被改掉', stillOld.data?.post?.content === '时间改成周六晚上。', String(stillOld.data?.post?.content));
 
-  const forced = await outsider.client.call(`${teamPath}/posts/${postId}`, {
+  const forced = await owner.client.call(`${teamPath}/posts/${postId}`, {
     method: 'PUT',
     body: { content: '我坚持我的版本。', version: seenVersion, force: true },
   });
@@ -364,19 +366,28 @@ try {
   check('强制保存之后版本号继续往上走', forced.data?.post?.version === seenVersion + 2, String(forced.data?.post?.version));
   check('强制保存之后正文换成了新的', forced.data?.post?.content === '我坚持我的版本。');
 
-  const noVersion = await outsider.client.call(`${teamPath}/posts/${postId}`, {
+  const noVersion = await owner.client.call(`${teamPath}/posts/${postId}`, {
     method: 'PUT',
     body: { content: '不带版本号的老客户端。' },
   });
   check('没带版本号时不比对版本（老客户端的兼容路径）', noVersion.status === 200, JSON.stringify(noVersion.error ?? noVersion.body));
 
+  // 编辑权只给作者本人：同队成员（哪怕是管理员）也不行 —— 想补充就回帖。
   const beforeMate = (await owner.client.call(`${teamPath}/posts/${postId}`)).data?.post?.version;
   const mateEdit = await outsider.client.call(`${teamPath}/posts/${postId}`, {
     method: 'PUT',
-    body: { content: '同队成员也能改这条帖子。' },
+    body: { content: '同队成员也想改别人发的帖子。' },
   });
-  check('验收⑤：同队成员可以一起编辑同一条帖子', mateEdit.status === 200, JSON.stringify(mateEdit.error ?? mateEdit.body));
-  check('一起编辑同样会把版本号往上推', mateEdit.data?.post?.version === beforeMate + 1, `${beforeMate} → ${mateEdit.data?.post?.version}`);
+  check('验收⑤：同队成员改不了别人发的帖子（403）', mateEdit.status === 403, String(mateEdit.status));
+  check('验收⑤：拒绝时的代号是 forbidden', mateEdit.error?.code === 'forbidden', String(mateEdit.error?.code));
+  check(
+    '验收⑤：拒绝时的文案说清了「只有作者本人可以编辑」',
+    mateEdit.error?.message === '只有作者本人可以编辑这篇帖子',
+    String(mateEdit.error?.message),
+  );
+  const afterMate = (await owner.client.call(`${teamPath}/posts/${postId}`)).data?.post;
+  check('被拒之后版本号没动', afterMate?.version === beforeMate, `${beforeMate} → ${afterMate?.version}`);
+  check('被拒之后正文也没动', afterMate?.content === '不带版本号的老客户端。', String(afterMate?.content));
 
   const strangerEdit = await stranger.client.call(`${teamPath}/posts/${postId}`, {
     method: 'PUT',
@@ -942,6 +953,19 @@ try {
     '管理员写公告，创建者同样收到通知',
     (ownerInbox.data?.items ?? []).some((item) => item.type === 'team_announcement' && item.actor?.username === 'teammate'),
     JSON.stringify((ownerInbox.data?.items ?? []).map((item) => item.type)),
+  );
+
+  // 但「改别人的帖子」不在管理员那条口径里：编辑权只归作者本人，
+  // 管理员想补充也得回帖（这也是它跟「删除」的分界线 —— 删帖仍然是作者或管理员）。
+  const adminEditSomeonePost = await mate.client.call(`${teamPath}/posts/${postId}`, {
+    method: 'PUT',
+    body: { content: '管理员也想改创建者发的那篇帖。' },
+  });
+  check('管理员也改不了别人发的帖子（403）', adminEditSomeonePost.status === 403, String(adminEditSomeonePost.status));
+  check(
+    '管理员被拒时的文案同样是「只有作者本人可以编辑」',
+    adminEditSomeonePost.error?.message === '只有作者本人可以编辑这篇帖子',
+    String(adminEditSomeonePost.error?.message),
   );
 
   /* ── 帖子下面的回复：发得出、看得见、删得掉，以及谁都别越权 ─────── */
