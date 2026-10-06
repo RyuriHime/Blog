@@ -888,13 +888,15 @@ const CASES = [
   ['动态首页', 'timeline.js', 'viewTimeline', [new Map()]],
   ['动态·我关注的', 'timeline.js', 'viewTimeline', [new URLSearchParams({ filter: 'following' })]],
   ['动态·搜索', 'timeline.js', 'viewTimeline', [new URLSearchParams({ q: '采样' })]],
+  // 「关注列表」= 我关注了谁的**名单**（头像 + 一键取关），跟上面那条「动态·我关注的」
+  // （关注**流**：只看 TA 们发的帖子）不是一回事。地址 `#/following`，别再被改道去动态流。
+  ['关注列表', 'feed.js', 'viewFollowing', []],
   // v1 的帖子列表页：`#/` 已经不再走它们了，但函数还在、还能渲染，
   // 所以继续测 —— 哪天要下线这批代码，删函数的同时把这四行一起删。
   ['帖子列表（旧首页）', 'feed.js', 'viewHome', [new Map()]],
   ['版块（已下线）', 'feed.js', 'viewBoard', ['general', new Map()]],
   ['帖子搜索（旧）', 'feed.js', 'viewSearch', [new Map()]],
   ['收藏', 'feed.js', 'viewBookmarks', [new Map()]],
-  ['关注流（旧）', 'feed.js', 'viewFollowing', []],
   ['个人主页', 'user.js', 'viewUser', ['admin', new Map()]],
   ['排行榜', 'user.js', 'viewRanking', [new Map()]],
   ['签到', 'checkin.js', 'viewCheckin', []],

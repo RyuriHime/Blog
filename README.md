@@ -173,7 +173,7 @@ HOST=0.0.0.0 node src/server.js       # 允许局域网内其它设备访问
 
 ### 关注 👥
 
-关注作者后：首页出现「我关注的」标签页；作者发新帖会推送通知；个人主页可以查看 TA 的关注者 / 关注列表和统计；在「我的关注」里可以随时取关。
+关注作者后：首页出现「我关注的」标签页；作者发新帖会推送通知；个人主页可以查看 TA 的关注者 / 关注的人和统计；在「📋 关注列表」（`#/following`，侧栏和用户菜单都有入口）里可以随时取关。
 
 ### 消息通知 🔔
 
@@ -416,7 +416,7 @@ forum/
 | `#/settings` | 账号设置：资料、密码、签到与资产、账号信息 |
 | `#/u/:username` | 个人主页：分类筛选、三种排版、置顶推荐、关注者与关注列表 |
 | `#/notifications` | 消息通知（全部 / 只看未读） |
-| `#/following` | 我的关注 |
+| `#/following` | 📋 关注列表：我关注了**谁**（头像 + 昵称 + 一键取关）。关注**流**（只看 TA 们发的帖子）是动态流的一个筛选，走 `#/?filter=following` |
 | `#/bookmarks` | 我的收藏 |
 | `#/search?q=关键词` | 全文搜索（标题 + 正文） |
 | `#/login`、`#/register` | 登录 / 注册 |
@@ -724,13 +724,13 @@ team_messages(id, team_id, user_id, content, deleted, created_at)
 ```bash
 node scripts/check-golden.mjs      # ★ 行为金标准：96 条请求的状态码 + 响应结构，一条都不能变
 node scripts/check-skeleton.mjs    # ★ 骨架自检：模块能不能独立拆掉、薄入口有没有变胖
-node scripts/check-frontend.mjs    # ★ 前端渲染冒烟：38 个页面全部渲染一遍 + 团队的文件柜/群聊/成员名单/团队号/公告/加入申请与审核/隐藏开关/帖子预览与详情回复交互 + 裸调用未定义名字的静态扫描
+node scripts/check-frontend.mjs    # ★ 前端渲染冒烟：38 个页面全部渲染一遍 + 关注列表 / 团队的文件柜/群聊/成员名单/团队号/公告/加入申请与审核/隐藏开关/帖子预览与详情回复交互 + 裸调用未定义名字的静态扫描
 node scripts/smoke.mjs             # 后端端到端：253 项（临时独立库+端口，跑完自动清理）
 node scripts/smoke-ai.mjs          # AI 接口端到端：61 项
 node scripts/feed-smoke.mjs        # 动态流端到端：95 项
 node scripts/doc-smoke.mjs         # 积木（可编程帖子）端到端：469 项
 node scripts/team-smoke.mjs        # 团队端到端：271 项（可见范围 / 越权 / 版本冲突 / 文件柜 / 群聊 / 团队号 / 公告通知 / Markdown 与公式 / 帖子回复 / 加入申请与审核 / 隐藏团队）
-node scripts/check-ui-contract.mjs # 前端契约：CSS 类名 + API 字段 + 主题/头像/角色/私信/团队号/公告/剪贴板/公式/详情与回复/申请与隐藏结构（通过项数不下降哨兵：287）
+node scripts/check-ui-contract.mjs # 前端契约：CSS 类名 + API 字段 + 主题/头像/角色/私信/团队号/公告/剪贴板/公式/关注列表/详情与回复/申请与隐藏结构（通过项数不下降哨兵：292）
 node scripts/check-encoding.mjs    # 源码编码体检：BOM / 乱码 / 关键中文内容
 node scripts/check-notes-ui.mjs    # 笔记 UI
 node scripts/notes-smoke.mjs       # 笔记接口
@@ -744,7 +744,7 @@ node scripts/capture-fixtures.mjs  # 重采前端冒烟用的假数据（改了�
 ```
 check-encoding 194 文件 / 87 断言 · check-skeleton 47 项 · check-golden 96 项 0 差异
 check-frontend 38 个页面 + 32 个模块静态扫描 · smoke 253 · smoke-ai 61 · feed-smoke 95
-doc-smoke 469 · team-smoke 271 · check-ui-contract 287 · check-notes-ui 33 · notes-smoke 44
+doc-smoke 469 · team-smoke 271 · check-ui-contract 292 · check-notes-ui 33 · notes-smoke 44
 ```
 
 > 知识网络图（`knowledge-pack/` + `#/graph` + `/api/knowledge/*`）已在 2026-10 整条链路删除：

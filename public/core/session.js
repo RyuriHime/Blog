@@ -58,7 +58,7 @@ function renderUserArea() {
       <a class="menu-item" href="#/checkin">📅 每日签到${state.checkin && !state.checkin.checkedInToday ? ' <span class="menu-badge">未签</span>' : ''}</a>
       <a class="menu-item" href="#/ranking">🏆 价值排行榜</a>
       <a class="menu-item" href="#/notifications">🔔 消息通知${state.unread > 0 ? ` <span class="menu-badge">${state.unread}</span>` : ''}</a>
-      <a class="menu-item" href="#/following">👥 我的关注</a>
+      <a class="menu-item" href="#/following">📋 关注列表</a>
       <a class="menu-item" href="#/bookmarks">⭐ 我的收藏</a>
       <a class="menu-item" href="#/docs">🧩 积木广场</a>
       <a class="menu-item" href="#/teams">👥 团队广场</a>
@@ -128,6 +128,9 @@ function renderSidebar() {
   //   · AI 阅读助手 / 知识网络图 / 学术笔记 → 搬到顶栏「发动态」旁边
   //   · 消息通知 / 我的关注 / 我的收藏 / 账号设置 → 在这里删除
   //     （功能都还在：顶栏 🔔 铃铛进消息通知，用户菜单里四个入口一个不少）
+  //   · P4 补回「📋 关注列表」：它跟「👥 我关注的」是两件事 ——
+  //     后者是**过滤后的动态流**（看 TA 们发了什么），前者是**名单**（我关注了谁、一键取关）。
+  //     之前 `#/following` 被改道去了动态流，名单页就没人到得了了，现在恢复。
   //   · 签到卡保留：「轻」不等于「空」，签到、投币这些功能一个都不能砍。
   const checkinCard = state.me ? checkinCardHtml() : '';
 
@@ -150,6 +153,7 @@ function renderSidebar() {
         <a class="side-link" href="#/">🌍 全部动态</a>
         <a class="side-link" href="#/?filter=following">👥 我关注的</a>
         <a class="side-link" href="#/?filter=mine">📝 我的动态</a>
+        <a class="side-link" href="#/following">📋 关注列表</a>
       </div>
     </div>
     <div class="card card-tight">

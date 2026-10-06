@@ -29,7 +29,7 @@ const PORT = Number(process.env.CONTRACT_PORT || 3412);
 const BASE = `http://127.0.0.1:${PORT}`;
 
 /** 不下降哨兵：接手的模块只允许加，不允许把这些数字改小。 */
-const MIN_CHECKS = Number(process.env.MIN_UI_CHECKS || 287);
+const MIN_CHECKS = Number(process.env.MIN_UI_CHECKS || 292);
 
 /**
  * 前端源码入口清单。搬家前这三份文件在 public/ 根目录；骨架会把它们拆进
@@ -320,6 +320,29 @@ check(
 check(
   '帖子回复 / 发帖的「预览」也排公式（core/events.js 的 case preview 同样只拿到 $…$ 原文）',
   /import \{ ntRenderMath \} from '\.\.\/views\/notes\.js';/.test(eventsCode) && /ntRenderMath\(box\);/.test(eventsCode),
+);
+
+/* 「关注列表」是同一个坑的第三遍：`public/views/feed.js` 的 `viewFollowing()` 一直写在那儿
+ * （头像 + 昵称 + 一键取关，数据走 `/api/me/following`），但 `#/following` 被改道去了动态流，
+ * 于是名单页谁也到不了 —— 函数还在、测试还在，只是没有地址能进得去。
+ * 「关注流」（只看 TA 们发的动态，`#/?filter=following`）和「关注列表」（我关注了谁）
+ * 是两件事，别再并成一个。
+ */
+const feedCode = codeOnly.get(join(publicDir, 'views', 'feed.js')) ?? '';
+check('侧栏有「关注列表」入口', /class="side-link" href="#\/following"/.test(appJs));
+check(
+  '关注列表入口和路由用的同一个地址',
+  /href="#\/following"/.test(appJs) && /first === 'following'/.test(appJs),
+);
+check(
+  '#/following 渲染的是名单页，不是动态流',
+  /if \(first === 'following'\) return await Feed\.viewFollowing\(\);/.test(appJs) &&
+    !/if \(first === 'following'\) return await Timeline\./.test(appJs),
+);
+check('关注列表页画的是名单（标题 + 计数）', /📋 关注列表/.test(feedCode) && /关注列表（/.test(feedCode));
+check(
+  '名单页「去看 TA 们发的动态」指到动态流的筛选（`?feed=` 那个地址没人认）',
+  /href="#\/\?filter=following"/.test(feedCode) && !/feed=following/.test(appJs),
 );
 
 /* 团队第二批（成员管理 / 文件柜 / 群聊）的契约。
