@@ -1,0 +1,238 @@
+/* AI 编辑台（P3，public/views/ai-edit.js）的样式。
+ *
+ * 规矩跟 95-ai.css 一样：颜色一律走 00-themes.css 的 CSS 变量，
+ * 不许写死 —— 六套主题都要能看。
+ *
+ * 编号 94 落在 88-messages 与 95-ai 之间；本文件只定义 `.ae-*`，
+ * 外加补一个 `.ai-chip.ok`（95 里只定义了 soft/warn/cat/diff）。
+ */
+
+/* 顶部统计 -------------------------------------------------------------- */
+.ae-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 18px;
+  margin-top: 12px;
+}
+.ae-stat {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.ae-stat-num {
+  font-size: 19px;
+  color: var(--text);
+}
+.ae-stat-label {
+  font-size: 12px;
+  color: var(--muted);
+}
+.ae-note {
+  margin-top: 12px;
+  padding: 9px 12px;
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-soft);
+  color: var(--text-dim);
+  font-size: 13px;
+}
+
+/* 能力授权 -------------------------------------------------------------- */
+.ae-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 12px;
+}
+.ae-cap {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-sm);
+  background: var(--bg-soft);
+}
+.ae-cap.is-on {
+  border-color: rgba(91, 140, 255, 0.45);
+  background: var(--accent-soft);
+}
+.ae-cap-top {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.ae-cap-name {
+  font-weight: 600;
+  color: var(--text);
+}
+.ae-cap-body {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  font-size: 12px;
+}
+.ae-cap-key {
+  font-family: var(--mono);
+  font-size: 11px;
+  padding: 1px 6px;
+  border-radius: 5px;
+  background: var(--code-bg);
+  color: var(--code-fg);
+}
+.ae-cap-meta {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+.ae-cap-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.ae-confirm {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--warn-fg);
+  cursor: pointer;
+}
+.ae-quota {
+  width: 84px;
+  padding: 4px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--panel);
+  color: var(--text);
+  font-family: var(--font);
+  font-size: 13px;
+}
+
+/* 表单 ------------------------------------------------------------------ */
+.ae-field {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  margin-bottom: 10px;
+}
+.ae-field-label {
+  font-size: 12px;
+  color: var(--muted);
+}
+.ae-input,
+.ae-textarea {
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--panel);
+  color: var(--text);
+  font-family: var(--font);
+  font-size: 14px;
+  box-sizing: border-box;
+}
+.ae-textarea {
+  font-family: var(--mono);
+  font-size: 12px;
+  resize: vertical;
+}
+.ae-input:focus,
+.ae-textarea:focus,
+.ae-quota:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+/* 预览 ------------------------------------------------------------------ */
+.ae-preview {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 12px;
+  margin: 12px 0;
+}
+.ae-preview-col {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  min-width: 0;
+}
+.ae-preview-title {
+  font-size: 12px;
+  color: var(--muted);
+}
+.ae-preview-code {
+  margin: 0;
+  padding: 10px;
+  max-height: 240px;
+  overflow: auto;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-sm);
+  background: var(--code-block-bg);
+  color: var(--code-block-fg);
+  font-family: var(--mono);
+  font-size: 12px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* 审计日志 -------------------------------------------------------------- */
+.ae-ops {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.ae-op {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 10px;
+  padding: 9px 12px;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-sm);
+  background: var(--bg-soft);
+}
+.ae-op-main {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+.ae-op-title {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  color: var(--text);
+  font-size: 13px;
+}
+.ae-op-meta {
+  font-size: 12px;
+  color: var(--muted);
+  word-break: break-word;
+}
+.ae-op-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* 补一个 95-ai.css 里没定义的 chip 变体（已授权 = 绿色） ------------------ */
+.ai-chip.ok {
+  color: var(--success);
+  border-color: rgba(67, 211, 158, 0.4);
+  background: rgba(67, 211, 158, 0.1);
+}
+
+@media (max-width: 640px) {
+  .ae-stats {
+    gap: 12px;
+  }
+  .ae-grid {
+    grid-template-columns: 1fr;
+  }
+}

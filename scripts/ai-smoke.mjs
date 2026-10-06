@@ -351,6 +351,51 @@ try {
   const untouched = await admin.call('/api/ai/status');
   check('forum-ai 自己的 /api/ai/status 没被动过', untouched.status === 200, `实际 ${untouched.status}`);
 
+  /* ---------- 15. 前端编辑台真的能被服务器发出来 ---------- */
+  //
+  // check-frontend.mjs 是从磁盘 import 视图的，绕过了 HTTP；这几条补的是
+  // 「服务器发不发得出来」+「三处注册有没有真的接上」。少了任何一处，
+  // 页面在浏览器里就是 #/ai-edit 打不开或者裸样式。
+  const pageJs = await fetch(`${BASE}/views/ai-edit.js`);
+  const pageJsText = await pageJs.text();
+  check(
+    '前端视图 /views/ai-edit.js 发得出来且导出了 viewAiEdit',
+    pageJs.status === 200 && pageJsText.includes('viewAiEdit'),
+    `实际 ${pageJs.status}`,
+  );
+
+  const pageCss = await fetch(`${BASE}/css/94-ai-edit.css`);
+  const pageCssText = await pageCss.text();
+  check(
+    '样式分片 /css/94-ai-edit.css 发得出来',
+    pageCss.status === 200 && pageCssText.includes('.ae-cap'),
+    `实际 ${pageCss.status}`,
+  );
+
+  const styleEntry = await fetch(`${BASE}/style.css`);
+  const styleEntryText = await styleEntry.text();
+  check(
+    'style.css 里接上了 94-ai-edit.css',
+    styleEntry.status === 200 && styleEntryText.includes('94-ai-edit.css'),
+    `实际 ${styleEntry.status}`,
+  );
+
+  const appEntry = await fetch(`${BASE}/app.js`);
+  const appEntryText = await appEntry.text();
+  check(
+    'app.js 里注册了 ai-edit 视图',
+    appEntry.status === 200 && appEntryText.includes('views/ai-edit.js'),
+    `实际 ${appEntry.status}`,
+  );
+
+  const routerEntry = await fetch(`${BASE}/core/router.js`);
+  const routerEntryText = await routerEntry.text();
+  check(
+    'router.js 里有 #/ai-edit 路由',
+    routerEntry.status === 200 && routerEntryText.includes("'ai-edit'"),
+    `实际 ${routerEntry.status}`,
+  );
+
   await finish(failures.length ? 1 : 0);
 } catch (error) {
   console.log(`❌ 测试自己崩了：${error.stack ?? error.message}`);

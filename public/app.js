@@ -15,6 +15,7 @@
 
 import * as Admin from './views/admin.js';
 import * as Ai from './views/ai.js';
+import * as AiEdit from './views/ai-edit.js';
 import * as Api from './core/api.js';
 import * as Auth from './views/auth.js';
 import * as Avatar from './core/avatar.js';
