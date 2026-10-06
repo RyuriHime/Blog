@@ -124,6 +124,15 @@
   background: var(--panel);
 }
 
+/* 纯 Markdown 视图改不了这篇时的横幅（原因由 doc.js 的 markdownViewBlocked() 拼）。 */
+.doc-md-blocked {
+  margin: 0 0 10px;
+  padding: 8px 10px;
+  border-radius: var(--radius);
+  border: 1px solid var(--accent);
+  color: var(--accent);
+}
+
 /* 块间联动：这一块的值从哪一块的哪个字段来（`bind`，跨块约定，见设计 §3.3③）。 */
 .doc-bind {
   display: flex;
@@ -951,7 +960,22 @@
   min-height: 240px;
 }
 
-/* 「新建一篇」的三步向导：模板摊成卡片，每个都带一句它能干什么。 */
+/*
+ * 模板栏（积木模式里那一栏）。
+ *
+ * 它取代的是原先「新建一篇」里那张三步向导 + 模板卡片墙 —— 卡片样式
+ * （`.doc-tpl-picks` / `.doc-tpl-pick` / `.doc-steps`）暂时留着，将来要做
+ * 「模板预览卡片」还能捡回来。
+ */
+.doc-tpl-bar .doc-actions {
+  flex-wrap: wrap;
+}
+
+.doc-tpl-bar .doc-select {
+  max-width: 260px;
+}
+
+/* 「新建一篇」的简洁表单：标题 + 形态 + 范围，创建后直接进 Markdown 编辑页。 */
 .doc-wizard {
   display: grid;
   gap: 10px;

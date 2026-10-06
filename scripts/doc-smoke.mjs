@@ -1932,9 +1932,17 @@ try {
       const editorJs = readText('public/views/doc.js');
       const partsJs = readText('public/views/doc-blocks.js');
       const css = readText('public/css/41-doc.css');
-      check('8.9 新建面板是三步向导', editorJs.includes('doc-steps') && editorJs.includes('function newDocPanelHtml()'), '');
-      check('8.9 模板摊成卡片并带上说明（不是只有名字的下拉框）', editorJs.includes('data-doc-action="pick-template"') && editorJs.includes('item.description'), '');
-      check('8.9 选中的模板写进隐藏框，提交路径没变', editorJs.includes('data-doc-action="pick-template"') && editorJs.includes('<input type="hidden" name="template"'), '');
+      check('8.9 新建面板不再摊模板墙（字还没写一个，先别做选择题）', editorJs.includes('function newDocPanelHtml()') && !editorJs.includes('data-doc-action="pick-template"'), '');
+      check('8.9 新建面板只剩标题 / 形态 / 范围 + 一个提交按钮', editorJs.includes('name="title"') && editorJs.includes('name="kind"') && editorJs.includes('name="scope"') && editorJs.includes('创建并开始写'), '');
+      check('8.9 建完直接进编辑器', editorJs.includes('return navigate(`/doc/${created.doc.id}/edit`)'), '');
+      check('8.9 模板搬到了积木模式那一栏（模板栏只在积木视图里渲染）', editorJs.includes('function templatePanelHtml()') && editorJs.includes('${blocksEditorHtml(blocks)}${templatePanelHtml()}'), '');
+      /* 用户在浏览器里报的四个 bug（m01284 / m01317）的回归钉：
+         ① 默认是纯 Markdown；② 三种视图共用一份草稿（切之前先存）；③ 源码里有 Markdown
+         表达不了的块时 Markdown 页只读；④ 保存之后编辑区不能被清空。 */
+      check('8.9 默认是纯 Markdown 模式', editorJs.includes("const wanted = query.get('mode') ?? 'markdown'"), '');
+      check('8.9 切视图前先把当前编辑区的改动存下去', editorJs.includes('async function flushDraft()') && editorJs.includes('if (!(await flushDraft())) return;'), '');
+      check('8.9 Markdown 存完会重新拉一次（不重拉就会把刚敲的从编辑区抹掉）', /async function saveMarkdown\(\)[\s\S]{0,600}?await loadMarkdown\(\)/.test(editorJs), '');
+      check('8.9 源码里有 Markdown 表达不了的块时，Markdown 页只读并说明原因', editorJs.includes('function markdownViewBlocked(') && editorJs.includes('MARKDOWN_VIEW_TYPES') && editorJs.includes('blocked ? \' readonly\' : \'\''), '');
       check('8.9 编辑器开头有「四步」说明卡', editorJs.includes('doc-howto') && editorJs.includes('保存本块'), '');
       check('8.9 每块底部也有一个「保存本块」（表单一长就滚不到顶上那个）', editorJs.includes('doc-block-foot'), '');
       check('8.9 联动默认收起（进阶功能不抢主线）', partsJs.includes('块间联动（进阶，可选）') && partsJs.includes('<details class="doc-bind"'), '');
