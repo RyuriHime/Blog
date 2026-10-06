@@ -236,10 +236,11 @@ scope = 'public' | 'followers' | 'team' | 'private'
 | `check-skeleton.mjs` | 骨架本身：模块解耦证明 + 薄入口行数 + 表归属 | 47 项 |
 | `check-frontend.mjs` | **前端整页渲染**：最小 DOM 垫片 + 真响应假数据，38 个页面全渲染（含团队帖详情页、非成员视角、申请式团队与等审核视角） | 38/38 |
 | `smoke.mjs` | 后端端到端（起真服务打接口） | 253 项 |
-| `smoke-ai.mjs` | AI 接口端到端 | 61 项 |
+| `smoke-ai.mjs` / `ai-smoke.mjs` | AI 接口端到端（两套：粗的一遍 + 更细的校验/限流/额度那套） | 61 / 387 项 |
 | `feed-smoke.mjs` / `doc-smoke.mjs` / `team-smoke.mjs` | 动态流 / 积木 / 团队的接口端到端 | 95 / 469 / 301 项 |
 | `check-ui-contract.mjs` | 前端类名 / API 字段 / 主题 / 头像 / 角色 / 私信 / 团队号与公告 / 剪贴板 / 公式 / 关注列表 / 团队帖详情与回复 / 加入申请与隐藏团队结构 / 编辑权只归作者与「💬 回复」/ 设置与申请的侧边抽屉 / 重建表不许改旧表名与坏库自愈 | 313 项 |
-| `check-encoding.mjs` | 编码体检（BOM / 乱码 / 关键中文片段） | 194 文件 / 87 断言 |
+| `ui-smoke.mjs` | 首页外壳轻量化 + 右侧栏抽屉（含 CSS / 前端模块的静态断言） | 42 项 |
+| `check-encoding.mjs` | 编码体检（BOM / 乱码 / 关键中文片段） | 195 文件 / 88 断言 |
 | `check-notes-ui.mjs` | 笔记的前端结构 | 33 项 |
 | `notes-smoke.mjs` / `forum-ai/selftest.mjs` / `note-studio/tests/run.mjs` | 子系统 | 44 / 92 / — |
 | `note-agent/scripts/run-tests.mjs` | note-agent | CI 上跑（本机受限沙箱下 spawn 管道会 EPERM） |

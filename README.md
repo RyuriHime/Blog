@@ -386,6 +386,7 @@ forum/
 │   ├── check-ui-contract.mjs    # 前端契约检查：CSS 类名 + API 字段 + 主题/头像/角色/私信结构
 │   ├── check-encoding.mjs       # 源码编码体检（BOM / 乱码 / 批处理换行与 ASCII）
 │   ├── check-notes-ui.mjs / check-frontend.mjs / notes-smoke.mjs / smoke-ai.mjs
+│   ├── ai-smoke.mjs / ui-smoke.mjs / feed-smoke.mjs / doc-smoke.mjs / team-smoke.mjs
 │   ├── fix-cmd.mjs              # 把 .cmd 规范化为 CRLF + 去 BOM
 │   └── reset-db.mjs             # 清库并重新播种（危险操作，必须加 --yes）
 └── data/forum.db                # SQLite 数据文件（首次运行自动生成）
@@ -742,10 +743,12 @@ node scripts/check-skeleton.mjs    # ★ 骨架自检：模块能不能独立拆
 node scripts/check-frontend.mjs    # ★ 前端渲染冒烟：38 个页面全部渲染一遍 + 关注列表 / 团队的文件柜/群聊/成员名单/团队号/公告/加入申请与审核/隐藏开关/设置与申请改右侧抽屉/帖子预览与详情回复（「💬 回复」按钮、编辑权只归作者）交互 + 裸调用未定义名字的静态扫描
 node scripts/smoke.mjs             # 后端端到端：253 项（临时独立库+端口，跑完自动清理）
 node scripts/smoke-ai.mjs          # AI 接口端到端：61 项
+node scripts/ai-smoke.mjs          # AI 接口端到端（更细的一套：校验 / 限流 / 额度）：387 项
 node scripts/feed-smoke.mjs        # 动态流端到端：95 项
 node scripts/doc-smoke.mjs         # 积木（可编程帖子）端到端：469 项
 node scripts/team-smoke.mjs        # 团队端到端：301 项（可见范围 / 越权 / 版本冲突 / 编辑权只归作者 / 文件柜 / 群聊 / 团队号 / 公告通知 / Markdown 与公式 / 帖子回复 / 加入申请与审核 / 隐藏团队 / 老库升级与坏库自愈）
 node scripts/check-ui-contract.mjs # 前端契约：CSS 类名 + API 字段 + 主题/头像/角色/私信/团队号/公告/剪贴板/公式/关注列表/详情与回复/申请与隐藏结构/编辑权与侧边抽屉/表重建与自愈（通过项数不下降哨兵：313）
+node scripts/ui-smoke.mjs          # 首页外壳轻量化 + 右侧栏抽屉：42 项
 node scripts/check-encoding.mjs    # 源码编码体检：BOM / 乱码 / 关键中文内容
 node scripts/check-notes-ui.mjs    # 笔记 UI
 node scripts/notes-smoke.mjs       # 笔记接口
@@ -754,12 +757,12 @@ node scripts/capture-fixtures.mjs  # 重采前端冒烟用的假数据（改了�
 
 > ⚠️ `scripts/reset-db.mjs` **不属于测试流程**（它以前被列在上面这段里，容易照着复制粘贴）：它会删掉 `data/forum.db`（连带 `-wal` / `-shm`）再重新播种，用户、帖子、私信、签到记录全部**不可恢复**，`data/` 又不在版本库里。要清库请按「常见问题」里那条走，并且必须显式加 `--yes`。
 
-一次跑完（`npm test` 就是前 12 组）：
+一次跑完（`npm test` 就是上面这些，14 组）：
 
 ```
-check-encoding 194 文件 / 87 断言 · check-skeleton 47 项 · check-golden 96 项 0 差异
-check-frontend 38 个页面 + 32 个模块静态扫描 · smoke 253 · smoke-ai 61 · feed-smoke 95
-doc-smoke 469 · team-smoke 301 · check-ui-contract 313 · check-notes-ui 33 · notes-smoke 44
+check-encoding 195 文件 / 88 断言 · check-skeleton 47 项 · check-golden 96 项 0 差异
+check-frontend 38 个页面 + 32 个模块静态扫描 · smoke 253 · smoke-ai 61 · ai-smoke 387 · feed-smoke 95
+doc-smoke 469 · team-smoke 301 · check-ui-contract 313 · check-notes-ui 33 · notes-smoke 44 · ui-smoke 42
 ```
 
 > 知识网络图（`knowledge-pack/` + `#/graph` + `/api/knowledge/*`）已在 2026-10 整条链路删除：
