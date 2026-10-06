@@ -1217,6 +1217,35 @@ try {
   );
   check('未登录不能拉黑（401）', (await anon.call(`/api/users/${dmAliceId}/block`, { method: 'POST' })).status === 401);
 
+  /* ---------------- 锁定帖子的互动守卫 ---------------- */
+  // locked 没有对外接口（只能由数据库置位），所以这里直接改临时库再发请求。
+  console.log('\n▶ 锁定帖子的互动守卫');
+  const lockedPost = (
+    await member.call('/api/posts', { method: 'POST', body: { boardId: 1, title: '锁定测试帖', content: '用来验证 locked 守卫' } })
+  ).data;
+  {
+    const { DatabaseSync } = await import('node:sqlite');
+    const db = new DatabaseSync(DB_FILE);
+    const setLocked = (locked) => db.prepare('UPDATE posts SET locked = ? WHERE id = ?').run(locked, lockedPost.id);
+    setLocked(1);
+    try {
+      const reaction = await dmAlice.call(`/api/posts/${lockedPost.id}/reaction`, { method: 'POST', body: { kind: 'like' } });
+      check('锁定后不能评价（403 locked）', reaction.status === 403 && reaction.error?.code === 'locked', JSON.stringify(reaction.body));
+      const coin = await dmAlice.call(`/api/posts/${lockedPost.id}/coin`, { method: 'POST', body: { amount: 1 } });
+      check('锁定后不能投币（403 locked）', coin.status === 403 && coin.error?.code === 'locked', JSON.stringify(coin.body));
+      const bookmark = await dmAlice.call(`/api/posts/${lockedPost.id}/bookmark`, { method: 'POST' });
+      check('锁定后不能收藏（403 locked）', bookmark.status === 403 && bookmark.error?.code === 'locked', JSON.stringify(bookmark.body));
+      const reply = await dmAlice.call(`/api/posts/${lockedPost.id}/replies`, { method: 'POST', body: { content: '锁了还能回吗' } });
+      check('锁定后不能回复（403 locked）', reply.status === 403 && reply.error?.code === 'locked', JSON.stringify(reply.body));
+      check('锁定不影响浏览', (await anon.call(`/api/posts/${lockedPost.id}`)).status === 200);
+    } finally {
+      setLocked(0);
+      db.close();
+    }
+    const afterUnlock = await dmAlice.call(`/api/posts/${lockedPost.id}/bookmark`, { method: 'POST' });
+    check('解锁后又能收藏', afterUnlock.status === 200, JSON.stringify(afterUnlock.body));
+  }
+
   console.log('\n▶ 退出登录');
   const logout = await member.call('/api/auth/logout', { method: 'POST' });
   check('退出登录成功', logout.data.loggedOut === true);

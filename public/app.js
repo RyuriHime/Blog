@@ -255,8 +255,53 @@ function toast(message, type = 'info') {
   setTimeout(() => node.remove(), 3200);
 }
 
+/* 页面代次：每次 route() 自增一次。
+   视图里发出的 GET 会记下「发起时的代次」，响应回来时若页面已经换过就丢弃 ——
+   否则一个慢响应会把它后面的新页面整个覆盖回旧内容。
+   后台轮询（未读数、站点信息）不经过 route()，此时 routeInFlight 为 null，不受影响。 */
+let routeSeq = 0;
+let routeInFlight = null;
+
+/** 页面已被新路由取代时抛出的「作废」错误：各处 catch 看到它就静默返回。 */
+function routeAborted() {
+  const error = new Error('页面已切换');
+  error.aborted = true;
+  return error;
+}
+
+/**
+ * 把接口错误统一分流成一句给用户看的话。
+ * 返回空字符串表示「已经处理过了，不要再提示」（目前只有会话失效这条）。
+ */
+function apiErrorText(error) {
+  const status = error?.status;
+  const code = error?.code;
+  if (status === 401 || code === 'login_required' || code === 'unauthorized') {
+    // 会话过期：清掉本地登录态、记住来路、送去登录页，回来还能接着原路走
+    state.me = null;
+    state.unread = 0;
+    renderUserArea();
+    state.redirect = location.hash.replace(/^#/, '') || '/';
+    if (parseHash().path !== '/login') navigate('/login');
+    toast('登录状态已失效，请重新登录', 'error');
+    return '';
+  }
+  if (status === 429 || code === 'rate_limited') return '操作太频繁了，歇一会儿再试';
+  if (status === 403) return error?.message || '没有权限执行这个操作';
+  if (status >= 500) return '服务器开小差了，请稍后再试';
+  return error?.message || '操作失败';
+}
+
+/** catch 里的统一出口：过期响应静默丢弃，其余按 apiErrorText 分流后弹提示。 */
+function toastError(error, fallback = '') {
+  if (error?.aborted) return;
+  const text = apiErrorText(error) || fallback;
+  if (text) toast(text, 'error');
+}
+
 async function api(path, options = {}) {
   const { method = 'GET', body } = options;
+  const seq = routeInFlight; // 发起这次请求时正在渲染的页面代次（不在视图里则为 null）
   let response;
   try {
     response = await fetch(path, {
@@ -268,6 +313,7 @@ async function api(path, options = {}) {
   } catch {
     throw new Error('网络请求失败，请检查服务是否在运行');
   }
+  if (seq !== null && seq !== routeSeq) throw routeAborted(); // 页面早换了，这份数据作废
   let payload = null;
   try {
     payload = await response.json();
@@ -317,13 +363,15 @@ function requireLogin(message) {
 
 function parseHash() {
   const raw = location.hash.replace(/^#/, '');
-  let decoded = raw;
+  // 只解码「路径」这一段，查询串原样交给 URLSearchParams：
+  // 先整体 decode 会把查询里的 %2B 还原成 `+`，再被当成空格 —— 搜索「C++」会变成搜「C」。
+  const [rawPath = '', queryString = ''] = (raw || '/').split('?');
+  let path = rawPath;
   try {
-    decoded = decodeURIComponent(raw);
+    path = decodeURIComponent(rawPath);
   } catch {
-    decoded = raw;
+    path = rawPath;
   }
-  const [path, queryString = ''] = (decoded || '/').split('?');
   return { path: path || '/', query: new URLSearchParams(queryString) };
 }
 
@@ -528,7 +576,7 @@ async function loadSite() {
     const ranking = await api('/api/ranking?limit=5');
     state.ranking = ranking.posts ?? [];
   } catch (error) {
-    toast(error.message, 'error');
+    toastError(error);
   }
 }
 
@@ -952,18 +1000,20 @@ async function viewUser(username, query) {
     )
     .join('');
 
-  const chip = (key, label, count) => {
+  const chip = (key, label, count, rawName = '') => {
     const active = filter === key ? 'is-active' : '';
     const inner = `<a class="chip-label" href="#${basePath}${key === 'all' ? '' : `?category=${encodeURIComponent(key)}`}">${label} <span class="chip-count">${count}</span></a>`;
+    // data-name 放「原始分类名」：label 是给人看的（带 🗂 前缀、已转义），
+    // 直接拿 label 回填重命名对话框，会把 🗂 和 &amp; 这类转义一起写回数据库。
     const tools = isOwner && key !== 'all' && key !== 'none' ? `
-      <button class="chip-x" data-action="rename-category" data-id="${key}" data-name="${esc(label)}" title="重命名">✎</button>
-      <button class="chip-x" data-action="delete-category" data-id="${key}" data-name="${esc(label)}" title="删除分类（文章会回到未分类）">✕</button>` : '';
+      <button class="chip-x" data-action="rename-category" data-id="${key}" data-name="${esc(rawName)}" title="重命名">✎</button>
+      <button class="chip-x" data-action="delete-category" data-id="${key}" data-name="${esc(rawName)}" title="删除分类（文章会回到未分类）">✕</button>` : '';
     return `<span class="chip ${active}">${inner}${tools}</span>`;
   };
 
   const chips = [
     chip('all', '📚 全部', user.postCount),
-    ...categories.map((category) => chip(String(category.id), `🗂 ${esc(category.name)}`, category.postCount)),
+    ...categories.map((category) => chip(String(category.id), `🗂 ${esc(category.name)}`, category.postCount, category.name)),
     chip('none', '📭 未分类', uncategorizedCount),
     data.repostCount ? chip('reposts', '🔁 转发', data.repostCount) : '',
   ]
@@ -1033,6 +1083,7 @@ async function viewUser(username, query) {
                  <input name="name" type="text" maxlength="12" placeholder="分类名称，例如「前端笔记」" required />
                  <button class="btn btn-primary" type="submit">创建</button>
                </div>
+               <div class="form-error" data-error hidden></div>
              </form>
              <div class="hint">分类只影响你的个人主页；删除分类不会删除文章，文章会回到「未分类」。置顶推荐最多 ${data.pinLimit} 篇（已置顶 ${pinnedCount} 篇）。</div>
            </section>`
@@ -1694,6 +1745,7 @@ async function viewThread(username) {
                <textarea name="content" rows="2" maxlength="${(state.site.messageRules ?? {}).maxLength ?? 1000}"
                          placeholder="输入私信内容，Enter 发送 / Shift+Enter 换行" required></textarea>
                <button class="btn btn-primary" type="submit">发送</button>
+               <div class="form-error" data-error hidden></div>
              </form>`
           : `<div class="dm-locked">
                ${messageQuotaHtml(availability)}
@@ -1834,6 +1886,7 @@ function repostSectionHtml(post, reposters) {
                        placeholder="${mine ? '修改你的转发语…' : '说点什么再转发（可留空直接转发）'}">${esc(mine?.comment ?? '')}</textarea>
              <span class="hint">转发会出现在你的主页「🔁 转发」里，并通知作者；同一篇只能转发一次，可随时撤销。</span>
            </div>
+           <div class="form-error" data-error hidden></div>
            <div class="form-actions">
              <button class="btn btn-primary" type="submit">${mine ? '更新转发语' : '确认转发'}</button>
              ${mine ? `<button class="btn" type="button" data-action="repost-cancel" data-id="${post.id}">撤销转发</button>` : ''}
@@ -1939,6 +1992,7 @@ async function viewPost(id) {
                    <textarea name="content" placeholder="写下你的想法…（支持 Markdown，@某人 可以提醒 TA）" required maxlength="5000"></textarea>
                    <span class="hint">支持 粗体、行内代码、代码块、引用、列表、链接与 @提及</span>
                  </div>
+                 <div class="form-error" data-error hidden></div>
                  <div class="form-actions">
                    <button class="btn btn-primary" type="submit">发表回复</button>
                    <button class="btn btn-ghost" type="button" data-action="preview" data-target="reply">预览</button>
@@ -2037,6 +2091,7 @@ async function viewCompose(postId) {
                     placeholder="详细描述你的问题或想法…">${esc(post?.content ?? '')}</textarea>
         </div>
         <div class="preview-box" data-preview hidden></div>
+        <div class="form-error" data-error hidden></div>
         <div class="form-actions">
           <button class="btn btn-primary" type="submit">${post ? '保存修改' : '发布帖子'}</button>
           <button class="btn btn-ghost" type="button" data-action="preview" data-target="compose">预览</button>
@@ -2641,6 +2696,10 @@ async function route() {
   const parts = path.split('/').filter(Boolean);
   const [first, second] = parts;
 
+  // 标记新页面：这一轮之前发出的请求，回来时会被 api() 判为过期并丢弃
+  routeSeq += 1;
+  routeInFlight = routeSeq;
+
   window.scrollTo({ top: 0 });
   closeMenus(); // 换页时收起用户菜单 / 主题菜单
   destroyComposeNotesPanel(); // 换页时销毁写作页的 AI 工作台（见其定义处的说明）
@@ -2671,9 +2730,14 @@ async function route() {
     if (first === 'admin') return await viewAdmin();
     ui.app.innerHTML = `<div class="card">${emptyHtml('🧭', '页面不存在', '返回首页继续逛逛')}</div>`;
   } catch (error) {
-    ui.app.innerHTML = `<div class="card">${emptyHtml('😵', error.message || '加载失败')}
+    if (error?.aborted) return; // 已被新页面取代，别再往新页面上画错误卡
+    const text = apiErrorText(error);
+    if (!text) return; // 已经处理过（例如已跳登录页），不用再画一张卡
+    ui.app.innerHTML = `<div class="card">${emptyHtml('😵', text)}
       <div style="text-align:center"><a class="btn btn-sm" href="#/">返回首页</a></div></div>`;
-    toast(error.message, 'error');
+    toast(text, 'error');
+  } finally {
+    routeInFlight = null;
   }
 }
 
@@ -3091,7 +3155,7 @@ document.addEventListener('click', async (event) => {
           toast('解读完成', 'success');
         } catch (error) {
           actionNode.textContent = before;
-          toast(error.message, 'error');
+          toastError(error);
           throw error;
         }
         break;
@@ -3119,7 +3183,7 @@ document.addEventListener('click', async (event) => {
           );
         } catch (error) {
           actionNode.textContent = before;
-          toast(error.message, 'error');
+          toastError(error);
           throw error;
         }
         break;
@@ -3162,7 +3226,7 @@ document.addEventListener('click', async (event) => {
         break;
     }
   } catch (error) {
-    toast(error.message, 'error');
+    toastError(error);
   }
 });
 
@@ -3291,7 +3355,7 @@ document.addEventListener('change', async (event) => {
       applyAvatarResult(result);
       toast('头像上传成功 🎉', 'success');
     } catch (error) {
-      toast(error.message, 'error');
+      toastError(error);
     }
     return;
   }
@@ -3308,7 +3372,7 @@ document.addEventListener('change', async (event) => {
     toast(result.category ? `已归入「${result.category.name}」` : '已移出分类', 'success');
     await refreshProfile();
   } catch (error) {
-    toast(error.message, 'error');
+    toastError(error);
   }
 });
 
@@ -3384,8 +3448,10 @@ document.addEventListener('submit', async (event) => {
         );
         if (answerHost) answerHost.innerHTML = aiAnswerHtml(result);
       } catch (error) {
-        if (answerHost) answerHost.innerHTML = `<div class="ai-error">${esc(error.message)}</div>`;
-        else fail(error.message);
+        const text = error?.aborted ? '' : apiErrorText(error);
+        if (!text) return; // 已经处理过（例如已跳登录页）
+        if (answerHost) answerHost.innerHTML = `<div class="ai-error">${esc(text)}</div>`;
+        else fail(text);
       }
       return;
     }
@@ -3466,7 +3532,8 @@ document.addEventListener('submit', async (event) => {
       return;
     }
   } catch (error) {
-    fail(error.message);
+    const text = error?.aborted ? '' : apiErrorText(error);
+    if (text) fail(text);
   }
 });
 
@@ -3563,7 +3630,10 @@ async function viewNotes() {
   try {
     await ntReload();
   } catch (error) {
-    ui.app.innerHTML = `<div class="card">${emptyHtml('📓', '笔记功能暂时打不开', esc(error.message || '请稍后再试'))}</div>`;
+    if (error?.aborted) return; // 页面已经切走了
+    const text = apiErrorText(error);
+    if (!text) return;
+    ui.app.innerHTML = `<div class="card">${emptyHtml('📓', '笔记功能暂时打不开', esc(text))}</div>`;
     return;
   }
   ntRender();
@@ -3721,7 +3791,7 @@ async function ntMutate(path, method, successMessage) {
     await ntReload();
     ntRender();
   } catch (error) {
-    toast(error.message || '操作失败', 'error');
+    toastError(error, '操作失败');
   } finally {
     ntState.busy = false;
   }
@@ -3735,7 +3805,7 @@ async function ntOpenNote(ownerId, name) {
     ntState.reading = note;
     ntRender();
   } catch (error) {
-    toast(error.message || '打不开这篇笔记', 'error');
+    toastError(error, '打不开这篇笔记');
   } finally {
     ntState.busy = false;
   }

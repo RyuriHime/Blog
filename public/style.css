@@ -2314,10 +2314,16 @@ label.btn {
 
 .dm-composer {
   display: flex;
+  flex-wrap: wrap;
   gap: 10px;
   align-items: flex-end;
   padding-top: 12px;
   border-top: 1px solid var(--border-soft);
+}
+
+/* 私信表单里的错误提示独占一行（见下面的通用 select / textarea 规则说明） */
+.dm-composer .form-error {
+  flex: 1 1 100%;
 }
 
 .dm-composer textarea {
@@ -2466,6 +2472,13 @@ label.btn {
   font-size: 12.5px;
   background: var(--bg-soft);
   color: var(--text-dim);
+}
+
+/* 通用表单规则里给 select / textarea 的 padding 更大（见文件后段），
+   而 .mini-select 只有一个类名（0,0,1）压不过它里面的属性选择器 —— 这里用
+   select.mini-select（0,1,1）把紧凑内边距钉回来。 */
+select.mini-select {
+  padding: 4px 8px;
 }
 
 /* ---------------- 账号设置 ---------------- */

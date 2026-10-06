@@ -48,6 +48,31 @@ for (const selector of selectors.filter((item) => item.startsWith('#') && !item.
   check(`index.html 中存在 id="${id}"`, indexHtml.includes(`id="${id}"`));
 }
 
+/* ---------- 1a-2. 交互与错误处理的静态契约（体检第 2 批） ---------- */
+
+// 这些是「修好了别再退化」的守卫：都不依赖运行时，改动 app.js / server.js 就会跑。
+const serverJs = readFileSync(join(ROOT, 'src', 'server.js'), 'utf8');
+
+check('统一的错误出口 toastError 存在', /function toastError\(/.test(appJs));
+check('不再有裸的 toast(error.message)（统一走 toastError）', !/toast\(error\.message/.test(appJs));
+check('不再有裸的 fail(error.message)（统一走 apiErrorText）', !/fail\(error\.message/.test(appJs));
+check(
+  'route() 有请求序号守卫（防切页竞态）',
+  /routeSeq \+= 1/.test(appJs) && /throw routeAborted\(\)/.test(appJs) && /if \(seq !== null && seq !== routeSeq\)/.test(appJs),
+);
+check('parseHash 只解码路径，查询串交给 URLSearchParams', /split\('\?'\)/.test(appJs) && /new URLSearchParams\(/.test(appJs));
+
+const formErrorBoxes = [...appJs.matchAll(/<div class="form-error" data-error hidden><\/div>/g)].length;
+check('主要表单都有错误提示容器（data-error）', formErrorBoxes >= 5, `找到 ${formErrorBoxes} 个`);
+
+const lockedGuards = [
+  ...serverJs.matchAll(/ensure\(!(?:post|bookmarkedPost)\.locked \|\| isStaff\(user\), 403, 'locked'/g),
+].length;
+check('评价 / 投币 / 收藏 / 转发 / 回复 都有锁定守卫', lockedGuards >= 5, `找到 ${lockedGuards} 个`);
+
+check('select.mini-select 把紧凑内边距钉回来', /select\.mini-select\s*\{/.test(styleCss));
+check('.dm-composer 允许换行给错误提示留位置', /\.dm-composer\s*\{[^}]*flex-wrap:\s*wrap/.test(styleCss));
+
 /* ---------- 1b. 背景主题契约 ---------- */
 
 /** 取出某个主题在 style.css 里的变量块（dark 用 :root 作为默认值） */
