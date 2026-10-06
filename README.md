@@ -386,6 +386,7 @@ forum/
 │   ├── check-ui-contract.mjs    # 前端契约检查：CSS 类名 + API 字段 + 主题/头像/角色/私信结构
 │   ├── check-encoding.mjs       # 源码编码体检（BOM / 乱码 / 批处理换行与 ASCII）
 │   ├── check-notes-ui.mjs / check-frontend.mjs / notes-smoke.mjs / smoke-ai.mjs
+│   ├── ai-smoke.mjs / ui-smoke.mjs / feed-smoke.mjs / doc-smoke.mjs / team-smoke.mjs
 │   ├── fix-cmd.mjs              # 把 .cmd 规范化为 CRLF + 去 BOM
 │   └── reset-db.mjs             # 清库并重新播种（危险操作，必须加 --yes）
 └── data/forum.db                # SQLite 数据文件（首次运行自动生成）
@@ -583,6 +584,20 @@ forum/
 > 顺带一个好处：把「加入方式」设成 `apply` 之后，审核记录（谁在什么时候申请、写了什么理由、谁批的）
 > 全部留在 `team_join_requests` 里，出事能查；拉人那条路是查不出痕迹的。
 > 旧库的 `join_policy='invite'` 在重建表时翻译成 `'apply'`（语义一样：都得有人批），迁移是幂等的。
+> **重建表时踩过的坑（一次真实的线上 500，值得引以为戒）**：最早那版重建是
+> `ALTER TABLE teams RENAME TO teams_old` → 建新表 → 搬数据 → `DROP TABLE teams_old`。
+> 那段代码的注释写着「先把外键关掉，RENAME 就不会去改别的表里的 `REFERENCES`」——
+> **这条是错的**：SQLite 3.25+ 的 `ALTER TABLE … RENAME TO` 会顺手改写其它表 DDL 里的
+> `REFERENCES "teams_old"(id)`，只看 `PRAGMA legacy_alter_table`（默认 OFF），**与 `foreign_keys` 无关**。
+> 于是六张子表都指向了一张已经被删掉的表：用团队号加入（写 `team_members`）、团队发帖（写 `team_posts`）、
+> 退出团队（删 `team_members`）、群聊、文件柜、回复 —— 全部报 `no such table: main.teams_old`，对外统一是 500
+> `internal_error`。**新库不受影响**，所以十二套自检（用的都是新库）全绿也照样漏掉了它。
+> 现在的两处保险：重建一律「先建新表 → 搬数据 → 删旧表 → 把新表改名」（全程不改旧表的名字），
+> 并在 `migrateTeamTables` 的第一步跑一次**幂等自愈**（扫 `sqlite_master` 里还引用 `teams_old` 的表，
+> 按存下来的 DDL 原地重建它们），所以本地与线上那两份已经坏掉的库，**升级后第一次启动就自己好了**。
+> `team-smoke` 里两个场景（上一版形状的老库 / 照老写法弄坏的库）把这件事钉住了。
+> doc 那边重建 `document_revisions`（让 `reason` 的 CHECK 收下 `adopt`）原来用的是同一套错顺序，
+> 只是今天还没有任何表引用它、所以没炸 —— 一并改成正确顺序并钉进契约，别等有了子表再踩第二次。
 > 「要不要出现在团队广场」是**创建者独有**的一条线（和「解散团队」同级）：管理员能改队名 / 简介 / 加入方式，
 > 但带 `listed` 去改会 403 —— 藏不藏一个团队是它的身份问题，不是日常运营。
 > 隐藏只是「不被发现」：广场列表不再列它，团队主页、团队号、帖子链接照旧能用，
@@ -646,7 +661,8 @@ teams(id, slug, name, intro, owner_id, join_policy, listed, join_code, announcem
       announcement_by, announcement_at, deleted, created_at, updated_at)
                     -- slug 唯一（团队地址，如 #/team/wenlan）；join_policy: open | apply
                     --   open = 谁都能加入；apply = 递申请、由团长 / 管理员批准
-                    --   （老库的 invite 在重建表时翻译成 apply，只是改名的等价语义）
+                    --   （老库的 invite 在重建表时翻译成 apply，只是改名的等价语义；
+                    --    重建**不能**把旧表改名成 teams_old —— 见上面那段线上 500）
                     -- listed: 1 | 0 —— 要不要出现在团队广场上，**只有创建者**能改；
                     --   0 只是「不被发现」，团队主页 / 团队号 / 帖子链接照旧可用
                     -- join_code 是 6 位团队号：部分唯一索引 WHERE join_code <> ''（空串不参与唯一性，
@@ -737,10 +753,12 @@ node scripts/check-skeleton.mjs    # ★ 骨架自检：模块能不能独立拆
 node scripts/check-frontend.mjs    # ★ 前端渲染冒烟：38 个页面全部渲染一遍 + 关注列表 / 团队的文件柜/群聊/成员名单/团队号/公告/加入申请与审核/隐藏开关/设置与申请改右侧抽屉/帖子预览与详情回复（「💬 回复」按钮、编辑权只归作者）交互 + 裸调用未定义名字的静态扫描
 node scripts/smoke.mjs             # 后端端到端：253 项（临时独立库+端口，跑完自动清理）
 node scripts/smoke-ai.mjs          # AI 接口端到端：61 项
+node scripts/ai-smoke.mjs          # AI 接口端到端（更细的一套：校验 / 限流 / 额度）：387 项
 node scripts/feed-smoke.mjs        # 动态流端到端：95 项
 node scripts/doc-smoke.mjs         # 积木（可编程帖子）端到端：469 项
-node scripts/team-smoke.mjs        # 团队端到端：276 项（可见范围 / 越权 / 版本冲突 / 编辑权只归作者 / 文件柜 / 群聊 / 团队号 / 公告通知 / Markdown 与公式 / 帖子回复 / 加入申请与审核 / 隐藏团队）
-node scripts/check-ui-contract.mjs # 前端契约：CSS 类名 + API 字段 + 主题/头像/角色/私信/团队号/公告/剪贴板/公式/关注列表/详情与回复/申请与隐藏结构/编辑权与侧边抽屉（通过项数不下降哨兵：303）
+node scripts/team-smoke.mjs        # 团队端到端：301 项（可见范围 / 越权 / 版本冲突 / 编辑权只归作者 / 文件柜 / 群聊 / 团队号 / 公告通知 / Markdown 与公式 / 帖子回复 / 加入申请与审核 / 隐藏团队 / 老库升级与坏库自愈）
+node scripts/check-ui-contract.mjs # 前端契约：CSS 类名 + API 字段 + 主题/头像/角色/私信/团队号/公告/剪贴板/公式/关注列表/详情与回复/申请与隐藏结构/编辑权与侧边抽屉/表重建与自愈（通过项数不下降哨兵：313）
+node scripts/ui-smoke.mjs          # 首页外壳轻量化 + 右侧栏抽屉：42 项
 node scripts/check-encoding.mjs    # 源码编码体检：BOM / 乱码 / 关键中文内容
 node scripts/check-notes-ui.mjs    # 笔记 UI
 node scripts/notes-smoke.mjs       # 笔记接口
@@ -749,12 +767,12 @@ node scripts/capture-fixtures.mjs  # 重采前端冒烟用的假数据（改了�
 
 > ⚠️ `scripts/reset-db.mjs` **不属于测试流程**（它以前被列在上面这段里，容易照着复制粘贴）：它会删掉 `data/forum.db`（连带 `-wal` / `-shm`）再重新播种，用户、帖子、私信、签到记录全部**不可恢复**，`data/` 又不在版本库里。要清库请按「常见问题」里那条走，并且必须显式加 `--yes`。
 
-一次跑完（`npm test` 就是前 12 组）：
+一次跑完（`npm test` 就是上面这些，14 组）：
 
 ```
-check-encoding 194 文件 / 87 断言 · check-skeleton 47 项 · check-golden 96 项 0 差异
-check-frontend 38 个页面 + 32 个模块静态扫描 · smoke 253 · smoke-ai 61 · feed-smoke 95
-doc-smoke 469 · team-smoke 276 · check-ui-contract 303 · check-notes-ui 33 · notes-smoke 44
+check-encoding 195 文件 / 88 断言 · check-skeleton 47 项 · check-golden 96 项 0 差异
+check-frontend 38 个页面 + 32 个模块静态扫描 · smoke 253 · smoke-ai 61 · ai-smoke 387 · feed-smoke 95
+doc-smoke 469 · team-smoke 301 · check-ui-contract 313 · check-notes-ui 33 · notes-smoke 44 · ui-smoke 42
 ```
 
 > 知识网络图（`knowledge-pack/` + `#/graph` + `/api/knowledge/*`）已在 2026-10 整条链路删除：

@@ -29,7 +29,7 @@ const PORT = Number(process.env.CONTRACT_PORT || 3412);
 const BASE = `http://127.0.0.1:${PORT}`;
 
 /** 不下降哨兵：接手的模块只允许加，不允许把这些数字改小。 */
-const MIN_CHECKS = Number(process.env.MIN_UI_CHECKS || 303);
+const MIN_CHECKS = Number(process.env.MIN_UI_CHECKS || 313);
 
 /**
  * 前端源码入口清单。搬家前这三份文件在 public/ 根目录；骨架会把它们拆进
@@ -656,6 +656,58 @@ check(
 check(
   '抽屉能用 ESC 关掉（挂监听前先问 document.addEventListener 在不在）',
   /typeof document\.addEventListener === 'function'/.test(appJs) && /event\.key !== 'Escape'/.test(appJs),
+);
+
+/* 团队第七批（`teams_old` 那次线上 500 的契约）：重建表不许改旧表的名字、坏库必须自愈。 */
+const teamSmokeJs = readFileSync(join(ROOT, 'scripts', 'team-smoke.mjs'), 'utf8');
+check(
+  '重建 teams 走的是「先建新表 → 搬数据 → 删旧表 → 把新表改名」',
+  /db\.exec\('DROP TABLE teams'\);[\s\S]{0,120}ALTER TABLE \$\{temp\} RENAME TO teams/.test(serverJs) &&
+    // 只在**贴着 exec 的代码**里查旧写法：注释里为了讲那段历史，必须能写出这条语句。
+    !/db\.exec\([^)]*ALTER TABLE teams RENAME TO teams_old/.test(serverJs),
+);
+check(
+  '自愈三件套都在：找出坏表 / 按存下来的 DDL 重建 / 把 teams_old 改回 teams',
+  /function repairTeamsReferences\(db\)/.test(serverJs) &&
+    /function rebuildTables\(db, tables, mapSql\)/.test(serverJs) &&
+    /function fixTeamsReferences\(sql\)/.test(serverJs),
+);
+check(
+  'migrateTeamTables 一进来先自愈（坏库要先能写，后面的迁移才有意义）',
+  /export function migrateTeamTables\(db\) \{[\s\S]{0,500}?repairTeamsReferences\(db\);/.test(serverJs),
+);
+check(
+  '重建与自愈都开着 legacy_alter_table，而且事后关回去',
+  /PRAGMA legacy_alter_table = ON/.test(serverJs) && /PRAGMA legacy_alter_table = OFF/.test(serverJs),
+);
+check(
+  '那次故障的教训写在代码里：这个改写只看 legacy_alter_table、与 foreign_keys 无关',
+  /只看 `legacy_alter_table`/.test(serverJs) && /与 `foreign_keys` 无关/.test(serverJs),
+);
+check(
+  'schema.js 的 teamTableDdl 支持「同一份 DDL 换个表名」',
+  /export function teamTableDdl\(name, as = name\)/.test(serverJs),
+);
+check(
+  'team-smoke 里有「上一版形状的库」这个场景（CHECK 还是 invite、没有 listed）',
+  /场景 A/.test(teamSmokeJs) && /LEGACY_TEAMS_DDL/.test(teamSmokeJs) && /'invite'/.test(teamSmokeJs),
+);
+check(
+  'team-smoke 里有「已经坏掉的库」这个场景，并且先把那个 500 复现出来',
+  /场景 B/.test(teamSmokeJs) &&
+    /ALTER TABLE teams RENAME TO teams_old/.test(teamSmokeJs) &&
+    /no such table: main\.teams_old/.test(teamSmokeJs),
+);
+check(
+  'doc 那边重建 document_revisions 也换了顺序（同类坑，今天还没人引用它，别等有了再踩）',
+  /const temp = 'document_revisions__rebuilt'/.test(serverJs) &&
+    /docTableDdl\('document_revisions', temp\)/.test(serverJs) &&
+    /export function docTableDdl\(name, as = name\)/.test(serverJs) &&
+    !/db\.exec\([^)]*ALTER TABLE document_revisions RENAME TO document_revisions_old/.test(serverJs),
+);
+check(
+  'team-smoke 起的那三台临时服务器与三份临时库跑完都会收拾掉',
+  /extraChildren/.test(teamSmokeJs) && /\[DB_FILE, SCAFFOLD_DB, LEGACY_DB, BROKEN_DB\]/.test(teamSmokeJs),
 );
 
 /* ---------- 1b. 背景主题契约 ---------- */
