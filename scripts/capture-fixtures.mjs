@@ -149,8 +149,6 @@ try {
     ['GET', '/api/checkin'],
     ['GET', '/api/messages'],
     ['GET', '/api/messages/fixturepal'],
-    ['GET', '/api/knowledge/graph'],
-    ['GET', '/api/knowledge/viewer'],
     ['GET', '/api/admin/overview'],
   ];
 

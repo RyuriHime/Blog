@@ -1,5 +1,5 @@
 // 学术笔记（#/notes）前端静态契约检查。
-// 跟 check-graph-ui.mjs 一个路子：只切「学术笔记」那一段代码来看，
+// 只切「学术笔记」那一段代码来看，
 // 免得把别的视图的类名 / id 算进来。
 //
 // 用法：node scripts/check-notes-ui.mjs
@@ -52,6 +52,8 @@ function check(label, condition, detail = '') {
 /* 切出笔记那一段                                                     */
 /* ---------------------------------------------------------------- */
 
+// v2 把笔记拆成了独立文件，所以这里直接认文件，
+// 不用再靠「下一个视图的注释」当下标（main 上那个 `/* 启动` 定位法就是为单文件写的）。
 const block = notesFile;
 
 console.log('\n▶ 前端：学术笔记接线');
@@ -67,7 +69,7 @@ check(
   /href="#\/notes"/.test(app) && /first === 'notes'/.test(app),
 );
 check(
-  '笔记页要求登录（跟公开的知识网络图不一样）',
+  '笔记页要求登录',
   /if \(!state\.me\) \{[\s\S]{0,120}navigate\('\/login'\);/.test(block),
 );
 check('登录后会带着 redirect 回来', /state\.redirect = '\/notes'/.test(block));

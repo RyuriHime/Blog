@@ -39,7 +39,7 @@ src/
     ├── index.js         ★ 全仓库唯一列举模块的地方（MODULES 名册）
     ├── core/            现有论坛本体（认证 / 帖子 / 回复 / 社交 / 通知 / 管理）
     │   ├── index.js     模块声明（name/apiPrefix/owns/reads/install）
-    │   └── routes-a.js  认证与站点      routes-b.js  内容与知识图
+    │   └── routes-a.js  认证与站点      routes-b.js  帖子与互动
     │       routes-c.js  社交与通知      routes-d.js  管理与上传
     ├── feed/            🅿️ P1 动态
     ├── doc/             🅿️ P2 可编程帖子（积木）
@@ -55,12 +55,12 @@ public/
 │                        events session widgets router sandbox
 │                        （sandbox.js = 沙箱宿主：消息白名单 / 看门狗 / 频率上限 / resize）
 ├── views/               页面 15 个：feed user checkin settings notifications messages post
-│                        compose auth ai admin notes graph doc timeline
+│                        compose auth ai admin notes doc timeline team
 │                        （+ doc-blocks.js = 积木编辑器的零件层，不是页面）
 └── css/                 样式分片 22 个：00-themes 10-base 20-components 30-feed 31-timeline
                          40-post 41-doc 50-forms 55-sidebar 60-admin 65-helpers 70-responsive
                          75-social 76-theme-switch 77-avatar 78-repost-ranking 80-checkin-profile
-                         85-roles 88-messages 95-ai 96-graph 97-notes
+                         85-roles 86-team 88-messages 95-ai 97-notes
 ```
 
 ---
@@ -232,12 +232,13 @@ scope = 'public' | 'followers' | 'team' | 'private'
 | --- | --- | --- |
 | `check-golden.mjs` | **行为金标准**：96 条固定请求的状态码 + 响应结构 | 96 项 0 差异 |
 | `check-skeleton.mjs` | 骨架本身：模块解耦证明 + 薄入口行数 + 表归属 | 47 项 |
-| `check-frontend.mjs` | **前端整页渲染**：最小 DOM 垫片 + 真响应假数据，18 个页面全渲染 | 18/18 |
-| `smoke.mjs` | 后端端到端（起真服务打接口） | 242 项 |
+| `check-frontend.mjs` | **前端整页渲染**：最小 DOM 垫片 + 真响应假数据，30 个页面全渲染 | 30/30 |
+| `smoke.mjs` | 后端端到端（起真服务打接口） | 253 项 |
 | `smoke-ai.mjs` | AI 接口端到端 | 61 项 |
-| `check-ui-contract.mjs` | 前端类名 / API 字段 / 主题 / 头像 / 角色 / 私信结构 | 200 项 |
-| `check-encoding.mjs` | 编码体检（BOM / 乱码 / 关键中文片段） | 155 文件 / 53 断言 |
-| `check-graph-ui.mjs` / `check-notes-ui.mjs` | 知识图 / 笔记的前端结构 | 24 / 33 项 |
+| `feed-smoke.mjs` / `doc-smoke.mjs` / `team-smoke.mjs` | 动态流 / 积木 / 团队的接口端到端 | 95 / 392 / 97 项 |
+| `check-ui-contract.mjs` | 前端类名 / API 字段 / 主题 / 头像 / 角色 / 私信结构 | 219 项 |
+| `check-encoding.mjs` | 编码体检（BOM / 乱码 / 关键中文片段） | 183 文件 / 87 断言 |
+| `check-notes-ui.mjs` | 笔记的前端结构 | 33 项 |
 | `notes-smoke.mjs` / `forum-ai/selftest.mjs` / `note-studio/tests/run.mjs` | 子系统 | 44 / 92 / — |
 | `note-agent/scripts/run-tests.mjs` | note-agent | CI 上跑（本机受限沙箱下 spawn 管道会 EPERM） |
 

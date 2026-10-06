@@ -24,7 +24,6 @@ import * as Dom from './core/dom.js';
 import * as Events from './core/events.js';
 import * as Feed from './views/feed.js';
 import * as Fmt from './core/format.js';
-import * as Graph from './views/graph.js';
 import * as Message from './views/messages.js';
 import * as Notes from './views/notes.js';
 import * as Notif from './views/notifications.js';

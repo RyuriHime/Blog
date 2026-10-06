@@ -29,7 +29,7 @@ const PORT = Number(process.env.CONTRACT_PORT || 3412);
 const BASE = `http://127.0.0.1:${PORT}`;
 
 /** 不下降哨兵：接手的模块只允许加，不允许把这些数字改小。 */
-const MIN_CHECKS = Number(process.env.MIN_UI_CHECKS || 210);
+const MIN_CHECKS = Number(process.env.MIN_UI_CHECKS || 219);
 
 /**
  * 前端源码入口清单。搬家前这三份文件在 public/ 根目录；骨架会把它们拆进

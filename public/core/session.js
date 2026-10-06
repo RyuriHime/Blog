@@ -120,8 +120,7 @@ function renderSidebar() {
            <a class="side-link" href="#/following">👥 我的关注</a>
            <a class="side-link" href="#/bookmarks">⭐ 我的收藏</a>
            <a class="side-link" href="#/ai">🤖 AI 阅读助手</a>
-           <a class="side-link" href="#/graph">🕸 知识网络图</a>
-          <a class="side-link" href="#/notes">📓 学术笔记</a>
+           <a class="side-link" href="#/notes">📓 学术笔记</a>
            <a class="side-link" href="#/settings">⚙️ 账号设置</a>
          </div>
        </div>

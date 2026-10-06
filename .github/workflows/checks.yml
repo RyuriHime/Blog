@@ -90,9 +90,6 @@ jobs:
       - name: 前端渲染冒烟（30 个页面 + 编辑框状态）
         run: node scripts/check-frontend.mjs
 
-      - name: 知识网络图 UI 检查
-        run: node scripts/check-graph-ui.mjs
-
       # ---------------------------------------------------------------
       # note-studio（笔记）
       # ---------------------------------------------------------------

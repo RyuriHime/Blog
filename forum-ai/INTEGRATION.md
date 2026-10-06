@@ -147,10 +147,6 @@ curl -s -b cookie.txt -X POST http://127.0.0.1:3000/api/ai/posts/2/analyze | hea
 
 **字段名兼容**：接口同时给 `postId` 和 `documentId`，前端用 `aiIdOf()` 取任一即可；你照抄就不会踩坑。
 
-**要接 `knowledge-pack` 那张知识网络图**（可选、不影响 AI 功能）：需要在你的 server 里加一个只读接口，
-调用 `knowledge-pack` 把当前帖子导出成文档再生成图（大约 40 行胶水代码）。这一块我**这次没有交付**，
-因为你要的"融合"以 AI 功能为主；需要的话说一声，我按同样方式给一个可挂载的版本。
-
 ---
 
 ## 五、合并后的验收清单

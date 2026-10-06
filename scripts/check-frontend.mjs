@@ -218,8 +218,6 @@ const FIXTURE_PEER = String(FIXTURES.__peer ?? FIXTURE_USERNAME);
 /** 采样时用过的路径（去掉 __ 元数据）。 */
 const FIXTURE_KEYS = Object.keys(FIXTURES).filter((key) => !key.startsWith('__'));
 
-/** 知识图与可视化页在临时库里还没生成（真接口会 404），这里给个空壳让页面仍然渲染。 */
-const EMPTY_GRAPH = { nodes: [], edges: [], tags: [], generatedAt: Date.now() };
 /** 四档可见范围。团队页的兜底清单要和后端 shape.js 的 SCOPE_OPTIONS 一致。 */
 const SCOPES = [
   { value: 'public', label: '公开' },
@@ -249,11 +247,8 @@ const TEAM_FIXTURE = {
 };
 
 const EXTRA = {
-  '/api/knowledge/graph': EMPTY_GRAPH,
-  '/api/knowledge/viewer': { ready: false },
   '/api/markdown/preview': { html: '<p>ok</p>' },
   '/api/ai/site': { configured: false, ready: false },
-  '/api/knowledge/status': { ready: false },
   // 积木（doc 模块）的四个页面要用的接口。采集器还没采这几条 ——
   // 手工给一小份真形状，渲染得出来就够了；接口形状改了就跟着改这里。
   '/api/docs/meta/block-types': {

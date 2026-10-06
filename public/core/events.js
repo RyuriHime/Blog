@@ -723,7 +723,7 @@ document.addEventListener('keydown', (event) => {
 /* ------------------------------------------------------------------ */
 
 // 这一页的所有控件都用 id / data-nt-* 就地绑定，不接中央的 data-action 分发，
-// 免得动到 check-ui-contract.mjs 盯着的那个 switch（跟知识网络图一个做法）。
+// 免得动到 check-ui-contract.mjs 盯着的那个 switch（跟 public/views/timeline.js 一个做法）。
 
 // ── 导出 ──────────────────────────────────────────────────────────────
 export { closeMenus };

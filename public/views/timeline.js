@@ -9,7 +9,7 @@
 //
 // 事件绑定方式：**不进 `public/core/events.js` 那个中央 switch**，
 // 改成对 `ui.app` 做一次性委托 + `data-feed-*` 属性。
-// 这是跟 `public/views/notes.js` / `public/views/graph.js` 学的做法：
+// 这是跟 `public/views/notes.js` 学的做法：
 // 中央 switch 被 `scripts/check-ui-contract.mjs` 盯着，动态的控件又天天变，
 // 分开放两边就不用每次改控件都去动那个文件。
 import { $, esc, emptyHtml, toast, ui } from '../core/dom.js';

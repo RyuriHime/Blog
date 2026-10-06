@@ -1,7 +1,6 @@
 // core 路由：认证 / 资料 / 头像 / 密码 / 签到 / 个人主页分类
 // // 搬运自 src/server.js 的固定行区间（预铺骨架，逐字未改），见 docs/tools/extract-server-modules.mjs。
 import { HttpError, ensure, field, ok, rateLimit, res_ } from '../../core/http.js';
-import { readJsonFile } from '../../core/json-file.js';
 import { assertPinAllowed, coinAvailability, notifyMentions, resolveOwnCategory, shapeAuthor, shapeCategory, shapeConversation, shapeMessage, shapeNotification, shapePerson, shapePostDetail, shapePostListRow, shapeProfile, shapeReply, shapeReposter, shapeUser } from '../../core/shape.js';
 import { isOwner, isStaff, requireOwner, requireStaff, requireUser } from '../../core/guards.js';
 import { issueSession, removeAvatarFile, saveAvatarFile, sessionCookie } from '../../core/sessions.js';
@@ -9,7 +8,6 @@ import { store } from '../../core/store.js';
 import { MAX_AVATAR_BYTES } from '../../core/paths.js';
 import { renderMarkdown, markdownToPlainText } from '../../markdown.js';
 import { hashPassword, verifyPassword } from '../../password.js';
-import { GRAPH_FILE, GRAPH_STATUS_FILE } from './graph-paths.js';
 import { forumAiStatus, noteAgentStatus } from '../../core/mount-status.js';
 
 /** 登记本文件负责的路由。 */
@@ -225,16 +223,5 @@ export function registerRoutesA(route) {
       })),
     });
   });
-
-  /* ---------------- 知识网络图 ---------------- */
-
-  /*
-   * 图不是在这里现算的：scripts/build-graph.mjs 离线跑（导出语料 → knowledge-pack
-   * 算关系网 → 清洗成 data/knowledge/graph.json），这里只负责把结果读出来。
-   * 好处是访问很轻（读一个 JSON），而且重新部署不会动 data/。
-   *
-   * 两个路径常量在 ./graph-paths.js 里（从 src/server.js:694-695 搬出去的），
-   * 不要在这里重新定义 —— 它们会用到 join/ROOT，而这两个名字不在本文件的 import 里。
-   */
 
 }

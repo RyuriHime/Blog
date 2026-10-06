@@ -3,7 +3,7 @@
   "version": "1.3.0",
   "private": true,
   "type": "module",
-  "description": "零依赖全栈社区：Node 内置 http + node:sqlite + 原生前端。首页是动态流（纯编辑框、Markdown + LaTeX、配图、点赞、@提醒、引用帖子、四档可见范围），另带通知 / 关注 / 签到 / 主页分类与置顶 / 价值排行榜 / 知识网络图。",
+  "description": "零依赖全栈社区：Node 内置 http + node:sqlite + 原生前端。首页是动态流（纯编辑框、Markdown + LaTeX、配图、点赞、@提醒、引用帖子、四档可见范围），另带知识库 / 团队 / 通知 / 关注 / 签到 / 主页分类与置顶 / 价值排行榜。",
   "main": "src/server.js",
   "scripts": {
     "start": "node src/server.js",
@@ -20,13 +20,11 @@
     "check:frontend": "node scripts/check-frontend.mjs",
     "fixtures": "node scripts/capture-fixtures.mjs",
     "check:encoding": "node scripts/check-encoding.mjs",
-    "check:graph": "node scripts/check-graph-ui.mjs",
     "check:notes": "node scripts/notes-smoke.mjs",
     "check:notes:ui": "node scripts/check-notes-ui.mjs",
     "test:notes": "node note-agent/scripts/run-tests.mjs",
-    "graph": "node scripts/build-graph.mjs",
     "fix:cmd": "node scripts/fix-cmd.mjs",
-    "test": "node scripts/check-encoding.mjs && node scripts/check-skeleton.mjs && node scripts/check-golden.mjs && node scripts/check-frontend.mjs && node scripts/smoke.mjs && node scripts/smoke-ai.mjs && node scripts/feed-smoke.mjs && node scripts/doc-smoke.mjs && node scripts/team-smoke.mjs && node scripts/check-ui-contract.mjs && node scripts/check-graph-ui.mjs && node scripts/check-notes-ui.mjs && node scripts/notes-smoke.mjs"
+    "test": "node scripts/check-encoding.mjs && node scripts/check-skeleton.mjs && node scripts/check-golden.mjs && node scripts/check-frontend.mjs && node scripts/smoke.mjs && node scripts/smoke-ai.mjs && node scripts/feed-smoke.mjs && node scripts/doc-smoke.mjs && node scripts/team-smoke.mjs && node scripts/check-ui-contract.mjs && node scripts/check-notes-ui.mjs && node scripts/notes-smoke.mjs"
   },
   "engines": {
     "node": ">=22.5.0"

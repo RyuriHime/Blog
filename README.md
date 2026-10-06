@@ -30,13 +30,12 @@
 
 ## 0. 这个仓库里有什么
 
-论坛本体 + 四个**互相独立**的扩展包。少装任何一个，其余部分照常跑。
+论坛本体 + 三个**互相独立**的扩展包。少装任何一个，其余部分照常跑。
 
 | 目录 | 是什么 | 版本 | 单独验一下 |
 | --- | --- | --- | --- |
 | `src/` `public/` `scripts/` | 论坛本体：后端（`node:http` + `node:sqlite`）、原生前端、检查脚本 | 1.3.0 | `npm test` |
 | `forum-ai/` | AI 层：站点分析、阅读助手，对接任意 OpenAI 兼容接口 | 1.0.0 | `node forum-ai/selftest.mjs` |
-| `knowledge-pack/` | 把帖子算成知识网络图（`#/graph`）。**纯本地计算，不调用 AI、不花钱** | 1.0.0 | `npm run check:graph` |
 | `note-studio/` | 学术笔记子系统：Markdown + LaTeX 可视化编辑、拍照转文字、导出 | 1.0.0 | `node note-studio/tests/run.mjs` |
 | `note-agent/` | 挂在写帖页和笔记编辑器上的「AI 工作台」抽屉 | 0.1.0 | `npm run test:notes` |
 
@@ -51,11 +50,11 @@ AI_MODEL=<模型名> \
 node src/server.js
 ```
 
-不设也能跑：论坛本体、知识网络图、笔记编辑都不需要 AI，只有 AI 相关的按钮会提示「未配置」。**动手改代码前先确认自己的 `AI_API_KEY` 没有写进任何文件。**
+不设也能跑：论坛本体、笔记编辑都不需要 AI，只有 AI 相关的按钮会提示「未配置」。**动手改代码前先确认自己的 `AI_API_KEY` 没有写进任何文件。**
 
 ### 数据在哪
 
-运行时数据全在 `data/`（SQLite 库、头像、生成的知识图），**不进版本库** —— 里面是真实帖子内容。删掉整个 `data/` 就等于重置成全新站点，下次启动会自动建表并写入示例数据。
+运行时数据全在 `data/`（SQLite 库、头像），**不进版本库** —— 里面是真实帖子内容。删掉整个 `data/` 就等于重置成全新站点，下次启动会自动建表并写入示例数据。
 
 ---
 
@@ -328,15 +327,15 @@ forum/
 │   ├── app.js                   # 薄入口（≤120 行）：只做 bootstrap
 │   ├── style.css                # 只剩 20 行 @import，按前缀顺序拼回原级联顺序
 │   ├── core/                    # 前端核心层：state / dom / api / router / theme / events …
-│   ├── views/                   # 页面：feed / user / post / compose / ai / admin / notes / graph …
-│   └── css/                     # 20 个样式分片（00-themes … 97-notes）
+│   ├── views/                   # 页面：feed / user / post / compose / timeline / messages / notes / doc / team / ai / admin …
+│   └── css/                     # 22 个样式分片（00-themes … 97-notes）
 ├── scripts/
-│   ├── smoke.mjs                # 后端端到端冒烟测试（242 项）
+│   ├── smoke.mjs                # 后端端到端冒烟测试（253 项）
 │   ├── check-golden.mjs         # ★ 行为金标准：96 条请求的状态码 + 响应结构指纹
 │   ├── check-skeleton.mjs       # ★ 骨架自检：模块解耦证明 + 薄入口行数
 │   ├── check-ui-contract.mjs    # 前端契约检查：CSS 类名 + API 字段 + 主题/头像/角色/私信结构
 │   ├── check-encoding.mjs       # 源码编码体检（BOM / 乱码 / 批处理换行与 ASCII）
-│   ├── check-graph-ui.mjs / check-notes-ui.mjs / notes-smoke.mjs / smoke-ai.mjs
+│   ├── check-notes-ui.mjs / check-frontend.mjs / notes-smoke.mjs / smoke-ai.mjs
 │   ├── fix-cmd.mjs              # 把 .cmd 规范化为 CRLF + 去 BOM
 │   └── reset-db.mjs             # 清库并重新播种（危险操作，必须加 --yes）
 └── data/forum.db                # SQLite 数据文件（首次运行自动生成）
@@ -595,14 +594,13 @@ team_posts(id, team_id, user_id, title, content, scope, version, updated_by,
 node scripts/check-golden.mjs      # ★ 行为金标准：96 条请求的状态码 + 响应结构，一条都不能变
 node scripts/check-skeleton.mjs    # ★ 骨架自检：模块能不能独立拆掉、薄入口有没有变胖
 node scripts/check-frontend.mjs    # ★ 前端渲染冒烟：30 个页面全部渲染一遍 + 裸调用未定义名字的静态扫描
-node scripts/smoke.mjs             # 后端端到端：242 项（临时独立库+端口，跑完自动清理）
+node scripts/smoke.mjs             # 后端端到端：253 项（临时独立库+端口，跑完自动清理）
 node scripts/smoke-ai.mjs          # AI 接口端到端：61 项
 node scripts/feed-smoke.mjs        # 动态流端到端：95 项
 node scripts/doc-smoke.mjs         # 积木（可编程帖子）端到端：392 项
 node scripts/team-smoke.mjs        # 团队端到端：97 项（可见范围 / 越权 / 版本冲突）
 node scripts/check-ui-contract.mjs # 前端契约：CSS 类名 + API 字段 + 主题/头像/角色/私信结构
 node scripts/check-encoding.mjs    # 源码编码体检：BOM / 乱码 / 关键中文内容
-node scripts/check-graph-ui.mjs    # 知识网络图 UI
 node scripts/check-notes-ui.mjs    # 笔记 UI
 node scripts/notes-smoke.mjs       # 笔记接口
 node scripts/capture-fixtures.mjs  # 重采前端冒烟用的假数据（改了接口形状才需要跑）
@@ -610,24 +608,25 @@ node scripts/capture-fixtures.mjs  # 重采前端冒烟用的假数据（改了�
 
 > ⚠️ `scripts/reset-db.mjs` **不属于测试流程**（它以前被列在上面这段里，容易照着复制粘贴）：它会删掉 `data/forum.db`（连带 `-wal` / `-shm`）再重新播种，用户、帖子、私信、签到记录全部**不可恢复**，`data/` 又不在版本库里。要清库请按「常见问题」里那条走，并且必须显式加 `--yes`。
 
-一次跑完（`npm test` 就是前 13 组）：
+一次跑完（`npm test` 就是前 12 组）：
 
 ```
-check-encoding 194 文件 / 87 断言 · check-skeleton 47 项 · check-golden 96 项 0 差异
-check-frontend 30 个页面 + 30 个模块静态扫描 · smoke 242 · smoke-ai 61 · feed-smoke 95
-doc-smoke 392 · team-smoke 97 · check-ui-contract 210 · check-graph-ui 24 · check-notes-ui 33 · notes-smoke 44
+check-encoding 183 文件 / 87 断言 · check-skeleton 47 项 · check-golden 96 项 0 差异
+check-frontend 30 个页面 + 31 个模块静态扫描 · smoke 253 · smoke-ai 61 · feed-smoke 95
+doc-smoke 392 · team-smoke 97 · check-ui-contract 219 · check-notes-ui 33 · notes-smoke 44
 ```
 
-> 跑 `check-golden` 前先确认 `data/knowledge/` 里没有生成好的图（`data/` 是被 gitignore 的本地目录）。
-> 有图时 `/api/knowledge/graph` 会返回 200 而不是指纹里的 404，于是报两处「行为差异」——
-> 那是本地残留，不是代码回归；清掉 `data/knowledge/` 再跑就绿。CI 是干净检出，不受影响。
+> 知识网络图（`knowledge-pack/` + `#/graph` + `/api/knowledge/*`）已在 2026-10 整条链路删除：
+> 本地 `data/knowledge` 一直是空的，线上那两条接口永远回 `graph_not_built`，页面点进去只有一句
+> 「知识网络图还没有生成」。现在这两个地址返回的是统一的 404 `not_found`，
+> 而 `scripts/golden.json` 里的指纹只比对「状态码 + 键结构」，形状没变，所以指纹不用重采。
+> 附带好处：以前本地留着 `data/knowledge/` 会让 `check-golden` 报两处假差异，这个坑跟着一起没了。
 
-另外四组在各自的包里，`npm test` 不带它们：
+另外三组在各自的包里，`npm test` 不带它们：
 
 ```
 node note-studio/tests/run.mjs        # 学术笔记子系统
 node forum-ai/selftest.mjs            # AI 层：92 项
-node knowledge-pack/selftest.mjs      # 知识网络图计算：56 项
 npm run test:notes                    # AI 工作台抽屉：32 个文件 / 722 条断言
 ```
 

@@ -15,7 +15,6 @@ import * as Compose from '../views/compose.js';
 import * as Doc from '../views/doc.js';
 import * as Events from './events.js';
 import * as Feed from '../views/feed.js';
-import * as Graph from '../views/graph.js';
 import * as Message from '../views/messages.js';
 import * as Notes from '../views/notes.js';
 import * as Notif from '../views/notifications.js';
@@ -94,7 +93,6 @@ async function route() {
     if (first === 'bookmarks') return await Feed.viewBookmarks(query);
     if (first === 'checkin') return await Checkin.viewCheckin();
     if (first === 'ai') return await Ai.viewAI();
-    if (first === 'graph') return await Graph.viewGraph();
     if (first === 'notes') return await Notes.viewNotes();
     // 积木（v2 可编程帖子）：`/doc/:id/edit` 与 `/doc/:id/blocks` 必须排在
     // `/doc/:id` 前面，否则编辑页会被当成 id 是 "…/edit" 的文档（parts 里第三段会被丢掉）。

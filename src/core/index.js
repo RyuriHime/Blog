@@ -6,7 +6,6 @@ export { isOwner, isStaff, requireUser, requireStaff, requireOwner, assertPostVi
 export * from './shape.js';
 export { issueSession, sessionCookie, resolveUser, sniffImageType, saveAvatarFile, removeAvatarFile } from './sessions.js';
 export { serveAvatar, serveStatic, MIME } from './static.js';
-export { readJsonFile } from './json-file.js';
 export { bindStore, hasStore, store } from './store.js';
 export { schemas, tablesWithoutOwner, ownedButNotRegistered } from './schema.js';
 export { openDatabase } from './open-db.js';
