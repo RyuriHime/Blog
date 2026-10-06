@@ -23,6 +23,7 @@ import * as Post from '../views/post.js';
 import { beginRoute, endRoute } from './route-guard.js';
 import * as Session from './session.js';
 import * as Settings from '../views/settings.js';
+import * as Team from '../views/team.js';
 import * as Timeline from '../views/timeline.js';
 import * as User from '../views/user.js';
 
@@ -107,6 +108,12 @@ async function route() {
     // 不再 `decodeURIComponent` —— `parseHash` 已经把整条 hash 解过一次了，
     // 再解一次会把标题里本来就有的 `%` 吃掉。标题里的 `/` 用 join 兜住。
     if (first === 'wiki' && second) return await Doc.viewWiki(parts.slice(1).join('/'), query);
+    // 团队（P4）：`#/teams` 是列表，`#/team/<slug>` 是某个团队的主页。
+    // 两段路径各自的第一段就不同（teams / team），所以顺序上没有依赖；
+    // 第二段传的是 **slug 字符串**（后端两种都收，但地址里露出来的应该是 slug），
+    // 不再解一次码 —— parseHash 已经把整条 hash 解过了。
+    if (first === 'teams') return await Team.viewTeams(query);
+    if (first === 'team' && second) return await Team.viewTeam(second, query);
     if (first === 'ranking') return await User.viewRanking(query);
     if (first === 'settings') return await Settings.viewSettings();
     if (first === 'notifications') return await Notif.viewNotifications(query);

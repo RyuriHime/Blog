@@ -33,6 +33,7 @@ import * as Prefs from './core/preferences.js';
 import * as Router from './core/router.js';
 import * as Session from './core/session.js';
 import * as Settings from './views/settings.js';
+import * as Team from './views/team.js';
 import * as Theme from './core/theme.js';
 import * as User from './views/user.js';
 import * as Widgets from './core/widgets.js';
