@@ -99,6 +99,8 @@ async function route() {
     // 不再 `decodeURIComponent` —— `parseHash` 已经把整条 hash 解过一次了，
     // 再解一次会把标题里本来就有的 `%` 吃掉。标题里的 `/` 用 join 兜住。
     if (first === 'wiki' && second) return await Doc.viewWiki(parts.slice(1).join('/'), query);
+    // `#/wiki`：所有看得见的站（一个帖子一个 wiki 里的「一个帖子」列表）。
+    if (first === 'wiki') return await Doc.viewWikiIndex();
     if (first === 'ranking') return await User.viewRanking(query);
     if (first === 'settings') return await Settings.viewSettings();
     if (first === 'notifications') return await Notif.viewNotifications(query);

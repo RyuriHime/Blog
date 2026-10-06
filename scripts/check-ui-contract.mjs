@@ -985,9 +985,9 @@ try {
   );
   const docTypes = await dmA('/api/docs/meta/block-types');
   check(
-    '积木：块类型清单给出 13 种内置类型且带声明式 schema',
+    '积木：块类型清单给出 14 种内置类型且带声明式 schema',
     docTypes.status === 200 &&
-      docTypes.json.data?.types?.length === 13 &&
+      docTypes.json.data?.types?.length === 14 &&
       docTypes.json.data.types.every((type) => type.builtin === true && type.schema && typeof type.schema === 'object'),
     JSON.stringify(docTypes.json).slice(0, 200),
   );

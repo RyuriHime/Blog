@@ -84,7 +84,7 @@ export const BUILTIN_TYPES = [
     },
     toMarkdown: (props) => props.text,
     toPlain: (props) => props.text,
-    toHtml: (props, block) => shell('paragraph', block, `<p>${escapeHtmlWithWikiLinks(props.text, { multiline: true })}</p>`),
+    toHtml: (props, block, options) => shell('paragraph', block, `<p>${escapeHtmlWithWikiLinks(props.text, { multiline: true, existing: options?.wikiTitles })}</p>`),
   },
   {
     name: 'list',
@@ -107,7 +107,7 @@ export const BUILTIN_TYPES = [
       return props.source && Object.keys(props.source).length > 0 ? structuredMarkdown('list', props) : text;
     },
     toPlain: (props) => props.text,
-    toHtml: (props, block) => shell('list', block, `<div class="doc-list-body">${escapeHtmlWithWikiLinks(props.text, { multiline: true })}</div>`),
+    toHtml: (props, block, options) => shell('list', block, `<div class="doc-list-body">${escapeHtmlWithWikiLinks(props.text, { multiline: true, existing: options?.wikiTitles })}</div>`),
   },
   {
     name: 'code',
@@ -223,9 +223,9 @@ export const BUILTIN_TYPES = [
       return lines.join('\n');
     },
     toPlain: (props) => (props.source ? `${props.text}\n—— ${props.source}` : props.text),
-    toHtml: (props, block) => {
+    toHtml: (props, block, options) => {
       const cite = props.source ? `<cite>—— ${escapeHtml(props.source)}</cite>` : '';
-      return shell('quote', block, `<blockquote>${escapeHtmlWithWikiLinks(props.text, { multiline: true })}${cite}</blockquote>`);
+      return shell('quote', block, `<blockquote>${escapeHtmlWithWikiLinks(props.text, { multiline: true, existing: options?.wikiTitles })}${cite}</blockquote>`);
     },
   },
   {
@@ -288,15 +288,18 @@ export const BUILTIN_TYPES = [
     // label 为空时省略，这样 `[[目标]]` 与 `[[目标|目标]]` 都不会丢失信息。
     toMarkdown: (props) => (props.label ? `[[${props.target}|${props.label}]]` : `[[${props.target}]]`),
     toPlain: (props) => props.target,
-    toHtml: (props, block) => {
+    toHtml: (props, block, options) => {
       const text = props.label || props.target;
       // 给一个真 href：双链是 wiki 的**导航**，不只是装饰 —— `#/wiki/<标题>`
       // 由前端路由接管（找不到页面时给出「建这一页」）。`data-wiki` 留着给脚本用。
       // `encodeURIComponent` 不会编码单引号，但 href 用的是双引号，`"` 会被编码成 %22，安全。
+      // 红链：目标页在所有看得见的 wiki 页里找不到时加 `is-missing`（虚线 + 点击即建）。
+      const known = options?.wikiTitles instanceof Set ? options.wikiTitles : null;
+      const missing = known && !known.has(String(props.target).toLowerCase()) ? ' is-missing' : '';
       return shell(
         'wiki',
         block,
-        `<a class="doc-wiki-link" data-wiki="${escapeHtml(props.target)}" href="#/wiki/${encodeURIComponent(props.target)}">${escapeHtml(text)}</a>`,
+        `<a class="doc-wiki-link${missing}" data-wiki="${escapeHtml(props.target)}" href="#/wiki/${encodeURIComponent(props.target)}">${escapeHtml(text)}</a>`,
       );
     },
   },
@@ -363,6 +366,48 @@ export const BUILTIN_TYPES = [
       block,
       sandboxInner({ ...props, app: '脚本' }, block, options),
     ),
+  },
+  {
+    // 第 14 种：**挂载子页**。一个 wiki 站里，站自己那篇文档（`template='station'`）
+    // 就是靠这些块把「站里的页」摆出来的 —— 一块 = 一张卡片，点击进那一页。
+    //
+    // `doc` 存的是页面（`template='page'` 的文档）的 id，**不是标题**：
+    // 作者改标题是常事，卡片上的字由服务端在渲染时按 id 现查（`options.pageTitles`），
+    // 所以改完标题卡片跟着变，链接也不会断。手写源码时也允许写标题（查 `wikiTitles`）。
+    name: 'subpage',
+    version: 1,
+    label: '子页',
+    icon: '▤',
+    editor: 'subpage',
+    schema: {
+      doc: { type: 'string', singleLine: true, default: '', maxLength: 200, label: '页面（id 或标题）' },
+      mode: { type: 'string', singleLine: true, default: 'card', maxLength: 8, label: '形态' },
+      title: { type: 'string', singleLine: true, default: '', maxLength: 200, label: '卡片标题（留空则用页面标题）' },
+      note: { type: 'string', default: '', maxLength: 300, label: '一句话摘要' },
+    },
+    // 用结构化围栏存（和投票 / 小应用一样）：`doc` / `mode` / `note` 一个字都不能在往返里丢，
+    // 而 markdown 链接 `[x](#/doc/27)` 恰好只能表达标题与 id 两项（见 blocks/markdown.js 的往返不变式）。
+    toMarkdown: (props) => structuredMarkdown('subpage', props),
+    toPlain: (props) => props.title || '',
+    toHtml: (props, block, options) => {
+      const key = String(props.doc ?? '').trim();
+      const titles = options?.pageTitles && typeof options.pageTitles === 'object' ? options.pageTitles : {};
+      const byId = titles[key];
+      const title = props.title || byId || (key === '' ? '（没选页面）' : key);
+      const href = /^\d+$/.test(key) ? `#/doc/${key}` : `#/wiki/${encodeURIComponent(key)}`;
+      const wide = props.mode === 'full' ? ' doc-subpage-full' : '';
+      const note = props.note
+        ? `<span class="doc-subpage-note">${escapeHtml(props.note)}</span>`
+        : `<span class="doc-subpage-note">${byId ? '' : '这一页还没写'}</span>`;
+      return shell(
+        'subpage',
+        block,
+        `<a class="doc-subpage${wide}" href="${href}">` +
+          `<span class="doc-subpage-title">${escapeHtml(title)}</span>` +
+          note +
+          '</a>',
+      );
+    },
   },
 ];
 

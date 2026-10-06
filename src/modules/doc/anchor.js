@@ -52,6 +52,15 @@ export function anchorHidden(scope) {
   return scope === 'public' ? 0 : 1;
 }
 
+/**
+ * wiki 站的页**不**出现在「积木」板块列表里（§6.1：一个帖子一个 wiki，页是站里的块）。
+ *
+ * 页照样要留影子行（赞 / 收藏 / 通知认 `posts.id`），但列表查询对**所有人**
+ * 都滤掉 `hidden = 1`（`src/store.js:426`），所以把页的影子行藏起来正好是我们要的效果，
+ * 而且一行 core 都不用改。
+ */
+export const STATION_PAGE_HIDDEN = 1;
+
 /** 建一条影子行，返回它的 posts.id。 */
 export function createAnchor(db, { userId, title, content, scope, now }) {
   const boardId = ensureAnchorBoard(db);
@@ -68,12 +77,12 @@ export function createAnchor(db, { userId, title, content, scope, now }) {
  * 同步影子行。**只改真的变了的列**：`views` / `pinned` 这些是旧链路的财产，
  * 每次保存都重写一遍会把用户的置顶和阅读数抹掉。
  */
-export function syncAnchor(db, anchorId, { title, content, scope, deleted, now }) {
+export function syncAnchor(db, anchorId, { title, content, scope, deleted, now, hidden = null }) {
   if (!anchorId) return;
   db.prepare('UPDATE posts SET title = ?, content = ?, hidden = ?, deleted = ?, updated_at = ? WHERE id = ?').run(
     title,
     content,
-    anchorHidden(scope),
+    hidden === null || hidden === undefined ? anchorHidden(scope) : (hidden ? 1 : 0),
     deleted ? 1 : 0,
     now,
     anchorId,

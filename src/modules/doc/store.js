@@ -32,7 +32,7 @@ import {
   APP_STATE_SCOPES,
   SANDBOX_CAPABILITIES,
 } from './schema.js';
-import { createAnchor, syncAnchor } from './anchor.js';
+import { createAnchor, syncAnchor, STATION_PAGE_HIDDEN } from './anchor.js';
 import { blockFromRow } from './queries.js';
 import { createVisibility, detectTeams, visibilityConditions } from './visibility.js';
 import {
@@ -50,7 +50,7 @@ import {
   toSource,
 } from './blocks/index.js';
 import { applyDocOps, MAX_OPS } from './blocks/ops.js';
-import { hasTemplate, templateBlocks, templateList, WIKI_TEMPLATE } from './templates.js';
+import { hasTemplate, STATION_TEMPLATE, templateBlocks, templateList, WIKI_TEMPLATE } from './templates.js';
 import { KIND_LABELS, REASON_LABELS, SCOPE_LABELS, shapeDoc, shapeRevision, shapeSettings } from './shape.js';
 
 /** 一条 op 被拒的原因 → 给人看的话（前端直接显示，不再自己映射一遍）。 */
@@ -513,18 +513,58 @@ export function createDocStore({ db, queries, now = () => Date.now() }) {
       }));
   }
 
+  /**
+   * 渲染上下文（§4.4 / §6.4）。
+   *
+   * 除了沙箱开关，还要给渲染管线两样**只有服务端查得到**的东西：
+   *   - `wikiTitles`：所有看得见的 wiki 页标题，双链据此决定蓝 / 红（红链 = 还没写）；
+   *   - `pageTitles`：`subpage` 卡片要显示的标题，按页面 id 现查（改标题卡片跟着变）。
+   * 两样都只在真用得上时才去查库 —— 普通帖子里的段落不该为 wiki 付一次查询。
+   */
+  function renderOptions(docRow, viewer, blocks, { sandboxDisabled = null } = {}) {
+    const options = {
+      sandboxDisabled: sandboxDisabled === null ? Boolean(docRow.sandbox_disabled) : Boolean(sandboxDisabled),
+      documentId: docRow.id,
+    };
+    const list = Array.isArray(blocks) ? blocks : [];
+    const wantsLinks = list.some((block) => block.type === 'wiki' || String(block?.props?.text ?? '').includes('[['));
+    if (wantsLinks) {
+      // 红链判断是「存在且我看得见」：小写化之后比较（标题查库走 COLLATE NOCASE）。
+      const set = new Set();
+      for (const title of queries.wikiPageTitles({ visible: visibilityConditions(viewer, hasTeams) })) {
+        set.add(String(title).toLowerCase());
+      }
+      if (docRow.title) set.add(String(docRow.title).toLowerCase());
+      options.wikiTitles = set;
+    }
+    const ids = [...new Set(list
+      .filter((block) => block.type === 'subpage')
+      .map((block) => String(block?.props?.doc ?? '').trim())
+      .filter((value) => /^\d+$/.test(value)))];
+    if (ids.length) {
+      const map = {};
+      for (const row of queries.titlesOf(ids)) map[String(row.id)] = row.title;
+      options.pageTitles = map;
+    }
+    return options;
+  }
+
   /** 影子行同步：public 才带标题与摘要，其余范围写空串（少泄露一点是一点）。 */
   function syncDocumentAnchor(docRow, at) {
     const anchorId = docRow?.anchor_post_id;
     if (!anchorId) return;
     const isPublic = docRow.scope === 'public';
     const excerpt = isPublic ? blocksToPlainText(readBlocks(docRow.id), 400) : '';
+    // wiki 站里的页要把影子行藏起来（§6.1）：页是站里的块，不该在「积木」板块里另立一行。
+    // 站本体（`template='station'`）不藏 —— 它本来就是一个正常帖子，正好是「一个帖子一个 wiki」。
+    const hidden = docRow.template === WIKI_TEMPLATE && stationIdOf(docRow.id) !== 0 ? STATION_PAGE_HIDDEN : null;
     syncAnchor(db, anchorId, {
       title: isPublic ? docRow.title : '',
       content: excerpt,
       scope: docRow.scope,
       deleted: Boolean(docRow.deleted),
       now: at,
+      hidden,
     });
   }
 
@@ -556,10 +596,7 @@ export function createDocStore({ db, queries, now = () => Date.now() }) {
     const derived = derivedRows(docRow.id, viewer);
     const living = derived.length ? [...materialized, ...derived] : materialized;
     // `sandboxDisabled` 要交给渲染层：沙箱块据此**连 iframe 都不建**（§6.4）。
-    const rendered = renderBlocks(living, {
-      sandboxDisabled: Boolean(docRow.sandbox_disabled),
-      documentId: docRow.id,
-    });
+    const rendered = renderBlocks(living, renderOptions(docRow, viewer, living));
     const abilities = abilitiesOf(docRow, viewer);
     const data = {
       doc: shapeDoc(docRow),
@@ -576,6 +613,9 @@ export function createDocStore({ db, queries, now = () => Date.now() }) {
       abilities,
       settings: shapeSettings(settingsRow),
     };
+    // 站里的页（或站本体）额外带上左树 / 前后页：三栏布局一次拿齐，不再发第二个请求。
+    const wiki = wikiContext(docRow, viewer);
+    if (wiki) data.wiki = wiki;
     // 源码只给改得动的人：它带着块 id，是编辑器的起点，不是读者需要的东西。
     if (abilities.canEdit) data.source = sourceOf(settingsRow, blocks);
     return data;
@@ -590,10 +630,7 @@ export function createDocStore({ db, queries, now = () => Date.now() }) {
   function previewMarkdown({ id, viewer, markdown } = {}) {
     const row = mustEdit(id, viewer);
     const parsed = parseSourceBlocks(String(markdown ?? ''));
-    const rendered = renderBlocks(parsed.blocks, {
-      sandboxDisabled: Boolean(row.sandbox_disabled),
-      documentId: row.id,
-    });
+    const rendered = renderBlocks(parsed.blocks, renderOptions(row, viewer, parsed.blocks));
     return {
       documentId: row.id,
       html: rendered.html,
@@ -670,6 +707,13 @@ export function createDocStore({ db, queries, now = () => Date.now() }) {
 
   function getDocument(id, viewer) {
     const row = mustSee(id, viewer);
+    // 触发点②（§6.7）：老 wiki 页第一次被打开时就地收编进站 —— 幂等，
+    // 而且只有能改这一页的人才收编得动（`attachPageToStation` 走作者身份）。
+    if (String(row.template ?? '') === WIKI_TEMPLATE && stationIdOf(row.id) === 0 && canEdit(row, viewer)) {
+      const station = ensureDefaultStation({ viewer });
+      attachPageToStation({ station, pageRow: mustExist(row.id), viewer });
+      return present(mustExist(row.id), viewer);
+    }
     return present(row, viewer);
   }
 
@@ -843,10 +887,16 @@ export function createDocStore({ db, queries, now = () => Date.now() }) {
     const existing = queries.documentByTitle(title, WIKI_TEMPLATE);
     if (existing) {
       if (!canView(existing, viewer)) throw notFound(viewer);
-      return { ...present(existing, viewer), created: false };
+      // 红链点出来的老路也能把页补进站：写了一次双链、点了「建这一页」，
+      // 结果它不在任何树的下面 —— 那才是真的奇怪。
+      if (canEdit(existing, viewer) && stationIdOf(existing.id) === 0) {
+        attachPageToStation({ station: ensureDefaultStation({ viewer }), pageRow: mustExist(existing.id), viewer });
+      }
+      return { ...present(mustExist(existing.id), viewer), created: false };
     }
     const data = createDocument({ viewer, title, kind: 'post', scope, template: WIKI_TEMPLATE, reason: 'template' });
-    return { ...data, created: true };
+    attachPageToStation({ station: ensureDefaultStation({ viewer }), pageRow: mustExist(data.doc.id), viewer });
+    return { ...present(mustExist(data.doc.id), viewer), created: true };
   }
 
   /**
@@ -884,6 +934,338 @@ export function createDocStore({ db, queries, now = () => Date.now() }) {
     const at = now();
     queries.upsertWikiMeta({ documentId: row.id, category: clean, sortOrder: order, now: at });
     return { id: row.id, category: clean, sortOrder: order, nav: wikiNav({ viewer }) };
+  }
+
+  /* ---------------- Wiki 站（§6：一个帖子一个 wiki） ---------------- */
+
+  /** 这一页归在哪个站（0 = 不归任何站，普通帖子 / 还没收编的老页）。 */
+  function stationIdOf(documentId) {
+    return Number(readSettings(documentId)?.station_id) || 0;
+  }
+
+  /** 站的本体行：`template='station'` 的那篇文档（它照旧是一个正常帖子）。 */
+  function stationRow(stationId) {
+    return queries.stationDocument(Number(stationId)) ?? null;
+  }
+
+  /** 站里的页（已按可见性过滤 + `canView` 复核），铺平成「树的中序遍历」。 */
+  function stationPages(stationId, viewer) {
+    const rows = queries
+      .pagesOfStation({ stationId: Number(stationId), visible: visibilityConditions(viewer, hasTeams) })
+      .filter((row) => canView(row, viewer))
+      .map((row) => ({
+        id: row.id,
+        title: row.title,
+        scope: row.scope,
+        username: row.username ?? '',
+        updatedAt: row.updated_at,
+        parentId: Number(row.parent_id) || 0,
+        sortOrder: Number(row.sort_order) || 0,
+        icon: row.icon || '',
+      }));
+    return flattenTree(rows);
+  }
+
+  /**
+   * 把「父 → 子」关系铺成一根线（前序遍历），顺带记下每一页的层级。
+   *
+   * 上一页 / 下一页就是这根线上的邻居；`depth` 给前端画缩进。
+   * 环（两页互相当父）不能让渲染卡死：走不到的页一律追加在末尾。
+   */
+  function flattenTree(pages) {
+    const children = new Map();
+    for (const page of pages) {
+      const key = page.parentId;
+      if (!children.has(key)) children.set(key, []);
+      children.get(key).push(page);
+    }
+    for (const list of children.values()) {
+      list.sort((a, b) => (a.sortOrder - b.sortOrder) || a.title.localeCompare(b.title, 'zh'));
+    }
+    const flat = [];
+    const seen = new Set();
+    const walk = (parentId, depth) => {
+      for (const page of children.get(parentId) ?? []) {
+        if (seen.has(page.id)) continue;
+        seen.add(page.id);
+        flat.push({ ...page, depth });
+        walk(page.id, depth + 1);
+      }
+    };
+    walk(0, 0);
+    for (const page of pages) if (!seen.has(page.id)) flat.push({ ...page, depth: 0 });
+    return flat;
+  }
+
+  function briefPage(page) {
+    return page ? { id: page.id, title: page.title, icon: page.icon ?? '' } : null;
+  }
+
+  function briefStation(row, viewer) {
+    return {
+      id: row.id,
+      title: row.title,
+      scope: row.scope,
+      username: row.username ?? '',
+      canEdit: canEdit(row, viewer),
+      updatedAt: row.updated_at,
+    };
+  }
+
+  /** 一篇文档所在的站（含树与前后页）；不在任何站里就返回 null。 */
+  function wikiContext(docRow, viewer) {
+    const isStation = String(docRow.template ?? '') === STATION_TEMPLATE;
+    const stationId = isStation ? docRow.id : stationIdOf(docRow.id);
+    if (!stationId) return null;
+    const station = isStation ? docRow : stationRow(stationId);
+    if (!station || !canView(station, viewer)) return null;
+    const pages = stationPages(station.id, viewer);
+    const index = pages.findIndex((page) => page.id === docRow.id);
+    return {
+      station: briefStation(station, viewer),
+      pages,
+      current: isStation ? 0 : docRow.id,
+      prev: index > 0 ? briefPage(pages[index - 1]) : null,
+      next: index >= 0 && index + 1 < pages.length ? briefPage(pages[index + 1]) : null,
+    };
+  }
+
+  /** `#/wiki`：所有看得见的站 + 每个站有多少页。 */
+  function listStations({ viewer = null } = {}) {
+    const stations = queries
+      .stations({ visible: visibilityConditions(viewer, hasTeams) })
+      .filter((row) => canView(row, viewer))
+      .map((row) => ({
+        id: row.id,
+        title: row.title,
+        scope: row.scope,
+        username: row.username ?? '',
+        pages: Number(row.pages) || 0,
+        updatedAt: row.updated_at,
+      }));
+    return { stations, nav: wikiNav({ viewer }) };
+  }
+
+  /**
+   * 打开一个站：按 id 或按名字（`#/wiki/<站>/<页>` 那条路由只有名字可用）。
+   *
+   * `pageTitle` 给了就顺便把那一页的 `present()` 一起回 —— 三栏页面的左树、右 ToC、
+   * 上一页 / 下一页一次拿齐，前端不用再发第二个请求（也就不会闪一下空壳）。
+   */
+  function getStation({ id = 0, title = '', pageTitle = '', viewer = null } = {}) {
+    const row = id ? stationRow(id) : queries.stationByTitle(String(title ?? '').trim());
+    if (!row || !canView(row, viewer)) return { found: false, station: null, pages: [] };
+    const payload = {
+      found: true,
+      station: briefStation(row, viewer),
+      pages: stationPages(row.id, viewer),
+      doc: null,
+    };
+    const wanted = String(pageTitle ?? '').trim();
+    if (wanted) {
+      // 同名页可能有别的站的（标题只在一个站里有意义），只认属于**这个站**的那一篇。
+      const page = queries
+        .documentsByTitle(wanted, WIKI_TEMPLATE)
+        .find((candidate) => stationIdOf(candidate.id) === row.id);
+      if (page && canView(page, viewer)) payload.doc = present(page, viewer);
+    } else {
+      // `#/wiki/<站>` 没有指名哪一页：站本身就是一篇普通帖子，直接给它的正文当首页。
+      payload.doc = present(row, viewer);
+    }
+    return payload;
+  }
+
+  /** 在站里新建一页，并把它挂到站的目录上（站里的卡片 = `subpage` 块）。 */
+  function createStationPage({ stationId, viewer, title, parentId = 0, icon = '' } = {}) {
+    const station = stationRow(stationId);
+    if (!station || !canView(station, viewer)) throw notFound(viewer);
+    if (!canEdit(station, viewer)) throw new HttpError(403, 'owner_only', '只有这个 wiki 的作者能加页');
+    const cleanTitle = singleLineText(title).slice(0, MAX_DOC_TITLE);
+    if (!cleanTitle) throw badRequest('页面名不能为空');
+    const existing = queries.documentByTitle(cleanTitle, WIKI_TEMPLATE);
+    if (existing) {
+      attachPageToStation({ station, pageRow: existing, viewer });
+      return { ...present(mustExist(existing.id), viewer), created: false };
+    }
+    const data = createDocument({
+      viewer,
+      title: cleanTitle,
+      kind: 'post',
+      scope: station.scope,
+      template: WIKI_TEMPLATE,
+      reason: 'template',
+    });
+    const pageRow = mustExist(data.doc.id);
+    attachPageToStation({ station, pageRow, viewer, parentId, icon });
+    return { ...present(mustExist(pageRow.id), viewer), created: true };
+  }
+
+  /**
+   * 把一页挂到站上：设 `station_id` → 往站文档追加一块 `subpage` → 藏起它的影子行。
+   *
+   * **幂等**是硬要求：站的目录、页的归属，两边都要「做过了就什么都不发生」。
+   */
+  function attachPageToStation({ station, pageRow, viewer, parentId = null, icon = null } = {}) {
+    const at = now();
+    const before = readSettings(pageRow.id);
+    const stationId = station.id;
+    const sameStation = Number(before?.station_id) === stationId;
+    const order = Number(before?.sort_order) || 0;
+    queries.setStationId({
+      documentId: pageRow.id,
+      stationId,
+      parentId: parentId === null ? Number(before?.parent_id) || 0 : Number(parentId) || 0,
+      sortOrder: order,
+      now: at,
+    });
+    // 站的目录里补一块子页卡。已经挂过（同一页 id 的 subpage 块）就不重复追加。
+    const blocks = readBlocks(stationId);
+    const already = blocks.some((block) => block.type === 'subpage' && String(block.props?.doc ?? '') === String(pageRow.id));
+    if (!already) {
+      const typeDef = getBlockType('subpage');
+      const shaped = serializeBlock({
+        block_id: `b${queries.nextBlockNumber(stationId)}`,
+        type: 'subpage',
+        version: typeDef?.version ?? 1,
+        props: { doc: String(pageRow.id), mode: 'card', title: '', note: '' },
+      });
+      assertBudget(blocks.length + 1);
+      queries.insertBlockRow({
+        documentId: stationId,
+        blockId: shaped.block_id ?? '',
+        type: shaped.type,
+        version: shaped.version,
+        position: blocks.length + 1,
+        propsJson: shaped.propsJson,
+        now: at,
+      });
+      // 站的源码（`source_text`）跟着重生成：站内搜索与编辑器都读它。
+      queries.setSourceText({ documentId: stationId, sourceText: toSource(readBlocks(stationId)), now: at });
+      snapshot(stationId, 'template', viewer?.id ?? pageRow.user_id, at);
+      syncDocumentAnchor(mustExist(stationId), at);
+    }
+    if (!sameStation) {
+      // 老页原来没有 `source_text`（那是后加的列）：收编时顺手按现在的块补一份，
+      // 否则站内搜索（搜的就是 `source_text`）会把老页漏掉。
+      if (!String(before?.source_text ?? '').trim()) {
+        queries.setSourceText({ documentId: pageRow.id, sourceText: toSource(readBlocks(pageRow.id)), now: at });
+      }
+      snapshot(pageRow.id, 'template', viewer?.id ?? pageRow.user_id, at);
+    }
+    syncDocumentAnchor(mustExist(pageRow.id), at);
+    return { stationId, attached: !sameStation };
+  }
+
+  /**
+   * 幂等收编：把还没有归站的 wiki 页（`station_id = 0`）全部挂到一个站上。
+   *
+   * 两个触发点共用这一条路（§6.7）：`GET /api/docs/wiki` 全量收编；
+   * 以及任何一页被 `GET /api/docs/:id` 打开时就地收编。第二条是必须的 ——
+   * 老页的链接到处都是，不能指望作者先去点一次站列表。
+   */
+  function ensurePagesAttached({ viewer } = {}) {
+    const orphans = queries.orphanPages(200);
+    if (orphans.length === 0) return { attached: 0, stationId: 0 };
+    const station = ensureDefaultStation({ viewer: viewer ?? { id: orphans[0].user_id } });
+    let attached = 0;
+    for (const page of orphans) {
+      const pageRow = mustExist(page.id);
+      // 只有页的作者（或 staff）能把它挂上：替别人改归属是越权。
+      if (!canEdit(pageRow, viewer)) continue;
+      attachPageToStation({ station, pageRow, viewer });
+      attached += 1;
+    }
+    return { attached, stationId: station.id };
+  }
+
+  /** 默认站：第一篇站；一篇都没有就建一个叫「Wiki」的公开站（幂等）。 */
+  function ensureDefaultStation({ viewer } = {}) {
+    const rows = queries.stations({ visible: visibilityConditions(viewer ?? null, hasTeams) });
+    const usable = rows.filter((row) => canEdit(row, viewer));
+    if (usable.length > 0) return mustExist(usable[0].id);
+    return mustExist(createStation({ viewer, title: 'Wiki', scope: 'public' }).doc.id);
+  }
+
+  /** 建一个站：就是建一篇普通帖子（`kind='post'`） + `station` 模板。 */
+  function createStation({ viewer, title = '', scope = 'public' } = {}) {
+    const cleanTitle = singleLineText(title).slice(0, MAX_DOC_TITLE);
+    return createDocument({
+      viewer,
+      title: cleanTitle || 'Wiki',
+      kind: 'post',
+      scope,
+      template: STATION_TEMPLATE,
+      reason: 'template',
+    });
+  }
+
+  /** 站内搜索：标题 + 作者敲的原文两个 LIKE，只搜本站、只搜看得见的页。 */
+  function searchStation({ stationId, q, viewer = null } = {}) {
+    const station = stationRow(stationId);
+    if (!station || !canView(station, viewer)) throw notFound(viewer);
+    const query = singleLineText(q).slice(0, 80);
+    if (!query) return { stationId: station.id, query: '', results: [] };
+    const results = queries
+      .searchStationPages({
+        stationId: station.id,
+        q: query,
+        visible: visibilityConditions(viewer, hasTeams),
+        limit: 50,
+      })
+      .filter((row) => canView(row, viewer))
+      .map((row) => ({
+        id: row.id,
+        title: row.title,
+        parentId: Number(row.parent_id) || 0,
+        // 摘要：从原文里摘一句带关键词的，找不到就从开头截。
+        excerpt: excerptAround(String(row.source_text ?? ''), query, 90),
+      }));
+    return { stationId: station.id, query, results };
+  }
+
+  /** 从原文里摘一句带关键词的上下文（搜不到就截开头），供搜索结果显示。 */
+  function excerptAround(text, keyword, width) {
+    const flat = text.replace(/\s+/g, ' ').trim();
+    const at = flat.toLowerCase().indexOf(String(keyword).toLowerCase());
+    if (at < 0) return flat.slice(0, width);
+    const start = Math.max(0, at - Math.floor(width / 3));
+    return `${start > 0 ? '…' : ''}${flat.slice(start, start + width)}`;
+  }
+
+  /**
+   * 改一页在站里的位置（父页 / 排序 / 图标）。
+   * 和 `putSettings` 分开：这组字段是**站**说了算，不是页自己说了算。
+   */
+  function moveStationPage({ stationId, id, viewer, parentId, sortOrder, icon } = {}) {
+    const station = stationRow(stationId);
+    if (!station || !canView(station, viewer)) throw notFound(viewer);
+    const row = mustEdit(id, viewer);
+    if (stationIdOf(row.id) !== station.id) throw badRequest('这一页不在这个 wiki 里');
+    const before = readSettings(row.id);
+    const nextParent = parentId === undefined ? Number(before?.parent_id) || 0 : Math.max(Number(parentId) || 0, 0);
+    if (nextParent === row.id) throw badRequest('一页不能把自己当父页');
+    const at = now();
+    queries.setStationId({
+      documentId: row.id,
+      stationId: station.id,
+      parentId: nextParent,
+      sortOrder: sortOrder === undefined ? Number(before?.sort_order) || 0 : Math.trunc(Number(sortOrder) || 0),
+      now: at,
+    });
+    if (icon !== undefined) {
+      queries.upsertSettings({
+        documentId: row.id,
+        allowScriptWrite: Boolean(before?.allow_script_write),
+        appMode: String(before?.app_mode ?? 'inline'),
+        stationId: station.id,
+        parentId: nextParent,
+        sortOrder: sortOrder === undefined ? Number(before?.sort_order) || 0 : Math.trunc(Number(sortOrder) || 0),
+        icon: singleLineText(icon).slice(0, 32),
+        sourceText: String(before?.source_text ?? ''),
+        now: at,
+      });
+    }
+    return { stationId: station.id, id: row.id, parentId: nextParent, pages: stationPages(station.id, viewer) };
   }
 
   /* ---------------- 投票（§5.2：投票块要真的能投） ---------------- */
@@ -1574,6 +1956,13 @@ export function createDocStore({ db, queries, now = () => Date.now() }) {
     openWikiPage,
     wikiNav,
     setWikiMeta,
+    listStations,
+    getStation,
+    createStation,
+    createStationPage,
+    moveStationPage,
+    searchStation,
+    ensurePagesAttached,
     getPollState,
     votePoll,
   };

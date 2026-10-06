@@ -91,6 +91,20 @@ export function createDocQueries(db) {
     },
 
     /**
+     * 站里的页可能和其它站里的页重名（`title` 其实只在一个站里有意义）。
+     * 打开「站 + 页」时要把候选都拿出来，再挑属于**这个站**的那一篇。
+     */
+    documentsByTitle(title, template = null) {
+      const where = ['d.title = ? COLLATE NOCASE', 'd.deleted = 0'];
+      const params = [String(title)];
+      if (template) {
+        where.push('d.template = ?');
+        params.push(String(template));
+      }
+      return all(`SELECT ${DOC_COLUMNS} ${DOC_SOURCE} WHERE ${where.join(' AND ')} ORDER BY d.id ASC LIMIT 20`, params);
+    },
+
+    /**
      * Wiki 用：按标题找一页。
      *
      * `template` 是「这一篇算不算 wiki 页」的标记（见 templates.js 的 `page`），
@@ -637,6 +651,33 @@ export function createDocQueries(db) {
           ORDER BY d.id ASC LIMIT ?`,
         [Math.min(Math.max(Number(limit) || 200, 1), 500)],
       );
+    },
+
+    /**
+     * 所有**看得见的** wiki 页标题 —— 红链判断（§6.4）只要标题，所以别把整行拖出来。
+     *
+     * 双链是正文里的文本，可能指向任何一个站里的页，所以这里不按站过滤：
+     * 只要「这一页确实存在且我看得见」，它就不该画成红的。
+     */
+    wikiPageTitles({ visible = null } = {}) {
+      const where = ["d.template = 'page'", 'd.deleted = 0'];
+      const params = [];
+      if (visible) {
+        where.push(visible.sql);
+        params.push(...visible.params);
+      }
+      return all(`SELECT d.title FROM documents d WHERE ${where.join(' AND ')}`, params).map((row) => String(row.title));
+    },
+
+    /** 一批文档 id → 标题。`subpage` 卡片在渲染时现查标题，改完标题卡片跟着变。 */
+    titlesOf(ids = []) {
+      const list = (Array.isArray(ids) ? ids : [])
+        .map((id) => Number(id))
+        .filter((id) => Number.isInteger(id) && id > 0)
+        .slice(0, 200);
+      if (list.length === 0) return [];
+      const holes = list.map(() => '?').join(', ');
+      return all(`SELECT id, title FROM documents WHERE id IN (${holes}) AND deleted = 0`, list);
     },
 
     /**

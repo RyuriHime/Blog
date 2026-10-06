@@ -25,7 +25,7 @@ import { attachSandbox, unmountSandboxes } from '../core/sandbox.js';
 import { ntRenderMath } from './notes.js';
 
 /** 元数据只拉一次：块类型表 / 模板表 / 两个枚举，整个会话里不会变。 */
-const docState = { types: [], templates: [], kinds: [], scopes: [], editor: null, viewing: null };
+const docState = { types: [], templates: [], kinds: [], scopes: [], editor: null, viewing: null, stationId: 0 };
 
 /** Markdown 模式的两件外挂的生命周期手柄（防抖句柄 + AI 抽屉实例）。 */
 let mdPreviewTimer = null;
@@ -86,32 +86,20 @@ function docCardHtml(doc) {
 }
 
 /**
- * 「新建一篇」的面板 —— 刻意**没有**模板。
+ * 「新建一篇」= **一次点击就落到 Markdown 编辑区**。
  *
- * 原先这里摊了一墙模板卡片，结果是「一个字都还没写，先做一道选择题」。
- * 现在只有标题 + 形态 + 范围，提交后直接落到 **纯 Markdown** 编辑页；
- * 模板搬去了编辑器的「🧱 积木模式」那一页 —— 那时你看得见自己已经写了什么，
- * 再决定要不要拿模板换掉整篇，才是这个决定该做的时候。
+ * 以前这里要先摊一个表单（标题 / 形态 / 范围），再摊一墙模板卡片 ——
+ * 结果是「一个字都还没写，先做三道选择题」。现在直接建一篇标题叫「未命名」的，
+ * 建完立刻跳进编辑器：标题在编辑页顶部改，可见范围也在那儿改，
+ * 想换形态、想写脚本、想套模板都在编辑页里切。
  */
-function newDocPanelHtml() {
-  return `<form class="doc-new doc-wizard" data-doc-form="create" hidden>
-    <label class="doc-field"><span class="doc-field-label">标题</span>
-      <input class="doc-input" name="title" maxlength="120" placeholder="给这篇起个名字">
-    </label>
-    <div class="doc-new-row">
-      <label class="doc-field"><span class="doc-field-label">形态</span>
-        <select class="doc-input doc-select" name="kind">${optionsHtml(docState.kinds, 'post')}</select>
-      </label>
-      <label class="doc-field"><span class="doc-field-label">谁可以看</span>
-        <select class="doc-input doc-select" name="scope">${scopeOptionsHtml('public')}</select>
-      </label>
-    </div>
-    <div class="doc-actions">
-      <button class="btn btn-sm btn-primary" type="submit">创建并开始写</button>
-      <button class="btn btn-sm btn-ghost" type="button" data-doc-action="new-cancel">取消</button>
-    </div>
-    <div class="doc-hint">创建后直接进 Markdown 编辑器，想换形态、想写脚本都在编辑页里切。要用模板的话，编辑页「🧱 积木模式」那一栏有整套模板。</div>
-  </form>`;
+async function newDocAndEdit() {
+  const created = await api('/api/docs', {
+    method: 'POST',
+    body: { title: '未命名', kind: 'post', scope: 'public', template: '' },
+  });
+  toast('建好了，开始写吧');
+  return navigate(`/doc/${created.doc.id}/edit`);
 }
 
 /** 积木广场：`#/docs?kind=&mine=1&q=`。 */
@@ -144,10 +132,9 @@ async function viewDocs(query = new URLSearchParams()) {
         <button class="btn btn-sm btn-primary" type="submit">筛选</button>
       </form>
       <div class="doc-actions">
-        ${state.me ? '<button class="btn btn-sm" type="button" data-doc-action="new">新建一篇</button>' : '<a class="btn btn-sm" href="#/login">登录后可以新建</a>'}
+        ${state.me ? '<button class="btn btn-sm" type="button" data-doc-action="new">＋ 新建一篇</button>' : '<a class="btn btn-sm" href="#/login">登录后可以新建</a>'}
         <a class="btn btn-sm btn-ghost" href="#/blocks">块类型表</a>
       </div>
-      ${state.me ? newDocPanelHtml() : ''}
     </div>
     ${
       documents.length
@@ -339,6 +326,163 @@ function mountWikiNav() {
 }
 
 /* ------------------------------------------------------------------ */
+/* Wiki 站（§6：一个帖子一个 wiki）                                    */
+/* ------------------------------------------------------------------ */
+
+/**
+ * 左栏：站名 + 站内搜索 + 页面树。
+ *
+ * 树是**服务端铺好的一根线**（`wiki.pages`，前序遍历 + `depth`），前端只画缩进 ——
+ * 谁是谁的子页是数据，不是样式，前端再算一遍就会有两份真相。
+ */
+function stationTreeHtml(wiki) {
+  const station = wiki?.station ?? {};
+  const pages = wiki?.pages ?? [];
+  const current = Number(wiki?.current) || 0;
+  const items = pages
+    .map((page) => {
+      const depth = Math.min(Math.max(Number(page.depth) || 0, 0), 6);
+      const icon = page.icon ? `<span class="doc-wiki-tree-icon">${esc(page.icon)}</span>` : '';
+      return `<a class="doc-wiki-nav-link doc-wiki-tree-link${page.id === current ? ' is-current' : ''}"`
+        + ` data-depth="${depth}" data-wiki-title="${esc(page.title)}" data-wiki-page="${page.id}"`
+        + ` href="#/wiki/${encodeURIComponent(station.title ?? '')}/${encodeURIComponent(page.title)}">${icon}${esc(page.title)}</a>`;
+    })
+    .join('');
+  const tools = [];
+  if (station.canEdit) {
+    tools.push(
+      `<input class="doc-input" type="text" data-wiki-new-name placeholder="新页面标题" aria-label="新页面标题">`,
+      `<button class="btn btn-sm" type="button" data-doc-action="wiki-new">＋ 新建页面</button>`,
+    );
+  }
+  return `<aside class="doc-wiki-nav doc-wiki-side">
+    <div class="doc-wiki-nav-head"><a href="#/wiki" class="doc-wiki-nav-back">⧉ Wiki 站</a><span class="hint">${pages.length} 页</span></div>
+    <div class="doc-wiki-station-name">${esc(station.title ?? '')}</div>
+    <input class="doc-input doc-wiki-search" type="search" data-wiki-search placeholder="站内搜索…" aria-label="站内搜索">
+    <div class="doc-wiki-tree" data-wiki-tree>${
+      items || '<div class="doc-wiki-nav-empty">这个站还没有页。</div>'
+    }</div>
+    <div class="doc-wiki-nav-hidden" data-wiki-nothing hidden>没有匹配的页面。</div>
+    ${tools.length ? `<div class="doc-wiki-nav-tools">${tools.join('')}</div>` : ''}
+  </aside>`;
+}
+
+/** 右栏：目录（标题块）。锚点用稳定块 id（`h-<blockId>`），服务端算好给的。 */
+function stationTocHtml(toc) {
+  const list = Array.isArray(toc) ? toc : [];
+  if (list.length === 0) return '';
+  const links = list
+    .map((item) => {
+      const level = Math.min(Math.max(Number(item.level) || 1, 1), 6);
+      return `<a class="doc-wiki-toc-link" data-toc-anchor="h-${esc(item.blockId)}" data-level="${level}" href="#">${esc(item.text)}</a>`;
+    })
+    .join('');
+  return `<aside class="doc-wiki-toc"><div class="doc-wiki-toc-head">本页目录</div>${links}</aside>`;
+}
+
+/** 底部「上一页 / 下一页」：树中线上的邻居，边界就整块不画。 */
+function stationPagerHtml(wiki) {
+  const prev = wiki?.prev;
+  const next = wiki?.next;
+  if (!prev && !next) return '';
+  const station = wiki?.station ?? {};
+  const link = (page, dir) => (page
+    ? `<a class="doc-wiki-pager-link ${dir === 'prev' ? 'doc-wiki-pager-prev' : 'doc-wiki-pager-next'}" href="#/wiki/${encodeURIComponent(station.title ?? '')}/${encodeURIComponent(page.title)}">
+        <span class="doc-wiki-pager-label">${dir === 'prev' ? '← 上一页' : '下一页 →'}</span>
+        <span class="doc-wiki-pager-title">${esc(page.icon ? `${page.icon} ` : '')}${esc(page.title)}</span>
+      </a>`
+    : '<span class="doc-wiki-pager-hole"></span>');
+  return `<nav class="doc-wiki-pager">${link(prev, 'prev')}${link(next, 'next')}</nav>`;
+}
+
+/** 三栏外壳：左树 / 中正文 / 右目录，正文底下接上一页下一页。 */
+function stationShellHtml(inner, wiki, toc) {
+  return `<div class="doc-wiki-layout doc-wiki-station">
+    ${stationTreeHtml(wiki)}
+    <div class="doc-wiki-main">${inner}${stationPagerHtml(wiki)}</div>
+    ${stationTocHtml(toc)}
+  </div>`;
+}
+
+/**
+ * 站里的交互：站内搜索、目录跳转、滚动高亮。
+ *
+ * 搜索**真的走服务端**（`/api/docs/wiki/station/:id/search`，标题 + 原文两个 LIKE）：
+ * 只在已经拿到的那棵树里过滤，翻不到正文里的字，那就不叫站内搜索。
+ */
+function mountStationTools(wiki) {
+  const stationId = Number(wiki?.station?.id) || 0;
+  docState.stationId = stationId;
+  const tree = $('[data-wiki-tree]');
+  const original = tree ? tree.innerHTML : '';
+  // 目录：点一下滚到那个标题。**不能**用 `href="#h-b3"` —— hash 是路由，
+  // 改 hash 会触发一次路由跳转（`#h-b3` 会被当成一个页面名）。
+  const tocLinks = typeof ui.app.querySelectorAll === 'function' ? ui.app.querySelectorAll('[data-toc-anchor]') : [];
+  for (const link of tocLinks) {
+    if (typeof link.addEventListener !== 'function') continue;
+    link.addEventListener('click', (event) => {
+      event.preventDefault();
+      const target = document.getElementById?.(link.dataset?.tocAnchor ?? '');
+      target?.scrollIntoView?.({ behavior: 'smooth', block: 'start' });
+    });
+  }
+  const search = $('[data-wiki-search]');
+  if (!search || typeof search.addEventListener !== 'function' || !tree) return;
+  let timer = null;
+  let alive = true;
+  search.addEventListener('input', () => {
+    const q = String(search.value ?? '').trim();
+    if (timer) clearTimeout(timer);
+    if (q === '') {
+      tree.innerHTML = original;
+      return;
+    }
+    timer = setTimeout(async () => {
+      try {
+        const found = await api(`/api/docs/wiki/station/${stationId}/search?q=${encodeURIComponent(q)}`);
+        if (!alive) return;
+        const results = found?.results ?? [];
+        tree.innerHTML = results.length
+          ? results
+            .map((item) => `<a class="doc-wiki-nav-link doc-wiki-search-hit" data-wiki-page="${item.id}" href="#/doc/${item.id}">
+                <span class="doc-wiki-search-title">${esc(item.title)}</span>
+                <span class="doc-wiki-search-excerpt">${esc(item.excerpt ?? '')}</span>
+              </a>`)
+            .join('')
+          : '<div class="doc-wiki-nav-empty">没有搜到。</div>';
+      } catch (error) {
+        console.warn('[doc] 站内搜索失败：', error);
+      }
+    }, 220);
+  });
+}
+
+/** `#/wiki`：所有看得见的站。 */
+async function viewWikiIndex() {
+  leaveDocPage();
+  await loadMeta();
+  docState.viewing = null;
+  docState.editor = null;
+  const data = await api('/api/docs/wiki/stations');
+  const stations = data?.stations ?? [];
+  const cards = stations
+    .map(
+      (station) => `<a class="card doc-station-card" href="#/wiki/${encodeURIComponent(station.title)}">
+        <div class="doc-station-title">⧉ ${esc(station.title)}</div>
+        <div class="doc-station-meta">${esc(station.username || '—')} · ${Number(station.pages) || 0} 页</div>
+      </a>`,
+    )
+    .join('');
+  ui.app.innerHTML = `<div class="card doc-panel">
+    <div class="card-head"><span class="card-title">⧉ Wiki 站</span><span class="hint">一个帖子一个 wiki</span></div>
+    <div class="doc-station-list">${cards || '<div class="doc-hint">还没有 wiki 站。</div>'}</div>
+    <div class="doc-hint">站里的页是独立文档，用 <code>[[双链]]</code> 互相链；站本身就是一个普通帖子。</div>
+  </div>`;
+}
+
+
+
+/* ------------------------------------------------------------------ */
 /* 投票                                                                */
 /* ------------------------------------------------------------------ */
 
@@ -483,12 +627,18 @@ function renderDoc(data) {
       <div class="card doc-revisions" data-doc-revisions hidden></div>
     </article>`;
   // wiki 页多一条分类边栏。用后端给的 `nav` 判断，不在前端猜「这算不算 wiki」。
-  ui.app.innerHTML = data.nav
-    ? `<div class="doc-wiki-layout">${wikiNavHtml(data.nav, doc)}<div class="doc-wiki-main">${article}</div></div>`
-    : article;
+  if (data.wiki) {
+    // 站里的页：三栏（左树 / 中正文 / 右目录）。
+    ui.app.innerHTML = stationShellHtml(article, data.wiki, data.toc);
+  } else if (data.nav) {
+    ui.app.innerHTML = `<div class="doc-wiki-layout">${wikiNavHtml(data.nav, doc)}<div class="doc-wiki-main">${article}</div></div>`;
+  } else {
+    ui.app.innerHTML = article;
+  }
   ensureDelegate();
   mountSandboxes(data);
-  if (data.nav) mountWikiNav();
+  if (data.wiki) mountStationTools(data.wiki);
+  else if (data.nav) mountWikiNav();
   loadPolls(doc.id).catch((error) => console.warn('[doc] 票数加载失败：', error));
   // 公式渲染必须在 innerHTML 之后 —— renderMathInElement 只处理**已经在 DOM 里**的节点
   // （论坛那边同样如此，见 views/timeline.js 的同名注释）。块里的 `$…$` 才不是一行源码。
@@ -518,8 +668,29 @@ async function viewDoc(id) {
 async function viewWiki(name, query = new URLSearchParams()) {
   leaveDocPage();
   await loadMeta();
-  const title = String(name ?? '').trim();
-  const found = await api(`/api/docs/wiki/${encodeURIComponent(title)}`);
+  const raw = String(name ?? '').trim();
+  // 1) 整串是不是一个**站**的名字？是就开站（`#/wiki/<站>`）。站先判 —— 站名和页名
+  //    撞车时以站为准，因为「站」才是这个 wiki 的入口。
+  const asStation = await api(`/api/docs/wiki/station?title=${encodeURIComponent(raw)}`);
+  if (asStation?.found) {
+    if (asStation.doc) return renderDoc(asStation.doc);
+    return renderMissingWikiPage(raw, asStation);
+  }
+  // 2) `#/wiki/<站>/<页>`：按**第一个** `/` 切一刀再试。只切一刀是因为页名里
+  //    本来就可能有 `/`（`[[某某/某某]]`），切多了就会去开一个不存在的页。
+  const slash = raw.indexOf('/');
+  if (slash > 0) {
+    const stationTitle = raw.slice(0, slash).trim();
+    const pageTitle = raw.slice(slash + 1).trim();
+    const hit = await api(`/api/docs/wiki/station?title=${encodeURIComponent(stationTitle)}&page=${encodeURIComponent(pageTitle)}`);
+    if (hit?.found) {
+      if (hit.doc) return renderDoc(hit.doc);
+      return renderMissingWikiPage(pageTitle, hit);
+    }
+  }
+  // 3) 老语义：按页名找（`[[双链]]` 的落点）。页已经被收编进站的话，它的
+  //    `present()` 里自带 `wiki`，到这儿照样是三栏。
+  const found = await api(`/api/docs/wiki/${encodeURIComponent(raw)}`);
   if (found?.found && found.doc) {
     docState.viewing = found.doc.id;
     docState.editor = null;
@@ -528,24 +699,36 @@ async function viewWiki(name, query = new URLSearchParams()) {
   }
   docState.viewing = null;
   docState.editor = null;
-  // 页面不存在时边栏照给：wiki 的意义就是「从目录里换个地方继续看」，
-  // 停在一页空白上就没法走了（`found:false` 的响应里也带 `nav`）。
-  ui.app.innerHTML = `<div class="doc-wiki-layout">${wikiNavHtml(found?.nav, null)}<div class="doc-wiki-main">
-    <div class="card doc-panel">
+  renderMissingWikiPage(raw, null, found?.nav);
+  if (query.get('create') === '1' && state.me) {
+    // 从双链点进来的「建这一页」就一步到位：直接落进编辑器，不用再点一次。
+    await openWikiPage(raw);
+  }
+}
+
+/**
+ * 「这一页还不存在」。
+ *
+ * 站里有这棵树就照给（wiki 的意义就是「从目录里换个地方继续看」，停在一页空白上就没法走了）；
+ * 没有站信息（老的双链落点）就退回老的分类边栏 `nav`。
+ */
+function renderMissingWikiPage(title, station = null, nav = null) {
+  const body = `<div class="card doc-panel">
       <div class="card-head"><span class="card-title">⧉ ${esc(title || '（空标题）')}</span><span class="hint">Wiki 页面</span></div>
       <div class="doc-hint">这一页还不存在。${state.me ? `建好之后它就是一页空白的 wiki，别的页面用 [[${esc(title)}]] 就能链过来。` : '登录之后可以把它建出来。'}</div>
       <div class="doc-actions">
         ${state.me ? `<button class="btn btn-sm btn-primary" type="button" data-doc-action="wiki-open" data-wiki-name="${esc(title)}">建这一页</button>` : '<a class="btn btn-sm" href="#/login">去登录</a>'}
         <a class="btn btn-sm" href="#/docs">回积木帖</a>
       </div>
-    </div>
-  </div></div>`;
-  ensureDelegate();
-  mountWikiNav();
-  if (query.get('create') === '1' && state.me) {
-    // 从双链点进来的「建这一页」就一步到位：直接落进编辑器，不用再点一次。
-    await openWikiPage(title);
+    </div>`;
+  if (station) {
+    ui.app.innerHTML = stationShellHtml(body, { ...station, current: 0, prev: null, next: null }, []);
+  } else {
+    ui.app.innerHTML = `<div class="doc-wiki-layout">${wikiNavHtml(nav, null)}<div class="doc-wiki-main">${body}</div></div>`;
   }
+  ensureDelegate();
+  if (station) mountStationTools(station);
+  else mountWikiNav();
 }
 
 /** 建（或打开）一页 wiki 然后进编辑器 —— 已经有了就只是打开。 */
@@ -553,6 +736,13 @@ async function openWikiPage(name) {
   const title = String(name ?? '').trim();
   if (!title) return;
   const page = await api(`/api/docs/wiki/${encodeURIComponent(title)}`, { method: 'POST', body: { scope: 'public' } });
+  toast(page.created ? '这一页建好了，开始写吧' : '这一页已经有了，直接打开');
+  return navigate(`/doc/${page.doc.id}/edit`);
+}
+
+/** 在指定站里建页（`＋ 新建页面` 走这条）—— 建完自动挂在站的目录上，然后进编辑器。 */
+async function createStationPageIn(stationId, title) {
+  const page = await api(`/api/docs/wiki/station/${stationId}/pages`, { method: 'POST', body: { title } });
   toast(page.created ? '这一页建好了，开始写吧' : '这一页已经有了，直接打开');
   return navigate(`/doc/${page.doc.id}/edit`);
 }
@@ -923,7 +1113,7 @@ function mountNotesPanel(mount, host, status) {
  * 模板栏 —— **只在积木模式里出现**。
  *
  * 放在这里是因为套模板的实质是「换一整套块」，只有正对着块列表时这个决定才有意义；
- * 新建面板里那张模板卡片墙已经拆了（见 `newDocPanelHtml`）。
+ * 「新建一篇」那条路上已经没有任何模板入口了（见 `newDocAndEdit`）。
  */
 function templatePanelHtml() {
   return `<div class="card doc-panel doc-tpl-bar">
@@ -1357,16 +1547,7 @@ async function onAppClick(event) {
   const currentId = docState.editor ? docState.editor.id : docState.viewing;
   const withBusy = (task) => withButtonBusy(node, task).catch((error) => toast(error.message, 'error'));
 
-  if (action === 'new') {
-    const panel = $('[data-doc-form="create"]');
-    if (panel) panel.hidden = false;
-    return;
-  }
-  if (action === 'new-cancel') {
-    const panel = $('[data-doc-form="create"]');
-    if (panel) panel.hidden = true;
-    return;
-  }
+  if (action === 'new') return withBusy(newDocAndEdit);
   if (action === 'import-toggle') {
     const panel = $('[data-doc-form="import"]');
     if (panel) panel.hidden = !panel.hidden;
@@ -1381,7 +1562,9 @@ async function onAppClick(event) {
       toast('先写一个页面标题', 'error');
       return;
     }
-    return withBusy(() => openWikiPage(name));
+    // 站在三栏页面上时，新页要挂到**这个**站上；老的双链落点没有站，才退回默认站。
+    const stationId = Number(docState.stationId) || 0;
+    return withBusy(() => (stationId ? createStationPageIn(stationId, name) : openWikiPage(name)));
   }
   if (action === 'wiki-cat') {
     const id = docState.viewing;
@@ -1441,15 +1624,6 @@ async function onAppSubmit(event) {
         if (values.kind) params.set('kind', values.kind);
         if (values.mine) params.set('mine', '1');
         return navigate(`/docs${params.toString() ? `?${params}` : ''}`);
-      }
-      if (form.dataset.docForm === 'create') {
-        // 表单里已经没有模板了：新建就是建一篇空的，模板到积木模式里再套。
-        const created = await api('/api/docs', {
-          method: 'POST',
-          body: { title: values.title, kind: values.kind, scope: values.scope, template: '' },
-        });
-        toast('建好了，开始写吧');
-        return navigate(`/doc/${created.doc.id}/edit`);
       }
       if (form.dataset.docForm === 'import') {
         let payload;
@@ -1532,6 +1706,7 @@ async function onTabClick(mode) {
 export { viewDocs };
 export { viewDoc };
 export { viewWiki };
+export { viewWikiIndex };
 export { viewDocEdit };
 export { viewBlocks };
 

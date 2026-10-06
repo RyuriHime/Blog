@@ -98,13 +98,85 @@ export function registerDocRoutes(ctx, { store }) {
     ok(reqCtx.res, store.importDocument({ viewer: user, payload: reqCtx.body.payload ?? reqCtx.body, scope: reqCtx.body.scope }));
   });
 
+  /* ---------------- Wiki 站（§6：一个帖子一个 wiki） ---------------- */
+
+  // 注意登记顺序：这几个的第三段是**字面量**（`stations` / `station`），
+  // 必须排在下面那条两段式 `/api/docs/wiki/:name` 之前，
+  // 否则 `/api/docs/wiki/station` 会被当成「一个叫 station 的 wiki 页」。
+
+  // `#/wiki`：所有看得见的站。老的 `pages` / `categories` 照旧一起回 ——
+  // 「站」是叠加在旧模型之上的，不是替换（旧客户端与旧测试都还读它们）。
+  add('GET', '/api/docs/wiki/stations', async (reqCtx) => {
+    const data = store.listStations({ viewer: reqCtx.user });
+    // `nav` 里的 `pages` / `categories` 也摊到顶层：旧的 `GET /api/docs/wiki` 就是这么给的，
+    // 前端与老测试读的都是顶层那两个键。
+    ok(reqCtx.res, { found: true, ...data, ...(data?.nav ?? {}) });
+  });
+
+  // 新建一个站（`#/wiki` 上的「＋ 新建站」）。站本身就是一个普通帖子（`template='station'`）。
+  add('POST', '/api/docs/wiki/stations', async (reqCtx) => {
+    const user = write(reqCtx, 'wiki-station');
+    ok(reqCtx.res, store.createStation({
+      viewer: user,
+      title: reqCtx.body?.title ?? '',
+      scope: reqCtx.body?.scope ?? 'public',
+    }));
+  });
+
+  // 站本体（按 id 或按站名）＋ 可选的某一页。三栏页面的左树 / 右 ToC / 前后页一次拿齐。
+  add('GET', '/api/docs/wiki/station', async (reqCtx) => {
+    const id = intOrNull(reqCtx.query.get('id')) ?? 0;
+    ok(reqCtx.res, store.getStation({
+      id,
+      title: reqCtx.query.get('title') ?? '',
+      pageTitle: reqCtx.query.get('page') ?? '',
+      viewer: reqCtx.user,
+    }));
+  });
+
+  // 站内搜索：标题 + 作者敲的原文两个 LIKE，只搜本站、只搜看得见的页。
+  add('GET', '/api/docs/wiki/station/:id/search', async (reqCtx) => {
+    ok(reqCtx.res, store.searchStation({
+      stationId: Number(reqCtx.params.id) || 0,
+      q: reqCtx.query.get('q') ?? '',
+      viewer: reqCtx.user,
+    }));
+  });
+
+  // 在站里新建一页（顺便挂到站的目录上）。`parentId` 给了就挂成子页。
+  add('POST', '/api/docs/wiki/station/:id/pages', async (reqCtx) => {
+    const user = write(reqCtx, 'wiki-page');
+    ok(reqCtx.res, store.createStationPage({
+      stationId: Number(reqCtx.params.id) || 0,
+      viewer: user,
+      title: reqCtx.body?.title ?? '',
+      parentId: intOrNull(reqCtx.body?.parentId) ?? 0,
+      icon: reqCtx.body?.icon ?? '',
+    }));
+  });
+
+  // 改一页在站里的位置（父页 / 排序 / 图标）。
+  add('PUT', '/api/docs/wiki/station/:id/pages/:pageId', async (reqCtx) => {
+    const user = write(reqCtx, 'wiki-page');
+    ok(reqCtx.res, store.moveStationPage({
+      stationId: Number(reqCtx.params.id) || 0,
+      id: Number(reqCtx.params.pageId) || 0,
+      viewer: user,
+      parentId: reqCtx.body?.parentId === undefined ? undefined : (intOrNull(reqCtx.body?.parentId) ?? 0),
+      sortOrder: reqCtx.body?.sortOrder === undefined ? undefined : Number(reqCtx.body.sortOrder),
+      icon: reqCtx.body?.icon,
+    }));
+  });
+
   /* ---------------- Wiki 多页面（`[[目标]]` 的落点） ---------------- */
 
   // 第三段是字面量 `wiki`，不与 `/api/docs/:id/{blocks,markdown,ops,...}` 撞车。
   // 边栏目录：分类 + 每一页。**必须排在 `/api/docs/:id` 前面**，
   // 否则 `wiki` 会被当成 id 吃掉（`/api/docs/:id` 的 `[^/]+` 什么都吃，见文件头）。
   add('GET', '/api/docs/wiki', async (reqCtx) => {
-    ok(reqCtx.res, { found: true, ...store.wikiNav({ viewer: reqCtx.user }) });
+    // 顺手全量收编（幂等）：升级后第一次打开 wiki，老页就都进了站（§6.7 触发点①）。
+    store.ensurePagesAttached({ viewer: reqCtx.user });
+    ok(reqCtx.res, { found: true, ...store.wikiNav({ viewer: reqCtx.user }), ...store.listStations({ viewer: reqCtx.user }) });
   });
 
   // GET 越权一律回 200 + `found:false`（不告诉陌生人「有这一页、只是你看不见」）；
