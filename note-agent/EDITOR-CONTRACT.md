@@ -56,7 +56,7 @@ window.NotesAgent.attach({
 `destroy()` 会移除自己的节点与监听，宿主可以在切换视图时放心调用。
 
 面板往 `mount` 里放**两个**节点：抽屉本体（`.notes-panel.notes-drawer`）与收起时留在屏幕
-右边缘的竖标签（`.notes-drawer-tab`）。后者必须是抽屉的**兄弟**节点 —— 抽屉收起是整块
+左边缘的竖标签（`.notes-drawer-tab`）。后者必须是抽屉的**兄弟**节点 —— 抽屉收起是整块
 `transform` 平移出屏，而它带 `overflow:hidden`，绝对定位的子元素会被一起裁掉。
 
 **关于挂载点的 `notes-mount` 类**：面板样式全部收在 `.notes-mount` 下

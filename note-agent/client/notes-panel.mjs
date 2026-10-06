@@ -511,7 +511,7 @@ export function attach({
   root.appendChild(head);
   root.appendChild(sections);
   root.appendChild(foot);
-  // 收起时留在屏幕右边缘的竖标签：必须挂在**抽屉外面**。
+  // 收起时留在屏幕左边缘的竖标签：必须挂在**抽屉外面**。
   // 抽屉收起是整块平移出屏，`overflow:hidden` 会把绝对定位的子元素一起裁掉 ——
   // 真机上表现为"收起后再也点不开"（标签还在 DOM 里，但落在视口外）。
   // 面板样式全部收在 `.notes-mount` 下（宿主一条 input[type="text"] 之类的泛化选择器

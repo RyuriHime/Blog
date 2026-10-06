@@ -16,7 +16,7 @@
 三段东西，只有**中间一段**需要你们动手：
 
 ```
-① AI 笔记整理 Agent（我们的包，87 个文件）—— 面板 = 右侧固定抽屉
+① AI 笔记整理 Agent（我们的包，87 个文件）—— 面板 = 左侧固定抽屉
         ↕  只认 EDITOR-CONTRACT.md 的 3 个方法（getDoc / setDoc / onChange）
 ② 适配器（你们写，约 20 行）—— 把 note-studio 的内部 API 翻译成那 3 个方法
         ↕
@@ -235,7 +235,7 @@ mountNoteAgent({
 
 ### ⑤ 新增 `notes/studio-adapter.js`（约 20 行，见下一节）
 
-改完刷新 `/notes/`：右侧应当出现抽屉，左下角状态胶囊显示「正在跟随编辑区 · N 字」。
+改完刷新 `/notes/`：左侧应当出现抽屉，左下角状态胶囊显示「正在跟随编辑区 · N 字」。
 
 ---
 
@@ -295,18 +295,22 @@ export function noteStudioAdapter(studio) {
 
 ---
 
-## 7. 排版冲突：抽屉会盖住右边 420px
+## 7. 排版冲突：抽屉会盖住左边 420px
 
-面板是 `position: fixed; right: 0; width: min(420px, 100dvw)`，展开时会盖住你页面右侧 420px
-（也就是你们的预览栏 + `aside#sidebar`）。面板展开时会给 `document.body` 挂一个 `notes-drawer-open` 类，收起时摘掉，**三种处理随你挑**：
+面板是 `position: fixed; left: 0; width: min(420px, 100dvw)`，展开时会盖住你页面左侧 420px
+（也就是你们的源码栏）。面板展开时会给 `document.body` 挂一个 `notes-drawer-open` 类，收起时摘掉，**三种处理随你挑**：
 
 ```css
-/* A. 什么都不做：抽屉盖着就盖着，用户可以把预览关掉（你们已有 👁 预览 / no-preview） */
-/* B. 工作区整体左移（推荐） */
-body.notes-drawer-open .workspace { padding-right: 432px; }
+/* A. 什么都不做：抽屉盖着就盖着，用户可以把源码栏收起来 */
+/* B. 工作区整体右移（推荐） */
+body.notes-drawer-open .workspace { padding-left: 432px; }
 /* C. 让编辑器自己的预览栏让位（两个预览不重复） */
 body.notes-drawer-open #previewPane { display: none; }
 ```
+
+> m04734：面板原本贴**右**边缘，和宿主自己的右侧栏功能上撞在一起（论坛右侧就是一条站点侧栏
+> 抽屉，两个都贴右边缘、高度还重叠），所以整块翻到了左边。右边的 `aside#sidebar` 因此不再被压住，
+> 代价是要给左边留位置。
 
 **真机核验过的布局事实**（`notes_studio.css:114-126`）：`.workspace` 是
 `grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 340px`（源码栏 / 预览栏 / 侧栏），
@@ -314,16 +318,16 @@ body.notes-drawer-open #previewPane { display: none; }
 所以：
 
 - 选 B 时**作用在 `.workspace` 上**（它的 `padding` 本来就是收缩的），比作用在 `main` 上稳；
-  `432px = 420px（抽屉）+ 12px（右边距）`。
-- 视口 ≲1280px 时 B 会把源码栏压到 ~420px 以下，这时可以叠加 C（`@media (max-width: 1280px) { … }`）。
-- 你们已有「👁 预览」开关，B + C 组合起来用户仍能自己找回空间；A 最省事但抽屉会压住侧栏。
-- 我们的论坛用的是 B 那一类做法（给主内容留右内边距）。
+  `432px = 420px（抽屉）+ 12px（左边距）`。
+- 视口 ≲1500px 时 B 会把三栏压得太窄，这时可以叠加 C（`@media (max-width: 1500px) { … }`）。
+- 你们已有「👁 预览」开关，B + C 组合起来用户仍能自己找回空间；A 最省事但抽屉会压住源码栏。
+- 我们的论坛用的是 B 那一类做法（给主内容留左内边距）。
 
 ---
 
 ## 8. 手机端不用适配
 
-面板自带断点：≤1080px 默认收起只留右侧竖标签、≤480px 铺满整屏；
+面板自带断点：≤1080px 默认收起只留左侧竖标签、≤480px 铺满整屏；
 窄屏有三条逃生通道（右上角 `›`、`Esc`、点抽屉外面）、触控目标 ≥44px、`padding` 带 `env(safe-area-inset-*)`。
 你们唯一要保证的是页面 `<head>` 里有：
 
@@ -375,7 +379,7 @@ aside#sidebar
 
 ```html
 <!-- 删除这一行（真机 L66） -->
-<button type="button" class="tool" id="btnAi" title="显示 / 隐藏 AI 助手（打开后在右侧竖排）">🤖 AI 助手</button>
+<button type="button" class="tool" id="btnAi" title="显示 / 隐藏 AI 助手（打开后在左侧竖排）">🤖 AI 助手</button>
 ```
 
 **② 删掉 AI 页签按钮，顺手把「文件数据」设成默认页签**（真机 L145-147）：
@@ -451,7 +455,7 @@ for (const sel of ['.tab[data-tab="info"]', '.tab-body[data-body="info"]']) {
 
 **浏览器里逐条看（我这边已经用 Playwright 在你们站点上跑过前面几条）**：
 
-1. `/notes/` 打开 → 右侧出现抽屉，胶囊显示「正在跟随编辑区 · N 字」，**不会触发任何模型调用**
+1. `/notes/` 打开 → 左侧出现抽屉，胶囊显示「正在跟随编辑区 · N 字」，**不会触发任何模型调用**
    （面板只在编辑区变化后打一次 `/api/note-agent/session` 同步草稿，`generate`/`turn`/`review` 一个都不发）。
 2. 在 `#source` 打字 → 胶囊字数跟着变，仍**不触发模型**。
 3. 切到 `wysiwyg` 打字 → 胶囊跟着变（验证第 2 节第 1 个坑：读的不是隐藏 textarea）。
@@ -504,5 +508,5 @@ for (const sel of ['.tab[data-tab="info"]', '.tab-body[data-body="info"]']) {
 > 原来的 **AI 助手页签请下线**（工具栏 `#btnAi` + 页签 `.tab[data-tab="ai"]` + 内容块
 > `.tab-body[data-body="ai"]`，里面是 `#btnOrganize`/`#btnReview`/`#aiResult`），
 > 把默认页签改成「文件数据」。**不要藏整个 `aside#sidebar`** —— 它里面还有「文件数据」和「我的笔记」。
-> 我们那边也不再从 `#btnApplyMarkdown` 取通知了。AI 只用我们的右侧抽屉一套。
+> 我们那边也不再从 `#btnApplyMarkdown` 取通知了。AI 只用我们的左侧抽屉一套。
 > 服务端 `/api/notes/ai/*` 留不留都行，不影响。

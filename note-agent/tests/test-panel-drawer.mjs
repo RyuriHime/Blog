@@ -1,5 +1,5 @@
 /**
- * 右侧抽屉 + 预览 + 聊天式历史（用户 m04046 的四条要求）。
+ * 抽屉 + 预览 + 聊天式历史（用户 m04046 的四条要求；按用户 m04734，抽屉已从右边挪到左边）。
  *
  * 用户原话：
  *   1. 「AI 笔记整理应该以折叠狂形式放在右侧，这样可以左侧边看右侧边改。」
@@ -98,10 +98,10 @@ async function setup({ content = DRAFT_V1, history = [], wide = true, withoutHos
 
 const drawerOf = (mount) => mount.querySelector('.notes-drawer');
 
-// ── 1. 折叠式抽屉，放在右侧 ────────────────────────────────────────
+// ── 1. 折叠式抽屉，放在左侧（m04734 起） ────────────────────────────
 const first = await setup();
 await first.panel.settle();
-check('面板根节点就带抽屉类（CSS 靠它做右侧固定定位）', drawerOf(first.mount)?.classList.contains('notes-panel') === true);
+check('面板根节点就带抽屉类（CSS 靠它做左侧固定定位）', drawerOf(first.mount)?.classList.contains('notes-panel') === true);
 // 面板样式全部收在 `.notes-mount` 下（宿主一条 input[type="text"] 就改不动面板）。
 // 挂载点没这个类时整块样式一条都不生效、面板退化成裸块 —— 交付包的演示页正是这么踩的。
 // 所以 attach 自己补上，接入方不必记这件事。
@@ -117,7 +117,7 @@ toggle()?.dispatchEvent(new Event('click'));
 check('再点一次又展开（折叠是双向的）', drawerOf(first.mount)?.classList.contains('is-open') === true);
 
 // 抽屉挂在 mount 内、生命周期仍归宿主管 —— 旧的挂载契约不能被打破。
-// 面板往 mount 里放两个节点：抽屉本体 + 收起时留在屏幕右边缘的竖标签。
+// 面板往 mount 里放两个节点：抽屉本体 + 收起时留在屏幕左边缘的竖标签。
 // 竖标签**必须**在抽屉外面：抽屉收起是整块平移出屏，`overflow:hidden` 会把
 // 绝对定位的子元素一起裁掉，真机上表现为"收起后再也点不开"。
 check('面板往 mount 里只放自己的两个根节点（抽屉 + 竖标签）', first.mount.children.length === 2, `节点数 ${first.mount.children.length}`);

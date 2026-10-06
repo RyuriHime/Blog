@@ -207,6 +207,6 @@ DROP TABLE notes_sessions, notes_materials, notes_attachments, notes_messages,
 3. `curl -sI localhost:PORT/notes-panel.css` → 200 + `text/css`。
 4. `curl -sI localhost:PORT/notes-markdown.js` → 200 + `text/javascript`（宿主没有
    `/markdown/preview` 时，面板的「效果」预览靠它）。
-5. 打开写作页：右侧出现抽屉（窄屏是一条竖标签），编辑区打字时抽屉顶部的字数跟着变，
+5. 打开写作页：左侧出现抽屉（窄屏是一条竖标签），编辑区打字时抽屉顶部的字数跟着变，
    **此时网络面板里没有模型调用**。
 6. 宿主原有的发布/预览/草稿功能照旧 —— 面板只在用户点「应用到编辑区」时调 `editor.setDoc()`。

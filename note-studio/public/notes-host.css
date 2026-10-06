@@ -26,16 +26,19 @@
 /* ── 2. 抽屉展开时给正文让位 ──────────────────────────────────────────── */
 /*
  * note-agent 展开时会往 document.body 挂一个 `notes-drawer-open` 类（destroy 时摘掉）。
- * 抽屉宽 420px + 右侧 12px 空隙，所以正文让出 432px ——
- * 不让的话抽屉会盖住右侧的「文件数据 / 我的笔记」页签与面板内容。
+ * 抽屉宽 420px + 左侧 12px 空隙，所以正文让出 432px ——
+ * 不让的话抽屉会盖住编辑区左半边。
  *
- * 只在 ≥1081px 生效：面板自己在 ≤1080px 的断点上就是「默认收起、从右边缘滑出」的
+ * m04734：抽屉整体挪到了**左边**（右边会撞上宿主自己的侧栏），所以让位也从
+ * 右边改成左边 —— 还写 padding-right 的话正文会让错方向、抽屉照样压住编辑区。
+ *
+ * 只在 ≥1081px 生效：面板自己在 ≤1080px 的断点上就是「默认收起、从左边缘滑出」的
  * 覆盖式形态，那种情况不该（也不需要）挤压正文。
  */
 @media (min-width: 1081px) {
   body.notes-drawer-open main.workspace {
-    padding-right: 432px;
-    transition: padding-right 0.18s ease;
+    padding-left: 432px;
+    transition: padding-left 0.18s ease;
   }
 }
 

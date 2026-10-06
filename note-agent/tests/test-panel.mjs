@@ -43,7 +43,7 @@ const mount = dom.document.createElement('div');
 mount.id = 'notesMount';
 dom.form.appendChild(mount);
 const handle = attach({ mount, editor, api: async () => ({ sessionId: 1, title: 't', blocks: [], stats: {}, sources: [], warnings: [] }) });
-// 面板往 mount 里放两个节点：抽屉本体 + 收起时留在屏幕右边缘的竖标签（见 test-panel-drawer.mjs）
+// 面板往 mount 里放两个节点：抽屉本体 + 收起时留在屏幕左边缘的竖标签（见 test-panel-drawer.mjs）
 const panelRoots = () => [...mount.children].filter((node) => String(node.className).includes('notes-'));
 check('attach 在 mount 内建面板且不碰 mount 之外', panelRoots().length === 2 && typeof handle.destroy === 'function', `节点数 ${mount.children.length}`);
 check('面板文案常量集中且齐全', Boolean(TEXT.organize && TEXT.apply && TEXT.turn && TEXT.review && TEXT.applyHigh && TEXT.watching));
