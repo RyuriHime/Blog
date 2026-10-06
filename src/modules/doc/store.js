@@ -9,7 +9,7 @@
 //   1. 越权一律 **404**（不是 403）—— 403 会告诉攻击者"这个 id 是存在的"。
 //   2. 每次改变块序列都写一条修订（S1 起就是设计的一部分，不是补丁）。
 //   3. 影子行跟着文档走：scope 变、标题变、删除，都要同步过去，
-//      因为点赞 / 投币 / 收藏三个核心接口只认 `posts` 那一行。
+//      因为点赞 / 收藏两个核心接口只认 `posts` 那一行。
 import { HttpError } from '../../core/http.js';
 import { isStaff } from '../../core/guards.js';
 import {
@@ -571,8 +571,8 @@ export function createDocStore({ db, queries, now = () => Date.now() }) {
   /**
    * 互动能力。
    *
-   * `canReact` / `canCoin` 必须与 `src/core/guards.js` 的 `assertPostVisible` **同规则**：
-   * 核心的赞 / 踩 / 投币 / 收藏只认影子行的 `hidden`，而 `hidden` 又只由 scope 决定。
+   * `canReact` 必须与 `src/core/guards.js` 的 `assertPostVisible` **同规则**：
+   * 核心的赞 / 踩 / 收藏只认影子行的 `hidden`，而 `hidden` 又只由 scope 决定。
    * 前端照着它藏按钮，才不会出现"点了就 404"的按钮。
    */
   function abilitiesOf(docRow, viewer) {
@@ -581,7 +581,6 @@ export function createDocStore({ db, queries, now = () => Date.now() }) {
       canView: true,
       canEdit: canEdit(docRow, viewer),
       canReact: interactionAllowed,
-      canCoin: interactionAllowed,
     };
   }
 

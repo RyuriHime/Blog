@@ -1,4 +1,4 @@
-// 会话与站点数据：登录态、未读数、币规则、消息未读。
+// 会话与站点数据：登录态、未读数、消息未读。
 // 这些数据在多个视图里被读，所以读回来一律写进 core/state.js 的 state 对象。
 import { $, esc, toast, ui } from './dom.js';
 import { api } from './api.js';
@@ -49,9 +49,6 @@ function renderUserArea() {
       ${Avatar.avatarHtml(me, 'avatar-sm')}
       <span>${esc(me.displayName)}</span>
     </button>
-    <span class="coin-chip" title="可用币 · 别人投给你的会到账">
-      <span class="coin-chip-icon" aria-hidden="true">🪙</span><span class="coin-chip-value">${Fmt.fmtNum(me.coinBalance ?? 0)}</span>
-    </span>
     <div class="menu" id="user-menu" hidden>
       <a class="menu-item" href="#/u/${encodeURIComponent(me.username)}">👤 我的主页</a>
       <a class="menu-item" href="#/messages">✉️ 私信${state.messageUnread > 0 ? ` <span class="menu-badge">${state.messageUnread}</span>` : ''}</a>
@@ -201,8 +198,7 @@ function renderSidebar() {
     )
     .join('');
 
-  // P5：侧栏「🪙 我的账户」卡片整体下线 ——
-  //   · 可用币                          → 搬到顶栏用户名右边（见 renderUserArea）
+  // P5：侧栏「我的账户」卡片整体下线 ——
   //   · AI 阅读助手 / 知识网络图 / 学术笔记 → 搬到顶栏「发动态」旁边
   //   · 消息通知 / 我的关注 / 我的收藏 / 账号设置 → 在这里删除
   //     （功能都还在：顶栏 🔔 铃铛进消息通知，用户菜单里四个入口一个不少）
@@ -228,7 +224,7 @@ function renderSidebar() {
         ? ''
         : `<div class="card card-tight">
              <div class="card-title" style="margin-bottom:8px">🎉 加入讨论</div>
-             <div class="hint" style="margin-bottom:10px">注册后可以发帖、评价、投币、关注作者并收到消息通知。</div>
+             <div class="hint" style="margin-bottom:10px">注册后可以发帖、评价、关注作者并收到消息通知。</div>
              <div class="form-actions">
                <a class="btn btn-sm btn-primary" href="#/register">注册</a>
                <a class="btn btn-sm" href="#/login">登录</a>

@@ -115,16 +115,6 @@ async function viewSettings() {
 
     <section class="card">
       <div class="card-head">
-        <span class="card-title">🪙 我的资产</span>
-      </div>
-      <div class="stat-grid stat-grid-wide">
-        <div class="stat"><div class="stat-value">🪙 ${Fmt.fmtNum(me.coinBalance ?? 0)}</div><div class="stat-label">可用币</div></div>
-      </div>
-      <div class="hint" style="margin-top:12px">币来自注册赠送和别人的投币，投给别人时也会扣掉。</div>
-    </section>
-
-    <section class="card">
-      <div class="card-head">
         <span class="card-title">🚫 黑名单（${blocks.items.length}）</span>
         <span class="hint">被拉黑的人无法关注你、给你发私信，也看不到你发的文章</span>
       </div>

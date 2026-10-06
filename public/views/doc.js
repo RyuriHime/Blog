@@ -166,12 +166,12 @@ function interactHtml(doc, abilities) {
   if (!doc.anchorPostId) return '';
   if (abilities.canReact) {
     return `<div class="card doc-interact">
-      <span>👍 点赞 / 投币 / 收藏走的是它的互动锚点。</span>
+      <span>👍 点赞 / 收藏走的是它的互动锚点。</span>
       <a class="btn btn-sm" href="#/post/${esc(doc.anchorPostId)}">去帖子里互动</a>
     </div>`;
   }
   return `<div class="card doc-interact">
-    <span>这篇的可见范围不是「公开」，核心互动接口只认帖子的 hidden 标记，别人在这里点赞 / 投币会 404 —— 设计文档 §2.5 登记过的已知短板，本轮不动 core。</span>
+    <span>这篇的可见范围不是「公开」，核心互动接口只认帖子的 hidden 标记，别人在这里点赞 / 收藏会 404 —— 设计文档 §2.5 登记过的已知短板，本轮不动 core。</span>
   </div>`;
 }
 

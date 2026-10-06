@@ -131,18 +131,6 @@ function mountComposeNotesPanel(postId) {
 
 /* ------------------------------------------------------------------ */
 /* 视图：登录 / 注册                                                   */
-function lockCoinButton(button, message, hintNode) {
-  button.dataset.coinLocked = '1';
-  button.dataset.coinHint = message;
-  button.setAttribute('aria-disabled', 'true');
-  button.title = message;
-  if (!button.classList.contains('is-locked')) button.classList.add('is-locked');
-  if (hintNode) {
-    hintNode.textContent = message;
-  } else {
-    button.insertAdjacentHTML('afterend', `<span class="coin-locked-hint">${esc(message)}</span>`);
-  }
-}
 function applyMarkdown(kind, textarea) {
   if (!textarea) return;
   const start = textarea.selectionStart;
@@ -228,6 +216,5 @@ export { viewCompose };
 export { applyMarkdown };
 export { applyAvatarResult };
 export { compressImageFile };
-export { lockCoinButton };
 
 /* @hand-written */

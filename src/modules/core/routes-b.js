@@ -1,7 +1,7 @@
 // core 路由：帖子列表 / 帖子详情 / 发帖 / 互动
 // // 搬运自 src/server.js 的固定行区间（预铺骨架，逐字未改），见 docs/tools/extract-server-modules.mjs。
 import { ensure, field, HttpError, ok, rateLimit, res_ } from '../../core/http.js';
-import { assertPinAllowed, coinAvailability, notifyMentions, resolveOwnCategory, shapeAuthor, shapeCategory, shapeConversation, shapeMessage, shapeNotification, shapePerson, shapePostDetail, shapePostListRow, shapeProfile, shapeReply, shapeReposter, shapeUser } from '../../core/shape.js';
+import { assertPinAllowed, notifyMentions, resolveOwnCategory, shapeAuthor, shapeCategory, shapeConversation, shapeMessage, shapeNotification, shapePerson, shapePostDetail, shapePostListRow, shapeProfile, shapeReply, shapeReposter, shapeUser } from '../../core/shape.js';
 import { assertPostVisible, isOwner, isStaff, requireOwner, requireStaff, requireUser } from '../../core/guards.js';
 import { issueSession, removeAvatarFile, saveAvatarFile, sessionCookie } from '../../core/sessions.js';
 import { store } from '../../core/store.js';
@@ -83,7 +83,6 @@ export function registerRoutesB(route) {
     ok(res_(ctx), {
       post: {
         ...shapePostDetail({ ...row, views: row.views + (isAuthor || row.hidden ? 0 : 1) }),
-        coin: coinAvailability(row, ctx.user),
       },
       replies: store.listReplies(id, ctx.user?.id ?? ANON).map(shapeReply),
       reposters: store.listReposters(id).map(shapeReposter),
@@ -243,46 +242,6 @@ export function registerRoutesB(route) {
       disliked: result.disliked,
       likeCount: result.likeCount,
       dislikeCount: result.dislikeCount,
-    });
-  });
-
-  /* ---------------- 投币 ---------------- */
-
-  route('POST', '/api/posts/:id/coin', async (ctx) => {
-    const user = requireUser(ctx);
-    const id = Number(ctx.params.id);
-    const post = store.postRow(id);
-    ensure(post && !post.deleted, 404, 'post_not_found', '帖子不存在');
-    assertPostVisible(post, ctx);
-    ensure(!post.locked || isStaff(user), 403, 'locked', '该帖子已锁定，暂时不能投币');
-    const rules = store.COIN_RULES;
-    const amount = Number(ctx.body.amount ?? 1);
-    ensure(Number.isFinite(amount) && amount >= 1, 400, 'bad_amount', '投币数量不正确');
-
-    const result = store.giveCoin({ userId: user.id, postId: id, amount });
-    if (result.error === 'self_coin') throw new HttpError(400, 'self_coin', '不能给自己的帖子投币');
-    if (result.error === 'per_post_limit') {
-      throw new HttpError(400, 'per_post_limit', `每个帖子最多投 ${rules.perPostLimit} 币`);
-    }
-    if (result.error === 'insufficient_coins') {
-      throw new HttpError(400, 'insufficient_coins', '币不够了：等别人给你的文章投币，攒够了再来');
-    }
-    ensure(!result.error, 400, 'coin_failed', '投币失败');
-
-    store.createNotification({
-      userId: result.authorId,
-      actorId: user.id,
-      type: 'post_coin',
-      postId: id,
-      excerpt: `投了 ${result.given} 币`,
-    });
-    ok(res_(ctx), {
-      given: result.given,
-      myCoins: result.myCoins,
-      coinCount: result.coinCount,
-      balance: result.balance,
-      perPostLimit: result.perPostLimit,
-      signupGrant: result.signupGrant,
     });
   });
 

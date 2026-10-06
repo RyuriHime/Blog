@@ -85,7 +85,7 @@ async function viewUser(username, query) {
         ${Avatar.avatarHtml(user, 'avatar-lg')}
         <div class="profile-info">
           <h1 style="font-size:21px">${esc(user.displayName)} ${Fmt.roleTag(user.role)}</h1>
-          <div class="page-sub">@${esc(user.username)} · 加入于 ${Fmt.timeAgo(user.createdAt)}${isOwner ? ` · 🪙 ${Fmt.fmtNum(user.coinBalance)} 币` : ''}</div>
+          <div class="page-sub">@${esc(user.username)} · 加入于 ${Fmt.timeAgo(user.createdAt)}</div>
           ${user.bio ? `<p class="profile-bio">${esc(user.bio)}</p>` : '<p class="profile-bio hint">这位用户还没有写个性签名</p>'}
         </div>
         <div class="profile-actions">

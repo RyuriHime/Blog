@@ -558,7 +558,7 @@ const EXTRA = {
     ],
     html: '<div class="doc-block doc-block-heading" data-block-id="b1" data-block-type="heading"><h2>采样标题</h2></div>\n<div class="doc-block doc-block-unknown" data-block-id="b9" data-block-type="ghost">这一块降级了</div>',
     warnings: [{ block_id: 'b9', code: 'unknown_type', message: '不认识的块类型：ghost' }],
-    abilities: { canView: true, canEdit: true, canReact: true, canCoin: true },
+    abilities: { canView: true, canEdit: true, canReact: true },
   },
   '/api/docs/1/markdown': { title: '采样用的积木帖子', markdown: '## 采样标题\n\n- 甲\n- 乙', updatedAt: Date.now() - 3600000 },
   '/api/docs/1/revisions': {

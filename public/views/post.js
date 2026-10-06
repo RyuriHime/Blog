@@ -1,4 +1,4 @@
-// 帖子详情页：正文、评价栏、投币、转发列表、回复。
+// 帖子详情页：正文、评价栏、转发列表、回复。
 
 import { $, emptyHtml, esc, loadingHtml, ui } from '../core/dom.js';
 import { api } from '../core/api.js';
@@ -32,17 +32,6 @@ function replyHtml(reply, post) {
     </div>`;
 }
 function reactionBarHtml(post) {
-  const rules = Fmt.coinRules();
-  // 投币规则由服务端下发（post.coin），前端只负责展示与提示
-  const coin = post.coin ?? {
-    available: false,
-    reason: 'anonymous',
-    message: '登录后即可投币',
-    myCoins: post.myCoins ?? 0,
-    balance: 0,
-    perPostLimit: rules.perPostLimit,
-    signupGrant: rules.signupGrant,
-  };
   const isAuthor = state.me && state.me.id === post.author.id;
 
   return `
@@ -53,19 +42,6 @@ function reactionBarHtml(post) {
       <button class="btn btn-sm reaction ${post.disliked ? 'is-on-danger' : ''}" data-action="reaction" data-kind="dislike" data-id="${post.id}" title="觉得没帮助可以踩">
         👎 <span data-dislike-label>${post.disliked ? '已踩' : '踩'}</span> <span data-dislike-count>${post.dislikeCount}</span>
       </button>
-      <button class="btn btn-sm reaction ${coin.myCoins > 0 ? 'is-on-coin' : ''} ${coin.available ? '' : 'is-locked'}"
-              data-action="coin" data-id="${post.id}"
-              data-coin-locked="${coin.available ? '0' : '1'}" data-coin-reason="${esc(coin.reason)}"
-              data-coin-hint="${esc(coin.message)}" data-limit="${coin.perPostLimit}"
-              aria-disabled="${coin.available ? 'false' : 'true'}" title="${esc(coin.message)}">
-        🪙 投币 <span data-coin-count>${post.coinCount}</span><span data-my-coins>${coin.myCoins > 0 ? ` <span class="tag tag-soft">我投了 ${coin.myCoins}</span>` : ''}</span>
-      </button>
-      ${
-        state.me && !isAuthor
-          ? `<span class="coin-budget" data-coin-budget>可用 ${coin.balance} 币</span>`
-          : ''
-      }
-      ${coin.available || !state.me ? '' : `<span class="coin-locked-hint">${esc(coin.message)}</span>`}
       <button class="btn btn-sm ${post.bookmarked ? 'is-on' : ''}" data-action="bookmark" data-id="${post.id}">
         ${post.bookmarked ? '★ 已收藏' : '☆ 收藏'} <span data-bookmark-count>${post.bookmarkCount}</span>
       </button>
@@ -202,9 +178,9 @@ async function viewPost(id) {
       ${Ai.aiPostPanelHtml(post, aiInfo)}
 
       ${state.me ? reactionBarHtml(post) : `<div class="action-bar">
-        <a class="btn btn-sm btn-primary" href="#/login">登录后可以评价、投币和关注作者</a>
+        <a class="btn btn-sm btn-primary" href="#/login">登录后可以评价和关注作者</a>
         <span class="spacer"></span>
-        <span class="post-meta"><span>👍 ${post.likeCount}</span><span>👎 ${post.dislikeCount}</span><span>🪙 ${post.coinCount}</span><span>⭐ ${post.bookmarkCount}</span><span>🔁 ${post.repostCount}</span></span>
+        <span class="post-meta"><span>👍 ${post.likeCount}</span><span>👎 ${post.dislikeCount}</span><span>⭐ ${post.bookmarkCount}</span><span>🔁 ${post.repostCount}</span></span>
       </div>`}
     </article>
 

@@ -42,7 +42,7 @@ async function viewHome(query) {
   const hero = `
     <section class="hero">
       <h1>围炉而坐，聊聊技术 👋</h1>
-      <p>分区讨论、Markdown 发帖、评价投币、关注作者，消息通知一个都不少。</p>
+      <p>分区讨论、Markdown 发帖、评价、关注作者，消息通知一个都不少。</p>
       <div class="hero-actions">
         <a class="btn btn-primary" href="#/new">✏️ 我要发帖</a>
         ${state.me ? '<a class="btn" href="#/following">👥 我关注的人</a>' : '<a class="btn" href="#/register">🎉 注册一个账号</a>'}

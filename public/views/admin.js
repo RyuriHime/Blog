@@ -27,7 +27,6 @@ async function viewAdmin() {
     ['已隐藏', stats.hiddenPosts ?? hiddenPosts.length],
     ['回复', stats.replies],
     ['评价总数', stats.reactions],
-    ['投币总数', stats.coins],
     ['关注关系', stats.follows],
     ['收藏总数', stats.bookmarks],
     ['今日新帖', stats.postsToday],
@@ -64,7 +63,6 @@ async function viewAdmin() {
       <td>${user.postCount}</td>
       <td>${user.replyCount}</td>
       <td>${user.followerCount}</td>
-      <td>🪙 ${user.coinBalance}</td>
       <td>${user.banned ? '<span class="tag tag-banned">已封禁</span>' : '<span class="tag">正常</span>'}</td>
       <td>
         <div class="row-actions">
@@ -159,7 +157,7 @@ async function viewAdmin() {
       </div>
       <div class="table-wrap">
         <table class="data">
-          <thead><tr><th>用户</th><th>账号</th><th>发帖</th><th>回复</th><th>粉丝</th><th>余额</th><th>状态</th><th>操作</th></tr></thead>
+          <thead><tr><th>用户</th><th>账号</th><th>发帖</th><th>回复</th><th>粉丝</th><th>状态</th><th>操作</th></tr></thead>
           <tbody>${userRows}</tbody>
         </table>
       </div>

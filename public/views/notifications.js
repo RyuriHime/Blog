@@ -13,7 +13,6 @@ const NOTIF_META = {
   post_repost: { icon: '🔁', text: '转发了你的文章' },
   post_like: { icon: '👍', text: '赞了你的帖子' },
   post_dislike: { icon: '👎', text: '踩了你的帖子' },
-  post_coin: { icon: '🪙', text: '给你的帖子投了币' },
   follow: { icon: '👥', text: '关注了你' },
   mention: { icon: '📣', text: '在内容里 @ 了你' },
   following_post: { icon: '🆕', text: '发布了新帖子' },
@@ -67,7 +66,7 @@ function notifHtml(item) {
         <span class="notif-action">${meta.text}</span>
       </div>
       ${
-        item.type === 'moderation' || item.type === 'system' || item.type === 'post_coin' || item.type === 'message' || item.type === 'team_announcement'
+        item.type === 'moderation' || item.type === 'system' || item.type === 'message' || item.type === 'team_announcement'
           || item.type === 'team_join_request' || item.type === 'team_join_approved' || item.type === 'team_join_rejected'
           ? item.excerpt
             ? `<div class="notif-excerpt">${esc(item.excerpt)}</div>`
@@ -118,7 +117,7 @@ async function viewNotifications(query) {
         <h1 style="font-size:20px">🔔 消息通知</h1>
         ${data.unreadCount > 0 ? `<button class="btn btn-sm" data-action="read-all">全部标为已读（${data.unreadCount}）</button>` : '<span class="tag">已全部读完</span>'}
       </div>
-      <div class="page-sub">有人回复、评价、投币、关注你或 @ 你时，这里会收到提醒。</div>
+      <div class="page-sub">有人回复、评价、关注你或 @ 你时，这里会收到提醒。</div>
       <div class="tabs" style="margin-top:12px">${tabs}</div>
     </section>
 

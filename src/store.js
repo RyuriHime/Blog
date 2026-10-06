@@ -1,14 +1,14 @@
 /**
  * 数据访问层：所有 SQL 都集中在这里，server.js 只负责 HTTP 与校验。
  *
- * 关于 POST_*_COLUMNS：开头的 6 个 `?` 依次是「浏览者参数」
- * （liked / disliked / my_coins / bookmarked / author_followed / reposted），
- * 拼接查询时必须先传 6 个 viewerId，再传过滤条件参数。
+ * 关于 POST_*_COLUMNS：开头的 5 个 `?` 依次是「浏览者参数」
+ * （liked / disliked / bookmarked / author_followed / reposted），
+ * 拼接查询时必须先传 5 个 viewerId，再传过滤条件参数。
  */
-import { COIN_RULES, MESSAGE_RULES, PROFILE_RULES } from './db.js';
+import { MESSAGE_RULES, PROFILE_RULES } from './db.js';
 import { addDays, parseDay, todayString } from './dates.js';
 
-const VIEWER_PARAM_COUNT = 6;
+const VIEWER_PARAM_COUNT = 5;
 
 /**
  * 拉黑过滤：把「我拉黑的人」和「拉黑了我的人」都排除掉。
@@ -29,7 +29,6 @@ const BLOCKED_COMMENTER_SQL = `r.user_id NOT IN (
 /* 单项计数的子查询（列表、详情共用，保证口径一致） */
 const LIKE_COUNT_SQL = "(SELECT COUNT(*) FROM reactions rx WHERE rx.post_id = p.id AND rx.kind = 'like')";
 const DISLIKE_COUNT_SQL = "(SELECT COUNT(*) FROM reactions rx WHERE rx.post_id = p.id AND rx.kind = 'dislike')";
-const COIN_COUNT_SQL = '(SELECT COALESCE(SUM(c.amount), 0) FROM coins c WHERE c.post_id = p.id)';
 const BOOKMARK_COUNT_SQL = '(SELECT COUNT(*) FROM bookmarks bm2 WHERE bm2.post_id = p.id)';
 const REPOST_COUNT_SQL = '(SELECT COUNT(*) FROM reposts rp WHERE rp.post_id = p.id)';
 const REPLY_COUNT_SQL = '(SELECT COUNT(*) FROM replies r WHERE r.post_id = p.id AND r.deleted = 0)';
@@ -44,12 +43,10 @@ const POST_LIST_COLUMNS = `
   ${REPLY_COUNT_SQL} AS reply_count,
   ${LIKE_COUNT_SQL} AS like_count,
   ${DISLIKE_COUNT_SQL} AS dislike_count,
-  ${COIN_COUNT_SQL} AS coin_count,
   ${BOOKMARK_COUNT_SQL} AS bookmark_count,
   ${REPOST_COUNT_SQL} AS repost_count,
   EXISTS (SELECT 1 FROM reactions rx WHERE rx.post_id = p.id AND rx.kind = 'like' AND rx.user_id = ?) AS liked,
   EXISTS (SELECT 1 FROM reactions rx WHERE rx.post_id = p.id AND rx.kind = 'dislike' AND rx.user_id = ?) AS disliked,
-  COALESCE((SELECT SUM(c.amount) FROM coins c WHERE c.post_id = p.id AND c.user_id = ?), 0) AS my_coins,
   EXISTS (SELECT 1 FROM bookmarks bm WHERE bm.post_id = p.id AND bm.user_id = ?) AS bookmarked,
   EXISTS (SELECT 1 FROM follows f WHERE f.follower_id = ? AND f.followee_id = p.user_id) AS author_followed,
   EXISTS (SELECT 1 FROM reposts rp2 WHERE rp2.post_id = p.id AND rp2.user_id = ?) AS reposted,
@@ -67,7 +64,7 @@ const SORTS = {
   // 个人主页：主页置顶优先，其次按时间
   profile: 'p.profile_pinned DESC, p.profile_pinned_at DESC, p.created_at DESC',
   hot: `p.pinned DESC,
-        (like_count * 4 + coin_count * 5 + reply_count * 3 - dislike_count * 2 + p.views * 0.1) DESC,
+        (like_count * 4 + reply_count * 3 - dislike_count * 2 + p.views * 0.1) DESC,
         p.created_at DESC`,
 };
 
@@ -76,16 +73,15 @@ export function createStore(db) {
     userByUsername: db.prepare('SELECT * FROM users WHERE username = ?'),
     userById: db.prepare('SELECT * FROM users WHERE id = ?'),
     insertUser: db.prepare(
-      `INSERT INTO users (username, display_name, password_hash, role, bio, banned, coin_balance, coin_refresh_at, created_at)
-       VALUES (?, ?, ?, ?, ?, 0, ?, ?, ?)`,
+      `INSERT INTO users (username, display_name, password_hash, role, bio, banned, created_at)
+       VALUES (?, ?, ?, ?, ?, 0, ?)`,
     ),
-    addCoinBalance: db.prepare('UPDATE users SET coin_balance = coin_balance + ? WHERE id = ?'),
     updateProfile: db.prepare('UPDATE users SET display_name = ?, bio = ? WHERE id = ?'),
     updateAvatar: db.prepare('UPDATE users SET avatar = ? WHERE id = ?'),
     updatePassword: db.prepare('UPDATE users SET password_hash = ? WHERE id = ?'),
     deleteOtherSessions: db.prepare('DELETE FROM sessions WHERE user_id = ? AND token <> ?'),
     listUsers: db.prepare(
-      `SELECT u.id, u.username, u.display_name, u.role, u.bio, u.avatar, u.banned, u.created_at, u.coin_balance,
+      `SELECT u.id, u.username, u.display_name, u.role, u.bio, u.avatar, u.banned, u.created_at,
               (SELECT COUNT(*) FROM posts p WHERE p.user_id = u.id AND p.deleted = 0) AS post_count,
               (SELECT COUNT(*) FROM replies r WHERE r.user_id = u.id AND r.deleted = 0) AS reply_count,
               (SELECT COUNT(*) FROM follows f WHERE f.followee_id = u.id) AS follower_count
@@ -112,7 +108,7 @@ export function createStore(db) {
     ),
     countUsers: db.prepare('SELECT COUNT(*) AS count FROM users'),
     userProfile: db.prepare(
-      `SELECT u.id, u.username, u.display_name, u.role, u.bio, u.avatar, u.created_at, u.coin_balance, u.banned,
+      `SELECT u.id, u.username, u.display_name, u.role, u.bio, u.avatar, u.created_at, u.banned,
               (SELECT COUNT(*) FROM posts p WHERE p.user_id = u.id AND p.deleted = 0) AS post_count,
               (SELECT COUNT(*) FROM replies r WHERE r.user_id = u.id AND r.deleted = 0) AS reply_count,
               (SELECT COUNT(*) FROM follows f WHERE f.followee_id = u.id) AS follower_count,
@@ -185,15 +181,6 @@ export function createStore(db) {
     ),
     deleteReaction: db.prepare('DELETE FROM reactions WHERE user_id = ? AND post_id = ?'),
     countReaction: db.prepare('SELECT COUNT(*) AS count FROM reactions WHERE post_id = ? AND kind = ?'),
-
-    coinByUserPost: db.prepare('SELECT amount FROM coins WHERE user_id = ? AND post_id = ?'),
-    upsertCoin: db.prepare(
-      `INSERT INTO coins (user_id, post_id, amount, created_at) VALUES (?, ?, ?, ?)
-       ON CONFLICT(user_id, post_id) DO UPDATE SET amount = amount + excluded.amount`,
-    ),
-    addCoins: db.prepare('UPDATE users SET coin_balance = coin_balance + ? WHERE id = ?'),
-    spendCoins: db.prepare('UPDATE users SET coin_balance = coin_balance - ? WHERE id = ?'),
-    totalCoins: db.prepare('SELECT COALESCE(SUM(amount), 0) AS total FROM coins WHERE post_id = ?'),
 
     deleteBookmark: db.prepare('DELETE FROM bookmarks WHERE user_id = ? AND post_id = ?'),
     insertBookmark: db.prepare(
@@ -425,7 +412,6 @@ export function createStore(db) {
   return {
     raw: db,
     ANON,
-    COIN_RULES,
     PROFILE_RULES,
 
     /* ---------------- 用户 ---------------- */
@@ -439,8 +425,6 @@ export function createStore(db) {
         passwordHash,
         role,
         bio,
-        COIN_RULES.signupGrant,
-        0,
         Date.now(),
       );
       return this.userById(Number(info.lastInsertRowid));
@@ -500,16 +484,6 @@ export function createStore(db) {
     },
 
     userProfile: (username) => statements.userProfile.get(username) ?? null,
-
-    /**
-     * 读取用户钱包（余额就存在 users.coin_balance 上）。
-     * 注意：已取消「每天补足」机制——余额只会在注册赠送、
-     * 别人投币给你时增加，不会随时间自动回涨。
-     * 列 coin_refresh_at 是历史遗留字段，现在只用于兼容旧库，不再读写。
-     */
-    wallet(userId) {
-      return statements.userById.get(userId) ?? null;
-    },
 
     stats() {
       return {
@@ -786,52 +760,6 @@ export function createStore(db) {
       };
     },
 
-    /* ---------------- 投币 ---------------- */
-    coinState(userId, postId) {
-      return {
-        balance: Number(this.wallet(userId)?.coin_balance ?? 0),
-        myCoins: Number(statements.coinByUserPost.get(userId, postId)?.amount ?? 0),
-        coinCount: Number(statements.totalCoins.get(postId).total),
-        perPostLimit: COIN_RULES.perPostLimit,
-        signupGrant: COIN_RULES.signupGrant,
-      };
-    },
-
-    /**
-     * 投币：单帖每人上限 2 币，余额不足则拒绝（没有每日补足，币要靠别人的投币赚），
-     * 投出的币会转进作者账户。
-     * @returns {{error?: string} & Record<string, unknown>}
-     */
-    giveCoin({ userId, postId, amount = 1 }) {
-      const user = this.wallet(userId);
-      if (!user) return { error: 'user_not_found' };
-      const post = this.postRow(postId);
-      if (!post || post.deleted) return { error: 'post_not_found' };
-      if (post.user_id === userId) return { error: 'self_coin' };
-
-      const mine = Number(statements.coinByUserPost.get(userId, postId)?.amount ?? 0);
-      const remaining = COIN_RULES.perPostLimit - mine;
-      if (remaining <= 0) {
-        return { error: 'per_post_limit', myCoins: mine, ...this.coinState(userId, postId) };
-      }
-      const give = Math.min(Math.max(1, Math.floor(amount)), remaining);
-      if (Number(user.coin_balance) < give) {
-        return { error: 'insufficient_coins', ...this.coinState(userId, postId) };
-      }
-
-      db.exec('BEGIN IMMEDIATE');
-      try {
-        statements.upsertCoin.run(userId, postId, give, Date.now());
-        statements.spendCoins.run(give, userId);
-        statements.addCoins.run(give, post.user_id);
-        db.exec('COMMIT');
-      } catch (error) {
-        db.exec('ROLLBACK');
-        throw error;
-      }
-      return { given: give, authorId: post.user_id, ...this.coinState(userId, postId) };
-    },
-
     /* ---------------- 收藏 ---------------- */
     toggleBookmark(userId, postId) {
       if (statements.hasBookmark.get(userId, postId)) {
@@ -1098,7 +1026,6 @@ export function createStore(db) {
           .count,
       );
       const reactions = Number(db.prepare('SELECT COUNT(*) AS count FROM reactions').get().count);
-      const coins = Number(db.prepare('SELECT COALESCE(SUM(amount), 0) AS total FROM coins').get().total);
       const follows = Number(db.prepare('SELECT COUNT(*) AS count FROM follows').get().count);
       const bookmarks = Number(db.prepare('SELECT COUNT(*) AS count FROM bookmarks').get().count);
       const hiddenPosts = Number(statements.countHiddenPosts.get().count);
@@ -1109,7 +1036,6 @@ export function createStore(db) {
         postsToday,
         repliesToday,
         reactions,
-        coins,
         follows,
         bookmarks,
         hiddenPosts,
@@ -1133,10 +1059,9 @@ export function createStore(db) {
         .prepare(
           `SELECT p.id, p.title, p.created_at,
                   (SELECT COUNT(*) FROM replies r WHERE r.post_id = p.id AND r.deleted = 0) AS reply_count,
-                  (SELECT COUNT(*) FROM reactions rx WHERE rx.post_id = p.id AND rx.kind = 'like') AS like_count,
-                  (SELECT COALESCE(SUM(c.amount), 0) FROM coins c WHERE c.post_id = p.id) AS coin_count
+                  (SELECT COUNT(*) FROM reactions rx WHERE rx.post_id = p.id AND rx.kind = 'like') AS like_count
            FROM posts p WHERE p.deleted = 0 AND p.hidden = 0
-           ORDER BY (like_count * 4 + coin_count * 5) DESC, p.created_at DESC LIMIT ?`,
+           ORDER BY (like_count * 4) DESC, p.created_at DESC LIMIT ?`,
         )
         .all(limit);
     },

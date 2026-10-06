@@ -8,7 +8,7 @@
 // 那时 `schemas` 必须已经满员。
 // 所以这里的 `schemas.addScript(...)` 是模块顶层语句（副作用导入），
 // 和 `src/core/tables.sql.js` 用的是同一个套路。
-// 顺序：`src/server.js` 先 import `./store.js`（它 import `./db.js` → 登记 17 张 core 表），
+// 顺序：`src/server.js` 先 import `./store.js`（它 import `./db.js` → 登记 14 张 core 表），
 // 再 import `./modules/index.js`（登记本模块的两张表）—— 所以 `feed_items.user_id`
 // 引用 `users(id)` 时外键目标已经存在。
 // （注意：上面别写出「函数名 + 左括号」的字样，scripts/check-skeleton.mjs 用行正则

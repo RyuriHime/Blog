@@ -16,7 +16,6 @@ const shapeUser = (row) =>
     bio: row.bio ?? '',
     avatar: row.avatar ?? '',
     banned: Boolean(row.banned),
-    ...(row.coin_balance === undefined ? {} : { coinBalance: Number(row.coin_balance) }),
     createdAt: row.created_at,
   };
 
@@ -42,10 +41,8 @@ function shapePostListRow(row) {
     replyCount: row.reply_count,
     likeCount: row.like_count,
     dislikeCount: row.dislike_count,
-    coinCount: row.coin_count,
     bookmarkCount: row.bookmark_count,
     repostCount: row.repost_count ?? 0,
-    myCoins: Number(row.my_coins ?? 0),
     liked: Boolean(row.liked),
     disliked: Boolean(row.disliked),
     bookmarked: Boolean(row.bookmarked),
@@ -154,7 +151,6 @@ const shapeProfile = (row, extra = {}) => ({
   avatar: row.avatar ?? '',
   banned: Boolean(row.banned),
   createdAt: row.created_at,
-  coinBalance: Number(row.coin_balance ?? 0),
   postCount: Number(row.post_count ?? 0),
   replyCount: Number(row.reply_count ?? 0),
   followerCount: Number(row.follower_count ?? 0),
@@ -233,58 +229,6 @@ function assertPinAllowed(user, { alreadyPinned = false } = {}) {
   );
 }
 
-/**
- * 计算「当前浏览者能不能给这篇帖子投币」，并把原因和提示文案一起返回。
- * 前端只负责展示，规则永远以服务端为准，避免两边逻辑不一致。
- */
-function coinAvailability(post, viewer) {
-  const rules = store.COIN_RULES;
-  const base = {
-    perPostLimit: rules.perPostLimit,
-    signupGrant: rules.signupGrant,
-    myCoins: 0,
-    balance: 0,
-  };
-
-  if (!viewer) {
-    return { ...base, available: false, reason: 'anonymous', message: '登录后才能投币' };
-  }
-
-  const state = store.coinState(viewer.id, post.id);
-  const common = { ...base, myCoins: state.myCoins, balance: state.balance };
-
-  if (post.author_id === viewer.id) {
-    return {
-      ...common,
-      available: false,
-      reason: 'self',
-      message: '不能给自己的帖子投币，把币留给别人吧 🙌',
-    };
-  }
-  if (state.myCoins >= rules.perPostLimit) {
-    return {
-      ...common,
-      available: false,
-      reason: 'per_post_limit',
-      message: `这篇帖子你已经投满 ${rules.perPostLimit} 币了`,
-    };
-  }
-  if (state.balance <= 0) {
-    return {
-      ...common,
-      available: false,
-      reason: 'insufficient_coins',
-      message: '币不够了：等别人给你的文章投币，攒够了再来',
-    };
-  }
-  return {
-    ...common,
-    available: true,
-    reason: 'ok',
-    message: `投 1 币给作者（可用 ${state.balance} 币，单帖上限 ${rules.perPostLimit} 币）`,
-  };
-}
-
 /* ------------------------------------------------------------------ */
 /* 路由表                                                              */
 /* ------------------------------------------------------------------ */
@@ -305,5 +249,4 @@ export {
   shapeCategory,
   resolveOwnCategory,
   assertPinAllowed,
-  coinAvailability,
 };

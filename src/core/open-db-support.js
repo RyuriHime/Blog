@@ -3,13 +3,13 @@
 //
 // 这里放的是「原来和 SCHEMA、openDatabase 挤在同一个文件里」的东西：
 //   SEED_BOARDS / SEED_USERS / 示例帖与回复数据 / migrate / seed / 六个 backfill*
-//   以及一堆规则常量（投币、个人主页、私信）。
+//   以及一堆规则常量（个人主页、私信）。
 // 单独拆出来的理由是让依赖方向保持单向：
 //   db.js → core/open-db.js → core/open-db-support.js
 // 如果把这些函数和常量留在 db.js、再让 open-db.js 回头 import，就形成 db.js ↔ open-db.js 的循环 import。
 //
 // 这些常量在本文件被 export 之后，由 src/db.js 尾部再 re-export 一次
-// （DEFAULT_BOARDS / COIN_RULES / PROFILE_RULES /
+// （DEFAULT_BOARDS / PROFILE_RULES /
 //   MESSAGE_RULES / ROLES / STAFF_ROLES），所以 src/store.js 等老调用方一行都不用改。
 import { DatabaseSync } from 'node:sqlite';
 import { hashPassword } from '../password.js';
@@ -31,14 +31,6 @@ export const SEED_USERS = [
   { username: 'carol', password: 'demo1234', display: 'Carol', role: 'member', bio: '产品经理，偶尔写点东西。' },
 ];
 
-/**
- * 投币经济：取消「每天补足」之后，币只从两个地方产生 ——
- *   1) 注册赠送（下面这个常量，一次性）
- *   2) 别人给你的文章投的币（币会转进作者账户）
- * 所以币是真正稀缺的：不能自投、单帖最多 2 币，投出去就没了。
- */
-export const COIN_SIGNUP_GRANT = 10;
-export const COIN_PER_POST_LIMIT = 2;
 export const PROFILE_PIN_LIMIT = 3;
 export const PROFILE_CATEGORY_LIMIT = 8;
 
@@ -78,7 +70,7 @@ const rows = db.prepare('SELECT * FROM posts WHERE deleted = 0').all();
 
 > 请勿发布广告、人身攻击或违法内容，违者封禁。
 
-看到好内容记得**点赞、投币、收藏**，喜欢作者可以直接**关注** TA 🔔
+看到好内容记得**点赞、收藏**，喜欢作者可以直接**关注** TA 🔔
 
 祝大家玩得开心 🎉`,
       replies: [
@@ -201,13 +193,12 @@ body { background: var(--bg); color: var(--fg); }
     {
       board: 'share',
       author: 'admin',
-      title: '论坛 v1.1 上线：消息通知、评价、投币与关注',
+      title: '论坛 v1.1 上线：消息通知、评价与关注',
       age: 2 * HOUR,
       content: `本次更新把社区互动补齐了：
 
-- 🔔 **消息通知**：有人回复、点赞、踩、投币、关注你，或 @ 提到你，都会推送
+- 🔔 **消息通知**：有人回复、点赞、踩、关注你，或 @ 提到你，都会推送
 - 👍👎 **评价**：点赞 / 踩二选一，可以随时改主意
-- 🪙 **投币**：每天 10 币额度，单个帖子最多投 2 币，币会真的进入作者账户
 - ⭐ **收藏**：在「我的收藏」里集中查看
 - 👥 **关注**：关注作者后，首页「我关注的」里只看 TA 们的帖子
 
@@ -215,7 +206,7 @@ body { background: var(--bg); color: var(--fg); }
       replies: [
         { author: 'alice', age: 1 * HOUR, content: '速度很快，UI 也清爽 👍' },
         { author: 'carol', age: 40 * 60 * 1000, content: '希望以后能加上消息通知 🔔' },
-        { author: 'bob', age: 25 * 60 * 1000, content: '投币额度挺合理，@站长 这个 @ 提醒能收到吗？' },
+        { author: 'bob', age: 25 * 60 * 1000, content: '试了下通知真的能收到，@站长 这个 @ 提醒也能用 👍' },
       ],
     },
   ];
@@ -240,8 +231,6 @@ export function ensureColumn(db, table, column, definition) {
 
 /** 兼容旧版本数据库：补齐新列，把老的 likes 表迁进 reactions 后删除。 */
 export function migrate(db) {
-  ensureColumn(db, 'users', 'coin_balance', 'INTEGER NOT NULL DEFAULT 10');
-  ensureColumn(db, 'users', 'coin_refresh_at', 'INTEGER NOT NULL DEFAULT 0');
   ensureColumn(db, 'users', 'avatar', "TEXT NOT NULL DEFAULT ''");
   ensureColumn(db, 'posts', 'category_id', 'INTEGER');
   ensureColumn(db, 'posts', 'profile_pinned', 'INTEGER NOT NULL DEFAULT 0');
@@ -287,8 +276,8 @@ export function seed(db) {
   }
 
   const insertUser = db.prepare(
-    `INSERT INTO users (username, display_name, password_hash, role, bio, banned, coin_balance, coin_refresh_at, created_at)
-     VALUES (?, ?, ?, ?, ?, 0, ?, ?, ?)`,
+    `INSERT INTO users (username, display_name, password_hash, role, bio, banned, created_at)
+     VALUES (?, ?, ?, ?, ?, 0, ?)`,
   );
   const userIds = new Map();
   SEED_USERS.forEach((user, index) => {
@@ -298,8 +287,6 @@ export function seed(db) {
       hashPassword(user.password),
       user.role,
       user.bio,
-      COIN_SIGNUP_GRANT,
-      0,
       now - (30 - index) * DAY,
     );
     userIds.set(user.username, Number(info.lastInsertRowid));
@@ -320,11 +307,7 @@ export function seed(db) {
   const insertReaction = db.prepare(
     'INSERT OR IGNORE INTO reactions (user_id, post_id, kind, created_at) VALUES (?, ?, ?, ?)',
   );
-  const insertCoin = db.prepare(
-    'INSERT OR IGNORE INTO coins (user_id, post_id, amount, created_at) VALUES (?, ?, ?, ?)',
-  );
 
-  const postIds = [];
   for (const post of buildSeedPosts(now)) {
     const createdAt = now - post.age;
     const info = insertPost.run(
@@ -338,7 +321,6 @@ export function seed(db) {
       createdAt,
     );
     const postId = Number(info.lastInsertRowid);
-    postIds.push(postId);
 
     for (const reply of post.replies) {
       insertReply.run(postId, userIds.get(reply.author), reply.content, now - reply.age);
@@ -369,22 +351,6 @@ export function seed(db) {
   ];
   for (const [follower, followee, age] of followPairs) {
     insertFollow.run(userIds.get(follower), userIds.get(followee), now - age);
-  }
-
-  // 给几篇帖子投币（同时把币记到作者账上）
-  const coinPlan = [
-    ['alice', postIds[1], 2],
-    ['carol', postIds[1], 1],
-    ['bob', postIds[0], 2],
-  ];
-  const creditAuthor = db.prepare(
-    'UPDATE users SET coin_balance = coin_balance + ? WHERE id = (SELECT user_id FROM posts WHERE id = ?)',
-  );
-  const debit = db.prepare('UPDATE users SET coin_balance = coin_balance - ? WHERE id = ?');
-  for (const [username, postId, amount] of coinPlan) {
-    insertCoin.run(userIds.get(username), postId, amount, now - 3 * HOUR);
-    debit.run(amount, userIds.get(username));
-    creditAuthor.run(amount, postId);
   }
 }
 
@@ -490,7 +456,7 @@ function welcomeNotifications(db) {  const insert = db.prepare(
 }
 
 /**
- * 通知回填：把已有的回复 / 评价 / 投币 / 关注转换成通知，
+ * 通知回填：把已有的回复 / 评价 / 关注转换成通知，
  * 这样从旧版本升级上来时消息中心也不会是空的。只在通知表为空时执行。
  */
 export function backfillNotifications(db) {
@@ -530,16 +496,6 @@ export function backfillNotifications(db) {
     .all();
   for (const row of reactions) {
     add(row.owner, row.actor, row.kind === 'like' ? 'post_like' : 'post_dislike', row.post_id, null, '', row.created_at);
-  }
-
-  const coins = db
-    .prepare(
-      `SELECT c.user_id AS actor, c.post_id, c.amount, c.created_at, p.user_id AS owner
-       FROM coins c JOIN posts p ON p.id = c.post_id`,
-    )
-    .all();
-  for (const row of coins) {
-    add(row.owner, row.actor, 'post_coin', row.post_id, null, `投了 ${row.amount} 币`, row.created_at);
   }
 
   const follows = db.prepare('SELECT follower_id, followee_id, created_at FROM follows').all();

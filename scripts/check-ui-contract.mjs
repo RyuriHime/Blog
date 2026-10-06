@@ -30,10 +30,13 @@ const BASE = `http://127.0.0.1:${PORT}`;
 
 /**
  * 不下降哨兵：接手的模块只允许加，不允许把这些数字改小。
- * 唯一一次**故意调小**：删掉签到与价值排行两套功能（用户要求删功能）之后，
+ * 第一次**故意调小**：删掉签到与价值排行两套功能（用户要求删功能）之后，
  * 13 条签到 / 排行榜断言随之删除、另加 7 条「删干净了」的守卫，实测 310，于是抬到 310。
+ * 第二次**故意调小**：删掉投币系统之后，投币相关的存在性断言（列表 coinCount/myCoins、
+ * 详情 post.coin、投币返回值、me.coinBalance 等）改成「不再有」，另加 8 条静态守卫
+ * （路由 / 常量 / coins 表 / 形状 / site / 通知类型 / 前端 / CSS），实测 314，抬到 314。
  */
-const MIN_CHECKS = Number(process.env.MIN_UI_CHECKS || 310);
+const MIN_CHECKS = Number(process.env.MIN_UI_CHECKS || 314);
 
 /**
  * 前端源码入口清单。搬家前这三份文件在 public/ 根目录；骨架会把它们拆进
@@ -209,7 +212,8 @@ check('主要表单都有错误提示容器（data-error）', formErrorBoxes >= 
 const lockedGuards = [
   ...serverJs.matchAll(/ensure\(!(?:post|bookmarkedPost)\.locked \|\| isStaff\(user\), 403, 'locked'/g),
 ].length;
-check('评价 / 投币 / 收藏 / 转发 / 回复 都有锁定守卫', lockedGuards >= 5, `找到 ${lockedGuards} 个`);
+/* 投币下线后这里从 5 变成 4：剩转发 / 收藏 / 回复 / 评价四条锁定守卫。 */
+check('评价 / 收藏 / 转发 / 回复 都有锁定守卫', lockedGuards >= 4, `找到 ${lockedGuards} 个`);
 
 check('select.mini-select 把紧凑内边距钉回来', /select\.mini-select\s*\{/.test(styleCss));
 check('.dm-composer 允许换行给错误提示留位置', /\.dm-composer\s*\{[^}]*flex-wrap:\s*wrap/.test(styleCss));
@@ -743,6 +747,47 @@ check(
   /78-repost\.css/.test(styleCss) && !/80-checkin-profile\.css|78-repost-ranking\.css/.test(styleCss),
 );
 
+/* 投币系统整体下线（用户要求删功能）的契约：守住「删干净了」。
+ *
+ * 这里比上面那组多一步**去注释**（复用第 250 行的 stripComments / appCode）：
+ * 别的开发者会在源码里留下「旧库不主动 DROP coins 表」「coin_refresh_at 是历史
+ * 遗留字段」这类说明，它们必须允许存在（而且应该存在，否则接手的人不知道旧库
+ * 为什么还留着表）。所以凡是会命中这些词组的守卫，一律拿去注释后的源码去测；
+ * 而下面那些**依赖注释**的守卫（例如 `只看 legacy_alter_table`）继续用原样的 serverJs。
+ */
+const serverCode = stripComments(serverJs);
+const cssCode = stripComments(styleCss);
+
+const tablesSqlJs = existsSync(join(ROOT, 'src', 'core', 'tables.sql.js'))
+  ? readFileSync(join(ROOT, 'src', 'core', 'tables.sql.js'), 'utf8')
+  : '';
+const coreIndexJs = existsSync(join(ROOT, 'src', 'modules', 'core', 'index.js'))
+  ? readFileSync(join(ROOT, 'src', 'modules', 'core', 'index.js'), 'utf8')
+  : '';
+
+check('服务端不再挂投币路由（POST /api/posts/:id/coin）', !/route\('POST', '\/api\/posts\/:id\/coin'/.test(serverCode));
+check(
+  '投币常量 / 钱包状态 / 可用性计算 / 币表语句全拔掉了',
+  !/COIN_RULES|COIN_SIGNUP_GRANT|COIN_PER_POST_LIMIT|coinAvailability|coinState|giveCoin|coinByUserPost|upsertCoin|addCoins|spendCoins|totalCoins|coin_count/.test(
+    serverCode,
+  ),
+);
+check(
+  '新库不再建 coins 表，core 的 owns 清单里也没有它',
+  !/CREATE TABLE(?: IF NOT EXISTS)?\s+coins\b/.test(stripComments(tablesSqlJs)) && !/'coins'/.test(stripComments(coreIndexJs)),
+);
+check(
+  '帖子形状里不再有 coinCount / myCoins，用户形状里不再有 coinBalance，积木 abilities 里不再有 canCoin',
+  !/coinCount|myCoins|coinBalance|canCoin/.test(serverCode),
+);
+check('/api/site 不再下发 coinRules', !/coinRules/.test(serverCode));
+check('通知类型里不再有 post_coin', !/post_coin/.test(serverCode));
+check(
+  '前端不再有投币按钮 / 投币字段 / canCoin / 「我的资产」卡',
+  !/data-action="coin"|coinRules|coinBalance|coinCount|myCoins|canCoin|post_coin|我的资产/.test(appCode),
+);
+check('样式里不再有 .coin-chip', !/\.coin-chip/.test(cssCode));
+
 /* ---------- 1b. 背景主题契约 ---------- */
 
 /** 取出某个主题在 style.css 里的变量块（dark 用 :root 作为默认值） */
@@ -943,8 +988,8 @@ try {
   check('site.boards[].slug/name/icon/postCount/replyCount/description', has(site, 'boards.0.slug') && has(site, 'boards.0.name') && has(site, 'boards.0.icon') && has(site, 'boards.0.postCount') && has(site, 'boards.0.replyCount') && has(site, 'boards.0.description'));
   check('site.stats.posts/replies/users', has(site, 'stats.posts') && has(site, 'stats.replies') && has(site, 'stats.users'));
   check(
-    'site.coinRules 投币规则（注册赠送 + 单帖上限，无每日补足）',
-    has(site, 'coinRules.signupGrant') && has(site, 'coinRules.perPostLimit') && !has(site, 'coinRules.dailyAllowance'),
+    'site 不再下发 coinRules（投币已下线）',
+    !has(site, 'coinRules') && site.coinRules === undefined,
     JSON.stringify(site.coinRules),
   );
   check('site.hotPosts[].id/title', has(site, 'hotPosts.0.id') && has(site, 'hotPosts.0.title'));
@@ -965,9 +1010,7 @@ try {
     'items.0.replyCount',
     'items.0.likeCount',
     'items.0.dislikeCount',
-    'items.0.coinCount',
     'items.0.bookmarkCount',
-    'items.0.myCoins',
     'items.0.liked',
     'items.0.disliked',
     'items.0.bookmarked',
@@ -988,7 +1031,12 @@ try {
   }
 
   const detail = (await admin(`/api/posts/${item.id}`)).json.data;
-  check('详情字段 post.contentHtml / post.myCoins / post.authorFollowed', has(detail, 'post.contentHtml') && has(detail, 'post.myCoins') && has(detail, 'post.authorFollowed'));
+  check('详情字段 post.contentHtml / post.authorFollowed', has(detail, 'post.contentHtml') && has(detail, 'post.authorFollowed'));
+  check(
+    '详情形状里没有 coin / coinCount / myCoins（投币已下线）',
+    !('coin' in (detail.post ?? {})) && !('coinCount' in (detail.post ?? {})) && !('myCoins' in (detail.post ?? {})),
+    JSON.stringify(Object.keys(detail.post ?? {})),
+  );
 
   /* ---------- v1.5：头像 ---------- */
 
@@ -1046,24 +1094,11 @@ try {
   check('重置头像返回空字符串', resetAvatar.json.data.user.avatar === '');
   check('非法头像类型被拒绝', (await admin('/api/me/avatar', { method: 'POST', body: { type: 'x' } })).status === 400);
 
-  check(
-    '详情下发投币可用性 post.coin（前端按钮状态依据）',
-    hasAll(detail.post.coin ?? {}, ['available', 'reason', 'message', 'myCoins', 'balance', 'perPostLimit', 'signupGrant']) &&
-      !has(detail.post.coin ?? {}, 'dailyAllowance'),
-    JSON.stringify(detail.post.coin),
-  );
-  const ownPost = list.items.find((row) => row.author.username === 'admin') ?? item;
-  const ownDetail = (await admin(`/api/posts/${ownPost.id}`)).json.data;
-  check(
-    '作者看自己的帖子时 coin.reason = self（按钮说明「不能给自己投币」）',
-    ownDetail.post.coin.reason === 'self' && ownDetail.post.coin.available === false,
-    JSON.stringify(ownDetail.post.coin),
-  );
   check('回复字段 replies[].contentHtml / author.displayName', has(detail, 'replies.0.contentHtml') && has(detail, 'replies.0.author.displayName'));
 
   const me = (await admin('/api/auth/me')).json.data;
   check('me.user.id/username/displayName/role', has(me, 'user.id') && has(me, 'user.username') && has(me, 'user.displayName') && has(me, 'user.role'));
-  check('me.user.coinBalance（侧栏余额卡片依赖）', has(me, 'user.coinBalance'));
+  check('me.user 不再有 coinBalance（投币已下线）', !('coinBalance' in me.user), JSON.stringify(Object.keys(me.user ?? {})));
   check('me.unread（消息铃铛依赖）', has(me, 'unread'));
 
   const created = (
@@ -1082,14 +1117,6 @@ try {
   );
   const dislike = (await admin(`/api/posts/${created.id}/reaction`, { method: 'POST', body: { kind: 'dislike' } })).json.data;
   check('踩会清掉赞', dislike.disliked === true && dislike.liked === false && dislike.likeCount === 0);
-
-  const otherPost = list.items.find((row) => row.author.username !== 'admin');
-  const coin = (await admin(`/api/posts/${otherPost.id}/coin`, { method: 'POST', body: { amount: 1 } })).json.data;
-  check(
-    '投币返回 given/myCoins/coinCount/balance/perPostLimit/signupGrant',
-    hasAll(coin, ['given', 'myCoins', 'coinCount', 'balance', 'perPostLimit', 'signupGrant']),
-    JSON.stringify(coin),
-  );
 
   const bookmark = (await admin(`/api/posts/${created.id}/bookmark`, { method: 'POST' })).json.data;
   check('收藏返回 bookmarked / bookmarkCount', hasAll(bookmark, ['bookmarked', 'bookmarkCount']));
@@ -1147,7 +1174,7 @@ try {
   );
 
   const following = (await admin('/api/me/following')).json.data;
-  check('我的关注返回 items/counts/coinBalance', Array.isArray(following.items) && has(following, 'counts.followerCount') && has(following, 'counts.followingCount') && has(following, 'coinBalance'), JSON.stringify(following.counts));
+  check('我的关注返回 items/counts（不含 coinBalance）', Array.isArray(following.items) && has(following, 'counts.followerCount') && has(following, 'counts.followingCount') && !('coinBalance' in following), JSON.stringify(following.counts));
 
   const notifications = (await admin('/api/notifications?perPage=20')).json.data;
   check(
@@ -1229,15 +1256,16 @@ try {
 
   const overview = (await admin('/api/admin/overview')).json.data;
   check(
-    '后台 stats 字段齐全',
-    ['users', 'posts', 'replies', 'reactions', 'coins', 'follows', 'bookmarks', 'postsToday', 'repliesToday', 'banned'].every(
+    '后台 stats 字段齐全（不再有 coins）',
+    ['users', 'posts', 'replies', 'reactions', 'follows', 'bookmarks', 'postsToday', 'repliesToday', 'banned'].every(
       (key) => key in overview.stats,
-    ),
+    ) && !('coins' in overview.stats),
     JSON.stringify(overview.stats),
   );
   check(
-    '后台 users[].postCount/replyCount/followerCount/coinBalance/banned/createdAt',
-    ['postCount', 'replyCount', 'followerCount', 'coinBalance', 'banned', 'createdAt'].every((key) => key in overview.users[0]),
+    '后台 users[].postCount/replyCount/followerCount/banned/createdAt（不再有 coinBalance）',
+    ['postCount', 'replyCount', 'followerCount', 'banned', 'createdAt'].every((key) => key in overview.users[0]) &&
+      !('coinBalance' in overview.users[0]),
   );
   check('后台 recentPosts[].author/board/views', ['author', 'board', 'views', 'createdAt'].every((key) => key in overview.recentPosts[0]));
 
@@ -1462,12 +1490,13 @@ try {
     body: { title: '契约用例', kind: 'post', scope: 'public', template: 'blank' },
   });
   check(
-    '积木：建文档返回 doc/blocks/html/warnings/abilities',
+    '积木：建文档返回 doc/blocks/html/warnings/abilities（abilities 里不再有 canCoin）',
     createdDoc.status === 200 &&
       hasAll(createdDoc.json.data ?? {}, ['doc', 'blocks', 'html', 'warnings', 'abilities']) &&
       hasAll(createdDoc.json.data.doc, ['id', 'kind', 'title', 'scope', 'anchorPostId', 'author', 'createdAt', 'updatedAt']) &&
       hasAll(createdDoc.json.data.doc.author, ['id', 'username', 'displayName', 'avatar', 'role']) &&
-      hasAll(createdDoc.json.data.abilities, ['canView', 'canEdit', 'canReact', 'canCoin']) &&
+      hasAll(createdDoc.json.data.abilities, ['canView', 'canEdit', 'canReact']) &&
+      !('canCoin' in createdDoc.json.data.abilities) &&
       typeof createdDoc.json.data.html === 'string' &&
       createdDoc.json.data.html.includes('doc-block'),
     JSON.stringify(createdDoc.json).slice(0, 300),

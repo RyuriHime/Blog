@@ -13,7 +13,7 @@ export default {
   name: 'core',
   /** core 用的是已有前缀，一块新功能必须给自己单独的 /api/<名字>/* 前缀。 */
   apiPrefix: '/api',
-  /** core 拥有的表：论坛本体现有全部 16 张（搬迁前后一字不差，顺序也不动）。 */
+  /** core 拥有的表：论坛本体现有全部 14 张（搬迁前后一字不差，顺序也不动）。 */
   owns: [
     'users',
     'sessions',
@@ -21,7 +21,6 @@ export default {
     'posts',
     'replies',
     'reactions',
-    'coins',
     'bookmarks',
     'follows',
     'notifications',
