@@ -7,6 +7,7 @@
  */
 import { MESSAGE_RULES, PROFILE_RULES } from './db.js';
 import { addDays, parseDay, todayString } from './dates.js';
+import { postListExclude } from './core/guards.js';
 
 const VIEWER_PARAM_COUNT = 5;
 
@@ -375,6 +376,14 @@ export function createStore(db) {
     const params = [];
     // 隐藏的文章默认对所有人不可见；管理员/作者查看时由调用方传 includeHidden
     if (!includeHidden) where.push('p.hidden = 0');
+    // 模块登记过的「结构性行」永远不进列表（典型：wiki 站里的页的影子行）。
+    // 它与 `hidden` 无关：个人主页给作者本人、staff 视角都带 includeHidden，
+    // 只靠 hidden 挡不住 —— 作者会在自己主页上看见 wiki 的每一页（用户报的 bug）。
+    const excluded = postListExclude();
+    if (excluded) {
+      where.push(excluded.clause);
+      params.push(...excluded.params);
+    }
     // 拉黑过滤：被拉黑的人看不到我的文章，我也看不到 TA 的
     if (hideBlockedFor && hideBlockedFor !== ANON) {
       where.push(BLOCKED_AUTHOR_SQL);

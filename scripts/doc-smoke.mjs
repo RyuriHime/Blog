@@ -2212,6 +2212,69 @@ try {
     const stationAnchor = scalar('SELECT p.hidden AS hidden FROM documents d JOIN posts p ON p.id = d.anchor_post_id WHERE d.id = ?', stationId);
     check('10.2 站自己的影子帖不藏（它就该出现在积木板块）', stationAnchor?.hidden === 0, JSON.stringify(stationAnchor));
 
+    // 10.2.1 「一个 wiki = 一篇帖子」：页的影子行**不进任何列表**。
+    //
+    // `hidden = 1` 只挡得住普通访客 —— 个人主页给作者本人、板块列表给 staff 时都会带
+    // `includeHidden`，于是作者会在自己主页上看见 wiki 的每一页（用户报的 bug：
+    // 「新增第二个页面副分类2 会被视为一个帖子显示在个人主页」）。
+    // 修法不是动文档层（wiki 底下还是积木文档），而是在帖子列表层加一把锁：
+    // doc 模块用 `addPostListExclude`（src/core/guards.js）登记「模板是 page 的行谁都不列」，
+    // `src/store.js` 的 `buildFilter()` 把它拼进**所有**列表的 WHERE。
+    const anchorOf = (id) => scalar('SELECT anchor_post_id AS id FROM documents WHERE id = ?', id)?.id;
+    const firstAnchor = anchorOf(firstId);
+    const secondAnchor = anchorOf(secondId);
+    const stationAnchorId = anchorOf(stationId);
+
+    const selfProfile = await author.call('/api/users/doc_author');
+    const selfPosts = (selfProfile.data?.posts ?? []).map((row) => row.id);
+    check(
+      '10.2.1 作者自己的主页不列 wiki 的页（includeHidden 挡不住的那条）',
+      selfProfile.status === 200 && !selfPosts.includes(firstAnchor) && !selfPosts.includes(secondAnchor),
+      `站=${stationAnchorId} 页=${firstAnchor}/${secondAnchor} 主页=${JSON.stringify(selfPosts.slice(0, 20))}`,
+    );
+    check(
+      '10.2.1 作者自己的主页照旧列这个 wiki（站本体就是那篇帖子）',
+      selfPosts.includes(stationAnchorId),
+      `want=${stationAnchorId} got=${JSON.stringify(selfPosts.slice(0, 20))}`,
+    );
+    const staffProfile = await staff.call('/api/users/doc_author');
+    const staffPosts = (staffProfile.data?.posts ?? []).map((row) => row.id);
+    check(
+      '10.2.1 staff 看别人主页也不列 wiki 的页（它不是「被隐藏的帖子」）',
+      staffProfile.status === 200 && !staffPosts.includes(firstAnchor) && !staffPosts.includes(secondAnchor),
+      JSON.stringify(staffPosts.slice(0, 20)),
+    );
+    const staffBoard = await staff.call('/api/posts?board=documents&perPage=30');
+    const boardIds = (staffBoard.data?.items ?? []).map((row) => row.id);
+    check(
+      '10.2.1 积木板块列表（staff 带 includeHidden）里 wiki 只有站本体那一条',
+      boardIds.includes(stationAnchorId) && !boardIds.includes(firstAnchor) && !boardIds.includes(secondAnchor),
+      `站=${stationAnchorId} 页=${firstAnchor}/${secondAnchor} 列表=${JSON.stringify(boardIds.slice(0, 20))}`,
+    );
+
+    // 机制的静态钉子：哪天有人把这把锁拆了、或者换成 `NOT IN (子查询)`（NULL 会让列表变空），这里就红。
+    const readText = (relative) => {
+      const full = join(ROOT, ...relative.split('/'));
+      return existsSync(full) ? readFileSync(full, 'utf8') : '';
+    };
+    const guardsSrc = readText('src/core/guards.js');
+    const storeSrc = readText('src/store.js');
+    const docIndexSrc = readText('src/modules/doc/index.js');
+    check(
+      '10.2.1 guards 提供 addPostListExclude / postListExclude',
+      /function addPostListExclude\(fn\)/.test(guardsSrc) && /function postListExclude\(\)/.test(guardsSrc) && /addPostListExclude,\s*\n\s*postListExclude,/.test(guardsSrc),
+    );
+    check(
+      '10.2.1 buildFilter 把登记过的结构性行拼进列表 WHERE（用 NOT EXISTS，不是 NOT IN）',
+      /const excluded = postListExclude\(\);/.test(storeSrc) && /where\.push\(excluded\.clause\)/.test(storeSrc),
+      storeSrc.slice(storeSrc.indexOf('buildFilter'), storeSrc.indexOf('buildFilter') + 700),
+    );
+    check(
+      '10.2.1 doc 模块登记的是 template=page（站本体不受影响）',
+      /addPostListExclude\(\(\) => \(\{\s*\n?\s*sql: `NOT EXISTS \(SELECT 1 FROM documents d WHERE d\.anchor_post_id = p\.id AND d\.template = '\$\{WIKI_TEMPLATE\}'\)`/.test(docIndexSrc),
+      docIndexSrc.slice(docIndexSrc.indexOf('addPostListExclude'), docIndexSrc.indexOf('addPostListExclude') + 320),
+    );
+
     // 10.3 三栏要的东西一次拿齐：树（前序 + depth）、ToC、上一页 / 下一页。
     const tree = await anon.call(`/api/docs/wiki/station?title=${encodeURIComponent('S10 测试站')}`);
     const pages = tree.data?.pages ?? [];

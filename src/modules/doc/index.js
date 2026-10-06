@@ -8,7 +8,7 @@
 // 所以下面的 `schemas.addScript(...)` 是模块顶层语句（副作用导入），
 // 和 `src/modules/feed/index.js`、`src/core/tables.sql.js` 用的是同一个套路。
 import { schemas } from '../../core/schema.js';
-import { addPostVisibility } from '../../core/guards.js';
+import { addPostListExclude, addPostVisibility } from '../../core/guards.js';
 import { DOC_SCHEMA } from './schema.js';
 import { migrateDocTables } from './migrate.js';
 import { createDocQueries } from './queries.js';
@@ -16,6 +16,7 @@ import { createDocStore } from './store.js';
 import { registerDocRoutes } from './routes.js';
 import { loadBlockTypes } from './blocks/index.js';
 import { createVisibility, detectTeams } from './visibility.js';
+import { WIKI_TEMPLATE } from './templates.js';
 
 // 副作用：登记本模块的十四张表（必须在开库之前，见文件头注释）。
 schemas.addScript(DOC_SCHEMA, 'doc');
@@ -69,6 +70,18 @@ export default {
       const row = queries.documentByAnchor(post.id);
       return Boolean(row && canView(row, reqCtx?.user));
     });
+
+    // wiki 站的**页**不是帖子：一个 wiki 是一篇帖子，页是站里的内容。
+    //
+    // 页照样留影子行（赞 / 收藏 / 通知全认 `posts.id`），它也被 `hidden = 1` 藏进了
+    // 积木板块 —— 但 `hidden` 挡不住带 `includeHidden` 的列表：作者打开**自己的**
+    // 个人主页就能看见 wiki 的每一页（staff 视角同理），看起来像「一个 wiki 发了一堆帖子」。
+    // 所以这里给 core 的列表再上一把锁：模板是 `page` 的文档，它的影子行**谁都别列**。
+    // 站本身（`template = 'station'`）不在此列 —— 它就该以一篇帖子的身份出现在主页上。
+    addPostListExclude(() => ({
+      sql: `NOT EXISTS (SELECT 1 FROM documents d WHERE d.anchor_post_id = p.id AND d.template = '${WIKI_TEMPLATE}')`,
+      params: [],
+    }));
 
     registerDocRoutes(ctx, { store, queries });
   },

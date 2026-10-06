@@ -44,6 +44,46 @@ function addPostVisibility(fn) {
 }
 
 /**
+ * 「这条帖子根本不该出现在任何列表里」——业务模块登记的结构性行。
+ *
+ * 典型：wiki 站里的**页**。页是站里的内容，站才是那篇帖子；页也留了影子行
+ * （赞 / 收藏 / 通知全认 `posts.id`），但列表里出现它就成了「一个 wiki 发了一堆帖子」。
+ * `hidden = 1` 挡不住这种泄露：个人主页与 staff 视角会带 `includeHidden`，
+ * 作者在自己主页上就能看见每一页（这正是用户报的那个 bug）。
+ *
+ * 与 `postVisibility` 正好相反 —— 那个只**放行**进详情，这个**谁都拦**在列表外
+ * （作者与 staff 一样拦，因为它压根不是一篇帖子）。
+ *
+ * 登记的函数返回 `{ sql, params }`：`sql` 里用别名 `p` 引用 posts 那一行，
+ * 返回 null 表示此刻没有要排的行。**别用 `NOT IN (子查询)`**：子查询里出现 NULL
+ * 会让整条 `NOT IN` 变成 NULL，列表会一条不剩（用 `NOT EXISTS`）。
+ */
+const postListExcludes = [];
+
+/** 登记一条「列表里排除」条件：`fn() -> { sql, params } | null`。 */
+function addPostListExclude(fn) {
+  if (typeof fn === 'function') postListExcludes.push(fn);
+}
+
+/** 把登记过的条件拼成一段 SQL（含参数）。没有登记就回 null。 */
+function postListExclude() {
+  const clauses = [];
+  const params = [];
+  for (const fn of postListExcludes) {
+    let item = null;
+    try {
+      item = fn();
+    } catch {
+      item = null; // 登记方自己炸了不该把整个列表带崩
+    }
+    if (!item?.sql) continue;
+    clauses.push(`(${item.sql})`);
+    if (Array.isArray(item.params)) params.push(...item.params);
+  }
+  return clauses.length ? { clause: clauses.join(' AND '), params } : null;
+}
+
+/**
  * 隐藏的文章对普通访客和搜索引擎都不存在：
  * 只有站务、作者本人，或**登记过的判定**放行的人能打开，其它人一律按「不存在」处理。
  */
@@ -58,4 +98,14 @@ function assertPostVisible(post, ctx) {
     '帖子不存在或已被删除',
   );
 }
-export { isOwner, isStaff, requireUser, requireStaff, requireOwner, assertPostVisible, addPostVisibility };
+export {
+  isOwner,
+  isStaff,
+  requireUser,
+  requireStaff,
+  requireOwner,
+  assertPostVisible,
+  addPostVisibility,
+  addPostListExclude,
+  postListExclude,
+};

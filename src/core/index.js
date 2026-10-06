@@ -2,7 +2,17 @@
 // 好处是以后要挪文件、换实现，改动只落在这个文件里。
 export { HttpError, ensure, ok, res_, sendJson, readJsonBody, parseCookies, rateLimit, field, buckets } from './http.js';
 export { route, routes } from './router.js';
-export { isOwner, isStaff, requireUser, requireStaff, requireOwner, assertPostVisible, addPostVisibility } from './guards.js';
+export {
+  isOwner,
+  isStaff,
+  requireUser,
+  requireStaff,
+  requireOwner,
+  assertPostVisible,
+  addPostVisibility,
+  addPostListExclude,
+  postListExclude,
+} from './guards.js';
 export * from './shape.js';
 export { issueSession, sessionCookie, resolveUser, sniffImageType, saveAvatarFile, removeAvatarFile } from './sessions.js';
 export { serveAvatar, serveStatic, MIME } from './static.js';
