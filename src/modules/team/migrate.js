@@ -62,7 +62,8 @@ function backfillJoinCodes(db) {
  *   1) `PRAGMA foreign_keys = OFF` 必须在 `BEGIN` **之前**：PRAGMA 在事务里改不动。
  *   2) 关外键还有一个作用 —— `ALTER TABLE ... RENAME` 在开着外键时会把别的表里
  *      的 `REFERENCES teams(id)` 一并改写成指向 `teams_old`（team_members / team_posts /
- *      team_replies / team_files / team_messages 五张表都引用它），关掉才不会改写。
+ *      team_replies / team_files / team_messages / team_join_requests 六张表都引用它），
+ *      关掉才不会改写。
  *   3) 索引被 RENAME 带走、又随 `DROP` 一起消失，所以先把它们的 SQL 抓在手里，
  *      等新表建好、旧表删掉之后再逐条重跑。
  */

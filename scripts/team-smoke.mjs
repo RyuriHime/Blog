@@ -167,7 +167,7 @@ try {
       .map((row) => row.name)
       .sort();
     check(
-      '验收①：teams / team_members / team_posts / team_files / team_messages 五张表都在库里',
+      '验收①：teams / team_members / team_posts / team_files / team_messages 五张表都在库里（加入申请那轮又多了 team_replies 与 team_join_requests）',
       names.join(',') === 'team_files,team_members,team_messages,team_posts,teams',
       names.join(','),
     );

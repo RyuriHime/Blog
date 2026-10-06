@@ -36,7 +36,7 @@ import { createTeamQueries } from './queries.js';
 import { registerTeamRoutes } from './routes.js';
 import { TEAM_SCHEMA } from './schema.js';
 
-// 副作用：登记本模块的五张表（必须在开库之前，见文件头注释）。
+// 副作用：登记本模块的七张表（必须在开库之前，见文件头注释）。
 schemas.addScript(TEAM_SCHEMA, 'team');
 
 export default {
