@@ -90,7 +90,9 @@ check('定义了 function renderGraphPage(', /function renderGraphPage\(/.test(a
 // 路由分发现在在 `public/core/router.js` 里，而且调用带命名空间前缀（`Graph.viewGraph()`）。
 // 正则写成「`viewGraph()` 结尾」即可兼容两种写法，不必锁死前缀。
 check('路由已接上 #/graph', /if \(first === 'graph'\) return await [\w.]*viewGraph\(\);/.test(app));
-check('侧栏有「知识网络图」入口', /class="side-link" href="#\/graph"/.test(app));
+// P5：这个入口从侧栏搬到了顶栏「发动态」旁边（public/core/session.js 里的 .top-link）。
+// 断言放宽成「顶栏或侧栏有它」，但仍然是「锚点 + 链接类名 + 正确 href」，不会变成恒真。
+check('界面上有「知识网络图」入口（顶栏或侧栏）', /class="(?:side-link|top-link)" href="#\/graph"/.test(app));
 check(
   '侧栏入口和路由用的同一个地址',
   /href="#\/graph"/.test(app) && /first === 'graph'/.test(app),
