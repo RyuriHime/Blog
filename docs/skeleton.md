@@ -232,12 +232,12 @@ scope = 'public' | 'followers' | 'team' | 'private'
 | --- | --- | --- |
 | `check-golden.mjs` | **行为金标准**：96 条固定请求的状态码 + 响应结构 | 96 项 0 差异 |
 | `check-skeleton.mjs` | 骨架本身：模块解耦证明 + 薄入口行数 + 表归属 | 47 项 |
-| `check-frontend.mjs` | **前端整页渲染**：最小 DOM 垫片 + 真响应假数据，30 个页面全渲染 | 30/30 |
+| `check-frontend.mjs` | **前端整页渲染**：最小 DOM 垫片 + 真响应假数据，34 个页面全渲染 | 34/34 |
 | `smoke.mjs` | 后端端到端（起真服务打接口） | 253 项 |
 | `smoke-ai.mjs` | AI 接口端到端 | 61 项 |
-| `feed-smoke.mjs` / `doc-smoke.mjs` / `team-smoke.mjs` | 动态流 / 积木 / 团队的接口端到端 | 95 / 392 / 97 项 |
-| `check-ui-contract.mjs` | 前端类名 / API 字段 / 主题 / 头像 / 角色 / 私信结构 | 219 项 |
-| `check-encoding.mjs` | 编码体检（BOM / 乱码 / 关键中文片段） | 183 文件 / 87 断言 |
+| `feed-smoke.mjs` / `doc-smoke.mjs` / `team-smoke.mjs` | 动态流 / 积木 / 团队的接口端到端 | 95 / 469 / 190 项 |
+| `check-ui-contract.mjs` | 前端类名 / API 字段 / 主题 / 头像 / 角色 / 私信 / 团队 / 剪贴板 / 公式结构 | 258 项 |
+| `check-encoding.mjs` | 编码体检（BOM / 乱码 / 关键中文片段） | 193 文件 / 87 断言 |
 | `check-notes-ui.mjs` | 笔记的前端结构 | 33 项 |
 | `notes-smoke.mjs` / `forum-ai/selftest.mjs` / `note-studio/tests/run.mjs` | 子系统 | 44 / 92 / — |
 | `note-agent/scripts/run-tests.mjs` | note-agent | CI 上跑（本机受限沙箱下 spawn 管道会 EPERM） |

@@ -942,6 +942,96 @@ if (!state.theme) problems.push('state.theme 没被初始化');
   }
 }
 
+/* ---- 交互：团队帖的「👁 预览」真的去问了服务端、也真的把结果摆出来 ----
+ *
+ * 为什么单独测这一条：`预览` 是纯前端动作，渲染断言只能证明按钮画出来了。
+ * 真正会坏的地方只有点一下才看得见：
+ *   ① `/api/markdown/preview` 发了没有、请求体里装的是不是输入框里的原文
+ *      （装错了 = 预览的和发出去的永远不是一回事）；
+ *   ② 回来的 HTML 有没有塞进预览盒、盒子有没有从 hidden 里放出来
+ *      （漏了任何一步 = 用户点了按钮什么都没发生）；
+ *   ③ 再点一次和空内容时**不该**再发请求（收起是纯本地动作，空内容本地就能判断）。
+ *
+ * 公式排版（`ntRenderMath`）在这一层测不到：它要等 KaTeX 脚本 onload，
+ * 而假 DOM 的 `head.appendChild()` 是空实现，那个 promise 永远不会 settle ——
+ * 不崩，但也不会跑。公式那一段由 `check-ui-contract.mjs` 的静态守卫盯着。
+ */
+{
+  try {
+    const team = await view('team.js');
+    // 发帖框是塞进 `[data-team-composer]` 的（team.js:823-824），
+    // 而假 DOM 不解析 HTML —— `[data-team-editor]` 只是同一段字符串里的一个标记，
+    // 它的 innerHTML 永远是空串，断言必须打在前者身上。
+    const composerBox = registered('[data-team-composer]');
+    const textarea = registered('[data-team-field="content"]');
+    const previewBox = registered('[data-team-preview]');
+
+    await team.viewTeam('frontend-group', new Map());
+    await settle();
+    if (!String(composerBox.innerHTML).includes('data-team-editor')) {
+      problems.push('团队成员看自己的团队页时，没有出现发帖框（data-team-editor）');
+    }
+    if (!String(composerBox.innerHTML).includes('data-team-preview')) {
+      problems.push('发帖框里没有预览盒（data-team-preview）');
+    }
+    if (!String(composerBox.innerHTML).includes('data-team-action="preview"')) {
+      problems.push('发帖框里没有「预览」按钮');
+    }
+    if (!String(composerBox.innerHTML).includes('LaTeX')) {
+      problems.push('发帖框的提示里没有告诉用户支持 Markdown 与 $LaTeX$');
+    }
+
+    // `togglePreview` 先 `node.closest('[data-team-editor]')` 找到外壳，
+    // 再在外壳里 `querySelector` 那两个盒子。外壳的 querySelector 默认就是
+    // `registered(selector)`（makeElement 里那行），正好接上，只需要把按钮的 closest 补全。
+    const previewNode = makeElement('button');
+    previewNode.dataset.teamAction = 'preview';
+    previewNode.closest = (selector) =>
+      selector === '[data-team-action]' ? previewNode : selector === '[data-team-editor]' ? registered('[data-team-editor]') : null;
+
+    /* ① 写点东西点预览：要发请求、发的是原文、结果要摆出来 */
+    textarea.value = '**重点**：质能方程 $E=mc^2$';
+    previewBox.hidden = true;
+    previewBox.innerHTML = '';
+    REQUESTS.length = 0;
+    dispatch(app, 'click', previewNode);
+    await settle();
+
+    const preview = REQUESTS.find((item) => item.method === 'POST' && item.url.split('?')[0] === '/api/markdown/preview');
+    if (!preview) problems.push('点「预览」之后没有去请求 /api/markdown/preview');
+    else if (preview.body?.content !== '**重点**：质能方程 $E=mc^2$') {
+      problems.push(`预览请求里装的不是输入框里的原文：${JSON.stringify(preview.body?.content)}`);
+    }
+    if (previewBox.hidden) problems.push('点「预览」之后预览盒还是藏着的（用户什么都看不到）');
+    if (!String(previewBox.innerHTML).includes('<p>ok</p>')) problems.push('预览回来的 HTML 没有塞进预览盒');
+    if (!String(previewNode.textContent).includes('收起')) problems.push('展开预览之后按钮没有变成「收起预览」');
+
+    /* ② 再点一次：收起来，且**不该**再问一次服务端 */
+    REQUESTS.length = 0;
+    dispatch(app, 'click', previewNode);
+    await settle();
+    if (!previewBox.hidden) problems.push('再点一次没有把预览盒藏回去');
+    if (REQUESTS.some((item) => item.url.includes('/api/markdown/preview'))) {
+      problems.push('收起预览时又发了一次预览请求（收起是纯本地动作）');
+    }
+
+    /* ③ 空内容：本地就该说「还没写内容」，别拿空白去问服务端 */
+    textarea.value = '   ';
+    REQUESTS.length = 0;
+    dispatch(app, 'click', previewNode);
+    await settle();
+    if (!String(previewBox.innerHTML).includes('还没写内容')) problems.push('内容为空时预览盒没有给出提示');
+    if (REQUESTS.some((item) => item.url.includes('/api/markdown/preview'))) {
+      problems.push('内容为空还是去问了服务端（本地就能判断）');
+    }
+
+    console.log(`  ${problems.length ? '❌' : '✅'} 交互：团队帖预览会问服务端、会摆结果、收起与空内容不再发请求`);
+  } catch (error) {
+    problems.push(`团队帖预览交互测试自身崩了：${error?.stack || error}`);
+    console.log('  ❌ 交互：团队帖预览会问服务端、会摆结果、收起与空内容不再发请求');
+  }
+}
+
 /* ---- 交互：凭团队号加入 + 团队公告的编辑与保存 ----
  *
  * 为什么单独测这一条：

@@ -259,6 +259,28 @@ try {
   check('读回来的正文是原文', readBack.data?.post?.content === '时间定在周五晚上。');
   check('帖子带 contentHtml（服务端渲染，前端不自己拼 Markdown）', typeof readBack.data?.post?.contentHtml === 'string' && readBack.data.post.contentHtml.length > 0);
 
+  /* 正文走的是站点共用那份 `src/markdown.js`。它只做 Markdown，**从不排公式** ——
+   * `$…$` / `$$…$$` 原样留在 HTML 里，排版权归客户端的 `ntRenderMath`（离线 KaTeX）。
+   * 所以这一条同时钉两件事：服务端要**渲染** Markdown，也要**别碰**公式源码
+   * （一旦被转义或拆开，前端那个 auto-render 就再也配不上这对定界符，公式永远出不来）。
+   * 漏掉这件事时的表现是「帖子里 $E=mc^2$ 就是一段等宽源码」，而渲染断言照样绿。 */
+  const mdPost = await owner.client.call(`${teamPath}/posts`, {
+    method: 'POST',
+    body: {
+      title: 'Markdown 与公式',
+      content: '**重点**：质能方程 $E=mc^2$。\n\n$$\n\\int_0^1 x^2 dx = \\frac{1}{3}\n$$',
+      scope: 'team',
+    },
+  });
+  const mdHtml = String(mdPost.data?.post?.contentHtml ?? '');
+  check('团队帖的 Markdown 真被渲染成 HTML（**重点** → <strong>重点</strong>）', mdHtml.includes('<strong>重点</strong>'), mdHtml);
+  check('行内公式原样留着 $E=mc^2$（服务端排不了，交给客户端 KaTeX）', mdHtml.includes('$E=mc^2$'), mdHtml);
+  check(
+    '块级公式也原样留着 $$…$$，没有被拆进别的标签里',
+    mdHtml.includes('$$\\int_0^1 x^2 dx = \\frac{1}{3}$$'),
+    mdHtml,
+  );
+
   const ownerList = await owner.client.call(`${teamPath}/posts`);
   check('团队成员在列表里能看到这条帖', (ownerList.data?.items ?? []).some((item) => item.id === postId));
   check('列表带回我在这支团队里的角色', ownerList.data?.myRole === 'owner', String(ownerList.data?.myRole));

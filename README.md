@@ -662,13 +662,13 @@ team_messages(id, team_id, user_id, content, deleted, created_at)
 ```bash
 node scripts/check-golden.mjs      # ★ 行为金标准：96 条请求的状态码 + 响应结构，一条都不能变
 node scripts/check-skeleton.mjs    # ★ 骨架自检：模块能不能独立拆掉、薄入口有没有变胖
-node scripts/check-frontend.mjs    # ★ 前端渲染冒烟：33 个页面全部渲染一遍 + 团队的文件柜/群聊/成员名单/团队号/公告交互 + 裸调用未定义名字的静态扫描
+node scripts/check-frontend.mjs    # ★ 前端渲染冒烟：34 个页面全部渲染一遍 + 团队的文件柜/群聊/成员名单/团队号/公告/帖子预览交互 + 裸调用未定义名字的静态扫描
 node scripts/smoke.mjs             # 后端端到端：253 项（临时独立库+端口，跑完自动清理）
 node scripts/smoke-ai.mjs          # AI 接口端到端：61 项
 node scripts/feed-smoke.mjs        # 动态流端到端：95 项
 node scripts/doc-smoke.mjs         # 积木（可编程帖子）端到端：469 项
-node scripts/team-smoke.mjs        # 团队端到端：187 项（可见范围 / 越权 / 版本冲突 / 文件柜 / 群聊 / 团队号 / 公告通知）
-node scripts/check-ui-contract.mjs # 前端契约：CSS 类名 + API 字段 + 主题/头像/角色/私信/团队号/公告结构（通过项数不下降哨兵：242）
+node scripts/team-smoke.mjs        # 团队端到端：190 项（可见范围 / 越权 / 版本冲突 / 文件柜 / 群聊 / 团队号 / 公告通知 / Markdown 与公式）
+node scripts/check-ui-contract.mjs # 前端契约：CSS 类名 + API 字段 + 主题/头像/角色/私信/团队号/公告/剪贴板/公式结构（通过项数不下降哨兵：258）
 node scripts/check-encoding.mjs    # 源码编码体检：BOM / 乱码 / 关键中文内容
 node scripts/check-notes-ui.mjs    # 笔记 UI
 node scripts/notes-smoke.mjs       # 笔记接口
@@ -680,9 +680,9 @@ node scripts/capture-fixtures.mjs  # 重采前端冒烟用的假数据（改了�
 一次跑完（`npm test` 就是前 12 组）：
 
 ```
-check-encoding 188 文件 / 87 断言 · check-skeleton 47 项 · check-golden 96 项 0 差异
-check-frontend 33 个页面 + 31 个模块静态扫描 · smoke 253 · smoke-ai 61 · feed-smoke 95
-doc-smoke 469 · team-smoke 187 · check-ui-contract 242 · check-notes-ui 33 · notes-smoke 44
+check-encoding 193 文件 / 87 断言 · check-skeleton 47 项 · check-golden 96 项 0 差异
+check-frontend 34 个页面 + 32 个模块静态扫描 · smoke 253 · smoke-ai 61 · feed-smoke 95
+doc-smoke 469 · team-smoke 190 · check-ui-contract 258 · check-notes-ui 33 · notes-smoke 44
 ```
 
 > 知识网络图（`knowledge-pack/` + `#/graph` + `/api/knowledge/*`）已在 2026-10 整条链路删除：
