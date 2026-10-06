@@ -2218,6 +2218,28 @@ try {
       check('10.8 收编是幂等的（第二次打开不报错、不改归属）', again2.status === 200, `${again2.status}`);
     }
 
+    // 10.8b 匿名的「全量收编」也要做完整。
+    // 线上就是这么被触发的（老链接 / 爬虫先到），以前执行人只传给了建站、没传给挂页，
+    // 结果是「站建出来了、页一个都没挂上」的半吊子迁移。
+    {
+      const stray = await author.call('/api/docs', {
+        method: 'POST',
+        body: {
+          title: 'S10 又一片野页',
+          kind: 'post',
+          scope: 'public',
+          template: 'page',
+          blocks: [{ block_id: 'b1', type: 'paragraph', props: { text: '匿名也要收编' } }],
+        },
+      });
+      const strayId = stray.data?.doc?.id;
+      check('10.8b 造出新的孤儿页', Number.isInteger(strayId), `${stray.status} ${JSON.stringify(stray.error)}`);
+      const oldest = scalar("SELECT d.user_id AS user_id FROM documents d LEFT JOIN doc_settings s ON s.document_id = d.id WHERE d.template = 'page' AND d.deleted = 0 AND COALESCE(s.station_id, 0) = 0 ORDER BY d.id ASC LIMIT 1");
+      await anon.call('/api/docs/wiki');
+      const left = scalar("SELECT COUNT(*) AS n FROM documents d LEFT JOIN doc_settings s ON s.document_id = d.id WHERE d.template = 'page' AND d.deleted = 0 AND COALESCE(s.station_id, 0) = 0 AND d.user_id = ?", oldest?.user_id);
+      check('10.8b 匿名访客打开站列表也会把老页收编完（不留半吊子迁移）', Number(left?.n ?? -1) === 0, JSON.stringify({ oldest, left }));
+    }
+
     // 10.9 前端接线：三栏页面、站列表、`#/wiki` 都能落地。
     const docJs = readFileSync(join(ROOT, 'public', 'views', 'doc.js'), 'utf8');
     const routerJs = readFileSync(join(ROOT, 'public', 'core', 'router.js'), 'utf8');

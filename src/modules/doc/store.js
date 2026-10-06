@@ -1166,13 +1166,17 @@ export function createDocStore({ db, queries, now = () => Date.now() }) {
   function ensurePagesAttached({ viewer } = {}) {
     const orphans = queries.orphanPages(200);
     if (orphans.length === 0) return { attached: 0, stationId: 0 };
-    const station = ensureDefaultStation({ viewer: viewer ?? { id: orphans[0].user_id } });
+    // 匿名访客触发（老链接点进来、站列表被爬）时，以第一篇孤儿页的作者当这次迁移的
+    // 「执行人」：收编是系统动作，但改归属得有人担责，用页作者自己最稳 —— 别人的页照旧不碰。
+    // 不这样做会出现「站建出来了、页一个都没挂上」的半吊子状态。
+    const actor = viewer ?? { id: orphans[0].user_id };
+    const station = ensureDefaultStation({ viewer: actor });
     let attached = 0;
     for (const page of orphans) {
       const pageRow = mustExist(page.id);
       // 只有页的作者（或 staff）能把它挂上：替别人改归属是越权。
-      if (!canEdit(pageRow, viewer)) continue;
-      attachPageToStation({ station, pageRow, viewer });
+      if (!canEdit(pageRow, actor)) continue;
+      attachPageToStation({ station, pageRow, viewer: actor });
       attached += 1;
     }
     return { attached, stationId: station.id };
