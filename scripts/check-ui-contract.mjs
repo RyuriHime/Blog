@@ -29,7 +29,7 @@ const PORT = Number(process.env.CONTRACT_PORT || 3412);
 const BASE = `http://127.0.0.1:${PORT}`;
 
 /** 不下降哨兵：接手的模块只允许加，不允许把这些数字改小。 */
-const MIN_CHECKS = Number(process.env.MIN_UI_CHECKS || 219);
+const MIN_CHECKS = Number(process.env.MIN_UI_CHECKS || 221);
 
 /**
  * 前端源码入口清单。搬家前这三份文件在 public/ 根目录；骨架会把它们拆进
@@ -209,6 +209,14 @@ check('评价 / 投币 / 收藏 / 转发 / 回复 都有锁定守卫', lockedGua
 
 check('select.mini-select 把紧凑内边距钉回来', /select\.mini-select\s*\{/.test(styleCss));
 check('.dm-composer 允许换行给错误提示留位置', /\.dm-composer\s*\{[^}]*flex-wrap:\s*wrap/.test(styleCss));
+
+// 团队（P4）的路由和接口都做完了，但侧栏一直没加入口 —— 上线之后只能手打 `#/teams`
+// 才进得去，等于功能不可达。这两条守住入口，别再掉。
+check('侧栏有「团队广场」入口', /class="side-link" href="#\/teams"/.test(appJs));
+check(
+  '团队入口和路由用的同一个地址',
+  /href="#\/teams"/.test(appJs) && /first === 'teams'/.test(appJs),
+);
 
 /* ---------- 1b. 背景主题契约 ---------- */
 

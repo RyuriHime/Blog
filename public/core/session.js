@@ -48,6 +48,7 @@ function renderUserArea() {
       <a class="menu-item" href="#/following">👥 我的关注</a>
       <a class="menu-item" href="#/bookmarks">⭐ 我的收藏</a>
       <a class="menu-item" href="#/docs">🧩 积木广场</a>
+      <a class="menu-item" href="#/teams">👥 团队广场</a>
       <a class="menu-item" href="#/settings">⚙️ 账号设置</a>
       <a class="menu-item" href="#/new">✏️ 发布新帖</a>
       ${Fmt.isStaffUser(me) ? '<a class="menu-item" href="#/admin">🛠️ 管理后台</a>' : ''}
@@ -153,6 +154,13 @@ function renderSidebar() {
       <div class="side-links">
         <a class="side-link" href="#/docs">🧩 积木广场</a>
         <a class="side-link" href="#/blocks">🧱 块类型表</a>
+      </div>
+    </div>
+    <div class="card card-tight">
+      <div class="card-head"><span class="card-title">👥 团队</span><a class="tag" href="#/teams">全部</a></div>
+      <div class="side-links">
+        <a class="side-link" href="#/teams">👥 团队广场</a>
+        <a class="side-link" href="#/teams?mine=1">🙋 我加入的</a>
       </div>
     </div>
     ${meCard}
