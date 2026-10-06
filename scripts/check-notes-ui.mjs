@@ -63,12 +63,13 @@ check('定义了 async function viewNotes()', /async function viewNotes\(\)/.tes
 // 路由分发现在在 `public/core/router.js` 里，而且调用带命名空间前缀（`Notes.viewNotes()`）。
 // 正则写成「`viewNotes()` 结尾」即可兼容两种写法，不必锁死前缀。
 check('路由已接上 #/notes', /if \(first === 'notes'\) return await [\w.]*viewNotes\(\);/.test(app));
-// P5：这个入口从侧栏搬到了顶栏「发动态」旁边（public/core/session.js 里的 .top-link）。
-// 断言放宽成「顶栏或侧栏有它」，但仍然是「锚点 + 链接类名 + 正确 href」，不会变成恒真。
-check('界面上有「学术笔记」入口（顶栏或侧栏）', /class="(?:side-link|top-link)" href="#\/notes"/.test(app));
+// P5 时这个入口从侧栏搬到顶栏；现在**整个入口都没了** —— 学术笔记并进了积木标签
+// （给积木打「学术笔记」标签），界面不再提它。断言反过来写：界面上必须找不到这个链接。
+// 路由与视图都留着（老书签、老地址还能进），所以下面仍然断「路由在」。
+check('界面上不再有「学术笔记」入口（顶栏与侧栏都没有）', !/class="(?:side-link|top-link)" href="#\/notes"/.test(app));
 check(
-  '侧栏入口和路由用的同一个地址',
-  /href="#\/notes"/.test(app) && /first === 'notes'/.test(app),
+  '老地址还进得去（路由留着），但没有任何指向它的链接',
+  /first === 'notes'/.test(app) && !/href="#\/notes"/.test(app),
 );
 check(
   '笔记页要求登录',

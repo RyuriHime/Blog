@@ -17,14 +17,14 @@ import { registerDocRoutes } from './routes.js';
 import { loadBlockTypes } from './blocks/index.js';
 import { createVisibility, detectTeams } from './visibility.js';
 
-// 副作用：登记本模块的十三张表（必须在开库之前，见文件头注释）。
+// 副作用：登记本模块的十四张表（必须在开库之前，见文件头注释）。
 schemas.addScript(DOC_SCHEMA, 'doc');
 
 export default {
   name: 'doc',
   /** 新前缀。写完在这里登记路由，不要往 /api/posts 上加东西。 */
   apiPrefix: '/api/docs',
-  /** 本模块**拥有**的表。十三张都是新增表，v1 的表一张都不动。 */
+  /** 本模块**拥有**的表。十四张都是新增表，v1 的表一张都不动。 */
   owns: [
     'documents',
     'document_blocks',
@@ -39,6 +39,7 @@ export default {
     'doc_script_blocks',
     'doc_site_state',
     'doc_script_templates',
+    'doc_tags',
   ],
   /**
    * 会读、但不拥有的表。

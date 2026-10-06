@@ -2459,6 +2459,137 @@ try {
     check('11.10 前端清单里登记了开发者功能与积木教程两页', frontendJs.includes("['开发者功能'") && frontendJs.includes("['积木教程'"), '');
   }
 
+  /* ================= 12 标签 + 广场的两种排法 =================
+     这一组对应「学术笔记下线，改用它自己的标签（#学术笔记）」：
+     标签必须真的存在库里、真的能筛、真的只给看得见的人看。 */
+
+  console.log('\n【12】标签：打得上、筛得着、看得见的才算数');
+
+  {
+    const readText = (relative) => {
+      const full = join(ROOT, ...relative.split('/'));
+      return existsSync(full) ? readFileSync(full, 'utf8') : '';
+    };
+    const docJs = readText('public/views/doc.js');
+    const css = readText('public/css/41-doc.css');
+    const prefsJs = readText('public/core/preferences.js');
+    const stateJs = readText('public/core/state.js');
+    const sessionJs = readText('public/core/session.js');
+    const routerJs = readText('public/core/router.js');
+    const notesJs = readText('public/views/notes.js');
+    const guideJs = readText('public/views/guide.js');
+    const readme = readText('README.md');
+
+    // 12.1 表：不是给 documents 加列（老库上加不出来），而是一张新表。
+    const ddl = String(tableSql('doc_tags') ?? '');
+    check('12.1 doc_tags 表真建出来了', ddl.includes('doc_tags'), ddl.slice(0, 140));
+    check('12.1 (document_id, tag) 是主键（同一篇里同一个标签只可能一行）', /PRIMARY KEY \(document_id, tag\)/i.test(ddl), ddl.replace(/\s+/g, ' ').slice(0, 200));
+    check(
+      '12.1 按标签反查有索引（?tag= 不能全表扫）',
+      String(scalar("SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'idx_doc_tags_tag'")?.name ?? '') === 'idx_doc_tags_tag',
+      '',
+    );
+
+    // 12.2 建的时候就能带标签（编辑器新建一篇时一起发）。
+    const made = await author.call('/api/docs', {
+      method: 'POST',
+      body: { title: '带标签的积木', kind: 'post', scope: 'public', tags: ['学术笔记', '公式', 'Css'] },
+    });
+    const taggedId = made.data?.doc?.id;
+    check(
+      '12.2 POST /api/docs 带 tags 一次建成',
+      made.status === 200 && (made.data?.doc?.tags ?? []).join('|') === '学术笔记|公式|Css',
+      `${made.status} ${JSON.stringify(made.data?.doc?.tags ?? made.error)}`,
+    );
+    check('12.2 写的顺序就是显示的顺序（按 rowid，不按字典序重排）', (made.data?.doc?.tags ?? [])[0] === '学术笔记', JSON.stringify(made.data?.doc?.tags));
+
+    // 12.3 列表 / 详情一个形状：卡片上要显示标签，就不能只有详情里有。
+    const listed = await author.call(`/api/docs?q=${encodeURIComponent('带标签的积木')}`);
+    const found = (listed.data?.documents ?? []).find((item) => item.id === taggedId);
+    check('12.3 列表里也带着同一份标签', (found?.tags ?? []).join('|') === '学术笔记|公式|Css', JSON.stringify(found?.tags));
+    const detail = await author.call(`/api/docs/${taggedId}`);
+    check('12.3 详情与列表的标签逐字相同', JSON.stringify(detail.data?.doc?.tags) === JSON.stringify(found?.tags), JSON.stringify(detail.data?.doc?.tags));
+
+    // 12.4 ?tag= 筛选：这就是「点标签看全部同标签的积木」的后端。
+    const byTag = await author.call(`/api/docs?tag=${encodeURIComponent('学术笔记')}`);
+    const byTagDocs = byTag.data?.documents ?? [];
+    check('12.4 ?tag= 只回带这个标签的文档', byTag.status === 200 && byTagDocs.length > 0 && byTagDocs.every((item) => (item.tags ?? []).includes('学术笔记')), JSON.stringify(byTagDocs.map((item) => item.id)));
+    check('12.4 筛选结果里有刚建的那一篇', byTagDocs.some((item) => item.id === taggedId), '');
+    check('12.4 ?tag= 与 ?q= 能叠着用', (await author.call(`/api/docs?tag=${encodeURIComponent('学术笔记')}&q=${encodeURIComponent('带标签')}`)).data?.documents?.some((item) => item.id === taggedId) === true, '');
+    // 大小写不敏感（COLLATE NOCASE）：作者写 Css，别人搜 css 也要找得到。
+    check('12.4 标签筛选不分大小写（Css / css 是同一个）', (await author.call('/api/docs?tag=css')).data?.documents?.some((item) => item.id === taggedId) === true, '');
+    check('12.4 不存在的标签 → 空列表（不是报错）', ((await author.call('/api/docs?tag=没有这个标签')).data?.documents ?? []).length === 0, '');
+
+    // 12.5 看得见才算数：标签不是绕过可见范围的后门。
+    const secret = await author.call('/api/docs', {
+      method: 'POST',
+      body: { title: '私密标签文档', kind: 'post', scope: 'private', tags: ['机密标签'] },
+    });
+    const secretId = secret.data?.doc?.id;
+    const outsiderByTag = await other.call(`/api/docs?tag=${encodeURIComponent('机密标签')}`);
+    check('12.5 别人按标签也筛不到 private 文档', ((outsiderByTag.data?.documents ?? []).length) === 0, JSON.stringify((outsiderByTag.data?.documents ?? []).map((item) => item.id)));
+    check('12.5 别人直接取 private 文档 → 404', (await other.call(`/api/docs/${secretId}`)).status === 404, '');
+    const myOnly = await author.call(`/api/docs?tag=${encodeURIComponent('机密标签')}`);
+    check('12.5 作者自己筛得到', (myOnly.data?.documents ?? []).some((item) => item.id === secretId), '');
+
+    // 12.6 上限与长度：坏输入在建影子行/写修订**之前**就要挡下。
+    const tooMany = await author.call(`/api/docs/${taggedId}`, { method: 'PUT', body: { tags: ['a', 'b', 'c', 'd', 'e', 'f'] } });
+    check('12.6 6 个标签 → 400 且说清上限', tooMany.status === 400 && String(tooMany.error?.message ?? '').includes('最多 5 个'), `${tooMany.status} ${JSON.stringify(tooMany.error)}`);
+    const tooLong = await author.call(`/api/docs/${taggedId}`, { method: 'PUT', body: { tags: ['x'.repeat(25)] } });
+    check('12.6 单个标签超 24 字 → 400 且说清长度', tooLong.status === 400 && String(tooLong.error?.message ?? '').includes('24'), `${tooLong.status} ${JSON.stringify(tooLong.error)}`);
+    check('12.6 被挡下的那次没有改坏库里的标签', (await author.call(`/api/docs/${taggedId}`)).data?.doc?.tags?.length === 3, '');
+    const dup = await author.call(`/api/docs/${taggedId}`, { method: 'PUT', body: { tags: ['同一个', '同一个'] } });
+    check('12.6 重复的标签合成一个', (dup.data?.doc?.tags ?? []).join('|') === '同一个', JSON.stringify(dup.data?.doc?.tags));
+
+    // 12.7 一整串也能用（作者习惯直接打字：`#学术笔记, 公式`）。
+    const asText = await author.call(`/api/docs/${taggedId}`, { method: 'PUT', body: { tags: ' #学术笔记，学术笔记、公式 css ' } });
+    check('12.7 一串文字也能打标签（逗号 / 中文逗号 / 顿号 / # 都认，重复去掉）', (asText.data?.doc?.tags ?? []).join('|') === '学术笔记|公式|css', JSON.stringify(asText.data?.doc?.tags));
+
+    // 12.8 清空 / 不动：`[]` 是「清空」，不传才是「别动」。
+    const kept = await author.call(`/api/docs/${taggedId}`, { method: 'PUT', body: { title: '改了标题' } });
+    check('12.8 只改标题的 PUT 不会顺手清空标签', (kept.data?.doc?.tags ?? []).join('|') === '学术笔记|公式|css', JSON.stringify(kept.data?.doc?.tags));
+    const cleared = await author.call(`/api/docs/${taggedId}`, { method: 'PUT', body: { tags: [] } });
+    check('12.8 传空数组 = 清空标签（不是「不改」）', (cleared.data?.doc?.tags ?? ['x']).length === 0, JSON.stringify(cleared.data?.doc?.tags));
+    const reTagged = await author.call(`/api/docs/${taggedId}`, { method: 'PUT', body: { tags: ['学术笔记'] } });
+    check('12.8 清空之后还能再打上', (reTagged.data?.doc?.tags ?? []).join('|') === '学术笔记', JSON.stringify(reTagged.data?.doc?.tags));
+
+    // 12.9 meta/tags：编辑器用它拿上限 + 「大家在用」。
+    const tagMeta = await anon.call('/api/docs/meta/tags');
+    check('12.9 GET /api/docs/meta/tags 给出上限（游客也能拿）', tagMeta.status === 200 && tagMeta.data?.maxTags === 5 && tagMeta.data?.maxTagLength === 24, `${tagMeta.status} ${JSON.stringify(tagMeta.data)?.slice(0, 140)}`);
+    check('12.9 匿名看得见公开文档用过的标签与篇数', (tagMeta.data?.tags ?? []).some((item) => item.tag === '学术笔记' && item.count >= 1), JSON.stringify(tagMeta.data?.tags));
+    check('12.9 匿名看不见 private 文档的标签（标签不泄露存在性）', !(tagMeta.data?.tags ?? []).some((item) => item.tag === '机密标签'), JSON.stringify(tagMeta.data?.tags));
+
+    // 12.10 删文档顺手清标签（否则会攒下一堆孤儿行）。
+    const before = Number(scalar('SELECT COUNT(*) AS n FROM doc_tags WHERE document_id = ?', secretId)?.n ?? -1);
+    await author.call(`/api/docs/${secretId}`, { method: 'DELETE' });
+    const after = Number(scalar('SELECT COUNT(*) AS n FROM doc_tags WHERE document_id = ?', secretId)?.n ?? -1);
+    check('12.10 删文档顺手清掉它的标签', before > 0 && after === 0, JSON.stringify({ before, after }));
+
+    // 12.11 前端接线（这几条是「界面真的做到了」的账）。
+    check('12.11 卡片与阅读页都渲染标签，点标签是去看同标签的积木', docJs.includes('function tagChipsHtml(') && docJs.includes('href="#/docs?tag='), '');
+    check('12.11 广场认 ?tag= 这个参数', docJs.includes("query.get('tag')") && docJs.includes("params.set('tag', tag)"), '');
+    check('12.11 筛选表单里带着 tag（在标签里搜标题不会把标签丢掉）', docJs.includes('type="hidden" name="tag"') && docJs.includes("if (values.tag) params.set('tag', values.tag)"), '');
+    check('12.11 编辑器有标签框，且跟着「保存」一起存（不是第二个保存按钮）', docJs.includes('data-doc-tags') && docJs.includes('parseTags(') && !docJs.includes('data-doc-action="save-tags"'), '');
+    check('12.11 标签上限来自服务端（客户端没自己发明一份 5 / 24）', docJs.includes("api('/api/docs/meta/tags')") && docJs.includes('docState.maxTags'), '');
+
+    // 12.12 学术笔记入口下线（代码留着）。
+    check('12.12 顶栏不再有「学术笔记」入口', !sessionJs.includes('href="#/notes"'), '');
+    check('12.12 老地址没坏：路由还在，页面还在', routerJs.includes("first === 'notes'") && notesJs.includes('async function viewNotes()'), '');
+    check('12.12 老页面顶上写明「并进积木了」并给了标签入口', notesJs.includes('并进积木') && notesJs.includes('#/docs?tag='), '');
+    check('12.12 广场的形态筛选里不再单列「笔记」', docJs.includes("item.value !== 'note'"), '');
+
+    // 12.13 第二种排法：从上往下列下来。
+    check('12.13 排法偏好读写同一个 key，并且真的导出（check-frontend 会查命名空间）', prefsJs.includes("const docsLayout = () => readPreference('forum:docsLayout'") && prefsJs.includes('export { docsLayout };'), '');
+    check('12.13 两种排法写在 state.js 里（界面文案也在那儿）', stateJs.includes('const DOC_LAYOUTS') && stateJs.includes('export { DOC_LAYOUTS };'), '');
+    check('12.13 切换按钮走中央分发，并且切换后用当前筛选条件重画', docJs.includes('data-doc-action="layout"') && docJs.includes('docState.listQuery'), '');
+    check('12.13 列表容器按偏好换壳（doc-grid / doc-list）', docJs.includes("layout === 'list' ? 'doc-list' : 'doc-grid'"), '');
+    check('12.13 两个新类名都有样式', css.includes('.doc-list {') && css.includes('.doc-card-item') && css.includes('.doc-tag {'), '');
+
+    // 12.14 教程与 README 都要提「打标签 = 现在的学术笔记」。
+    check('12.14 教程讲了标签（怎么打、怎么按标签找）', guideJs.includes('标签') && guideJs.includes('#/docs?tag='), '');
+    check('12.14 README 的接口表收录了 meta/tags 与 ?tag=', readme.includes('`/api/docs/meta/tags`') && readme.includes('?tag='), '');
+  }
+
   await finish(failures.length ? 1 : 0);
 } catch (error) {
   console.log('❌ 测试脚本自己抛了异常：');

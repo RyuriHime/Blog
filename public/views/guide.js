@@ -256,7 +256,24 @@ export async function viewGuide() {
     </div>
 
     <div class="card doc-panel doc-guide">
-      <div class="card-head"><span class="card-title">6. 读者能做什么</span></div>
+      <div class="card-head"><span class="card-title">6. 标签：分类，也方便找同类</span></div>
+      <p class="doc-hint">标签就是给积木贴几个词，一篇最多 5 个。它解决两件事：
+        <strong>以后自己找得回来</strong>，以及<strong>让同类内容聚在一起</strong>。</p>
+      <ol class="doc-guide-list">
+        <li>在编辑器最上面那张卡里，<strong>「标签」框</strong>写几个词，用逗号隔开
+          （比如 <code class="doc-code">学术笔记, 公式</code>），点「保存」就跟标题正文一起存好了。</li>
+        <li>框下面那排<strong>「大家在用」</strong>是现成的标签，点一下就填进框里 —— 想跟大家用同一个词，点它最省事。</li>
+        <li>标签会显示在卡片和阅读页上。<strong>点标签</strong>就跳到
+          <code class="doc-code">#/docs?tag=标签</code>，那是「所有贴了这个标签的积木」。</li>
+      </ol>
+      <div class="doc-hint">以前站里有一个单独的「学术笔记」功能，现在并进来了：
+        想写笔记，就写一篇积木、打上 <a href="#/docs?tag=%E5%AD%A6%E6%9C%AF%E7%AC%94%E8%AE%B0">#学术笔记</a> 标签 ——
+        公式、代码、双链在积木里都有，还能被搜到、被引用。老地址 <code class="doc-code">#/notes</code> 还开着，
+        只为看以前写下的笔记，入口不再出现在导航里。</div>
+    </div>
+
+    <div class="card doc-panel doc-guide">
+      <div class="card-head"><span class="card-title">7. 读者能做什么</span></div>
       <ul class="doc-guide-list">
         <li>每篇底下都有<strong>点赞 / 踩 / 投币 / 收藏 / 转发</strong>，还有 <strong>AI 解读</strong>（自动讲这篇在说什么、难在哪）。</li>
         <li><strong>投票块是现成的</strong>：读者点一下就投，结果用百分比条显示出来，不看别人的票数只看比例。</li>
@@ -267,7 +284,7 @@ export async function viewGuide() {
     </div>
 
     <div class="card doc-panel doc-guide">
-      <div class="card-head"><span class="card-title">7. 进阶：让积木会跑代码</span></div>
+      <div class="card-head"><span class="card-title">8. 进阶：让积木会跑代码</span></div>
       <p class="doc-hint">前面都是填字段。如果想让积木自己算、自己画（计数器、计算器、小游戏、
         按别的块的结果出结论），就插这两种块：</p>
       <ol class="doc-guide-list">
@@ -290,37 +307,37 @@ export async function viewGuide() {
     </div>
 
     <div class="card doc-panel doc-guide">
-      <div class="card-head"><span class="card-title">8. 例子：记个数（会存下来）</span></div>
+      <div class="card-head"><span class="card-title">9. 例子：记个数（会存下来）</span></div>
       <div class="doc-hint">最小的一片能存东西的代码。默认「每人一份」：别人点不会改你的数。</div>
       ${code(SAMPLE_COUNT)}
     </div>
 
     <div class="card doc-panel doc-guide">
-      <div class="card-head"><span class="card-title">9. 例子：认出正在看的人</span></div>
+      <div class="card-head"><span class="card-title">10. 例子：认出正在看的人</span></div>
       ${code(SAMPLE_HELLO)}
       <div class="doc-hint">想按人给不同内容，就用 <code class="doc-code">Sandbox.viewer()</code>。</div>
     </div>
 
     <div class="card doc-panel doc-guide">
-      <div class="card-head"><span class="card-title">10. 例子：数一数正文里有什么</span></div>
+      <div class="card-head"><span class="card-title">11. 例子：数一数正文里有什么</span></div>
       ${code(SAMPLE_READ_BLOCKS)}
     </div>
 
     <div class="card doc-panel doc-guide">
-      <div class="card-head"><span class="card-title">11. 例子：全站共用一个数</span></div>
+      <div class="card-head"><span class="card-title">12. 例子：全站共用一个数</span></div>
       ${code(SAMPLE_SHARED)}
       <div class="doc-hint">写共用数据要登录：没登录的读者点了会看到你那句提示，这是正常的。</div>
     </div>
 
     <div class="card doc-panel doc-guide">
-      <div class="card-head"><span class="card-title">12. 例子：两块联动</span></div>
+      <div class="card-head"><span class="card-title">13. 例子：两块联动</span></div>
       <div class="doc-hint">在块的设置里，把上游块的结果绑到这个块的字段上；下游就在
         <code class="doc-code">Sandbox.inputs</code> 里收到它 —— 不用写死。</div>
       ${code(SAMPLE_BIND)}
     </div>
 
     <div class="card doc-panel doc-guide">
-      <div class="card-head"><span class="card-title">13. 例子：让脚本画出新块</span></div>
+      <div class="card-head"><span class="card-title">14. 例子：让脚本画出新块</span></div>
       <div class="doc-hint">「脚本」块可以生成别的块：先放在<strong>派生层</strong>，正文一个字都不动；
         作者看着喜欢，就在编辑器里把它们<strong>采纳</strong>成真块。
         要三件事齐了才行：作者打开「允许脚本改块」、你登录了、这种块类型注册过。</div>
@@ -328,12 +345,12 @@ export async function viewGuide() {
     </div>
 
     <div class="card doc-panel doc-guide">
-      <div class="card-head"><span class="card-title">14. 例子：整块小界面</span></div>
+      <div class="card-head"><span class="card-title">15. 例子：整块小界面</span></div>
       ${code(SAMPLE_APP)}
     </div>
 
     <div class="card doc-panel doc-guide">
-      <div class="card-head"><span class="card-title">15. 进阶：把写顺手的代码存起来</span></div>
+      <div class="card-head"><span class="card-title">16. 进阶：把写顺手的代码存起来</span></div>
       <ol class="doc-guide-list">
         <li>到 <a href="#/dev">开发者功能</a> 里的「我的脚本模板」，把代码粘进去、起个名字存下。</li>
         <li>以后在卡片上点「用它新建一篇」：它建一篇只带这一块的积木，并把你送进编辑器。
@@ -343,7 +360,7 @@ export async function viewGuide() {
     </div>
 
     <div class="card doc-panel doc-guide">
-      <div class="card-head"><span class="card-title">16. 进阶：给全站加一种新块</span><span class="hint">写给会写模板的人</span></div>
+      <div class="card-head"><span class="card-title">17. 进阶：给全站加一种新块</span><span class="hint">写给会写模板的人</span></div>
       <ol class="doc-guide-list">
         <li><strong>填字段式</strong>：写一份字段说明（每个字段叫什么、什么类型、必不必填）+ 一段渲染模板，
           用 <code class="doc-code">{{字段}}</code> 取值。最省事，渲染走服务端，天然安全。</li>

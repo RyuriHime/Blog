@@ -514,6 +514,15 @@ const EXTRA = {
       { value: 'private', label: '仅自己' },
     ],
   },
+  // 标签上限 + 「大家在用」。**必须给一条真的**：空表渲染不出标签徽章那段 HTML。
+  '/api/docs/meta/tags': {
+    maxTags: 5,
+    maxTagLength: 24,
+    tags: [
+      { tag: '学术笔记', count: 7 },
+      { tag: '公式', count: 3 },
+    ],
+  },
   // 开发者功能里的「我的脚本模板」。**必须给一条真的**：空表只会渲染出一句
   // 「还没有模板」，卡片那段 HTML（以及卡片里的 Fmt.timeAgo）根本没被跑到。
   '/api/docs/meta/script-templates': {
@@ -565,6 +574,9 @@ const EXTRA = {
       anchorPostId: FIXTURE_POST_ID,
       sandboxDisabled: false,
       deleted: false,
+      // 阅读页与编辑器都要渲染标签；列表那一条（/api/docs）故意**不带** tags，
+      // 顺带钉住「没有 tags 字段的老响应也不能炸」。
+      tags: ['学术笔记', '公式'],
       author: { id: 1, username: FIXTURE_USERNAME, displayName: '站长', avatar: null, role: 'owner' },
       createdAt: Date.now() - 86400000,
       updatedAt: Date.now() - 3600000,

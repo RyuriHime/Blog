@@ -124,7 +124,7 @@ export function createDocQueries(db) {
      * 列表。`visible` 由 visibility.js 给出（null = staff，不加范围条件）。
      * `viewerId` 只用于 `mine=1`。
      */
-    listDocuments({ viewerId = null, visible = null, kind = '', scope = '', mine = false, q = '', page = 1, limit = 20, sort = 'updated' } = {}) {
+    listDocuments({ viewerId = null, visible = null, kind = '', scope = '', tag = '', mine = false, q = '', page = 1, limit = 20, sort = 'updated' } = {}) {
       const conditions = ['d.deleted = 0'];
       const params = [];
       if (kind && DOC_KINDS.includes(kind)) {
@@ -134,6 +134,12 @@ export function createDocQueries(db) {
       if (scope) {
         conditions.push('d.scope = ?');
         params.push(scope);
+      }
+      // 按标签筛选：EXISTS 而不是 JOIN —— JOIN 会让一篇带两个匹配标签的文档出现两次。
+      // COLLATE NOCASE：手工敲进地址栏的 `?tag=css` 也该命中作者写的 `CSS`。
+      if (tag) {
+        conditions.push('EXISTS (SELECT 1 FROM doc_tags dt WHERE dt.document_id = d.id AND dt.tag = ? COLLATE NOCASE)');
+        params.push(tag);
       }
       if (mine) {
         if (!viewerId) return { rows: [], total: 0 };
@@ -849,6 +855,73 @@ export function createDocQueries(db) {
 
     deleteScriptTemplate({ id, userId }) {
       run('DELETE FROM doc_script_templates WHERE id = ? AND user_id = ?', [id, userId]);
+    },
+
+    /* ---------- 标签（doc_tags，第四轮：替代下线的学术笔记） ---------- */
+
+    /**
+     * 一篇的标签，**按作者写的顺序**回（`rowid` 就是插入顺序）。
+     * 不按字典序：作者把「学术笔记」写在最前面，卡片上就该排在最前面；
+     * 换个排法会让「我只想调一下顺序」变成做不到的事。
+     */
+    tagsOf(documentId) {
+      return all('SELECT tag FROM doc_tags WHERE document_id = ? ORDER BY rowid ASC', [documentId]).map((row) => String(row.tag));
+    },
+
+    /**
+     * 一次问一批：列表页每张卡片都要标签，逐个查就是 N+1。
+     * 回 `Map<documentId, string[]>`（没有标签的文档不在表里，调用方 `?? []`）。
+     * 同一篇内同样按 rowid（作者顺序），跨篇按 document_id。
+     */
+    tagsFor(ids) {
+      const list = (ids ?? []).map((id) => Number(id)).filter((id) => Number.isInteger(id) && id > 0);
+      const byDoc = new Map();
+      if (list.length === 0) return byDoc;
+      const holes = list.map(() => '?').join(', ');
+      const rows = all(`SELECT document_id, tag FROM doc_tags WHERE document_id IN (${holes}) ORDER BY document_id ASC, rowid ASC`, list);
+      for (const row of rows) {
+        const key = Number(row.document_id);
+        if (!byDoc.has(key)) byDoc.set(key, []);
+        byDoc.get(key).push(String(row.tag));
+      }
+      return byDoc;
+    },
+
+    /** 覆盖式写入：标签是一份名单，不是可增删的条目（改一次 = 删光重写）。 */
+    replaceTags({ documentId, tags = [], now }) {
+      run('DELETE FROM doc_tags WHERE document_id = ?', [documentId]);
+      for (const tag of tags) {
+        run('INSERT OR IGNORE INTO doc_tags (document_id, tag, created_at) VALUES (?, ?, ?)', [documentId, String(tag), now]);
+      }
+    },
+
+    deleteTagsOfDocument(documentId) {
+      run('DELETE FROM doc_tags WHERE document_id = ?', [documentId]);
+    },
+
+    /**
+     * 用过的标签 + 各自篇数（广场的标签云、编辑器的候选项都读它）。
+     *
+     * `visible` 与列表是同一份：标签云不能把「别人看不见的文档的标签」漏出来。
+     */
+    popularTags({ visible = null, limit = 24 } = {}) {
+      const conditions = ['d.deleted = 0'];
+      const params = [];
+      if (visible) {
+        conditions.push(visible.sql);
+        params.push(...visible.params);
+      }
+      const size = Math.min(Math.max(Number(limit) || 24, 1), 100);
+      const rows = all(
+        `SELECT t.tag AS tag, COUNT(*) AS n
+           FROM doc_tags t JOIN documents d ON d.id = t.document_id
+          WHERE ${conditions.join(' AND ')}
+          GROUP BY t.tag
+          ORDER BY n DESC, t.tag ASC
+          LIMIT ?`,
+        [...params, size],
+      );
+      return rows.map((row) => ({ tag: String(row.tag), count: Number(row.n) }));
     },
   };
 }

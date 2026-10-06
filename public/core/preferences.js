@@ -16,6 +16,10 @@ function writePreference(key, value) {
   }
 }
 const profileLayout = () => readPreference('forum:profileLayout', 'list');
+// 积木广场的排法：grid（一行多个）还是 list（从上往下列下来）。
+// 读和写必须用同一个 key —— events.js 里那个 'forum:Prefs.profileLayout'
+// 就是写错 key 的反例（个人主页布局因此从来没被记住）。
+const docsLayout = () => readPreference('forum:docsLayout', 'grid');
 
 /* ------------------------------------------------------------------ */
 /* 背景主题                                                            */
@@ -28,6 +32,7 @@ const THEME_STORAGE_KEY = 'forum:theme';
 export { readPreference };
 export { writePreference };
 export { profileLayout };
+export { docsLayout };
 export { THEME_STORAGE_KEY };
 
 /* @hand-written */

@@ -24,8 +24,9 @@ import { $, emptyHtml, esc, loadingHtml, toast, ui } from '../core/dom.js';
 import { api, withButtonBusy } from '../core/api.js';
 import { toastError } from '../core/errors.js';
 import { navigate } from '../core/router.js';
-import { state } from '../core/state.js';
+import { state, DOC_LAYOUTS } from '../core/state.js';
 import * as Fmt from '../core/format.js';
+import * as Prefs from '../core/preferences.js';
 import * as Blocks from './doc-blocks.js';
 import * as Ai from './ai.js';
 import { reactionBarHtml } from './post.js';
@@ -33,7 +34,19 @@ import { attachSandbox, unmountSandboxes } from '../core/sandbox.js';
 import { ntRenderMath } from './notes.js';
 
 /** 元数据只拉一次：块类型表 / 模板表 / 两个枚举，整个会话里不会变。 */
-const docState = { types: [], templates: [], kinds: [], scopes: [], editor: null, viewing: null, stationId: 0 };
+const docState = {
+  types: [],
+  templates: [],
+  kinds: [],
+  scopes: [],
+  popularTags: [],
+  maxTags: 5,
+  maxTagLength: 24,
+  editor: null,
+  viewing: null,
+  stationId: 0,
+  listQuery: null,
+};
 
 /** 开发者功能里的「我的脚本模板」：只对登录用户有意义，没登录就是一份空表。 */
 const scriptTemplateState = { templates: [], limit: 0, maxCode: 0, loaded: false, failed: false };
@@ -44,11 +57,20 @@ let mdNotesPanel = null;
 
 async function loadMeta(force = false) {
   if (!force && docState.types.length > 0) return;
-  const [types, meta] = await Promise.all([api('/api/docs/meta/block-types'), api('/api/docs/meta/templates')]);
+  const [types, meta, tags] = await Promise.all([
+    api('/api/docs/meta/block-types'),
+    api('/api/docs/meta/templates'),
+    // 标签上限与「大家在用的标签」都从服务端来：客户端不该自己发明一份 5 / 24。
+    // 拉不到不算事故（老服务器 / 离线），退成一份空表，编辑器照常能用。
+    api('/api/docs/meta/tags').catch(() => ({ tags: [], maxTags: 5, maxTagLength: 24 })),
+  ]);
   docState.types = types.types ?? [];
   docState.templates = meta.templates ?? [];
   docState.kinds = meta.kinds ?? [];
   docState.scopes = meta.scopes ?? [];
+  docState.popularTags = tags.tags ?? [];
+  docState.maxTags = Number(tags.maxTags ?? 5);
+  docState.maxTagLength = Number(tags.maxTagLength ?? 24);
 }
 
 /**
@@ -91,6 +113,25 @@ const optionsHtml = (list, current) =>
     .map((item) => `<option value="${esc(item.value)}"${item.value === current ? ' selected' : ''}>${esc(item.label)}</option>`)
     .join('');
 
+/**
+ * 标签框里的字 → 数组。分隔符跟服务端同一套：逗号 / 中文逗号 / 顿号 / # / 空白。
+ *
+ * 服务端才是权威（那里也会挡），这里先挡一道的理由是界面：不挡住的话，
+ * 会是「标题存进去了、标签被退回」的半截状态 —— 作者看到的是「存好了」。
+ */
+function parseTags(text) {
+  const list = [];
+  for (const raw of String(text ?? '').split(/[,，#、\s]+/)) {
+    const tag = raw.trim().replace(/^#+/, '');
+    if (!tag) continue;
+    if (tag.length > docState.maxTagLength) return { error: `标签「${tag}」太长了，最多 ${docState.maxTagLength} 个字` };
+    if (list.some((item) => item.toLowerCase() === tag.toLowerCase())) continue;
+    list.push(tag);
+  }
+  if (list.length > docState.maxTags) return { error: `一篇最多 ${docState.maxTags} 个标签` };
+  return { tags: list };
+}
+
 const scopeOptionsHtml = (current) => optionsHtml(docState.scopes, current);
 
 function download(filename, payload) {
@@ -108,16 +149,28 @@ function download(filename, payload) {
 /* 积木广场                                                            */
 /* ------------------------------------------------------------------ */
 
+/** 标签徽章：点一下就去看「所有同标签的积木」。 */
+function tagChipsHtml(tags) {
+  return (tags ?? [])
+    .filter((tag) => typeof tag === 'string' && tag)
+    .map((tag) => `<a class="doc-tag" href="#/docs?tag=${encodeURIComponent(tag)}">#${esc(tag)}</a>`)
+    .join('');
+}
+
 function docCardHtml(doc) {
   const author = doc.author ?? {};
-  return `<a class="doc-card" href="#/doc/${esc(doc.id)}">
+  const tags = tagChipsHtml(doc.tags);
+  return `<div class="doc-card-item">
+  <a class="doc-card" href="#/doc/${esc(doc.id)}">
     <div class="doc-card-title">${esc(doc.title || '（无标题）')}</div>
     <div class="doc-badges">
       <span class="doc-badge doc-badge-kind">${esc(doc.kindLabel ?? '')}</span>
       <span class="doc-badge doc-badge-scope">${esc(doc.scopeLabel ?? '')}</span>
     </div>
     <div class="doc-card-meta">${esc(author.displayName ?? author.username ?? '')} · ${esc(Fmt.timeAgo(doc.updatedAt))}</div>
-  </a>`;
+  </a>
+  ${tags ? `<div class="doc-card-tags">${tags}</div>` : ''}
+</div>`;
 }
 
 /**
@@ -137,19 +190,32 @@ async function newDocAndEdit() {
   return navigate(`/doc/${created.doc.id}/edit`);
 }
 
-/** 积木广场：`#/docs?kind=&mine=1&q=`。 */
+/**
+ * 积木广场：`#/docs?kind=&mine=1&q=&tag=`。
+ *
+ * 两种排法（`forum:docsLayout`）：grid = 一行多个的平铺，list = 从上往下列下来。
+ * 排法只影响这一个列表的壳，卡片本身是同一个函数渲染的。
+ */
 async function viewDocs(query = new URLSearchParams()) {
   leaveDocPage();
   await loadMeta();
+  docState.listQuery = new URLSearchParams(query);
   const kind = query.get('kind') ?? '';
   const mine = query.get('mine') === '1';
   const q = query.get('q') ?? '';
+  const tag = query.get('tag') ?? '';
+  const layout = Prefs.docsLayout() === 'list' ? 'list' : 'grid';
   const params = new URLSearchParams();
   if (kind) params.set('kind', kind);
   if (mine) params.set('mine', '1');
   if (q) params.set('q', q);
+  if (tag) params.set('tag', tag);
   const data = await api(`/api/docs${params.toString() ? `?${params}` : ''}`);
   const documents = data.documents ?? [];
+  const layoutTabs = DOC_LAYOUTS.map(
+    ([key, label]) =>
+      `<button class="tab ${layout === key ? 'is-active' : ''}" type="button" data-doc-action="layout" data-layout="${key}">${label}</button>`,
+  ).join('');
 
   ui.app.innerHTML = `
     <div class="card doc-panel">
@@ -157,11 +223,17 @@ async function viewDocs(query = new URLSearchParams()) {
         <span class="card-title">🧩 积木广场</span>
         <span class="hint">${Fmt.fmtNum(data.total ?? documents.length)} 篇</span>
       </div>
+      ${
+        tag
+          ? `<div class="doc-active-tag">正在看标签 <strong>#${esc(tag)}</strong><a class="btn btn-sm btn-ghost" href="#/docs">看全部</a></div>`
+          : ''
+      }
       <form class="doc-filters" data-doc-form="filter">
+        <input type="hidden" name="tag" value="${esc(tag)}">
         <input class="doc-input" type="search" name="q" value="${esc(q)}" placeholder="搜标题或正文摘要…">
         <select class="doc-input doc-select" name="kind">
           <option value="">全部形态</option>
-          ${optionsHtml(docState.kinds, kind)}
+          ${optionsHtml(docState.kinds.filter((item) => item.value !== 'note'), kind)}
         </select>
         <label class="doc-check-label"><input type="checkbox" class="doc-check" name="mine"${mine ? ' checked' : ''}>只看我的</label>
         <button class="btn btn-sm btn-primary" type="submit">筛选</button>
@@ -170,11 +242,12 @@ async function viewDocs(query = new URLSearchParams()) {
         ${state.me ? '<button class="btn btn-sm" type="button" data-doc-action="new">＋ 新建一篇</button>' : '<a class="btn btn-sm" href="#/login">登录后可以新建</a>'}
         <a class="btn btn-sm" href="#/wiki">⧉ Wiki 站</a>
         <a class="btn btn-sm btn-ghost" href="#/dev">🛠 开发者功能</a>
+        <div class="tabs tabs-sm doc-layout-tabs">${layoutTabs}</div>
       </div>
     </div>
     ${
       documents.length
-        ? `<div class="doc-grid">${documents.map(docCardHtml).join('')}</div>`
+        ? `<div class="${layout === 'list' ? 'doc-list' : 'doc-grid'}">${documents.map(docCardHtml).join('')}</div>`
         : `<div class="card">${emptyHtml('🧩', '还没有积木', '换一个筛选条件，或者新建一篇')}</div>`
     }`;
 
@@ -720,6 +793,7 @@ function renderDoc(data) {
           <span class="doc-badge doc-badge-scope">${esc(doc.scopeLabel ?? '')}</span>
           ${doc.edited ? '<span class="doc-badge">已编辑</span>' : ''}
         </div>
+        ${tagChipsHtml(doc.tags) ? `<div class="doc-tags">${tagChipsHtml(doc.tags)}</div>` : ''}
         <h1 class="doc-title">${esc(doc.title || '（无标题）')}</h1>
         <div class="doc-byline">
           <a href="#/u/${encodeURIComponent(author.username ?? '')}">${esc(author.displayName ?? author.username ?? '匿名')}</a>
@@ -1260,6 +1334,18 @@ function renderEditor() {
         <label class="doc-field"><span class="doc-field-label">谁可以看</span>
           <select class="doc-input doc-select" data-doc-scope>${scopeOptionsHtml(doc.scope)}</select>
         </label>
+        <label class="doc-field doc-field-wide"><span class="doc-field-label">标签</span>
+          <input class="doc-input" data-doc-tags maxlength="160" value="${esc((doc.tags ?? []).join(', '))}"
+            placeholder="逗号隔开，最多 ${docState.maxTags} 个，例：学术笔记, 公式">
+        </label>
+        ${
+          docState.popularTags.length
+            ? `<div class="doc-tag-picks"><span class="doc-hint">大家在用：</span>${docState.popularTags
+                .slice(0, 8)
+                .map((item) => `<button class="doc-tag doc-tag-pick" type="button" data-doc-tag-pick="${esc(item.tag)}">#${esc(item.tag)}<span class="doc-tag-count">${Fmt.fmtNum(item.count)}</span></button>`)
+                .join('')}</div>`
+            : ''
+        }
         <label class="doc-check-label"><input class="doc-check" type="checkbox" data-doc-script-write${editor.data.settings?.allowScriptWrite ? ' checked' : ''}>
           允许脚本改块（打开后，沙箱里的 <code class="doc-code">Sandbox.render</code> 能往派生层写块）</label>
       </div>
@@ -1366,7 +1452,14 @@ async function saveAll() {
   }
   const scope = $('[data-doc-scope]')?.value ?? doc.scope ?? 'public';
   const scriptWrite = Boolean($('[data-doc-script-write]')?.checked);
-  const metaChanged = title !== (doc.title ?? '') || scope !== (doc.scope ?? 'public');
+  const parsedTags = parseTags($('[data-doc-tags]')?.value ?? (doc.tags ?? []).join(', '));
+  if (parsedTags.error) {
+    toast(parsedTags.error, 'error');
+    return;
+  }
+  const tags = parsedTags.tags;
+  const tagsChanged = tags.join('\n') !== (doc.tags ?? []).join('\n');
+  const metaChanged = title !== (doc.title ?? '') || scope !== (doc.scope ?? 'public') || tagsChanged;
   const settingsChanged = scriptWrite !== Boolean(editor.data.settings?.allowScriptWrite);
   const draft = currentDraft();
 
@@ -1374,7 +1467,7 @@ async function saveAll() {
   if (metaChanged) {
     editor.data = await api(`/api/docs/${editor.id}`, {
       method: 'PUT',
-      body: { title, scope, template: doc.template ?? '' },
+      body: { title, scope, template: doc.template ?? '', tags },
     });
   }
   if (settingsChanged) {
@@ -1417,7 +1510,13 @@ async function saveAll() {
     return;
   }
   const bits = [];
-  if (metaChanged) bits.push('标题与可见范围');
+  if (metaChanged) {
+    const metaBits = [];
+    if (title !== (doc.title ?? '')) metaBits.push('标题');
+    if (scope !== (doc.scope ?? 'public')) metaBits.push('可见范围');
+    if (tagsChanged) metaBits.push('标签');
+    bits.push(metaBits.join('、'));
+  }
   if (settingsChanged) bits.push(`「允许脚本改块」已${scriptWrite ? '打开' : '关闭'}`);
   if (contentSaved) bits.push(editor.mode === 'blocks' ? `${contentSaved} 个块` : '正文');
   toast(`存好了：${bits.join('、')}`);
@@ -1887,6 +1986,17 @@ async function onAppClick(event) {
   // Tab 切换先判：它不是一个「动作」，但它也是 click。
   const tab = typeof event.target?.closest === 'function' ? event.target.closest('[data-doc-tab]') : null;
   if (tab) return onTabClick(tab.dataset.docTab);
+  // 「大家在用」的标签：点一下就是往标签框里追加一个，不直接存 —— 存还是按「保存」。
+  const pick = typeof event.target?.closest === 'function' ? event.target.closest('[data-doc-tag-pick]') : null;
+  if (pick) {
+    const input = $('[data-doc-tags]');
+    const tag = pick.dataset.docTagPick ?? '';
+    if (input && tag && !input.value.includes(tag)) {
+      const current = input.value.trim().replace(/[,\s]+$/, '');
+      input.value = current ? `${current}, ${tag}` : tag;
+    }
+    return;
+  }
   const node = findAction(event.target);
   if (!node) return;
   const action = node.dataset.docAction;
@@ -1896,6 +2006,13 @@ async function onAppClick(event) {
   const withBusy = (task) => withButtonBusy(node, task).catch((error) => toastError(error));
 
   if (action === 'new') return withBusy(newDocAndEdit);
+  if (action === 'layout') {
+    // 只记一个偏好，然后整页重画 —— 列表的排法不是文档的一部分。
+    // 重画要用「当前这份筛选条件」，否则切一下排法就把搜的关键词丢了。
+    const layout = node.dataset.layout;
+    if (layout) Prefs.writePreference('forum:docsLayout', layout === 'list' ? 'list' : 'grid');
+    return withBusy(() => viewDocs(docState.listQuery ?? new URLSearchParams()));
+  }
   if (action === 'import-toggle') {
     const panel = $('[data-doc-form="import"]');
     if (panel) panel.hidden = !panel.hidden;
@@ -2004,6 +2121,9 @@ async function onAppSubmit(event) {
         if (values.q) params.set('q', values.q);
         if (values.kind) params.set('kind', values.kind);
         if (values.mine) params.set('mine', '1');
+        // 标签是从卡片上点进来的，筛选表单里带着一个 hidden 的 tag：不清空它，
+        // 否则「在某个标签里搜标题」一按筛选就变回全站了。
+        if (values.tag) params.set('tag', values.tag);
         return navigate(`/docs${params.toString() ? `?${params}` : ''}`);
       }
       if (form.dataset.docForm === 'import') {

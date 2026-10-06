@@ -32,10 +32,12 @@ function renderUserArea() {
   // 「✏️ 发动态」按钮后面，所以放在最前面就是「发动态的旁边」。
   // 原本这里还有第三个「🕸 知识网络图」：知识网络图在 PR #5 里整条删除（路由、视图、样式分片、
   // knowledge-pack 全没了），入口跟着去掉，否则顶栏会挂一个点了没反应的死链。
+  // 「📓 学术笔记」也走同一条路：功能并进了**积木的标签**（给积木打「学术笔记」标签），
+  // 入口从今天起不再出现。代码还留着（#/notes 与 /notes/ 都还在，直接输地址还能进），
+  // 只是界面上不再提它 —— 测试也改成断言「界面上找不到这个入口」。
   const quickLinks = `
     <div class="top-links">
       <a class="top-link" href="#/ai" title="AI 阅读助手">🤖<span class="top-link-text">AI 阅读助手</span></a>
-      <a class="top-link" href="#/notes" title="学术笔记">📓<span class="top-link-text">学术笔记</span></a>
     </div>`;
   ui.userArea.innerHTML = `
     ${quickLinks}

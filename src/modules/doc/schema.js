@@ -1,6 +1,6 @@
 // 可编程帖子（P2）的数据表。
 //
-// 十二张表全是新增的，v1 的表一张都不动 —— 迁移是纯加法（同 feed 的做法）。
+// 十四张表全是新增的，v1 的表一张都不动 —— 迁移是纯加法（同 feed 的做法）。
 //
 // 建表顺序 = 别的模块 import 这个文件时登记的顺序；
 // `addScript` 会按「括号深度为 0 的分号」切开逐条登记，
@@ -27,6 +27,16 @@ export const DOC_SCOPES = ['public', 'followers', 'team', 'private'];
 
 /** 标题长度上限。 */
 export const MAX_DOC_TITLE = 120;
+
+/**
+ * 标签的上限（`doc_tags`，第四轮新增）。
+ *
+ * 上限照着两个邻居取：forum-ai 的 `asStringArray(parsed.tags, 6, 24)`（6 个 × 24 字）
+ * 与 note-agent 的「标签最多 5 个」。这里取更紧的那一对 —— 标签是给人扫的，
+ * 一排 6 个以上就没人看了。
+ */
+export const MAX_DOC_TAGS = 5;
+export const MAX_TAG_TEXT = 24;
 
 /** 一篇文档最多多少块（防止一次导入把库撑爆）。 */
 export const MAX_DOC_BLOCKS = 500;
@@ -421,6 +431,22 @@ CREATE TABLE IF NOT EXISTS doc_script_templates (
   UNIQUE (user_id, name)
 );
 CREATE INDEX IF NOT EXISTS idx_doc_script_templates_user ON doc_script_templates (user_id, updated_at DESC);
+
+-- 积木的**标签**（第四轮新增，用来替代下线的「学术笔记」）。
+-- 为什么不给 documents 加一列 tags：表早就建好了，CREATE TABLE IF NOT EXISTS 对已存在的表
+-- 是空操作，而 core 的 ensureColumn 只覆盖 users 与 posts（见文件头与 §2.1 的长注释）——
+-- 要加列就得写一次守卫式迁移，为了一张「一篇文章 0~5 个短字符串」的名单不值当。
+-- 为什么不是一张 tags 主表 + 关联表：标签没有自己的生命周期（没有简介、没有作者、不能单独改名），
+-- 「有哪些标签」是从用法里长出来的（SELECT DISTINCT tag 就够了），多一张主表只会多一条要同步的真相。
+-- 主键 (document_id, tag) 顺带管住了「同一篇里同一个标签出现两次」。
+-- 删文档时由 store 一并清掉，不留孤儿行。
+CREATE TABLE IF NOT EXISTS doc_tags (
+  document_id INTEGER NOT NULL REFERENCES documents(id),
+  tag         TEXT    NOT NULL,
+  created_at  INTEGER NOT NULL,
+  PRIMARY KEY (document_id, tag)
+);
+CREATE INDEX IF NOT EXISTS idx_doc_tags_tag ON doc_tags (tag, document_id);
 `;
 
 /**

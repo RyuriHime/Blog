@@ -78,6 +78,17 @@ export function registerDocRoutes(ctx, { store }) {
     ok(reqCtx.res, { types: store.listBlockTypes() });
   });
 
+  /**
+   * 用过的标签 + 篇数。
+   *
+   * 为什么是「用过的」而不是一张标签表：标签没有自己的生命周期（没有简介、没有作者、
+   * 不能单独改名）—— 它是从用法里长出来的，所以候选项该跟着用法走，而不是先让人建标签。
+   * 与列表同一个可见性：看不见的文档的标签不会出现在这里。
+   */
+  add('GET', '/api/docs/meta/tags', async (reqCtx) => {
+    ok(reqCtx.res, store.listTags({ viewer: reqCtx.user, limit: intOrNull(reqCtx.query.get('limit')) ?? 24 }));
+  });
+
   add('POST', '/api/docs/meta/block-types', async (reqCtx) => {
     const user = write(reqCtx, 'type');
     const result = store.registerCustomBlockType({
@@ -232,6 +243,7 @@ export function registerDocRoutes(ctx, { store }) {
       viewer: reqCtx.user,
       kind: reqCtx.query.get('kind') ?? '',
       scope: reqCtx.query.get('scope') ?? '',
+      tag: reqCtx.query.get('tag') ?? '',
       mine: reqCtx.query.get('mine') === '1',
       q: reqCtx.query.get('q') ?? '',
       page: intOrNull(reqCtx.query.get('page')) ?? 1,
@@ -249,6 +261,7 @@ export function registerDocRoutes(ctx, { store }) {
       kind: reqCtx.body.kind,
       scope: reqCtx.body.scope,
       template: reqCtx.body.template,
+      tags: reqCtx.body.tags,
       blocks: reqCtx.body.blocks,
     }));
   });
@@ -269,6 +282,7 @@ export function registerDocRoutes(ctx, { store }) {
       title: reqCtx.body.title,
       scope: reqCtx.body.scope,
       template: reqCtx.body.template,
+      tags: reqCtx.body.tags,
     }));
   });
 

@@ -35,6 +35,8 @@ import {
   MAX_SCRIPT_TEMPLATES,
   MAX_SCRIPT_TEMPLATE_NAME,
   MAX_SCRIPT_TEMPLATE_DESC,
+  MAX_DOC_TAGS,
+  MAX_TAG_TEXT,
 } from './schema.js';
 import { createAnchor, syncAnchor, STATION_PAGE_HIDDEN } from './anchor.js';
 import { blockFromRow } from './queries.js';
@@ -99,6 +101,34 @@ export function createDocStore({ db, queries, now = () => Date.now() }) {
   /** 单行文本：换行 / 连续空白压成一个空格，再去掉首尾空白。分类这类字段用。 */
   function singleLineText(value) {
     return typeof value === 'string' ? value.replace(/\s+/g, ' ').trim() : '';
+  }
+
+  /**
+   * 标签：接受数组，也接受「逗号 / 空格 / 顿号 / # 分开」的一整串（编辑器里就是一个输入框）。
+   *
+   * 三条规矩：单个标签最长 MAX_TAG_TEXT；一篇最多 MAX_DOC_TAGS 个；重复的合并。
+   * 比较重复用大小写不敏感（`CSS` 与 `css` 是同一个标签），但**保留作者写下的那个写法**。
+   * 空数组是合法值 —— 「把这篇文章的标签清空」必须能表达。
+   */
+  function normalizeTags(value) {
+    const raw = Array.isArray(value)
+      ? value
+      : String(value ?? '')
+          .split(/[,，#、\s]+/)
+          .filter(Boolean);
+    const list = [];
+    const seen = new Set();
+    for (const item of raw) {
+      const text = singleLineText(String(item ?? '')).replace(/^#+/, '');
+      if (!text) continue;
+      if (text.length > MAX_TAG_TEXT) throw badRequest(`标签「${text}」太长了，最多 ${MAX_TAG_TEXT} 个字`);
+      const key = text.toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      list.push(text);
+    }
+    if (list.length > MAX_DOC_TAGS) throw badRequest(`一篇最多 ${MAX_DOC_TAGS} 个标签`);
+    return list;
   }
 
   function normalizeKind(value) {    const kind = String(value ?? 'post');
@@ -607,7 +637,7 @@ export function createDocStore({ db, queries, now = () => Date.now() }) {
     const rendered = renderBlocks(living, renderOptions(docRow, viewer, living));
     const abilities = abilitiesOf(docRow, viewer);
     const data = {
-      doc: shapeDoc(docRow),
+      doc: shapeDoc(docRow, queries.tagsOf(docRow.id)),
       blocks: living.map((block) => ({
         blockId: block.block_id,
         type: block.type,
@@ -718,25 +748,39 @@ export function createDocStore({ db, queries, now = () => Date.now() }) {
 
   /* ---------------- 文档 ---------------- */
 
-  function listDocuments({ viewer, kind = '', scope = '', mine = false, q = '', page = 1, limit = 20, sort = 'updated' } = {}) {
+  function listDocuments({ viewer, kind = '', scope = '', tag = '', mine = false, q = '', page = 1, limit = 20, sort = 'updated' } = {}) {
     const visible = visibilityConditions(viewer, hasTeams);
     const { rows, total } = queries.listDocuments({
       viewerId: viewer?.id ?? null,
       visible,
       kind,
       scope,
+      tag: singleLineText(String(tag ?? '')).replace(/^#+/, ''),
       mine: Boolean(mine),
       q: String(q ?? ''),
       page,
       limit,
       sort,
     });
+    // 标签一次问一批（N+1 会把列表页变成 20 次查询）。
+    const byDoc = queries.tagsFor(rows.map((row) => row.id));
     return {
-      documents: rows.map((row) => shapeDoc(row)),
+      documents: rows.map((row) => shapeDoc(row, byDoc.get(Number(row.id)) ?? [])),
       total,
       page: Math.max(Number(page) || 1, 1),
       limit: Math.min(Math.max(Number(limit) || 20, 1), 50),
     };
+  }
+
+  /**
+   * 用过的标签 + 篇数（广场的标签云、编辑器的候选项）。
+   *
+   * 门槛是「至少有一篇看得见的文档在用」：标签没有独立的生命周期，
+   * 它是从用法里长出来的 —— 最后一篇带它的文档删了，它就该消失。
+   */
+  function listTags({ viewer, limit = 24 } = {}) {
+    const visible = visibilityConditions(viewer, hasTeams);
+    return { tags: queries.popularTags({ visible, limit }), maxTags: MAX_DOC_TAGS, maxTagLength: MAX_TAG_TEXT };
   }
 
   function getDocument(id, viewer) {
@@ -752,11 +796,13 @@ export function createDocStore({ db, queries, now = () => Date.now() }) {
   }
 
   /** 建一篇文档：正文 + 影子行 + 修订 1，一步不少。 */
-  function createDocument({ viewer, title, kind = 'post', scope = 'public', template = '', blocks = null, reason = 'create' } = {}) {
+  function createDocument({ viewer, title, kind = 'post', scope = 'public', template = '', tags = null, blocks = null, reason = 'create' } = {}) {
     if (!viewer) throw new HttpError(401, 'unauthenticated', '请先登录');
     const cleanTitle = normalizeTitle(title);
     const cleanKind = normalizeKind(kind);
     const cleanScope = normalizeScope(scope);
+    // 先校验标签：坏标签要在**建影子行之前**就被挡下来，否则会留下一行没人认领的帖子。
+    const cleanTags = normalizeTags(tags);
     const cleanTemplate = String(template ?? '');
     if (cleanTemplate && !hasTemplate(cleanTemplate)) throw badRequest(`不认识的模板：${cleanTemplate}`);
     // 一个用户至多一份 profile 文档（§8.2）：已经有了就把那一篇原样交回去，
@@ -801,6 +847,7 @@ export function createDocStore({ db, queries, now = () => Date.now() }) {
       now: at,
     });
     writeBlocks(id, list, at);
+    if (cleanTags.length) queries.replaceTags({ documentId: id, tags: cleanTags, now: at });
     snapshot(id, reason, viewer.id, at);
     return present(mustExist(id), viewer);
   }
@@ -1395,14 +1442,17 @@ export function createDocStore({ db, queries, now = () => Date.now() }) {
     }
   }
 
-  function updateDocument({ id, viewer, title, scope, template } = {}) {
+  function updateDocument({ id, viewer, title, scope, template, tags } = {}) {
     const row = mustEdit(id, viewer);
     const cleanTitle = title === undefined ? row.title : normalizeTitle(title);
     const cleanScope = scope === undefined ? row.scope : normalizeScope(scope);
     const cleanTemplate = template === undefined ? String(row.template ?? '') : String(template ?? '');
     if (cleanTemplate && !hasTemplate(cleanTemplate)) throw badRequest(`不认识的模板：${cleanTemplate}`);
+    // 标签同理：`undefined` = 不动它（改标题的老客户端不该顺手把标签清空）。
+    const cleanTags = tags === undefined ? null : normalizeTags(tags);
     const at = now();
     queries.updateDocumentMeta({ id: row.id, title: cleanTitle, scope: cleanScope, template: cleanTemplate, updatedAt: at });
+    if (cleanTags) queries.replaceTags({ documentId: row.id, tags: cleanTags, now: at });
     // 元信息变了只写修订、不动块序列（修订表存的是块，但 reason 会记成 edit）。
     snapshot(row.id, 'edit', viewer.id, at);
     const fresh = mustExist(row.id);
@@ -1418,6 +1468,8 @@ export function createDocStore({ db, queries, now = () => Date.now() }) {
     queries.deletePollVotesOfDocument(row.id);
     // 沙箱块的状态同理：文档都没了，状态也不该继续占地方。
     queries.deleteAppStatesOfDocument(row.id);
+    // 标签也一样：留着只会让标签云指向一堆看不见的文档。
+    queries.deleteTagsOfDocument(row.id);
     syncDocumentAnchor({ ...row, deleted: 1 }, at);
     return { id: row.id, deleted: true };
   }
@@ -2078,6 +2130,7 @@ export function createDocStore({ db, queries, now = () => Date.now() }) {
     votePoll,
     anchorPostIdOf,
     documentByAnchorFor,
+    listTags,
     listScriptTemplates,
     saveScriptTemplate,
     deleteScriptTemplate,

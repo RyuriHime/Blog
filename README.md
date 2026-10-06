@@ -422,13 +422,14 @@ forum/
 | `#/search?q=关键词` | 全文搜索（标题 + 正文） |
 | `#/login`、`#/register` | 登录 / 注册 |
 | `#/admin` | 管理后台（仅管理员） |
-| `#/docs` | 积木广场：可编程帖子 / 笔记 / 主页文档的列表，支持 `?kind=` `?scope=` `?mine=1` `?q=` |
-| `#/doc/:id` | 积木阅读页：块渲染结果、降级警告、修订记录、导出/导入，底下是**互动条**（点赞 / 踩 / 投币 / 收藏 / 转发 / 关注作者 + AI 解读）—— 它挂在文档的锚点帖上，走 `GET /api/docs/:id/anchor`，不再需要跳到帖子页 |
-| `#/doc/:id/edit` | 积木编辑器：逐块编辑、上下移动、Markdown 双向、`ops` 增量改动、套模板、回滚、沙箱开关 |
+| `#/docs` | 积木广场：可编程帖子 / 笔记 / 主页文档的列表，支持 `?kind=` `?scope=` `?mine=1` `?q=` `?tag=标签`（点卡片上的标签就是跳到这儿）；两种排法 `▦ 网格` / `☰ 列表`（从上往下列下来），选择记在本地偏好 `forum:docsLayout` 里 |
+| `#/doc/:id` | 积木阅读页：块渲染结果、降级警告、修订记录、导出/导入、顶部挂着**标签**（点一下看同标签的积木），底下是**互动条**（点赞 / 踩 / 投币 / 收藏 / 转发 / 关注作者 + AI 解读）—— 它挂在文档的锚点帖上，走 `GET /api/docs/:id/anchor`，不再需要跳到帖子页 |
+| `#/doc/:id/edit` | 积木编辑器：逐块编辑、上下移动、Markdown 双向、`ops` 增量改动、套模板、回滚、沙箱开关、标签（跟着同一个「保存」一起存） |
 | `#/doc/:id/blocks` | 同一个编辑器的高级入口（默认落在积木模式）：块列表 + 当前块的 props 表单 |
 | `#/blocks` | 块类型表的老地址：进的是同一页 `#/dev`（页面没下线，收藏夹里的链接照样能开） |
 | `#/dev` | 开发者功能：块类型表（内置/自定义类型的 schema 速查 + 注册自己的块类型）+「我的脚本模板」（把自己常写的沙箱代码存下来，一键新建一篇只带这一块的积木） |
-| `#/guide` | 积木教程：写给用积木的人 —— 新建一篇、编辑器三档怎么用、一次「保存」都存什么、谁可以看、怎么分享、读者能做什么，后半截是进阶（让积木跑代码的两种块、能申请的六项能力、超时与失败怎么接、七个能直接抄的样例、存脚本模板、给全站加新块类型） |
+| `#/guide` | 积木教程：写给用积木的人 —— 新建一篇、编辑器三档怎么用、一次「保存」都存什么、谁可以看、怎么分享、**标签（怎么打、怎么按标签找）**、读者能做什么，后半截是进阶（让积木跑代码的两种块、能申请的六项能力、超时与失败怎么接、七个能直接抄的样例、存脚本模板、给全站加新块类型） |
+| `#/notes` | **（已下线，入口不再出现）** 老的学术笔记宿主页：路由与页面都留着，直接输地址还能看以前写的笔记，顶上写着「已经并进积木了 —— 给积木打 `#学术笔记` 标签」。代码没删（`public/views/notes.js`、`src/notes.js`、`note-studio/`），只是界面上不再提它 |
 | `#/wiki/:name` | Wiki 多页面：`[[双链]]` 的落点；左侧是分类边栏（页内筛选 + 新建页，作者多一个「改分类」），有这一页就渲染它，没有就给「建这一页」（`?create=1` 一步进编辑器） |
 | `#/teams` | 团队列表：公开团队广场（**被创建者藏起来的团队不出现**），`?mine=1` 只看我加入的，`?page=` 翻页；未登录也能看。顶上是「🔑 用团队号加入」，填 6 位号直接进队（登录后才显示） |
 | `#/team/:slug` | 团队主页：最上面是**团队公告**（只有成员看得见）与团队号（点「复制」发给要拉的人）、团队简介与成员、发帖框、帖子列表（按四档可见范围过滤，标题点进详情页，右侧显示「💬 N 条回复」）；成员在这里**只能编辑自己发的帖**（别人发的帖右边只有「💬 回复」，编辑 / 删除按钮只画在团队主页列表上）。三个页签 `?tab=discuss`（默认）/ `?tab=files`（文件柜）/ `?tab=chat`（群聊）；`?page=` 翻帖子、`?fpage=` 翻文件。没加入的人看到的是「加入团队」（`open`）或「申请加入」（`apply`，被拒过就是「再申请一次」），递过申请是「⏳ 申请审核中 + 撤回申请」；团长 / 管理员多一个「📨 加入申请」抽屉（待审 / 已批准 / 已拒绝 / 全部；批准 / 拒绝 / 撤销），创建者的团队设置（同一个抽屉位）里多一个「出现在团队广场」开关。每篇帖右边都有「💬 回复」：列表上点它落进详情页的回复框（`?reply=1`），在详情页点它就是原地把光标送进去 |
@@ -490,10 +491,10 @@ forum/
 | POST | `/api/messages/:username` | 发私信（互关不限量 / 单向每天 1 条） | 登录 |
 | POST | `/api/admin/users/:id/role` | 任命 / 收回管理员（`role: 'admin'\|'member'`） | **仅站长** |
 | POST | `/api/admin/users/:id/ban` | 封禁 / 解封（立即踢掉该用户全部会话；不能封禁站长） | 站长/管理员 |
-| GET | `/api/docs` | 积木文档列表，支持 `kind` `scope` `mine=1` `q` `page` `limit` `sort` | 公开（按可见范围过滤） |
-| POST | `/api/docs` | 新建积木文档，body `{ title, kind, scope, template }`；`kind='profile'` 一个用户至多一份 | 登录 |
-| GET | `/api/docs/:id` | 文档详情：`{ doc, blocks, html, warnings, abilities }` | 按 scope |
-| PUT | `/api/docs/:id` | 改标题 / 可见范围 / 模板名 | 作者/管理员 |
+| GET | `/api/docs` | 积木文档列表，支持 `kind` `scope` `mine=1` `q` `tag`（按标签筛，大小写不敏感）`page` `limit` `sort` | 公开（按可见范围过滤） |
+| POST | `/api/docs` | 新建积木文档，body `{ title, kind, scope, template, tags }`（标签最多 5 个、每个 24 字）；`kind='profile'` 一个用户至多一份 | 登录 |
+| GET | `/api/docs/:id` | 文档详情：`{ doc, blocks, html, warnings, abilities }`（`doc.tags` 是字符串数组） | 按 scope |
+| PUT | `/api/docs/:id` | 改标题 / 可见范围 / 模板名 / 标签（`tags` 不传 = 不动，传 `[]` = 清空） | 作者/管理员 |
 | DELETE | `/api/docs/:id` | 软删除文档并同步影子行 | 作者/管理员 |
 | POST | `/api/docs/:id/blocks` | 新增一块，body `{ type, props, after\|before\|position }` | 作者/管理员 |
 | PUT | `/api/docs/:id/blocks/:blockId` | 改一块的 props | 作者/管理员 |
@@ -518,6 +519,7 @@ forum/
 | POST | `/api/docs/meta/block-types` | 注册自定义块类型（名字 `^[a-z][a-z0-9_]{0,31}$`，内置名与重名 409）；`rendererKind:'declarative'` 可带 `renderer:{html:'…{{字段}}…'}`（会剥掉 script/内联事件/`javascript:`），`'sandbox'` 则用 schema 里的 `code` 走玻璃房 | 登录 |
 | POST | `/api/docs/meta/import` | 按 `forum-doc/1` 格式导入一份新文档 | 登录 |
 | GET | `/api/docs/meta/script-templates` | 我的脚本模板清单：`{ templates, limit, maxName, maxDescription, maxCode }`（模板只自己可见） | 登录 |
+| GET | `/api/docs/meta/tags` | 标签用过的清单 `{ tags: [{ tag, count }], maxTags: 5, maxTagLength: 24 }`（只统计**当前用户看得见**的文档 —— 私有文档的标签不在这里泄露存在性）；编辑器的「标签框上限 + 大家在用」用它 | 公开 |
 | POST | `/api/docs/meta/script-templates` | 存一个脚本模板，body `{ id?, name, description?, code }`；不带 `id` 是新建（重名 409、超过 50 个 400），带 `id` 是覆盖 | 登录（只能改自己的） |
 | DELETE | `/api/docs/meta/script-templates/:id` | 删掉自己的一个脚本模板（别人的 / 不存在的统一 404） | 登录（只能删自己的） |
 | POST | `/api/docs/notes/import` | 把一篇笔记接成文档，body `{ name, title, markdown, scope }`；幂等 | 登录（只能导自己的） |
@@ -653,6 +655,13 @@ doc_script_templates(id, user_id, name, description, code, created_at, updated_a
                     --   code 是沙箱脚本原文；存下来只为「一键新建一篇」时少粘一次
 doc_capability_logs(id, document_id, block_id, capability, user_id, allowed, created_at)
                     -- 沙箱能力调用的审计流水：被拒也记一行
+doc_tags(document_id, tag, created_at)
+                    -- 积木的标签，主键 (document_id, tag)，索引 (tag, document_id)。
+                    --   单开一张表而不是给 documents 加列：已存在的库上 CREATE TABLE IF NOT EXISTS
+                    --   不会补列，而 core 的 ensureColumn 只管 users / posts（「新状态开新表」是既定习惯）。
+                    --   一篇最多 5 个、每个最多 24 字；标签是用户自由写的词，不是预置枚举。
+                    --   点标签进 #/docs?tag=xxx（后端 GET /api/docs?tag=，大小写不敏感）。
+                    --   学术笔记功能已并进这里：写积木打 #学术笔记 标签即可（#/notes 入口下线、代码保留）
 note_documents(user_id, note_name, document_id, created_at)
                     -- 笔记子系统 ⇄ documents 的接线表，(user_id, note_name) 唯一
 

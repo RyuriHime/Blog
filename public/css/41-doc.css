@@ -242,6 +242,81 @@
   margin-bottom: 14px;
 }
 
+/* 另一种排法：卡片从上往下一张一行（同一张卡片，只是壳换了）。 */
+.doc-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-bottom: 14px;
+}
+
+/* 卡片外面套一层的原因只有一个：标签要是**真链接**（点一下看同标签的积木），
+   而 <a class="doc-card"> 里面不能嵌 <a>。 */
+.doc-card-item {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.doc-card-tags,
+.doc-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+
+.doc-tags {
+  margin-top: 10px;
+}
+
+.doc-tag {
+  display: inline-block;
+  font-size: 11px;
+  line-height: 1.8;
+  padding: 0 8px;
+  border-radius: 999px;
+  border: 1px solid var(--border-soft);
+  background: var(--bg-soft);
+  color: var(--muted);
+  text-decoration: none;
+}
+
+.doc-tag:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.doc-tag-pick {
+  cursor: pointer;
+}
+
+.doc-tag-count {
+  margin-left: 4px;
+  opacity: 0.6;
+}
+
+.doc-tag-picks {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+  width: 100%;
+}
+
+.doc-layout-tabs {
+  margin-left: auto;
+}
+
+.doc-active-tag {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+  font-size: 13px;
+}
+
 .doc-card {
   display: block;
   background: var(--panel);
@@ -476,6 +551,11 @@
   color: var(--text-dim);
   font-size: 12px;
   font-weight: 600;
+}
+
+/* 占满一整行（标签框 + 「大家在用」那一排）：.doc-meta 是 flex 换行。 */
+.doc-field-wide {
+  flex-basis: 100%;
 }
 
 .doc-req {

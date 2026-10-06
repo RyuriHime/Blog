@@ -100,6 +100,14 @@ function ntRender() {
         <h1 style="font-size:21px">📓 学术笔记</h1>
         <a class="btn btn-sm btn-primary" href="/notes/" target="_blank" rel="noopener">✏️ 打开编辑器</a>
       </div>
+      <div class="doc-moved-banner">
+        <span class="doc-moved-icon">🧩</span>
+        <div class="doc-moved-text">
+          <strong>这个功能已经并进积木了</strong>
+          <div class="hint">新写的笔记请直接写成积木，打上 <a href="#/docs?tag=%E5%AD%A6%E6%9C%AF%E7%AC%94%E8%AE%B0">#学术笔记</a> 标签 —— 公式、代码、双链在积木里都有，还能被搜到、被引用。这一页只留给以前写下的笔记，入口不再出现在导航里。</div>
+        </div>
+        <a class="btn btn-sm" href="#/docs">去积木广场 →</a>
+      </div>
       <div class="page-sub">支持 Markdown 与 LaTeX 公式，图片可以转成文字或公式，也有 AI 帮你整理和审阅。笔记默认私密，只有你自己看得到；想分享就点「公开」。</div>
       <div class="nt-stats">
         <span class="nt-stat"><strong>${Fmt.fmtNum(mine.length)}</strong> 篇我的笔记</span>

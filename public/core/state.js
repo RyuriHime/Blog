@@ -29,6 +29,11 @@ const PROFILE_LAYOUTS = [
   ['cards', '▦ 卡片'],
   ['compact', '≡ 紧凑'],
 ];
+// 积木广场的两种排法：一行多个（网格）/ 从上往下列下来（列表）。
+const DOC_LAYOUTS = [
+  ['grid', '▦ 网格'],
+  ['list', '☰ 列表'],
+];
 
 /* ------------------------------------------------------------------ */
 /* 本地偏好                                                            */
@@ -52,6 +57,7 @@ const AVATAR_EMOJIS = [
 // ── 导出 ──────────────────────────────────────────────────────────────
 export { state };
 export { PROFILE_LAYOUTS };
+export { DOC_LAYOUTS };
 export { AVATAR_EMOJIS };
 
 /* @hand-written */

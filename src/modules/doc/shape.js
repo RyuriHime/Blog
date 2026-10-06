@@ -58,8 +58,18 @@ export function shapeSettings(row) {
   };
 }
 
+/** 标签列表的兜底：只放非空字符串、去重、保持传入顺序。 */
+function tagList(value) {
+  const list = [];
+  for (const item of Array.isArray(value) ? value : []) {
+    const text = typeof item === 'string' ? item.trim() : '';
+    if (text && !list.includes(text)) list.push(text);
+  }
+  return list;
+}
+
 /** 一行 `documents`（带作者信息）→ 对外形状。 */
-export function shapeDoc(row) {
+export function shapeDoc(row, tags = []) {
   if (!row) return null;
   return {
     id: row.id,
@@ -69,6 +79,9 @@ export function shapeDoc(row) {
     scope: DOC_SCOPES.includes(row.scope) ? row.scope : 'public',
     scopeLabel: SCOPE_LABELS[row.scope] ?? SCOPE_LABELS.public,
     template: String(row.template ?? ''),
+    // 标签住在 doc_tags（不是 documents 的列），所以由调用方查好了传进来 ——
+    // 形状仍然只有这一处，只是多了一个入口参数。
+    tags: tagList(tags),
     anchorPostId: row.anchor_post_id == null ? null : Number(row.anchor_post_id),
     sandboxDisabled: Boolean(row.sandbox_disabled),
     deleted: Boolean(row.deleted),
@@ -86,8 +99,8 @@ export function shapeDoc(row) {
 }
 
 /** 列表用的轻形状：不带 blocks / warnings / abilities。 */
-export function shapeDocSummary(row) {
-  const doc = shapeDoc(row);
+export function shapeDocSummary(row, tags = []) {
+  const doc = shapeDoc(row, tags);
   if (!doc) return null;
   return {
     id: doc.id,
@@ -97,6 +110,7 @@ export function shapeDocSummary(row) {
     scope: doc.scope,
     scopeLabel: doc.scopeLabel,
     template: doc.template,
+    tags: doc.tags,
     anchorPostId: doc.anchorPostId,
     author: doc.author,
     createdAt: doc.createdAt,
