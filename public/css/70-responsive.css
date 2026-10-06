@@ -25,8 +25,36 @@
     padding: 18px 14px 34px;
   }
 
+  /* P5：窄屏（≤900px）不做浮层抽屉 —— 触屏没有 hover，滑出反而没法用。
+     侧栏回落到常规文档流（内容下方一列），把手与拖拽带隐藏，面板还原成普通卡片列。 */
   .sidebar {
     position: static;
+    transform: none;
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    pointer-events: auto;
+  }
+
+  .sidebar-handle {
+    display: none;
+  }
+
+  .sidebar-resizer {
+    display: none;
+  }
+
+  .sidebar-panel {
+    position: static;
+    width: auto;
+    max-height: none;
+    overflow: visible;
+    padding: 0;
+    background: none;
+    border: 0;
+    border-radius: 0;
+    box-shadow: none;
+    transform: none;
   }
 
   .brand-text {
