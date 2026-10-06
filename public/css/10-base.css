@@ -238,6 +238,7 @@
 
 /* ---------------- 布局 ---------------- */
 
+/* P5：右栏改抽屉后，主内容区吃满整宽（不再给侧栏预留 306px）。 */
 .layout {
   flex: 1;
   width: 100%;
@@ -245,7 +246,7 @@
   margin: 0 auto;
   padding: 24px 20px 40px;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 306px;
+  grid-template-columns: minmax(0, 1fr);
   gap: 22px;
   align-items: start;
 }
@@ -257,12 +258,19 @@
   gap: 16px;
 }
 
+/* P5：右侧栏 = 固定在右边缘的抽屉容器。
+   收起时只有把手可点，所以容器本身不吃点击（pointer-events: none），
+   由 .sidebar-handle 与 .sidebar-panel 各自打开。样式细节见 55-sidebar.css。 */
 .sidebar {
-  position: sticky;
-  top: 78px;
+  position: fixed;
+  top: 82px;
+  right: 0;
+  bottom: 0;
   display: flex;
-  flex-direction: column;
-  gap: 16px;
+  align-items: flex-start;
+  gap: 0;
+  z-index: 40;
+  pointer-events: none;
 }
 
 .footer {

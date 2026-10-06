@@ -100,6 +100,104 @@
   background: var(--accent-soft);
   color: var(--accent-fg);
 }
+/* ==================================================================
+ * P5：右侧栏抽屉（默认收起 · 悬停滑出 · 可拖宽）
+ *   结构见 public/core/session.js 的 renderSidebar()：
+ *     aside#sidebar.sidebar
+ *       ├─ button#sidebar-handle.sidebar-handle   ← 收起时唯一可见的东西
+ *       └─ div#sidebar-panel.sidebar-panel
+ *            ├─ div#sidebar-resizer.sidebar-resizer  ← 拖宽用的 6px 细带
+ *            └─ 原来的七张卡片
+ *   收起/展开：位移挂在【容器 .sidebar】上，靠 .sidebar.is-open 切换 transform ——
+ *   所以把手与面板是一块，一起出、一起回（收起时把手正好停在屏幕最右边）。
+ * ================================================================== */
+
+.sidebar-handle {
+  pointer-events: auto;
+  flex: 0 0 auto;
+  align-self: flex-start;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  width: 30px;                    /* 窄条：只占 30px */
+  padding: 12px 0 14px;
+  border: 1px solid var(--border);
+  border-right: 0;
+  border-radius: var(--radius-sm) 0 0 var(--radius-sm);
+  background: var(--panel);
+  color: var(--text-dim);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  box-shadow: var(--shadow);
+}
+
+.sidebar-handle:hover {
+  color: var(--text);
+  border-color: var(--accent);
+}
+
+.sidebar-handle-icon {
+  font-size: 15px;
+  line-height: 1;
+}
+
+.sidebar-handle-text {
+  writing-mode: vertical-rl;
+  letter-spacing: 2px;
+}
+
+.sidebar-panel {
+  pointer-events: auto;
+  position: relative;
+  width: var(--sidebar-width, 306px);
+  max-height: calc(100vh - 96px);
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 16px 16px 20px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-right: 0;
+  border-radius: var(--radius) 0 0 var(--radius);
+  box-shadow: var(--shadow);
+}
+
+/* 收起 / 展开：位移挂在【容器】上 —— 把手与面板是一块，一起出、一起回。
+   位移量就是当前宽度：收起时面板正好推出画面，把手正好停在屏幕最右边；
+   展开时整块左移，把手跟着面板一起走，始终贴在面板左边缘。 */
+.sidebar {
+  transform: translateX(var(--sidebar-width, 306px));
+  transition: transform 0.18s ease;
+}
+
+.sidebar.is-open {
+  transform: translateX(0);
+}
+
+/* 拖宽用的细带：贴在面板左边缘 */
+.sidebar-resizer {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 6px;
+  cursor: col-resize;
+  background: transparent;
+}
+
+.sidebar-resizer:hover {
+  background: var(--accent-soft);
+}
+
+/* 动效敏感的人：只保留开合，不要动画 */
+@media (prefers-reduced-motion: reduce) {
+  .sidebar {
+    transition: none;
+  }
+}
 
 
 /* @hand-written */
