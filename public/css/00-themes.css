@@ -1,0 +1,262 @@
+/* 00-themes.css —— `:root` 暗色变量表 + 8 套主题（`[data-theme]` 选择器）。**必须最先加载**，后面的分片都依赖这些变量。
+ *
+ * 本文件由 docs/tools/split-css.mjs 从原先的单体 public/style.css 切出来。
+ * 改样式请直接改这里；**不要**去改 public/style.css（它现在只是一个 @import 清单）。
+ */
+
+:root {
+  --bg: #0b0f16;
+  --bg-glow: #17233c;
+  --bg-soft: #111725;
+  --panel: #141b29;
+  --panel-2: #182132;
+  --border: #243044;
+  --border-soft: #1d2637;
+  --text: #e8eef7;
+  --text-dim: #a6b3c6;
+  --muted: #77869c;
+  --accent: #5b8cff;
+  --accent-2: #7c5bff;
+  --accent-soft: rgba(91, 140, 255, 0.14);
+  /* 「强调底色上的文字」专用。写死一个浅蓝会在亮色主题里直接消失，
+     所以每个浅底主题都自己给一个能看清的值。 */
+  --accent-fg: #cfe0ff;
+  /* 同样的问题也出在其它几种「浅色小标签」上：写死的浅薄荷 / 浅金 / 浅红
+     压在 12% 透明度的同色浅底上，暗色主题好看，亮色主题看不见。 */
+  --success-fg: #b8f0d8;
+  --warn-fg: #ffd479;
+  --danger-fg: #ffb4b4;
+  --violet-fg: #c8b8ff;
+  --danger: #ff6b6b;
+  --success: #43d39e;
+  --warn: #ffb454;
+  --topbar-bg: rgba(11, 15, 22, 0.85);
+  --hero-a: rgba(91, 140, 255, 0.18);
+  --hero-b: rgba(124, 91, 255, 0.12);
+  --code-bg: #0c1220;
+  --code-fg: #ffd8a8;
+  --code-block-bg: #0a0f1a;
+  --code-block-fg: #cfe3ff;
+  --radius: 14px;
+  --radius-sm: 9px;
+  --shadow: 0 10px 30px rgba(0, 0, 0, 0.35);
+  --font: "Segoe UI", system-ui, -apple-system, "Microsoft YaHei", "PingFang SC", sans-serif;
+  --mono: "Cascadia Code", "JetBrains Mono", Consolas, "Courier New", monospace;
+  color-scheme: dark;
+}
+
+
+/* ================= 背景主题 =================
+   切换方式：给 <html> 加 data-theme="midnight|light|forest|violet"，
+   默认（无属性）就是下面的「暗夜」。auto 由前端解析成 light / dark 后再写入。 */
+
+/* 极夜：纯黑 OLED，适合夜间长时间阅读 */
+html[data-theme='midnight'] {
+  --bg: #000000;
+  --bg-glow: #0b1220;
+  --bg-soft: #0a0c11;
+  --panel: #0b0e13;
+  --panel-2: #12161d;
+  --border: #1e242e;
+  --border-soft: #171c24;
+  --text: #eef2f8;
+  --text-dim: #a3aebd;
+  --muted: #74808f;
+  --topbar-bg: rgba(0, 0, 0, 0.85);
+  --shadow: 0 12px 34px rgba(0, 0, 0, 0.6);
+  --code-bg: #0a0d13;
+  --code-block-bg: #05070a;
+  color-scheme: dark;
+}
+
+/* 明亮：浅色日间主题 */
+html[data-theme='light'] {
+  --bg: #f5f7fb;
+  --bg-glow: #e4ebfa;
+  --bg-soft: #ffffff;
+  --panel: #ffffff;
+  --panel-2: #f1f4fa;
+  --border: #d8e0ed;
+  --border-soft: #e7ecf5;
+  --text: #1b2430;
+  --text-dim: #4a5666;
+  --muted: #7a8798;
+  --accent: #2f66f0;
+  --accent-2: #7a4bff;
+  --accent-soft: rgba(47, 102, 240, 0.12);
+  --accent-fg: #1d4ed8;
+  /* 浅底主题要把这几个「标签文字色」压深，否则和背景糊在一起。 */
+  --success-fg: #0b6b47;
+  --warn-fg: #8a5200;
+  --danger-fg: #a81b12;
+  --violet-fg: #5b2ecc;
+  --danger: #d92d20;
+  --success: #0f8a5f;
+  --warn: #b26a00;
+  --topbar-bg: rgba(255, 255, 255, 0.88);
+  --hero-a: rgba(47, 102, 240, 0.14);
+  --hero-b: rgba(122, 75, 255, 0.1);
+  --code-bg: #eef2f9;
+  --code-fg: #b2500a;
+  --code-block-bg: #f7f9fd;
+  --code-block-fg: #26303c;
+  --shadow: 0 12px 30px rgba(24, 39, 75, 0.12);
+  color-scheme: light;
+}
+
+/* 森林：墨绿底色 */
+html[data-theme='forest'] {
+  --bg: #07130d;
+  --bg-glow: #12301f;
+  --bg-soft: #0c1a13;
+  --panel: #0e1c15;
+  --panel-2: #14251b;
+  --border: #1f3529;
+  --border-soft: #182a20;
+  --text: #e6f3ea;
+  --text-dim: #a6c3b3;
+  --muted: #7b9a89;
+  --accent: #35c07f;
+  --accent-2: #2fa5a0;
+  --accent-soft: rgba(53, 192, 127, 0.14);
+  --topbar-bg: rgba(7, 19, 13, 0.85);
+  --hero-a: rgba(53, 192, 127, 0.16);
+  --hero-b: rgba(47, 165, 160, 0.1);
+  --code-bg: #0b1912;
+  --code-fg: #a8e9c6;
+  --code-block-bg: #081410;
+  --code-block-fg: #c8f0dc;
+  --shadow: 0 10px 30px rgba(0, 0, 0, 0.45);
+  color-scheme: dark;
+}
+
+/* 暮紫：紫罗兰夜色 */
+html[data-theme='violet'] {
+  --bg: #0d0a18;
+  --bg-glow: #2a1c50;
+  --bg-soft: #150f26;
+  --panel: #171228;
+  --panel-2: #1f1834;
+  --border: #2d2449;
+  --border-soft: #241c3c;
+  --text: #ece7fb;
+  --text-dim: #b8aede;
+  --muted: #8b81b3;
+  --accent: #a06bff;
+  --accent-2: #ff6bb5;
+  --accent-soft: rgba(160, 107, 255, 0.16);
+  --topbar-bg: rgba(13, 10, 24, 0.85);
+  --hero-a: rgba(160, 107, 255, 0.2);
+  --hero-b: rgba(255, 107, 181, 0.12);
+  --code-bg: #140f24;
+  --code-fg: #ffc7e6;
+  --code-block-bg: #100c1c;
+  --code-block-fg: #e0d6ff;
+  --shadow: 0 10px 30px rgba(0, 0, 0, 0.45);
+  color-scheme: dark;
+}
+
+/* 暖阳：琥珀黄深色（黄色系 · 深色） */
+html[data-theme='amber'] {
+  --bg: #16110a;
+  --bg-glow: #4a3308;
+  --bg-soft: #1e1710;
+  --panel: #221a0f;
+  --panel-2: #2b2113;
+  --border: #3d2f18;
+  --border-soft: #302614;
+  --text: #f6ecdb;
+  --text-dim: #cdb894;
+  --muted: #9a8763;
+  --accent: #f0b429;
+  --accent-2: #e8833a;
+  --accent-soft: rgba(240, 180, 41, 0.16);
+  --danger: #ff7a6b;
+  --success: #7ed4a0;
+  --warn: #ffd166;
+  --topbar-bg: rgba(22, 17, 10, 0.85);
+  --hero-a: rgba(240, 180, 41, 0.2);
+  --hero-b: rgba(232, 131, 58, 0.12);
+  --code-bg: #1c1509;
+  --code-fg: #ffdf9e;
+  --code-block-bg: #140f07;
+  --code-block-fg: #f4e3bd;
+  --shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+  color-scheme: dark;
+}
+
+/* 奶黄：米黄纸感（黄色系 · 浅色） */
+html[data-theme='sand'] {
+  --bg: #fdf6e3;
+  --bg-glow: #f6e7b8;
+  --bg-soft: #fffdf5;
+  --panel: #fffdf7;
+  --panel-2: #fbf3dd;
+  --border: #e6d9b4;
+  --border-soft: #f0e6cb;
+  --text: #3a2f1a;
+  --text-dim: #6b5a37;
+  --muted: #93825c;
+  --accent: #c98a00;
+  --accent-2: #e0672b;
+  --accent-soft: rgba(201, 138, 0, 0.14);
+  --accent-fg: #7a4b00;
+  --success-fg: #0b6b47;
+  --warn-fg: #7a4b00;
+  --danger-fg: #a81b12;
+  --violet-fg: #5b2ecc;
+  --danger: #c0392b;
+  --success: #1a7f52;
+  --warn: #a86a00;
+  --topbar-bg: rgba(253, 246, 227, 0.9);
+  --hero-a: rgba(201, 138, 0, 0.16);
+  --hero-b: rgba(224, 103, 43, 0.1);
+  --code-bg: #f6eed6;
+  --code-fg: #9c5a06;
+  --code-block-bg: #fbf6e8;
+  --code-block-fg: #43381f;
+  --shadow: 0 12px 30px rgba(120, 95, 30, 0.14);
+  color-scheme: light;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  background: radial-gradient(1100px 600px at 15% -10%, var(--bg-glow) 0%, var(--bg) 55%) no-repeat, var(--bg);
+  color: var(--text);
+  font-family: var(--font);
+  font-size: 15px;
+  line-height: 1.65;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  transition: background-color 0.25s ease, color 0.2s ease;
+}
+
+a {
+  color: var(--accent);
+  text-decoration: none;
+}
+
+a:hover {
+  text-decoration: underline;
+}
+
+h1,
+h2,
+h3,
+h4 {
+  line-height: 1.35;
+  margin: 0;
+}
+
+
+/* @hand-written */

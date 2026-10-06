@@ -1,11 +1,21 @@
 /**
  * 前端契约检查：
- *  1) app.js / index.html 用到的 CSS 类是否都在 style.css 里定义了；
+ *  1) 前端用到的 CSS 类是否都在 CSS 里定义了；
  *  2) 前端读取的 API 字段是否都真实存在（启动临时服务器实测）。
  * 用法：node scripts/check-ui-contract.mjs
+ *
+ * ── 为什么不再写死三个文件路径 ───────────────────────────────────────────
+ * v2 骨架会把 public/app.js（4000+ 行）拆成 public/core/* + public/views/*，
+ * 把 public/style.css 拆成 public/css/*。本检查原本只 readFileSync 三个固定
+ * 路径，文件一搬家「用到的类名」集合就会变小 —— missing 恒为空数组，
+ * 断言永远通过，**测试静默失效却依然报绿**。
+ *
+ * 所以改成两个集合都由「递归扫描 public/ 下的全部 .js/.html/.css」算出，
+ * 并加三条哨兵（文件数下限、断言数下限、被扫描文件必须真的产出类名），
+ * 任何一条不满足就直接失败。
  */
 import { spawn } from 'node:child_process';
-import { mkdirSync, openSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, openSync, readdirSync, readFileSync, rmSync, statSync } from 'node:fs';
 
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -18,6 +28,16 @@ const LOG_FILE = join(ROOT, 'data', 'contract-server.log');
 const PORT = Number(process.env.CONTRACT_PORT || 3412);
 const BASE = `http://127.0.0.1:${PORT}`;
 
+/** 不下降哨兵：接手的模块只允许加，不允许把这些数字改小。 */
+const MIN_CHECKS = Number(process.env.MIN_UI_CHECKS || 219);
+
+/**
+ * 前端源码入口清单。搬家前这三份文件在 public/ 根目录；骨架会把它们拆进
+ * public/core/ 与 public/views/。清单里任何一份（按 basename 匹配）都不许消失，
+ * 否则「类名都有定义」就会因为扫不到模板而假绿。
+ */
+const REQUIRED_SOURCES = ['app.js', 'index.html', 'style.css'];
+
 const problems = [];
 const notes = [];
 const check = (name, condition, detail = '') => {
@@ -25,11 +45,41 @@ const check = (name, condition, detail = '') => {
   else problems.push(`${name}${detail ? ` — ${detail}` : ''}`);
 };
 
+/* ---------- 0. 递归收集前端源码 ---------- */
+
+const SKIP_DIRS = new Set(['.git', 'node_modules']);
+
+function walk(dir, out = []) {
+  if (!existsSync(dir)) return out;
+  for (const name of readdirSync(dir)) {
+    if (SKIP_DIRS.has(name)) continue;
+    const full = join(dir, name);
+    if (statSync(full).isDirectory()) walk(full, out);
+    else out.push(full);
+  }
+  return out;
+}
+
+const publicDir = join(ROOT, 'public');
+const publicFiles = walk(publicDir);
+const jsFiles = publicFiles.filter((file) => file.endsWith('.js'));
+const htmlFiles = publicFiles.filter((file) => file.endsWith('.html'));
+const cssFiles = publicFiles.filter((file) => file.endsWith('.css'));
+
+const readAll = (files) => files.map((file) => readFileSync(file, 'utf8')).join('\n');
+const appJs = readAll(jsFiles); // 前端全部 JS（骨架前是 app.js 一个文件）
+const indexHtml = readAll(htmlFiles);
+const styleCss = readAll(cssFiles);
+
 /* ---------- 1. 前端静态资源自检 ---------- */
 
-const appJs = readFileSync(join(ROOT, 'public', 'app.js'), 'utf8');
-const indexHtml = readFileSync(join(ROOT, 'public', 'index.html'), 'utf8');
-const styleCss = readFileSync(join(ROOT, 'public', 'style.css'), 'utf8');
+const publicBasenames = new Set(publicFiles.map((file) => file.slice(Math.max(file.lastIndexOf('/'), file.lastIndexOf('\\')) + 1)));
+const missingSources = REQUIRED_SOURCES.filter((name) => !publicBasenames.has(name));
+check(
+  `前端源码入口都在（js ${jsFiles.length} / html ${htmlFiles.length} / css ${cssFiles.length}）`,
+  jsFiles.length >= 1 && htmlFiles.length >= 1 && cssFiles.length >= 1 && missingSources.length === 0,
+  `js=${jsFiles.length} html=${htmlFiles.length} css=${cssFiles.length} 缺=${missingSources.join(',') || '无'}`,
+);
 
 const defined = new Set([...styleCss.matchAll(/\.(-?[A-Za-z][\w-]*)/g)].map((match) => match[1]));
 const used = new Set();
@@ -39,19 +89,106 @@ for (const source of [appJs, indexHtml]) {
     for (const name of value.split(/\s+/)) if (name) used.add(name);
   }
 }
+check(
+  '模板里确实扫到了类名（否则「类名都有定义」是假绿）',
+  used.size >= 50,
+  `used=${used.size}`,
+);
 const missing = [...used].filter((name) => !defined.has(name));
 check('所有模板类名都在 style.css 中有定义', missing.length === 0, missing.join(', '));
 
-const selectors = [...appJs.matchAll(/querySelector(?:All)?\('([^']+)'\)/g)].map((match) => match[1]);
-for (const selector of selectors.filter((item) => item.startsWith('#') && !item.includes(' '))) {
+// 前端拼的是**字符串 HTML**，Markdown 的强调语法在这里不会被渲染 ——
+// 写进 innerHTML 的 `**加粗**` 会原样显示成两个星号（真机验收前踩到过：`#/blocks`
+// 页面上三处提示词带着字面的星号）。只扫真正会进 HTML 的行：
+// JS 注释与 HTML 注释（`<!-- … -->`，可能跨行）都不算。
+const strayEmphasis = [];
+for (const file of jsFiles) {
+  let inHtmlComment = false;
+  readFileSync(file, 'utf8')
+    .split('\n')
+    .forEach((raw, index) => {
+      let line = raw;
+      if (inHtmlComment) {
+        const close = line.indexOf('-->');
+        if (close === -1) return;
+        line = line.slice(close + 3);
+        inHtmlComment = false;
+      }
+      const open = line.indexOf('<!--');
+      if (open !== -1) {
+        const close = line.indexOf('-->', open);
+        if (close === -1) {
+          inHtmlComment = true;
+          line = line.slice(0, open);
+        } else {
+          line = line.slice(0, open) + line.slice(close + 3);
+        }
+      }
+      const trimmed = line.trim();
+      if (trimmed.startsWith('*') || trimmed.startsWith('//') || trimmed.startsWith('/*')) return;
+      if (!line.includes('<')) return;
+      if (!/\*\*[^*\n]+\*\*/.test(line)) return;
+      strayEmphasis.push(`${file.slice(ROOT.length + 1)}:${index + 1}: ${trimmed.slice(0, 100)}`);
+    });
+}
+check(
+  'HTML 字面量里没有 Markdown 的 **强调**（页面上会原样显示星号）',
+  strayEmphasis.length === 0,
+  strayEmphasis.join(' | '),
+);
+
+// 积木的**服务端**也会拼 HTML（`src/modules/doc/**`），那些类名不在 public/ 里，
+// 上面「所有模板类名都在 style.css 中有定义」那条扫不到它们 —— 于是四个类
+// （`.doc-block-warning` / `.doc-block-fields` / `.doc-block-tpl` / `.doc-poll-hint`）
+// 曾经一条 CSS 都没有：块降级时的「为什么降级」就是一句没有边框底色的灰字，
+// 真机验收被报成「警告渲染失效」。这里把服务端产出的类名也纳入同一份清单。
+// 只认字面量，跳过 `class="doc-block-${type}"` 这类拼接出来的名字。
+const docDir = join(ROOT, 'src', 'modules', 'doc');
+const docSources = existsSync(docDir) ? walk(docDir).filter((file) => file.endsWith('.js')) : [];
+const serverUsed = new Set();
+for (const file of docSources) {
+  for (const match of readFileSync(file, 'utf8').matchAll(/class="([^"]*)"/g)) {
+    for (const name of match[1].split(/\s+/)) {
+      if (name && !name.includes('${') && !name.includes('$')) serverUsed.add(name);
+    }
+  }
+}
+const serverMissing = [...serverUsed].filter((name) => !defined.has(name));
+// 真扫到了才断言，否则「0 个缺失」是假绿（改了目录结构就会变成这种）。
+check(
+  '确实扫到了服务端拼进页面的类名',
+  serverUsed.size >= 10,
+  `count=${serverUsed.size}`,
+);
+check(
+  '服务端产出的类名也都有 CSS（否则块降级提示、自定义块外壳会没有样式）',
+  serverMissing.length === 0,
+  serverMissing.join(', '),
+);
+
+// 前端有两种写法：原生 querySelector('#x') 与内部简写 $('#x')（= app.js 顶部的 $ 助手）。
+// 只认一种会让 idSelectors 直接变 0 —— 那样的「断言 0 条」也是假绿。
+const selectors = [
+  ...[...appJs.matchAll(/querySelector(?:All)?\('([^']+)'\)/g)].map((match) => match[1]),
+  ...[...appJs.matchAll(/\$\('#([A-Za-z][\w-]*)'\)/g)].map((match) => `#${match[1]}`),
+];
+// 排除运行时才创建的元素（它们不在 index.html 里，由 JS 自己 insertAdjacentHTML 出来）。
+const DYNAMIC_IDS = new Set(['user-menu', 'theme-menu', 'username']);
+const idSelectors = selectors.filter(
+  (item) => item.startsWith('#') && !item.includes(' ') && !DYNAMIC_IDS.has(item.slice(1)),
+);
+check('确实扫到了 index.html 里的挂载点查询', idSelectors.length >= 5, `count=${idSelectors.length}`);
+for (const selector of idSelectors) {
   const id = selector.slice(1);
   check(`index.html 中存在 id="${id}"`, indexHtml.includes(`id="${id}"`));
 }
 
 /* ---------- 1a-2. 交互与错误处理的静态契约（体检第 2 批） ---------- */
 
-// 这些是「修好了别再退化」的守卫：都不依赖运行时，改动 app.js / server.js 就会跑。
-const serverJs = readFileSync(join(ROOT, 'src', 'server.js'), 'utf8');
+// 这些是「修好了别再退化」的守卫：都不依赖运行时，改动前端 / 服务端就会跑。
+// serverJs 从前只读 src/server.js 一个文件；v2 把路由拆进了 src/modules/**，
+// 所以改成把 src/ 下所有 .js 拼起来看 —— 否则下面那条「锁定守卫」会假红。
+const serverJs = readAll(walk(join(ROOT, 'src')).filter((file) => file.endsWith('.js')));
 
 check('统一的错误出口 toastError 存在', /function toastError\(/.test(appJs));
 check('不再有裸的 toast(error.message)（统一走 toastError）', !/toast\(error\.message/.test(appJs));
@@ -124,6 +261,90 @@ for (const match of swatchSource.matchAll(
     `预览 ${bg}/${panel}/${accent} vs CSS ${cssValue('--bg')}/${cssValue('--panel')}/${cssValue('--accent')}`,
   );
 }
+
+/* ---------- 1c. 浅色主题的可读性 ---------- */
+//
+// 用户报过「文字不适配亮色主题」：写死的浅色（#cfe0ff / #ffd479 / #dbe4f0 …）在
+// 暗色底上很好看，切到浅色底就和背景糊在一起。这种问题只有手动切主题才看得见，
+// 所以这里直接把它算出来 —— 对比度低于 4.5 就不算通过。
+
+/** '#rrggbb' → [r,g,b]；认不出来返回 null。 */
+function parseHex(value) {
+  const match = /^#([0-9a-fA-F]{6})$/.exec(String(value).trim());
+  if (!match) return null;
+  const n = Number.parseInt(match[1], 16);
+  return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+}
+
+/** 把可能带 alpha 的颜色摊在底色上，得到实际看到的颜色。 */
+function flatten(value, base) {
+  const text = String(value).trim();
+  const hex = parseHex(text);
+  if (hex) return hex;
+  const rgba = /^rgba?\(([^)]+)\)$/.exec(text);
+  if (!rgba) return null;
+  const parts = rgba[1].split(',').map((item) => Number(item.trim()));
+  if (parts.length < 3 || parts.slice(0, 3).some((item) => Number.isNaN(item))) return null;
+  const alpha = parts.length > 3 ? parts[3] : 1;
+  return [0, 1, 2].map((i) => Math.round(parts[i] * alpha + base[i] * (1 - alpha)));
+}
+
+function luminance(rgb) {
+  const channel = (value) => {
+    const s = value / 255;
+    return s <= 0.03928 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4;
+  };
+  return 0.2126 * channel(rgb[0]) + 0.7152 * channel(rgb[1]) + 0.0722 * channel(rgb[2]);
+}
+
+/** WCAG 对比度，1~21；算不出来返回 null。 */
+function contrast(fgValue, bgValue) {
+  const base = parseHex(bgValue) ?? flatten(bgValue, [255, 255, 255]);
+  if (!base) return null;
+  const fg = flatten(fgValue, base);
+  const bg = flatten(bgValue, base);
+  if (!fg || !bg) return null;
+  const a = luminance(fg);
+  const b = luminance(bg);
+  return (Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05);
+}
+
+/** 取某个主题里的变量值，没写就按 CSS 规则回退到 :root。 */
+function themeValue(key, name) {
+  const block = themeBlock(key) ?? '';
+  const pattern = new RegExp(`${name}:\\s*([^;]+);`);
+  const own = block.match(pattern);
+  if (own) return own[1].trim();
+  const root = rootBlock.match(pattern);
+  return root ? root[1].trim() : '';
+}
+
+// 只有浅底主题需要把「标签文字色」压深；暗底主题里这些值本来就是亮的，天然达标。
+for (const key of ['light', 'sand']) {
+  const bg = themeValue(key, '--bg');
+  for (const name of ['--text', '--text-dim', '--accent-fg', '--success-fg', '--warn-fg', '--danger-fg', '--violet-fg']) {
+    const ratio = contrast(themeValue(key, name), bg);
+    check(
+      `浅色主题「${key}」的 ${name} 在底色上看得清`,
+      ratio !== null && ratio >= 4.5,
+      `${name}=${themeValue(key, name)} on ${bg} → 对比度 ${ratio === null ? '算不出' : ratio.toFixed(2)}`,
+    );
+  }
+}
+
+// 写死的浅色文字只在暗底上成立。这类色值必须走变量，否则下次换主题又会糊。
+const BANNED_HARDCODED = [
+  '#cfe0ff', '#dbe4f0', '#b8f0d8', '#8ff0c4',
+  '#ffd479', '#ffe6b3', '#ffb4b4', '#ffc9c9', '#ffd9d9', '#c8b8ff',
+];
+const hardcodedOffenders = [...styleCss.matchAll(/^\s*color:\s*(#[0-9a-fA-F]{3,8})\s*;/gm)]
+  .filter((match) => BANNED_HARDCODED.includes(match[1].toLowerCase()))
+  .map((match) => match[0].trim());
+check(
+  '浅色小标签的文字色都走主题变量，没有写死的浅色',
+  hardcodedOffenders.length === 0,
+  hardcodedOffenders.slice(0, 5).join(' | '),
+);
 
 // 首屏内联脚本必须存在，并且用同一个 localStorage key（否则刷新会闪一下）
 const themeKeyInApp = (appJs.match(/const THEME_STORAGE_KEY = '([^']+)'/) ?? [])[1];
@@ -777,6 +998,66 @@ try {
     !(await dmB('/api/posts?perPage=30')).json.data.items.some((row) => row.author.username === dmAName),
   );
   check('解除拉黑', (await dmA(`/api/users/${idB}/block`, { method: 'POST', body: { blocked: false } })).json.data.blocked === false);
+
+  /* ---- 可编程帖子（积木）的对外契约 ---- */
+  const docTemplates = await dmA('/api/docs/meta/templates');
+  check(
+    '积木：模板清单给出 templates/kinds/scopes',
+    docTemplates.status === 200 &&
+      hasAll(docTemplates.json.data ?? {}, ['templates', 'kinds', 'scopes']) &&
+      docTemplates.json.data.templates.length === 7 &&
+      docTemplates.json.data.kinds.length === 3 &&
+      docTemplates.json.data.scopes.length === 4,
+    JSON.stringify(docTemplates.json).slice(0, 200),
+  );
+  const docTypes = await dmA('/api/docs/meta/block-types');
+  check(
+    '积木：块类型清单给出 12 种内置类型且带声明式 schema',
+    docTypes.status === 200 &&
+      docTypes.json.data?.types?.length === 12 &&
+      docTypes.json.data.types.every((type) => type.builtin === true && type.schema && typeof type.schema === 'object'),
+    JSON.stringify(docTypes.json).slice(0, 200),
+  );
+  const createdDoc = await dmA('/api/docs', {
+    method: 'POST',
+    body: { title: '契约用例', kind: 'post', scope: 'public', template: 'blank' },
+  });
+  check(
+    '积木：建文档返回 doc/blocks/html/warnings/abilities',
+    createdDoc.status === 200 &&
+      hasAll(createdDoc.json.data ?? {}, ['doc', 'blocks', 'html', 'warnings', 'abilities']) &&
+      hasAll(createdDoc.json.data.doc, ['id', 'kind', 'title', 'scope', 'anchorPostId', 'author', 'createdAt', 'updatedAt']) &&
+      hasAll(createdDoc.json.data.doc.author, ['id', 'username', 'displayName', 'avatar', 'role']) &&
+      hasAll(createdDoc.json.data.abilities, ['canView', 'canEdit', 'canReact', 'canCoin']) &&
+      typeof createdDoc.json.data.html === 'string' &&
+      createdDoc.json.data.html.includes('doc-block'),
+    JSON.stringify(createdDoc.json).slice(0, 300),
+  );
+  const listedDocs = await dmA('/api/docs?kind=post');
+  check(
+    '积木：列表接口返回 total/documents',
+    listedDocs.status === 200 &&
+      hasAll(listedDocs.json.data ?? {}, ['total', 'documents']) &&
+      Array.isArray(listedDocs.json.data.documents),
+    JSON.stringify(listedDocs.json).slice(0, 200),
+  );
+  check(
+    '积木：/api/docs/profile/:username 用 found 标记而不是 404',
+    (await dmA(`/api/docs/profile/${dmAName}`)).json.data?.found === false,
+  );
+  check(
+    '积木：/api/docs/notes/lookup 用 found 标记而不是 404',
+    (await dmA('/api/docs/notes/lookup?ownerId=1&name=nope')).json.data?.found === false,
+  );
+  const createdProfileDoc = await dmA('/api/docs', {
+    method: 'POST',
+    body: { title: '契约主页', kind: 'profile', scope: 'public', template: 'blank' },
+  });
+  check(
+    '积木：建了 profile 文档后按用户名查得到同一份',
+    createdProfileDoc.json.data?.doc?.kind === 'profile' &&
+      (await dmA(`/api/docs/profile/${dmAName}`)).json.data?.doc?.id === createdProfileDoc.json.data.doc.id,
+  );
 } catch (error) {
   problems.push(`契约检查异常：${error.message}`);
 } finally {
@@ -802,11 +1083,22 @@ try {
 }
 
 for (const line of notes) console.log(line);
+
+/* ---------- 3. 不下降哨兵 ---------- */
+// 断言数掉下去 = 有断言没被执行（文件被搬走、正则不再命中、提前 return）。
+// 这是 R-08「重构让静态检查静默失效」的最后一道防线。
+if (notes.length < MIN_CHECKS) {
+  problems.push(`通过项数从 ${MIN_CHECKS} 掉到 ${notes.length}：有断言没被执行（前端文件被搬走却没同步本检查？）`);
+}
+
 console.log(`\n${'─'.repeat(46)}`);
-console.log(`通过 ${notes.length} 项，问题 ${problems.length} 项`);
+console.log(`通过 ${notes.length} 项（下限 ${MIN_CHECKS}），问题 ${problems.length} 项`);
 for (const problem of problems) console.log(`  ❌ ${problem}`);
 if (problems.length) {
   console.log('\n服务器日志尾部（供排查）：');
-  console.log(readFileSync(LOG_FILE, 'utf8').slice(-1500));
+  // ⚠️ 必须 existsSync 兜一层：起服务器那步如果自己就失败了（端口被占、被沙箱拦），
+  // 日志文件根本不会生成，这里 readFileSync 会抛 ENOENT —— 那样「3 个问题」就变成
+  // 一个看不懂的堆栈，真正的失败原因反而被盖掉（踩过一次）。
+  console.log(existsSync(LOG_FILE) ? readFileSync(LOG_FILE, 'utf8').slice(-1500) : `（没有 ${LOG_FILE}）`);
 }
 process.exit(problems.length ? 1 : 0);

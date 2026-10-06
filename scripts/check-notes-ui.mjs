@@ -3,17 +3,40 @@
 // 免得把别的视图的类名 / id 算进来。
 //
 // 用法：node scripts/check-notes-ui.mjs
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
-const app = readFileSync(join(ROOT, 'public', 'app.js'), 'utf8');
-const css = readFileSync(join(ROOT, 'public', 'style.css'), 'utf8');
-const html = readFileSync(join(ROOT, 'public', 'index.html'), 'utf8');
+
+/**
+ * 递归收集 public/ 下指定后缀的文件。
+ *
+ * ⚠️ 骨架改造后的变化（第二次调整）：前端拆成了 `public/core/*` + `public/views/*`，
+ * 样式拆成 `public/css/*`。原先直接 `readFileSync('public/app.js')` 会在文件一搬家后
+ * **静默失效**（断言全都不跑、测试却还是绿的），所以这里改成扫整个目录。
+ */
+function collect(dir, suffix, out = []) {
+  for (const entry of readdirSync(dir)) {
+    const full = join(dir, entry);
+    if (statSync(full).isDirectory()) collect(full, suffix, out);
+    else if (entry.endsWith(suffix)) out.push(full);
+  }
+  return out;
+}
+
+const PUBLIC = join(ROOT, 'public');
+const app = collect(PUBLIC, '.js').map((file) => readFileSync(file, 'utf8')).join('\n');
+const css = collect(PUBLIC, '.css').map((file) => readFileSync(file, 'utf8')).join('\n');
+const html = readFileSync(join(PUBLIC, 'index.html'), 'utf8');
+// 笔记页现在单独一个文件，切段落直接认这个文件最准（不用再靠「下一个视图的注释」定位）。
+const notesFile = readFileSync(join(PUBLIC, 'views', 'notes.js'), 'utf8');
 
 let pass = 0;
 const problems = [];
+
+/** 骨架改造时的通过项数下限。只许涨，不许跌。 */
+const MIN_PASS = Number(process.env.MIN_PASS || 33);
 
 function check(label, condition, detail = '') {
   if (condition) {
@@ -29,15 +52,17 @@ function check(label, condition, detail = '') {
 /* 切出笔记那一段                                                     */
 /* ---------------------------------------------------------------- */
 
-const start = app.indexOf('学术笔记（note-studio）');
-const end = app.indexOf('/* 启动', start);
-const block = start >= 0 && end > start ? app.slice(start, end) : '';
+// v2 把笔记拆成了独立文件，所以这里直接认文件，
+// 不用再靠「下一个视图的注释」当下标（main 上那个 `/* 启动` 定位法就是为单文件写的）。
+const block = notesFile;
 
 console.log('\n▶ 前端：学术笔记接线');
 
 check('app.js 里能找到学术笔记代码块', block.length > 0);
 check('定义了 async function viewNotes()', /async function viewNotes\(\)/.test(block));
-check('路由已接上 #/notes', /if \(first === 'notes'\) return await viewNotes\(\);/.test(app));
+// 路由分发现在在 `public/core/router.js` 里，而且调用带命名空间前缀（`Notes.viewNotes()`）。
+// 正则写成「`viewNotes()` 结尾」即可兼容两种写法，不必锁死前缀。
+check('路由已接上 #/notes', /if \(first === 'notes'\) return await [\w.]*viewNotes\(\);/.test(app));
 check('侧栏有「学术笔记」入口', /class="side-link" href="#\/notes"/.test(app));
 check(
   '侧栏入口和路由用的同一个地址',
@@ -102,6 +127,11 @@ check('有新窗口打开编辑器的入口', /href="\/notes\/" target="_blank"/
 check('入口只加在侧栏，没动 index.html 顶栏', !html.includes('#/notes') && !html.includes('/notes/'));
 
 console.log('\n' + '─'.repeat(46));
+/* 不下降哨兵：通过项数不得少于骨架改造时的实测值。 */
+if (pass < MIN_PASS) {
+  problems.push(`通过项数从 ${MIN_PASS} 掉到 ${pass}：有断言没被执行（文件被搬走却没同步本检查？）`);
+  console.log(`  ❌ 通过项数从 ${MIN_PASS} 掉到 ${pass}：有断言没被执行（文件被搬走却没同步本检查？）`);
+}
 console.log(`通过 ${pass} 项，问题 ${problems.length} 项`);
 if (problems.length) {
   console.log('  - ' + problems.join('\n  - '));

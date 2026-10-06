@@ -1,0 +1,55 @@
+// 可编程帖子（P2）—— 学术笔记升级成「有序积木块」的文档。
+//
+// 归属：文档本身、文档的块、文档的修订、块类型注册表、沙箱能力审计、笔记对照表。
+// 不拥有：posts / reactions / coins（那是 core 的表，可编程帖子只是**另一种帖子形态**）。
+//
+// ── 为什么表在 import 期登记，而不是在 install(ctx) 里 ──
+// 开库动作发生在 `src/server.js` 里，那时 `schemas` 必须已经满员。
+// 所以下面的 `schemas.addScript(...)` 是模块顶层语句（副作用导入），
+// 和 `src/modules/feed/index.js`、`src/core/tables.sql.js` 用的是同一个套路。
+import { schemas } from '../../core/schema.js';
+import { DOC_SCHEMA } from './schema.js';
+import { createDocQueries } from './queries.js';
+import { createDocStore } from './store.js';
+import { registerDocRoutes } from './routes.js';
+import { loadBlockTypes } from './blocks/index.js';
+
+// 副作用：登记本模块的九张表（必须在开库之前，见文件头注释）。
+schemas.addScript(DOC_SCHEMA, 'doc');
+
+export default {
+  name: 'doc',
+  /** 新前缀。写完在这里登记路由，不要往 /api/posts 上加东西。 */
+  apiPrefix: '/api/docs',
+  /** 本模块**拥有**的表。九张都是新增表，v1 的表一张都不动。 */
+  owns: [
+    'documents',
+    'document_blocks',
+    'document_revisions',
+    'doc_block_types',
+    'doc_capability_logs',
+    'note_documents',
+    'doc_poll_votes',
+    'doc_wiki_pages',
+    'doc_app_state',
+  ],
+  /**
+   * 会读、但不拥有的表。
+   *
+   * ⚠️ `boards` 在这里有一个**唯一的例外**：`doc` 会往 `boards` 里写一行
+   * 「积木」系统板块（见 `src/modules/doc/anchor.js`）。
+   * 这么做的原因写在那个文件里 —— 互动接口（赞/踩/投币/收藏）全部只认 `posts` 的行，
+   * 而 `posts.board_id` 是 NOT NULL 外键，所以影子行必须挂在一个真实板块下。
+   * 这一行是幂等创建的（`INSERT OR IGNORE`），而且**惰性**创建：
+   * 只有真的建了第一篇文档才会出现，新库上一个字都不加。
+   */
+  reads: ['users', 'posts', 'reactions', 'boards'],
+  install(ctx) {
+    // 顺序不能换：先把数据库里注册过的块类型装进注册表，
+    // 再建 store —— 否则「渲染一篇用了自定义类型的文档」会退化成占位。
+    loadBlockTypes(ctx.db);
+    const queries = createDocQueries(ctx.db);
+    const store = createDocStore({ db: ctx.db, queries });
+    registerDocRoutes(ctx, { store, queries });
+  },
+};

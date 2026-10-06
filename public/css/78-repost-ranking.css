@@ -1,0 +1,207 @@
+/* 78-repost-ranking.css —— v1.3 新增：转发区、排行榜、公式说明卡片。
+ *
+ * 本文件由 docs/tools/split-css.mjs 从原先的单体 public/style.css 切出来。
+ * 改样式请直接改这里；**不要**去改 public/style.css（它现在只是一个 @import 清单）。
+ */
+
+/* ================= v1.3 新增：转发 / 排行榜 ================= */
+
+/* ---------------- 转发按钮与转发区 ---------------- */
+.reaction.is-on-repost,
+.btn.is-on-repost {
+  background: rgba(67, 211, 158, 0.14);
+  border-color: rgba(67, 211, 158, 0.5);
+  color: var(--success-fg);
+}
+
+.tag-repost {
+  color: var(--success-fg);
+  border-color: rgba(67, 211, 158, 0.4);
+  background: rgba(67, 211, 158, 0.12);
+}
+
+.value-chip {
+  padding: 4px 10px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 212, 121, 0.45);
+  background: rgba(255, 212, 121, 0.12);
+  color: var(--warn-fg);
+  font-size: 12.5px;
+  white-space: nowrap;
+}
+
+.repost-form {
+  padding: 14px 18px 0;
+  border-bottom: 1px dashed var(--border-soft);
+}
+
+.repost-form textarea {
+  min-height: 62px;
+}
+
+.repost-list {
+  display: flex;
+  flex-direction: column;
+}
+
+.repost-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 11px 0;
+  border-bottom: 1px solid var(--border-soft);
+}
+
+.repost-item:last-child {
+  border-bottom: 0;
+}
+
+.repost-body {
+  flex: 1;
+  min-width: 0;
+}
+
+.repost-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.repost-comment {
+  margin-top: 4px;
+  font-size: 14px;
+  color: var(--text-dim);
+  background: var(--bg-soft);
+  border-left: 3px solid rgba(67, 211, 158, 0.5);
+  border-radius: 0 8px 8px 0;
+  padding: 6px 12px;
+}
+
+.repost-quote {
+  margin: 0 0 8px;
+  padding: 5px 12px;
+  border-left: 3px solid rgba(67, 211, 158, 0.5);
+  background: rgba(67, 211, 158, 0.06);
+  border-radius: 0 8px 8px 0;
+  color: var(--text-dim);
+  font-size: 13.5px;
+}
+
+/* ---------------- 排行榜 ---------------- */
+.rank-table td {
+  vertical-align: middle;
+}
+
+.rank-cell {
+  width: 46px;
+}
+
+.rank-badge {
+  display: inline-grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 8px;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  color: var(--muted);
+  font-size: 12.5px;
+  font-weight: 600;
+}
+
+.rank-badge.top-1 {
+  background: linear-gradient(135deg, #ffd479, #ff9f43);
+  border-color: transparent;
+  color: #3a2600;
+}
+
+.rank-badge.top-2 {
+  background: linear-gradient(135deg, #d7e0ea, #9fb0c4);
+  border-color: transparent;
+  color: #22303f;
+}
+
+.rank-badge.top-3 {
+  background: linear-gradient(135deg, #f0b98a, #cf8b52);
+  border-color: transparent;
+  color: #3a2205;
+}
+
+.rank-table .num {
+  text-align: right;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.value-cell {
+  color: var(--warn-fg);
+  font-weight: 700;
+}
+
+.author-cell {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin-right: 6px;
+}
+
+.rank-value {
+  margin-left: auto;
+  color: var(--warn-fg);
+  font-size: 12.5px;
+  padding-left: 8px;
+}
+
+/* ---------------- 公式说明卡片 ---------------- */
+.formula-card {
+  background: linear-gradient(135deg, var(--hero-a), var(--hero-b) 60%, transparent);
+}
+
+.formula {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.formula-line {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  font-size: 13.8px;
+  color: var(--text-dim);
+  line-height: 1.7;
+}
+
+.formula-line code {
+  font-family: var(--mono);
+  font-size: 12.8px;
+  background: var(--code-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 1px 7px;
+  color: var(--code-fg);
+  white-space: nowrap;
+}
+
+.formula-tag {
+  flex: 0 0 auto;
+  color: var(--accent);
+  font-weight: 700;
+}
+
+@media (max-width: 900px) {
+  .rank-table .num {
+    font-size: 12.5px;
+  }
+
+  .formula-line {
+    flex-direction: column;
+    gap: 2px;
+  }
+}
+
+
+/* @hand-written */
