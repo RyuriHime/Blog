@@ -25,7 +25,16 @@ import { setTimeout as sleep } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
 // 第 19 节要用**运行时**那份白名单：真正决定 `blockPatchProblem` 放行谁的是它，
 // 而不是源文件里的数组字面量（两者之间隔着一个 `.map(...)`）。
-import { AI_BLOCK_TYPE_NAMES as AI_RUNTIME_TYPE_NAMES } from '../src/modules/ai/schema.js';
+// `AI_MAX_SECTION_BLOCKS` 同理（第 22 节末尾的漂移哨兵）：源文本只证明「抄的那一行
+// 写着 50」，运行时值才证明「派生 / 重新赋值那一步没被改坏」。
+import {
+  AI_BLOCK_TYPE_NAMES as AI_RUNTIME_TYPE_NAMES,
+  AI_MAX_SECTION_BLOCKS as AI_RUNTIME_MAX_SECTION_BLOCKS,
+  AI_MAX_SECTION_INPUT as AI_RUNTIME_MAX_SECTION_INPUT,
+  AI_MAX_RANGE_CHARS as AI_RUNTIME_MAX_RANGE_CHARS,
+  AI_RANGE_TARGET_TYPES as AI_RUNTIME_RANGE_TARGET_TYPES,
+  AI_SCOPES as AI_RUNTIME_SCOPES,
+} from '../src/modules/ai/schema.js';
 
 const ROOT = resolve(fileURLToPath(new URL('.', import.meta.url)), '..');
 const SERVER = join(ROOT, 'src', 'server.js');
@@ -63,6 +72,9 @@ const BLOCK_AFTER = { type: 'poll', props: { question: '选哪个？', options: 
 // 核对提示词教给模型的形状，所以在这里一次性读出来。
 const P2_TYPES_SRC = readFileSync(join(ROOT, 'src', 'modules', 'doc', 'blocks', 'types.js'), 'utf8');
 const AI_SCHEMA_SRC = readFileSync(join(ROOT, 'src', 'modules', 'ai', 'schema.js'), 'utf8');
+// 第 22 节末尾的漂移哨兵：`AI_MAX_SECTION_BLOCKS` 抄的是 P2 的 `MAX_OPS`，
+// 两边必须是同一个数 —— 一小节的落盘就是一批 `POST /api/docs/:id/ops`。
+const P2_OPS_SRC = readFileSync(join(ROOT, 'src', 'modules', 'doc', 'blocks', 'ops.js'), 'utf8');
 
 /** `export const BUILTIN_TYPES = [ … ];` 里每个块的 `name`。 */
 function grabP2BlockTypeNames(src) {
@@ -799,6 +811,53 @@ try {
   let lastRequestBody = null;
   let lastAuth = '';
 
+  /**
+   * 从「这一节的块（JSON 数组，按顺序）：[…]」里把那个数组抠出来。
+   *
+   * 第 23 节要验「模型照抄我给过去的 blockId」这条契约，所以假模型必须**真的读一遍**
+   * 客户端发来的块，而不是写死一个 id —— 写死的话，把 `blockId` 从提示词里删掉、
+   * 或者在半路改名，测试都不会红（那正是这条契约要挡住的事）。
+   */
+  function blocksFromPrompt(text) {
+    const raw = String(text ?? '');
+    const start = raw.indexOf('：[');
+    if (start < 0) return [];
+    let depth = 0;
+    for (let i = start + 1; i < raw.length; i += 1) {
+      const char = raw[i];
+      if (char === '[') depth += 1;
+      if (char === ']') {
+        depth -= 1;
+        if (depth === 0) {
+          try {
+            const parsed = JSON.parse(raw.slice(start + 1, i + 1));
+            return Array.isArray(parsed) ? parsed : [];
+          } catch {
+            return [];
+          }
+        }
+      }
+    }
+    return [];
+  }
+
+  /**
+   * 照抄 blockId、**只改第一块的正文**，其余块原样吐回 —— 故意套一层 ```json 围栏。
+   *
+   * 只改第一块是有意的：`changedCount` 的语义是「这一节里**真的改了**几块」（按
+   * type/props 逐块比对），所以模型改 1 块、原样带回 2 块时，`changedCount` 必须是 1
+   * 而 `patch.blocks.length` 是 2。全都改的话这两个数字永远相等，那条契约就形同虚设。
+   */
+  function echoedSection() {
+    const blocks = blocksFromPrompt(lastRequestBody?.messages?.[1]?.content).map((item, index) => ({
+      blockId: item.blockId,
+      type: item.type,
+      props: index === 0 ? { ...item.props, text: `已改：${String(item.props?.text ?? '')}` } : { ...item.props },
+    }));
+    // 新契约：patch 里除了 `blocks`（落盘用）还要有 `markdown`（只用于预览渲染）。
+    return `\`\`\`json\n${JSON.stringify({ blocks, markdown: '## 改过的小节\n\n改过的正文。' })}\n\`\`\``;
+  }
+
   const stub = createServer((req, res) => {
     let raw = '';
     req.on('data', (chunk) => {
@@ -823,6 +882,132 @@ try {
       // 合法的 JSON，但块类型是模型自造的 `vote`（合法 type 里没有它）。
       if (modelMode === 'unknownType') {
         return send(200, { choices: [{ message: { content: '{"type":"vote","props":{}}' } }] });
+      }
+      // ── 下面是第 23 节（`/draft-range`）用的分支 ──────────────────────────
+      // 按小节：原样照抄发过去的 blockId，只动 props.text（合法路径）。
+      if (modelMode === 'section-echo') {
+        return send(200, { choices: [{ message: { content: echoedSection() } }] });
+      }
+      // 按小节：**编造**一个不属于这一节的 blockId —— 模型跑偏的典型表现，
+      // 后端必须用 502 ai_bad_json 挡住（否则会往文档里写一块不属于这一节的东西）。
+      if (modelMode === 'section-badid') {
+        return send(200, {
+          choices: [
+            {
+              message: {
+                content:
+                  '{"blocks":[{"blockId":"model-invented-1","type":"paragraph","props":{"text":"凭空造的块"}}]}',
+              },
+            },
+          ],
+        });
+      }
+      // 按小节：**整节原样照抄 + 额外多一块凭空多出来的 `b99`**，markdown 正常。
+      //
+      // 和上面 `section-badid` 的区别很关键：那条的应答里**压根没给 markdown**，所以它是被
+      // 「markdown 不能为空」挡下的，并**没有**真的走到「blockId 必须属于我发过去的这一节」
+      // 那道判断上（这也是它明明在、却没能拦住「把归属校验改成恒假」那次破坏的原因）。
+      // 这一条只错一处：`b99` 不属于这一节 —— 归属校验一旦失效，它就会一路走到落盘，
+      // 而 `/api/docs/:id/ops` 的 replace 不看块属于哪一节，文档里就会多出一块不存在的东西。
+      if (modelMode === 'section-extraid') {
+        const echoed = blocksFromPrompt(lastRequestBody?.messages?.[1]?.content).map((item) => ({
+          blockId: item.blockId,
+          type: item.type,
+          props: { ...item.props },
+        }));
+        echoed.push({ blockId: 'b99', type: 'paragraph', props: { text: '凭空多出来的' } });
+        return send(200, {
+          choices: [
+            {
+              message: {
+                content: `\`\`\`json\n${JSON.stringify({ blocks: echoed, markdown: '## 改过的小节\n\n改过的正文。' })}\n\`\`\``,
+              },
+            },
+          ],
+        });
+      }
+      // 按小节：块缺 `type` —— 形状不对。
+      if (modelMode === 'section-badshape') {
+        return send(200, {
+          choices: [{ message: { content: '{"blocks":[{"blockId":"x","props":{"text":"没有 type"}}],"markdown":"x"}' } }],
+        });
+      }
+      // 按小节：只给 blocks、**不给 markdown**（新契约里 markdown 是必填的，缺失 → 502）。
+      if (modelMode === 'section-no-markdown') {
+        return send(200, {
+          choices: [
+            {
+              message: {
+                content: '{"blocks":[{"blockId":"sec-9","type":"paragraph","props":{"text":"改了"}}]}',
+              },
+            },
+          ],
+        });
+      }
+      // 按小节：markdown 是空串（空白也算空）。
+      if (modelMode === 'section-empty-markdown') {
+        return send(200, {
+          choices: [
+            {
+              message: {
+                content: '{"blocks":[{"blockId":"sec-9","type":"paragraph","props":{"text":"改了"}}],"markdown":"   "}',
+              },
+            },
+          ],
+        });
+      }
+      // 按小节：markdown 不是字符串。
+      if (modelMode === 'section-nonstring-markdown') {
+        return send(200, {
+          choices: [
+            {
+              message: {
+                content: '{"blocks":[{"blockId":"sec-9","type":"paragraph","props":{"text":"改了"}}],"markdown":123}',
+              },
+            },
+          ],
+        });
+      }
+      // 按小节：markdown 超过 40000 字符。
+      if (modelMode === 'section-huge-markdown') {
+        return send(200, {
+          choices: [
+            {
+              message: {
+                content: `{"blocks":[{"blockId":"sec-9","type":"paragraph","props":{"text":"改了"}}],"markdown":"${'x'.repeat(40001)}"}`,
+              },
+            },
+          ],
+        });
+      }
+      // 按小节：**少吐一块** —— 这一节发过去两块，模型只回一块。落盘那步要求
+      // before/after 的块 id 一一对应，所以这里必须 502（否则「草拟成了、落盘 400」）。
+      if (modelMode === 'section-missing-block') {
+        const first = blocksFromPrompt(lastRequestBody?.messages?.[1]?.content)[0];
+        const only = first
+          ? { blockId: first.blockId, type: first.type, props: { ...first.props, text: '只改了第一块' } }
+          : { blockId: 'sec-1', type: 'paragraph', props: { text: '只改了第一块' } };
+        return send(200, {
+          choices: [{ message: { content: JSON.stringify({ blocks: [only], markdown: '## 只回了一块' }) } }],
+        });
+      }
+      // 整篇：合法形状（带 ```json 围栏）。
+      if (modelMode === 'document-ok') {
+        return send(200, {
+          choices: [
+            {
+              message: {
+                content: '```json\n{"markdown":"# 改完的整篇\\n\\n正文。","title":"改完的标题"}\n```',
+              },
+            },
+          ],
+        });
+      }
+      // 整篇：模型吐回 `{blocks:[…]}` —— 形状不对（整篇要的是 `{markdown}`）。
+      if (modelMode === 'document-badshape') {
+        return send(200, {
+          choices: [{ message: { content: '{"blocks":[{"blockId":"b1","type":"paragraph","props":{}}]}' } }],
+        });
       }
       // 故意套一层 ```json 围栏：模型经常这么干，代码里必须剥掉才能解析。
       return send(200, {
@@ -1298,6 +1483,1334 @@ try {
     '审计里的 before / after 是剥掉多余键的干净 {type, props}',
     sameJson(dirtyRow?.after, contractAfter) && sameJson(dirtyRow?.before, contractBefore),
     `after=${JSON.stringify(dirtyRow?.after)} before=${JSON.stringify(dirtyRow?.before)}`,
+  );
+
+  // ── 新增粒度（2026-10）的哨兵 #1：`AI_MAX_SECTION_BLOCKS` 必须等于 P2 的 `MAX_OPS` ──
+  //
+  // 一小节的落盘走的是 P2 的 `POST /api/docs/:id/ops`，一批最多 `MAX_OPS` 条。AI 这边
+  // `AI_MAX_SECTION_BLOCKS` 是从 ops.js 的 `MAX_OPS` **抄的一份**（骨架规范禁止 import
+  // 隔壁模块的文件），抄来的会漂：P2 以后把一批上限改成 100，AI 这边还按 50 判
+  // `tooLarge` / 400，用户就会看到「界面说这一节太大了」，而 P2 明明吃得下 —— 或者反过来，
+  // 界面上是好的、落盘时被 P2 拒掉一半。
+  //
+  // 这里**既比源文本、又比运行时值**（照第 19 节那条 `AI_BLOCK_TYPE_NAMES` 哨兵的思路）：
+  // 只比源文本的话，「字面量写着 50、导出时被 `Math.min(…, 10)` 改掉」这种派生漂移照样漏。
+  const grabNumberLiteral = (src, name) => {
+    const matched = src.match(new RegExp(`\\b${name}\\s*=\\s*(\\d+)`));
+    return matched ? Number(matched[1]) : NaN;
+  };
+  const schemaSentinelMax = grabNumberLiteral(AI_SCHEMA_SRC, 'AI_MAX_SECTION_BLOCKS');
+  const p2SentinelMaxOps = grabNumberLiteral(P2_OPS_SRC, 'MAX_OPS');
+
+  check(
+    '从 P2 的 blocks/ops.js 源文本抓到 MAX_OPS = 50',
+    p2SentinelMaxOps === 50,
+    String(p2SentinelMaxOps),
+  );
+  check(
+    '从 AI 的 schema.js 源文本抓到 AI_MAX_SECTION_BLOCKS = 50',
+    schemaSentinelMax === 50,
+    String(schemaSentinelMax),
+  );
+  check(
+    'AI_MAX_SECTION_BLOCKS 与 P2 的 MAX_OPS 是同一个数（一小节 = 一批 ops）',
+    schemaSentinelMax === p2SentinelMaxOps,
+    `AI=${schemaSentinelMax} P2=${p2SentinelMaxOps}`,
+  );
+  check(
+    '运行时导出的 AI_MAX_SECTION_BLOCKS 也等于 50（派生 / 重新赋值那一步没被改坏）',
+    AI_RUNTIME_MAX_SECTION_BLOCKS === 50,
+    String(AI_RUNTIME_MAX_SECTION_BLOCKS),
+  );
+  check(
+    '运行时导出的 AI_MAX_SECTION_BLOCKS 与 P2 的 MAX_OPS 源文本一致',
+    AI_RUNTIME_MAX_SECTION_BLOCKS === p2SentinelMaxOps,
+    `运行时=${AI_RUNTIME_MAX_SECTION_BLOCKS} P2=${p2SentinelMaxOps}`,
+  );
+
+  // ── 新增粒度哨兵 #2：切分函数必须**只有服务端那一份** ────────────────────
+  //
+  // `POST /api/ai-edit/sections` 的切分算法在 `src/modules/ai/sections.js`。前端拿这份
+  // 清单渲染下拉、`draft-range` 拿同一份校验「你发来的块确实是这一节」—— 两边各切一份
+  // 必然漂移，漂移的表现是「下拉里选的是第 3 节，实际改到别的块」。所以钉住 routes.js
+  // 真的从 `./sections.js` import 了切分函数（有人把逻辑复制到前端 / 复制进 routes.js 就红）。
+  const sectionsModuleSrc = readFileSync(join(ROOT, 'src', 'modules', 'ai', 'sections.js'), 'utf8');
+  check(
+    'src/modules/ai/sections.js 导出了 splitSections',
+    /export function splitSections\s*\(/.test(sectionsModuleSrc),
+    '切分函数不见了',
+  );
+  check(
+    'AI routes.js 里从 ./sections.js import 了切分函数（切分逻辑只有服务端这一份）',
+    /from\s+'\.\/sections\.js'/.test(aiRoutesSrc) && /\bsplitSections\b/.test(aiRoutesSrc),
+    aiRoutesSrc.includes('./sections.js') ? 'import 在，但没用到 splitSections' : '没有 from \'./sections.js\' 这一行',
+  );
+
+  /* ---------- 23. 小节清单 POST /api/ai-edit/sections（纯切分，不调模型） ---------- */
+  //
+  // 前端的「改哪一节」下拉就用这份清单，所以这里钉的是**界面契约**：节的边界、每节的名字
+  // （标题文字还是「开头」）、`level`、`tooLarge`。切分错一位，用户选中的就是别的块。
+  const anonSections = await createClient().call('/api/ai-edit/sections', {
+    method: 'POST',
+    body: { blocks: [] },
+  });
+  check('未登录调小节清单返回 401（不是 404）', anonSections.status === 401, `实际 ${anonSections.status}`);
+  check(
+    '未登录的错误代号是 unauthenticated',
+    anonSections.error?.code === 'unauthenticated',
+    String(anonSections.error?.code),
+  );
+
+  const sectionPara = (id, text) => ({ blockId: id, type: 'paragraph', props: { text } });
+  const sectionHeading = (id, text, level = 2) => ({ blockId: id, type: 'heading', props: { text, level } });
+
+  // 无 heading：**整篇算一节**，这一节就是「开头」。
+  const noHeading = await admin.call('/api/ai-edit/sections', {
+    method: 'POST',
+    body: { blocks: [sectionPara('p1', '一'), sectionPara('p2', '二')] },
+  });
+  check('没有小标题时清单返回 200', noHeading.status === 200, `实际 ${noHeading.status}`);
+  check('没有小标题时整篇只有 1 节', noHeading.data?.count === 1, String(noHeading.data?.count));
+  check('这 1 节的标题是「开头」那一节', noHeading.data?.sections?.[0]?.heading === noHeading.data?.opening, JSON.stringify(noHeading.data?.sections?.[0]));
+  check('「开头」这一节的 blockId 是空串', noHeading.data?.sections?.[0]?.blockId === '', String(noHeading.data?.sections?.[0]?.blockId));
+  check('「开头」这一节的 level 是 0', noHeading.data?.sections?.[0]?.level === 0, String(noHeading.data?.sections?.[0]?.level));
+  check('opening 的字面量与文档一致', noHeading.data?.opening === '开头（第一个小标题之前）', String(noHeading.data?.opening));
+  check('maxSectionBlocks 是 50', noHeading.data?.maxSectionBlocks === 50, String(noHeading.data?.maxSectionBlocks));
+  check('total 是发过去的块数', noHeading.data?.total === 2, String(noHeading.data?.total));
+
+  // 一个 heading 夹在中间：前面成「开头」，后面成它自己那一节，blockIds 顺序与文档一致。
+  const middleHeading = await admin.call('/api/ai-edit/sections', {
+    method: 'POST',
+    body: { blocks: [sectionPara('m1', '甲'), sectionHeading('h1', '小标题'), sectionPara('m2', '乙')] },
+  });
+  check('一个标题夹在中间 → 2 节', middleHeading.data?.count === 2, String(middleHeading.data?.count));
+  check(
+    '第一块的 id 落在「开头」那一节里（不是标题节）',
+    sameJson(middleHeading.data?.sections?.[0]?.blockIds, ['m1']),
+    JSON.stringify(middleHeading.data?.sections?.[0]?.blockIds),
+  );
+  check(
+    '标题节从标题块开始，到下一个标题之前结束',
+    middleHeading.data?.sections?.[1]?.blockId === 'h1' &&
+      sameJson(middleHeading.data?.sections?.[1]?.blockIds, ['h1', 'm2']),
+    JSON.stringify(middleHeading.data?.sections?.[1]),
+  );
+  check('标题节的 heading 就是标题文字', middleHeading.data?.sections?.[1]?.heading === '小标题', String(middleHeading.data?.sections?.[1]?.heading));
+  check('标题节的 level 取自 props.level', middleHeading.data?.sections?.[1]?.level === 2, String(middleHeading.data?.sections?.[1]?.level));
+  check('blockCount 与 blockIds 的长度一致', middleHeading.data?.sections?.[1]?.blockCount === 2, String(middleHeading.data?.sections?.[1]?.blockCount));
+
+  // 连续两个 heading：**空节不会出现** —— 切分的判据是「遇到 heading 就起新节」，
+  // 所以前一个标题的节里只剩标题自己（blockCount 1），中间那个「第二块也是标题」
+  // 的边界根本不会产生 0 块的节。这条顺手把「第一个块就是标题时没有『开头』节」也钉住。
+  const emptySection = await admin.call('/api/ai-edit/sections', {
+    method: 'POST',
+    body: { blocks: [sectionHeading('e1', '第一节'), sectionHeading('e2', '第二节'), sectionPara('e3', '正文')] },
+  });
+  check('连续两个标题（第一块就是标题）→ 2 节', emptySection.data?.count === 2, String(emptySection.data?.count));
+  check(
+    '第一块就是标题时，没有「开头」这一节（blockId 空串的那节不存在）',
+    !(emptySection.data?.sections ?? []).some((item) => item.blockId === ''),
+    JSON.stringify(emptySection.data?.sections),
+  );
+  check(
+    '前一个标题的节里只剩标题自己（blocks 为空时不产生 0 块节）',
+    emptySection.data?.sections?.[0]?.blockId === 'e1' &&
+      sameJson(emptySection.data?.sections?.[0]?.blockIds, ['e1']) &&
+      emptySection.data?.sections?.[0]?.blockCount === 1,
+    JSON.stringify(emptySection.data?.sections?.[0]),
+  );
+  check(
+    '下一节从第二个标题开始，一直到结尾',
+    emptySection.data?.sections?.[1]?.blockId === 'e2' &&
+      sameJson(emptySection.data?.sections?.[1]?.blockIds, ['e2', 'e3']),
+    JSON.stringify(emptySection.data?.sections?.[1]),
+  );
+  check(
+    '没有 0 块的节（blockCount 最小是 1）',
+    (emptySection.data?.sections ?? []).every((item) => item.blockCount >= 1),
+    JSON.stringify((emptySection.data?.sections ?? []).map((item) => item.blockCount)),
+  );
+  check(
+    '空节不会被标成 tooLarge',
+    emptySection.data?.sections?.every((item) => item.tooLarge === false) === true,
+    JSON.stringify(emptySection.data?.sections?.map((item) => item.tooLarge)),
+  );
+  check(
+    'index 是从 0 开始的连续序号',
+    sameJson((emptySection.data?.sections ?? []).map((item) => item.index), [0, 1]),
+    JSON.stringify((emptySection.data?.sections ?? []).map((item) => item.index)),
+  );
+
+  // 标题文字超长：`SECTION_MAX_HEADING_CHARS = 80` 截断，免得下拉被一整段正文撑爆。
+  const longHeadingText = '标'.repeat(100);
+  const longHeading = await admin.call('/api/ai-edit/sections', {
+    method: 'POST',
+    body: { blocks: [sectionHeading('L1', longHeadingText)] },
+  });
+  const headingOut = String(longHeading.data?.sections?.[0]?.heading ?? '');
+  check(
+    '超长标题被截断到 80 字 + 省略号',
+    headingOut.length === 81 && headingOut.endsWith('…') && headingOut.startsWith('标'.repeat(80)),
+    `长度=${headingOut.length} 尾=${headingOut.slice(-3)}`,
+  );
+  check(
+    '源码里的 SECTION_MAX_HEADING_CHARS 也是 80（截断长度不是别处来的）',
+    Number((sectionsModuleSrc.match(/SECTION_MAX_HEADING_CHARS\s*=\s*(\d+)/) || [])[1]) === 80,
+    String((sectionsModuleSrc.match(/SECTION_MAX_HEADING_CHARS\s*=\s*(\d+)/) || [])[1]),
+  );
+
+  // 51 块一节 → tooLarge:true（一节超过一批 ops 的上限，界面要禁用这个选项）。
+  const bigSection = await admin.call('/api/ai-edit/sections', {
+    method: 'POST',
+    body: {
+      blocks: [
+        sectionHeading('big-h', '大节'),
+        ...Array.from({ length: 50 }, (_, i) => sectionPara(`big-${i}`, 'x')),
+      ],
+    },
+  });
+  const bigOut = bigSection.data?.sections?.[0] ?? {};
+  check('51 块一节：blockCount 是 51', bigOut.blockCount === 51, String(bigOut.blockCount));
+  check('51 块一节被标成 tooLarge:true', bigOut.tooLarge === true, String(bigOut.tooLarge));
+  check('but tooLarge 的判据是 blockCount > 50，不是 ≥', bigOut.blockCount - 1 === 50, String(bigOut.blockCount));
+
+  // 50 块一节正好踩在线上：**不算** tooLarge。
+  const exactSection = await admin.call('/api/ai-edit/sections', {
+    method: 'POST',
+    body: {
+      blocks: [
+        sectionHeading('exact-h', '刚好 50 块'),
+        ...Array.from({ length: 49 }, (_, i) => sectionPara(`exact-${i}`, 'x')),
+      ],
+    },
+  });
+  check(
+    '50 块一节不标 tooLarge（判的是「超过 50」）',
+    exactSection.data?.sections?.[0]?.blockCount === 50 &&
+      exactSection.data?.sections?.[0]?.tooLarge === false,
+    JSON.stringify(exactSection.data?.sections?.[0]),
+  );
+  check(
+    'chars 是这一节块 JSON 的字符数（大于 0）',
+    Number(exactSection.data?.sections?.[0]?.chars) > 0,
+    String(exactSection.data?.sections?.[0]?.chars),
+  );
+
+  // 入参上限：200 块可以（纯切分，不调模型，所以比一节宽），201 块 400。
+  const twoHundred = await admin.call('/api/ai-edit/sections', {
+    method: 'POST',
+    body: { blocks: Array.from({ length: 200 }, (_, i) => sectionPara(`t-${i}`, 'x')) },
+  });
+  check('200 块可以（切分输入上限）', twoHundred.status === 200, `实际 ${twoHundred.status}`);
+  check('200 块仍然只有「开头」一节', twoHundred.data?.count === 1, String(twoHundred.data?.count));
+  const twoOhOne = await admin.call('/api/ai-edit/sections', {
+    method: 'POST',
+    body: { blocks: Array.from({ length: 201 }, (_, i) => sectionPara(`t-${i}`, 'x')) },
+  });
+  check('201 块 → 400', twoOhOne.status === 400, `实际 ${twoOhOne.status}`);
+  check('201 块的错误代号是 bad_request', twoOhOne.error?.code === 'bad_request', String(twoOhOne.error?.code));
+  check('运行时导出的 AI_MAX_SECTION_INPUT 就是 200', AI_RUNTIME_MAX_SECTION_INPUT === 200, String(AI_RUNTIME_MAX_SECTION_INPUT));
+
+  const notArray = await admin.call('/api/ai-edit/sections', { method: 'POST', body: { blocks: '不是数组' } });
+  check('blocks 不是数组 → 400', notArray.status === 400, `实际 ${notArray.status}`);
+  check('非数组的错误代号是 bad_request', notArray.error?.code === 'bad_request', String(notArray.error?.code));
+  const noBlocks = await admin.call('/api/ai-edit/sections', { method: 'POST', body: {} });
+  check('缺 blocks → 400（不是 500）', noBlocks.status === 400, `实际 ${noBlocks.status}`);
+  const nullBody = await admin.call('/api/ai-edit/sections', { method: 'POST', body: null });
+  check('根本没带请求体 → 400（不是 500）', nullBody.status === 400, `实际 ${nullBody.status}`);
+  check('空数组本身是合法的（下游自己判「没有块」）', (await admin.call('/api/ai-edit/sections', { method: 'POST', body: { blocks: [] } })).status === 200);
+
+  // 权限边界：`/sections` 只是**切分**，不花模型的钱，所以守卫是 `viewer`（登录即可），
+  // 不是 `guardCapability`；而真正改稿的 `draft-range` 必须拿到 `edit_content`。
+  // 这两条钉住这个不对称 —— 哪天有人给切分也套上能力门，或把改稿的能力门摘掉，都会红。
+  // carol 在这台服务器上没有任何 AI 授权。
+  const carolPlain = createClient();
+  const carolPlainLogin = await carolPlain.call('/api/auth/login', { method: 'POST', body: { username: 'carol', password: 'demo1234' } });
+  check('carol 登录成功（用她来验这两条权限边界）', carolPlainLogin.status === 200, JSON.stringify(carolPlainLogin.error ?? null));
+  const carolSections = await carolPlain.call('/api/ai-edit/sections', {
+    method: 'POST',
+    body: { blocks: [{ blockId: 'c1', type: 'heading', props: { text: '标题' } }] },
+  });
+  check(
+    '没有 edit_content 的用户也能调 /sections（只切分、不花模型的钱）',
+    carolSections.status === 200,
+    `实际 ${carolSections.status} ${carolSections.error?.code ?? ''}`,
+  );
+  const carolDraftRange = await carolPlain.call('/api/ai-edit/draft-range', {
+    method: 'POST',
+    body: {
+      scope: 'section',
+      documentId: 'doc-range',
+      blocks: [{ blockId: 'c1', type: 'paragraph', props: { text: 'x' } }],
+      instruction: '改一下',
+    },
+  });
+  check('没有 edit_content 的用户调 draft-range 是 403（不是 400 / 503）', carolDraftRange.status === 403, `实际 ${carolDraftRange.status} ${carolDraftRange.error?.code ?? ''}`);
+  check('权限拒绝的代号是 forbidden', carolDraftRange.error?.code === 'forbidden', String(carolDraftRange.error?.code));
+  const carolOps = await carolPlain.call('/api/ai-edit/ops', { method: 'POST', body: { documentId: 'doc-range', after: BLOCK_AFTER, confirm: true } });
+  check('没有 edit_content 的用户落盘 /ops 也是 403', carolOps.status === 403, `实际 ${carolOps.status} ${carolOps.error?.code ?? ''}`);
+
+  /* ---------- 24. POST /api/ai-edit/draft-range 的参数矩阵（没配模型的那台服务器） ---------- */
+  //
+  // 这一节跑在**故意不配 key** 的主服务器上：凡是参数合法的请求都该撞上 503
+  // `ai_not_configured`（+ 一条 blocked 审计），凡是参数不对的都该在调模型**之前** 400。
+  // 两条分界线正是这节要钉的：校验排在配置门 / 限流之前。
+  //
+  // 为了不把第 11 节那批 blocked 审计和新加的混起来，这里用**操作 id 差集**取新行
+  // （同一张表里 `reason='ai_not_configured'`、action='draft' 的行已经有好几条了）。
+  const listOps = async (client) => (await client.call('/api/ai-edit/ops?limit=100')).data?.ops ?? [];
+  const beforeList = await listOps(admin);
+  const beforeIds = new Set(beforeList.map((row) => row.id));
+
+  const rangeSectionBody = (extra = {}) => ({
+    scope: 'section',
+    documentId: 'doc-range',
+    heading: '演示小节',
+    blocks: [sectionPara('rs1', '甲'), sectionPara('rs2', '乙')],
+    instruction: '把这两块改得短一点',
+    ...extra,
+  });
+
+  const rangeAnon = await createClient().call('/api/ai-edit/draft-range', {
+    method: 'POST',
+    body: { scope: 'section', documentId: 'doc-range', blocks: [sectionPara('a1', 'x')], instruction: '改一下' },
+  });
+  check('未登录调 draft-range 返回 401（不是 404）', rangeAnon.status === 401, `实际 ${rangeAnon.status}`);
+  check('未登录的错误代号是 unauthenticated', rangeAnon.error?.code === 'unauthenticated', String(rangeAnon.error?.code));
+
+  const rangeNoModel = await admin.call('/api/ai-edit/draft-range', { method: 'POST', body: rangeSectionBody() });
+  check('没配模型时 draft-range（section）返回 503', rangeNoModel.status === 503, `实际 ${rangeNoModel.status}`);
+  check('错误代号是 ai_not_configured', rangeNoModel.error?.code === 'ai_not_configured', String(rangeNoModel.error?.code));
+  const rangeNoModelDoc = await admin.call('/api/ai-edit/draft-range', {
+    method: 'POST',
+    body: { scope: 'document', documentId: 'doc-range', markdown: '# 标题', instruction: '改一下' },
+  });
+  check('没配模型时 draft-range（document）也是 503', rangeNoModelDoc.status === 503, `实际 ${rangeNoModelDoc.status}`);
+
+  const rangeUsedBefore = await editContentUsed(admin);
+  for (let i = 0; i < 3; i += 1) {
+    await admin.call('/api/ai-edit/draft-range', { method: 'POST', body: rangeSectionBody() });
+  }
+  const rangeUsedAfter = await editContentUsed(admin);
+  check(
+    'draft-range 的 503 不扣每日用量',
+    rangeUsedAfter === rangeUsedBefore,
+    `${rangeUsedBefore} → ${rangeUsedAfter}`,
+  );
+  // 503 是「配置门」，它排在参数校验**之后**：形状不对的请求还是该拿到 400，
+  // 而不是被配置门拦成 503 让人以为「服务器没配好 key」。
+  const rangeSectionNoBlocks = await admin.call('/api/ai-edit/draft-range', {
+    method: 'POST',
+    body: { scope: 'section', documentId: 'doc-range', instruction: '改一下' },
+  });
+  check('没配模型时，参数错的 draft-range 仍然先拿到 400（不是 503）', rangeSectionNoBlocks.status === 400, `实际 ${rangeSectionNoBlocks.status}`);
+  const rangeDocEmpty = await admin.call('/api/ai-edit/draft-range', {
+    method: 'POST',
+    body: { scope: 'document', documentId: 'doc-range', markdown: '  ', instruction: '改一下' },
+  });
+  check('整篇 markdown 为空时也是 400（不是 503）', rangeDocEmpty.status === 400, `实际 ${rangeDocEmpty.status}`);
+
+  const afterList = await listOps(admin);
+  // 这一段总共新增 5 条：section 类 4 条（提交那次 + 循环 3 次）+ document 类 1 条。
+  // 先按 id 差集取全部新行，再把 section 那 4 条挑出来（document 那条单独核）。
+  const rangeBlockedNew = afterList.filter((row) => !beforeIds.has(row.id));
+  const rangeBlocked = rangeBlockedNew.filter((row) => row.targetId === 'doc-range:rs1~rs2');
+  check('四次 draft-range（section）都留下了 blocked 审计', rangeBlocked.length === 4, `section 新行=${rangeBlocked.length}，全部新行=${rangeBlockedNew.length}`);
+  check(
+    'section 类的 blocked 审计 targetType 记成 doc_section',
+    rangeBlocked.length === 4 && rangeBlocked.every((row) => row.targetType === 'doc_section'),
+    JSON.stringify(rangeBlocked.map((row) => row.targetType)),
+  );
+  check(
+    'section 类的 blocked 审计 targetId 是 <documentId>:<首块>~<末块>',
+    rangeBlocked.length === 4 && rangeBlocked.every((row) => row.targetId === 'doc-range:rs1~rs2'),
+    JSON.stringify(rangeBlocked.map((row) => row.targetId)),
+  );
+  check(
+    'blocked 审计的 reason 是 ai_not_configured',
+    rangeBlocked.length === 4 && rangeBlocked.every((row) => row.reason === 'ai_not_configured'),
+    JSON.stringify(rangeBlocked.map((row) => row.reason)),
+  );
+  check(
+    '这一段新增的审计只有 5 条（没有多记也没有漏记）',
+    rangeBlockedNew.length === 5,
+    JSON.stringify(rangeBlockedNew.map((row) => [row.targetType, row.targetId, row.reason])),
+  );
+  const rangeBlockedDoc = rangeBlockedNew.find((row) => row.targetId === 'doc-range:*');
+  check('document 类的 blocked 审计 targetType 记成 document', rangeBlockedDoc?.targetType === 'document', JSON.stringify(rangeBlockedDoc?.targetType));
+  check(
+    'document 类的 blocked 审计 targetId 是 <documentId>:*',
+    rangeBlockedDoc?.targetId === 'doc-range:*',
+    String(rangeBlockedDoc?.targetId),
+  );
+  check(
+    'document 类的 blocked 审计也是 ai_not_configured',
+    rangeBlockedDoc?.reason === 'ai_not_configured' && rangeBlockedDoc?.status === 'blocked',
+    JSON.stringify({ reason: rangeBlockedDoc?.reason, status: rangeBlockedDoc?.status }),
+  );
+
+  // 参数矩阵：全部 400 `bad_request`。这批请求**一次模型都不会发出去**。
+  const rangeBadBodies = [
+    ['scope 不是 section/document', rangeSectionBody({ scope: 'paragraph' })],
+    ['缺 scope', { documentId: 'doc-range', blocks: [sectionPara('x1', 'x')], instruction: '改一下' }],
+    ['scope 是空串', rangeSectionBody({ scope: '' })],
+    ['缺 documentId', { scope: 'section', blocks: [sectionPara('x1', 'x')], instruction: '改一下' }],
+    ['documentId 是空串', rangeSectionBody({ documentId: '' })],
+    ['documentId 含冒号', rangeSectionBody({ documentId: 'doc:1' })],
+    ['documentId 只有空白', rangeSectionBody({ documentId: '   ' })],
+    ['缺 instruction', rangeSectionBody({ instruction: undefined })],
+    ['instruction 是空串', rangeSectionBody({ instruction: '' })],
+    ['instruction 只有空白', rangeSectionBody({ instruction: '   ' })],
+    ['instruction 超过 2000 字', rangeSectionBody({ instruction: '改'.repeat(2001) })],
+    ['section 缺 blocks', rangeSectionBody({ blocks: undefined })],
+    ['section 的 blocks 是空数组', rangeSectionBody({ blocks: [] })],
+    ['section 的 blocks 有 51 块', rangeSectionBody({ blocks: Array.from({ length: 51 }, (_, i) => sectionPara(`x-${i}`, 'x')) })],
+    ['section 的块缺 blockId', rangeSectionBody({ blocks: [{ type: 'paragraph', props: { text: 'x' } }] })],
+    ['section 的块 blockId 是空串', rangeSectionBody({ blocks: [sectionPara('', 'x')] })],
+    ['section 的块 blockId 含冒号', rangeSectionBody({ blocks: [sectionPara('a:1', 'x')] })],
+    ['section 的块 blockId 超过 64 字符', rangeSectionBody({ blocks: [sectionPara('z'.repeat(65), 'x')] })],
+    ['section 的块 blockId 重复', rangeSectionBody({ blocks: [sectionPara('dup', '甲'), sectionPara('dup', '乙')] })],
+    ['section 的块缺 type', rangeSectionBody({ blocks: [{ blockId: 'a1', props: { text: 'x' } }] })],
+    ['section 的块 type 不在白名单', rangeSectionBody({ blocks: [{ blockId: 'a1', type: 'vote', props: {} }] })],
+    ['section 的块缺 props', rangeSectionBody({ blocks: [{ blockId: 'a1', type: 'paragraph' }] })],
+    ['section 整体超过 40000 字符', rangeSectionBody({ blocks: [sectionPara('big', 'x'.repeat(60000))] })],
+    ['document 的 markdown 为空', { scope: 'document', documentId: 'doc-range', markdown: '', instruction: '改一下' }],
+    ['document 缺 markdown', { scope: 'document', documentId: 'doc-range', instruction: '改一下' }],
+    ['document 的 markdown 超过 40000 字', { scope: 'document', documentId: 'doc-range', markdown: 'x'.repeat(40001), instruction: '改一下' }],
+  ];
+  const rangeBadResults = [];
+  for (const [label, body] of rangeBadBodies) {
+    const result = await admin.call('/api/ai-edit/draft-range', { method: 'POST', body });
+    rangeBadResults.push({ label, status: result.status, code: result.error?.code });
+  }
+  const not400 = rangeBadResults.filter((item) => item.status !== 400);
+  check(
+    `参数矩阵里 ${rangeBadBodies.length} 种坏请求全部 400`,
+    not400.length === 0,
+    JSON.stringify(not400),
+  );
+  check(
+    '参数矩阵里每一条的错误代号都是 bad_request',
+    rangeBadResults.every((item) => item.code === 'bad_request'),
+    JSON.stringify(rangeBadResults.filter((item) => item.code !== 'bad_request')),
+  );
+
+  // 限流排在校验之后：上面已经连发了 27 次坏请求，全都该是 400 而不是 429
+  // （限流桶是 5 次/分钟；要是它在校验之前，第一批之后就会开始吐 429）。
+  check(
+    '连发坏请求不会被记进限流额度（没有一条 429）',
+    !rangeBadResults.some((item) => item.status === 429),
+    JSON.stringify(rangeBadResults.filter((item) => item.status === 429 || item.status === 503)),
+  );
+  check('运行时导出的 AI_MAX_RANGE_CHARS 就是 40000', AI_RUNTIME_MAX_RANGE_CHARS === 40000, String(AI_RUNTIME_MAX_RANGE_CHARS));
+  check('运行时导出的 AI_SCOPES 就是 section/document', sameJson(AI_RUNTIME_SCOPES, ['section', 'document']), JSON.stringify(AI_RUNTIME_SCOPES));
+  check(
+    '运行时导出的 AI_RANGE_TARGET_TYPES 两个目标名',
+    AI_RUNTIME_RANGE_TARGET_TYPES?.section === 'doc_section' && AI_RUNTIME_RANGE_TARGET_TYPES?.document === 'document',
+    JSON.stringify(AI_RUNTIME_RANGE_TARGET_TYPES),
+  );
+
+  /* ---------- 25. 真打模型：section / document 成功路径 + 每一条失败路径 ---------- */
+  //
+  // 跑在第 18 节那台**配了 key** 的服务器（`stub-key` + 本地假模型）上。
+  // 限流是 5 次/分钟且只按用户算，所以这一节要数着来：**每一条打得到 callModel 的**
+  // 请求都占一格额度（`okDraft` 已经用掉 1 格）。坏 JSON / 上游 4xx / 超时那几条
+  // 在 `callModel` 里就返回了，不占（它们是「发得出去但没成功」的调用）。
+  const keyedBody = async (ops, id) => (await ops).find((row) => row.id === id) ?? null;
+
+  modelMode = 'section-echo';
+  const keyedSection = [{ blockId: 'sec-1', type: 'heading', props: { text: '演示小节', level: 2 } }, { blockId: 'sec-2', type: 'paragraph', props: { text: '甲' } }];
+  const sectionDraft = await keyedAdmin.call('/api/ai-edit/draft-range', {
+    method: 'POST',
+    body: { scope: 'section', documentId: 'doc-range', heading: '演示小节', blocks: keyedSection, instruction: '把这一节改得短一点' },
+  });
+  check(
+    '按小节草拟成功（200，且只是预览）',
+    sectionDraft.status === 200 && sectionDraft.data?.applied === false,
+    `${sectionDraft.status} ${JSON.stringify(sectionDraft.error ?? null)}`,
+  );
+  check('按小节返回的 scope 是 section', sectionDraft.data?.scope === 'section', String(sectionDraft.data?.scope));
+  check('按小节返回的 targetType 是 doc_section', sectionDraft.data?.targetType === 'doc_section', String(sectionDraft.data?.targetType));
+  check(
+    'patch.blocks 是数组，且每个 blockId 都属于我发过去的这一节',
+    Array.isArray(sectionDraft.data?.patch?.blocks) &&
+      sectionDraft.data.patch.blocks.length > 0 &&
+      sectionDraft.data.patch.blocks.every((item) => ['sec-1', 'sec-2'].includes(item.blockId)),
+    JSON.stringify(sectionDraft.data?.patch),
+  );
+  check(
+    'patch.blocks 整节收了回来（2 块），不是只回改动的那一块',
+    sectionDraft.data?.patch?.blocks?.length === 2,
+    JSON.stringify(sectionDraft.data?.patch?.blocks),
+  );
+  check(
+    'changedCount 数的是「真的改了的块」而不是模型返回的块数（改 1 块、回 2 块 → 1）',
+    sectionDraft.data?.changedCount === 1,
+    `${sectionDraft.data?.changedCount} / patch.blocks=${sectionDraft.data?.patch?.blocks?.length}`,
+  );
+  check(
+    'before 是原整节块数组（原样回带）',
+    sameJson(sectionDraft.data?.before, keyedSection),
+    JSON.stringify(sectionDraft.data?.before),
+  );
+  check(
+    'section 的 writeTo 指向 P2 的 ops 接口',
+    sectionDraft.data?.writeTo === '/api/docs/doc-range/ops',
+    String(sectionDraft.data?.writeTo),
+  );
+  check('section 的 targetId 是 <documentId>:<首块>~<末块>', sectionDraft.data?.targetId === 'doc-range:sec-1~sec-2', String(sectionDraft.data?.targetId));
+  check('draft-range 的 opId 是整数', Number.isInteger(sectionDraft.data?.opId), String(sectionDraft.data?.opId));
+  check('draft-range 回填了 model', sectionDraft.data?.model === 'stub-model', String(sectionDraft.data?.model));
+  check(
+    '带 ```json 围栏的一节应答也能解析（改过的第一块带上了「已改：」）',
+    String(sectionDraft.data?.patch?.blocks?.[0]?.props?.text ?? '').includes('已改：'),
+    JSON.stringify(sectionDraft.data?.patch?.blocks?.[0]),
+  );
+  check(
+    '一字未动的第二块原样带回（改的是 props，不是块的身份）',
+    sectionDraft.data?.patch?.blocks?.[1]?.blockId === 'sec-2' &&
+      sectionDraft.data?.patch?.blocks?.[1]?.props?.text === '甲',
+    JSON.stringify(sectionDraft.data?.patch?.blocks?.[1]),
+  );
+
+  // ——— 提示词 / 请求体契约（这一节顺手把「模型到底收到了什么」也钉住）
+  check('请求体带上了配置的 model', lastRequestBody?.model === 'stub-model', String(lastRequestBody?.model));
+  check('带上了 Authorization: Bearer <key>', lastAuth === 'Bearer stub-key', lastAuth);
+  check(
+    'section 的 system 提示词要求只输出一个 JSON 对象',
+    String(lastRequestBody?.messages?.[0]?.content ?? '').includes('JSON'),
+    String(lastRequestBody?.messages?.[0]?.content ?? '').slice(0, 120),
+  );
+  check(
+    'section 的 system 提示词教的是 {blocks:[{blockId,…}]} 形状',
+    String(lastRequestBody?.messages?.[0]?.content ?? '').includes('"blocks"') &&
+      String(lastRequestBody?.messages?.[0]?.content ?? '').includes('blockId'),
+    String(lastRequestBody?.messages?.[0]?.content ?? '').slice(0, 200),
+  );
+  check(
+    'section 的 user 消息里带着这一节的块（含 blockId）',
+    String(lastRequestBody?.messages?.[1]?.content ?? '').includes('sec-2') &&
+      String(lastRequestBody?.messages?.[1]?.content ?? '').includes('"blockId"'),
+    String(lastRequestBody?.messages?.[1]?.content ?? '').slice(0, 200),
+  );
+  check(
+    'section 的 user 消息里带着小标题与改写要求',
+    String(lastRequestBody?.messages?.[1]?.content ?? '').includes('演示小节') &&
+      String(lastRequestBody?.messages?.[1]?.content ?? '').includes('把这一节改得短一点'),
+    String(lastRequestBody?.messages?.[1]?.content ?? '').slice(0, 200),
+  );
+
+  const sectionDraftRow = await keyedBody(keyedAdmin.call('/api/ai-edit/ops?limit=100').then((r) => r.data?.ops ?? []), sectionDraft.data?.opId);
+  check('成功草拟后能在审计里查到这一条', Boolean(sectionDraftRow), String(sectionDraft.data?.opId));
+  check('审计里的 action 是 draft', sectionDraftRow?.action === 'draft', String(sectionDraftRow?.action));
+  check('审计里的 status 是 preview（草拟不落盘）', sectionDraftRow?.status === 'preview', String(sectionDraftRow?.status));
+  check(
+    '审计里的 before 是块数组（一节）',
+    Array.isArray(sectionDraftRow?.before),
+    JSON.stringify(sectionDraftRow?.before),
+  );
+  check(
+    '审计里的 targetType 是 doc_section',
+    sectionDraftRow?.targetType === 'doc_section',
+    String(sectionDraftRow?.targetType),
+  );
+  // 新契约：`patch.markdown` 是给界面渲染预览用的（界面不渲染块 JSON）。
+  // 缺了它前端就只能退回「把块 JSON 铺在 <pre> 里」，那正是这次要改掉的东西。
+  check(
+    'patch.markdown 是非空字符串（给预览渲染用，不只是 blocks）',
+    typeof sectionDraft.data?.patch?.markdown === 'string' && sectionDraft.data.patch.markdown.trim() !== '',
+    typeof sectionDraft.data?.patch?.markdown === 'string'
+      ? `长度=${sectionDraft.data.patch.markdown.length}`
+      : JSON.stringify(sectionDraft.data?.patch ?? null),
+  );
+
+  // ——— 整篇：成功路径
+  modelMode = 'document-ok';
+  const documentDraft = await keyedAdmin.call('/api/ai-edit/draft-range', {
+    method: 'POST',
+    body: { scope: 'document', documentId: 'doc-range', markdown: '# 原稿\n\n正文。', title: '原稿', instruction: '把整篇改一下' },
+  });
+  check(
+    '整篇草拟成功（200，且只是预览）',
+    documentDraft.status === 200 && documentDraft.data?.applied === false,
+    `${documentDraft.status} ${JSON.stringify(documentDraft.error ?? null)}`,
+  );
+  check('整篇返回的 scope 是 document', documentDraft.data?.scope === 'document', String(documentDraft.data?.scope));
+  check('整篇返回的 targetType 是 document', documentDraft.data?.targetType === 'document', String(documentDraft.data?.targetType));
+  check(
+    '整篇的 patch.markdown 是字符串',
+    typeof documentDraft.data?.patch?.markdown === 'string' && documentDraft.data.patch.markdown.length > 0,
+    JSON.stringify(documentDraft.data?.patch),
+  );
+  check(
+    '整篇的 before 是 { markdown, title }',
+    documentDraft.data?.before?.markdown === '# 原稿\n\n正文。' && documentDraft.data?.before?.title === '原稿',
+    JSON.stringify(documentDraft.data?.before),
+  );
+  check(
+    '整篇的 writeTo 指向 P2 的 markdown 接口',
+    documentDraft.data?.writeTo === '/api/docs/doc-range/markdown',
+    String(documentDraft.data?.writeTo),
+  );
+  check('整篇的 targetId 是 <documentId>:*', documentDraft.data?.targetId === 'doc-range:*', String(documentDraft.data?.targetId));
+  check(
+    '整篇的 system 提示词要的是 {"markdown":…}',
+    String(lastRequestBody?.messages?.[0]?.content ?? '').includes('"markdown"'),
+    String(lastRequestBody?.messages?.[0]?.content ?? '').slice(0, 160),
+  );
+  check(
+    '整篇的 user 消息里带着当前 Markdown 与改写要求',
+    String(lastRequestBody?.messages?.[1]?.content ?? '').includes('# 原稿') &&
+      String(lastRequestBody?.messages?.[1]?.content ?? '').includes('把整篇改一下'),
+    String(lastRequestBody?.messages?.[1]?.content ?? '').slice(0, 160),
+  );
+  const documentDraftRow = await keyedBody(
+    keyedAdmin.call('/api/ai-edit/ops?limit=100').then((r) => r.data?.ops ?? []),
+    documentDraft.data?.opId,
+  );
+  check(
+    '整篇成功草拟也留一条 preview 审计，before 是 {markdown}',
+    documentDraftRow?.status === 'preview' &&
+      documentDraftRow?.targetType === 'document' &&
+      typeof documentDraftRow?.before?.markdown === 'string',
+    JSON.stringify(documentDraftRow),
+  );
+
+  // ——— 模型跑偏的几条：blockId 不属于这一节 / 缺 type / markdown 形状不对 / 整篇吐成 {blocks}
+  //
+  // **限流是按用户算的**（`ai-edit:draft-range:<userId>`，5 次 / 60 秒），而「打到了
+  // callModel」的调用哪怕最后 502 也照样占一格（实测：连发 5 次都过、第 6 次 429）。
+  // 这一节要验的路径比 5 条多，所以按用户拆成三个桶：admin / alice / bob 各 5 格。
+  // 不拆的话，后面的路径会被限流器挡成 429 —— 那报错看起来像「服务端坏了」，其实只是
+  // 测试自己把额度用光了（上一版就是这么红的）。
+  const keyedRangeBody = (extra = {}) => ({
+    scope: 'section',
+    documentId: 'doc-range',
+    blocks: [{ blockId: 'sec-9', type: 'paragraph', props: { text: '原文' } }],
+    instruction: '改一下',
+    ...extra,
+  });
+
+  const keyedAlice = createClient(KEYED_BASE);
+  const keyedBob = createClient(KEYED_BASE);
+  for (const [label, client, username] of [
+    ['alice', keyedAlice, 'alice'],
+    ['bob', keyedBob, 'bob'],
+  ]) {
+    const login = await client.call('/api/auth/login', {
+      method: 'POST',
+      body: { username, password: 'demo1234' },
+    });
+    check(`第三台（keyed）服务器上 ${label} 也能登录`, login.status === 200, JSON.stringify(login.error ?? null));
+    await client.call('/api/ai-edit/grants', {
+      method: 'POST',
+      body: { capability: 'edit_content', confirm: true, dailyQuota: 0 },
+    });
+  }
+
+  // admin 桶：section-echo（1）+ document-ok（1）+ document-badshape（1）+ 下面两条形状错误（2）= 5 格，正好用满。
+  modelMode = 'document-badshape';
+  const badShapeDoc = await keyedAdmin.call('/api/ai-edit/draft-range', {
+    method: 'POST',
+    body: { scope: 'document', documentId: 'doc-range', markdown: '# 原稿', instruction: '改一下' },
+  });
+  check(
+    '整篇模式里模型吐回 {blocks:[…]} → 502 ai_bad_json',
+    badShapeDoc.status === 502 && badShapeDoc.error?.code === 'ai_bad_json',
+    `${badShapeDoc.status} ${badShapeDoc.error?.code}`,
+  );
+
+  modelMode = 'section-badid';
+  const badIdRange = await keyedAdmin.call('/api/ai-edit/draft-range', { method: 'POST', body: keyedRangeBody() });
+  check(
+    '模型返回的 blockId 不在这一节里 → 502 ai_bad_json（不许放行模型编的 id）',
+    badIdRange.status === 502 && badIdRange.error?.code === 'ai_bad_json',
+    `${badIdRange.status} ${badIdRange.error?.code}`,
+  );
+
+  modelMode = 'section-badshape';
+  const badShapeRange = await keyedAdmin.call('/api/ai-edit/draft-range', { method: 'POST', body: keyedRangeBody() });
+  check(
+    '模型返回的块缺 type → 502 ai_bad_json',
+    badShapeRange.status === 502 && badShapeRange.error?.code === 'ai_bad_json',
+    `${badShapeRange.status} ${badShapeRange.error?.code}`,
+  );
+
+  // 新契约：patch 里除了 blocks 还要有 `markdown`（只用来渲染预览）。
+  // 缺失 / 空串 / 不是字符串 / 超长，与「blocks 形状不对」同一类 → 502 ai_bad_json + blocked 审计。
+  // alice 桶：这四条占 4 格。
+  const badMarkdownCases = [
+    ['section-no-markdown', '缺 markdown'],
+    ['section-empty-markdown', 'markdown 是空串'],
+    ['section-nonstring-markdown', 'markdown 不是字符串'],
+    ['section-huge-markdown', 'markdown 超过 40000 字'],
+  ];
+  for (const [mode, label] of badMarkdownCases) {
+    modelMode = mode;
+    const result = await keyedAlice.call('/api/ai-edit/draft-range', { method: 'POST', body: keyedRangeBody() });
+    check(
+      `模型返回的 ${label} → 502 ai_bad_json`,
+      result.status === 502 && result.error?.code === 'ai_bad_json',
+      `${result.status} ${result.error?.code}`,
+    );
+  }
+
+  // ——— 「一节必须整节收齐」：模型少吐一块 → 502。
+  //
+  // 落盘走 `POST /api/docs/:id/ops`，那一步要求 before/after 的块 id **一一对应**；
+  // 这里放过就成了「草拟能成、点落盘 400」，用户拿到的是个半成品。所以必须在草拟这步挡住。
+  // 归 alice 桶（她前面用了 4 格，这是第 5 格）。
+  modelMode = 'section-missing-block';
+  const missingBlockRange = await keyedAlice.call('/api/ai-edit/draft-range', {
+    method: 'POST',
+    body: { scope: 'section', documentId: 'doc-range', heading: '演示小节', blocks: keyedSection, instruction: '把这一节改得短一点' },
+  });
+  check(
+    '模型少吐一块（这一节有两块只回一块）→ 502 ai_bad_json',
+    missingBlockRange.status === 502 && missingBlockRange.error?.code === 'ai_bad_json',
+    `${missingBlockRange.status} ${missingBlockRange.error?.code} ${missingBlockRange.error?.message ?? ''}`,
+  );
+  check(
+    '少吐一块的报错点名了缺的那个 blockId 并说明「一节要整节收齐」',
+    String(missingBlockRange.error?.message ?? '').includes('sec-2') &&
+      String(missingBlockRange.error?.message ?? '').includes('一节要整节收齐'),
+    String(missingBlockRange.error?.message ?? ''),
+  );
+
+  // ——— 上游失败的五条：交给 bob 发（admin 桶 5 格已满、alice 5 格已满）。
+  //
+  // 这几条**不会**返回 `data.opId`（它们抛的是 HttpError，没有成功路径那种返回体），
+  // 所以审计要按 `reason` 去列表里找，不能按 opId 找。两个坑：
+  //   ① 列表要在**这些调用之后**再拉（第一次写把顺序搞反了，拿到的是调用前的快照，五条全找不到）；
+  //   ② 审计里的 `reason` 只有**代号**（`ai_bad_json` / `ai_timeout` / `ai_upstream_error 500`），
+  //      不带给人看的那句中文（「模型返回的不是 JSON」只在 HTTP 错误体里）。按中文找永远找不到。
+  //   ③ `/api/ai-edit/ops` 只列**调用者自己**的行，所以要按发起者去查（bob 发的就查 bob）。
+  const rangeFailureCases = [
+    ['badjson', 502, 'ai_bad_json', 'ai_bad_json'],
+    ['unauthorized', 502, 'ai_unauthorized', 'ai_unauthorized'],
+    ['upstream', 502, 'ai_upstream_error', 'ai_upstream_error 500'],
+    ['ratelimited', 429, 'ai_rate_limited', 'ai_rate_limited'],
+    ['hang', 504, 'ai_timeout', 'ai_timeout'],
+  ];
+  const rangeFailureResults = [];
+  for (const [mode, status, code, auditReason] of rangeFailureCases) {
+    modelMode = mode;
+    const result = await keyedBob.call('/api/ai-edit/draft-range', { method: 'POST', body: keyedRangeBody() });
+    rangeFailureResults.push({
+      mode,
+      status: result.status,
+      code: result.error?.code,
+      expectedStatus: status,
+      expectedCode: code,
+      auditReason,
+    });
+  }
+  // 五种模式各发一次，逐条核对「模式 → 状态码 + 代号」；上面 push 时已经带上期望值。
+  const statusWrong = rangeFailureResults.filter((item) => item.status !== item.expectedStatus || item.code !== item.expectedCode);
+  check(
+    '上游失败的五条路径状态码 / 代号全部正确',
+    statusWrong.length === 0,
+    JSON.stringify(statusWrong.map((item) => [item.mode, item.status, item.expectedStatus, item.code, item.expectedCode])),
+  );
+  for (const item of rangeFailureResults) {
+    check(
+      `上游失败「${item.mode}」→ ${item.expectedStatus} ${item.expectedCode}`,
+      item.status === item.expectedStatus && item.code === item.expectedCode,
+      `实际 ${item.status} ${item.code}`,
+    );
+  }
+  modelMode = 'ok';
+
+  // 每一条失败都要留痕，而且 targetType 跟着 scope 走（section → doc_section）。
+  // 审计列表只列调用者自己的行，这五条是 bob 发的 → 用 bob 的客户端查。
+  const keyedRangeOpsNow = (await keyedAdmin.call('/api/ai-edit/ops?limit=100')).data?.ops ?? [];
+  const bobOpsNow = (await keyedBob.call('/api/ai-edit/ops?limit=100')).data?.ops ?? [];
+  for (const item of rangeFailureResults) {
+    const row = bobOpsNow.find(
+      (entry) => entry.action === 'draft' && entry.targetType === 'doc_section' && String(entry.reason ?? '') === item.auditReason,
+    );
+    check(
+      `上游失败「${item.mode}」留下了 status=blocked 的审计（targetType=doc_section）`,
+      row?.status === 'blocked',
+      JSON.stringify(row ?? null),
+    );
+  }
+  const sectionShapeRow = keyedRangeOpsNow.find(
+    (row) => row.action === 'draft' && row.targetType === 'doc_section' && String(row.reason ?? '').includes('一节形状不对'),
+  );
+  check(
+    '模型编造 blockId 也留了 blocked 审计，理由是「一节形状不对」',
+    sectionShapeRow?.status === 'blocked',
+    JSON.stringify(sectionShapeRow ?? null),
+  );
+  const documentShapeRow = keyedRangeOpsNow.find(
+    (row) => row.action === 'draft' && row.targetType === 'document' && String(row.reason ?? '').includes('整篇形状不对'),
+  );
+  check(
+    '整篇形状不对留的 blocked 审计 targetType 是 document（跟着 scope 走）',
+    documentShapeRow?.status === 'blocked',
+    JSON.stringify(documentShapeRow ?? null),
+  );
+  // alice 自己那条「markdown 形状不对」的审计要出现在**她自己**的列表里（发起的用户查得到）。
+  const aliceBlockedRows = ((await keyedAlice.call('/api/ai-edit/ops?limit=100')).data?.ops ?? []).filter(
+    (row) => row.action === 'draft' && row.status === 'blocked' && row.targetType === 'doc_section',
+  );
+  check(
+    'badMarkdown 的四条 blocked 审计都记在发起者（alice）名下（查得到 4 条 doc_section）',
+    aliceBlockedRows.length >= 4,
+    JSON.stringify(aliceBlockedRows.map((row) => row.reason)),
+  );
+  const missingBlockRow = aliceBlockedRows.find((row) => String(row.reason ?? '').includes('整节收齐'));
+  check(
+    '「少吐一块」也留了 status=blocked 的审计（targetType=doc_section）',
+    missingBlockRow?.status === 'blocked',
+    JSON.stringify(missingBlockRow ?? null),
+  );
+
+  // ── 「模型吐回的每个 blockId 都必须属于我发过去的这一节」─────────────────────
+  // 上面那条 `section-badid` **没有真的验到这道判断**：它的应答里连 `markdown` 都没给，
+  // 所以是被「markdown 不能为空」提前挡下的（谁把归属校验删了它照样绿）。这里补一条
+  // **只错这一点**的：整节原样照抄（id 齐全）+ markdown 正常 + 额外多一块 `b99`。
+  // 归属校验失效时它会 200，然后那块会被写进文档；所以这条用例就是那道防线的哨兵。
+  const extrasUser = createClient(KEYED_BASE);
+  const extrasRegister = await extrasUser.call('/api/auth/register', {
+    method: 'POST',
+    body: { username: 'airrange', password: 'airpass123' },
+  });
+  check(
+    '注册一个干净用户来验这条（draft-range 桶从 0 开始，不受前面 admin/alice/bob/carol 影响）',
+    extrasRegister.status === 200,
+    `${extrasRegister.status} ${JSON.stringify(extrasRegister.error ?? null)}`,
+  );
+  const extrasGrant = await extrasUser.call('/api/ai-edit/grants', {
+    method: 'POST',
+    body: { capability: 'edit_content', confirm: true, dailyQuota: 0 },
+  });
+  check('这个新用户自助拿到 edit_content', extrasGrant.status === 200, `${extrasGrant.status} ${JSON.stringify(extrasGrant.error ?? null)}`);
+
+  modelMode = 'section-extraid';
+  const extraIdRange = await extrasUser.call('/api/ai-edit/draft-range', { method: 'POST', body: keyedRangeBody() });
+  check(
+    '模型多吐一块不属于这一节的块（整节齐全、markdown 正常）→ 502 ai_bad_json',
+    extraIdRange.status === 502 && extraIdRange.error?.code === 'ai_bad_json',
+    `${extraIdRange.status} ${extraIdRange.error?.code} ${extraIdRange.error?.message ?? ''}`,
+  );
+  check(
+    '错误信息点名了那个多出来的 id、并说明它不属于这一节',
+    String(extraIdRange.error?.message ?? '').includes('b99') &&
+      String(extraIdRange.error?.message ?? '').includes('不在我发过去的这一节里'),
+    String(extraIdRange.error?.message ?? ''),
+  );
+  const extrasOps = (await extrasUser.call('/api/ai-edit/ops?limit=100')).data?.ops ?? [];
+  const extraIdRow = extrasOps.find((row) => String(row.reason ?? '').includes('ai_bad_json'));
+  check(
+    '多出来那一块也留了 status=blocked 的审计（reason 含 ai_bad_json）',
+    extraIdRow?.status === 'blocked' && extraIdRow?.targetType === 'doc_section',
+    JSON.stringify(extraIdRow ?? null),
+  );
+  // 临时模式用完就复位（跟本节别处的习惯一致）：后面的用例各自会设自己需要的模式，
+  // 但别把「假模型现在吐什么」这种状态留在身后。
+  modelMode = 'ok';
+
+  // ——— 限流：桶是「5 次/分钟」，满了以后才该 429。
+  //     注意代号是 `rate_limited`（core/http.js 的限流器），不是上游那个 `ai_rate_limited`
+  //     —— 两者都是 429，混起来用户就分不清「我发太快了」还是「服务商限流了」。
+  //
+  //     用一个**从零开始**的用户（carol）来验，这样「第几次被挡」是确定的：桶是
+  //     `ai-edit:draft-range:<userId>`，这一节前面的调用全记在 admin / alice / bob 名下，
+  //     所以 carol 这里是干净的 0 格。前 5 次该过、第 6 次该 429（实测过这个边界）。
+  const keyedCarol = createClient(KEYED_BASE);
+  const carolLogin = await keyedCarol.call('/api/auth/login', { method: 'POST', body: { username: 'carol', password: 'demo1234' } });
+  check('第三台（keyed）服务器上 carol 也能登录', carolLogin.status === 200, JSON.stringify(carolLogin.error ?? null));
+  await keyedCarol.call('/api/ai-edit/grants', {
+    method: 'POST',
+    body: { capability: 'edit_content', confirm: true, dailyQuota: 0 },
+  });
+
+  modelMode = 'section-echo';
+  const throttleAttempts = [];
+  let throttleData;
+  for (let i = 0; i < 10; i += 1) {
+    const attempt = await keyedCarol.call('/api/ai-edit/draft-range', { method: 'POST', body: keyedRangeBody() });
+    throttleAttempts.push(attempt.status);
+    if (attempt.status === 429) {
+      throttleAttempts.push(attempt.error?.code ?? '');
+      throttleData = attempt.data;
+      break;
+    }
+  }
+  check(
+    '连续打 draft-range 最终会被本机限流挡住（429）',
+    throttleAttempts[throttleAttempts.length - 2] === 429,
+    JSON.stringify(throttleAttempts),
+  );
+  check(
+    '本机限流的代号是 rate_limited（区别于上游的 ai_rate_limited）',
+    throttleAttempts[throttleAttempts.length - 1] === 'rate_limited',
+    JSON.stringify(throttleAttempts),
+  );
+  check(
+    '被本机限流时不返回 data（它根本没走到模型那一步）',
+    throttleData === undefined || throttleData === null,
+    JSON.stringify(throttleData ?? null),
+  );
+  check(
+    '限流桶是「5 次/分钟」：干净的用户前 5 次放行、第 6 次才被挡',
+    sameJson(throttleAttempts.slice(0, 6).filter((item) => typeof item === 'number'), [200, 200, 200, 200, 200, 429]),
+    JSON.stringify(throttleAttempts),
+  );
+
+  // 静态哨兵：section 分支的返回值里必须有 `markdown`（新契约：块给落盘、markdown 给预览）。
+  // 只查 `"blocks"` 不够 —— `markdown` 被顺手删掉时，前端预览会退回「什么都不显示」。
+  // 注意别把**整篇**分支的 markdown 误当成它：整篇分支在更后面（用下面的切片把
+  // section 分支切出来，窗口只覆盖到 `const markdown = typeof body.markdown` 之前）。
+  const markdownGuardAt = aiRoutesSrc.indexOf('const markdown = typeof body.markdown');
+  const sectionBranchSrc =
+    markdownGuardAt > 0
+      ? aiRoutesSrc.slice(aiRoutesSrc.indexOf('AI_RANGE_TARGET_TYPES.section'), markdownGuardAt)
+      : '';
+  check(
+    'draft-range 的 section 分支源码里确实把 markdown 塞进了 patch',
+    sectionBranchSrc.includes('patch: { blocks:') && sectionBranchSrc.includes('markdown: previewMarkdown'),
+    sectionBranchSrc ? sectionBranchSrc.slice(0, 200) : '没抓到这个分支',
+  );
+  check(
+    '整篇分支的 markdown 校验 / 清洗还在（没被 section 的新字段串味）',
+    aiRoutesSrc.includes('documentPatchProblem(patch') && aiRoutesSrc.includes('cleanDocumentPatch(patch)'),
+    '整篇的形状校验 / 清洗不见了',
+  );
+
+  // 静态哨兵（父代理点名）：预览必须走 P2 的渲染接口，而不是把块 JSON 铺在 <pre> 里。
+  //
+  // 现状：P2 的 `POST /api/docs/:id/preview` 已经在了，`public/views/ai-edit.js` **还没接**
+  // （它现在仍用 `shortJson(draft.patch.blocks)` 铺 <pre>）。所以这条写成两段：
+  //   ① 无条件钉住 P2 那侧的路由存在（前端接上去以后不会撞 404）；
+  //   ② 前端一旦接上（文件里出现 `…/preview`），就要求它打的是这个接口、并且
+  //      **不再**把块 JSON 当正文铺 <pre>。
+  // 只写 ① 是诚实的：前端当前状态做不到「必须出现 /preview」，硬写会立刻红。
+  const aiEditUiSrc = readFileSync(join(ROOT, 'public', 'views', 'ai-edit.js'), 'utf8');
+  const docRoutesSrc = readFileSync(join(ROOT, 'src', 'modules', 'doc', 'routes.js'), 'utf8');
+  check(
+    'P2 的 POST /api/docs/:id/preview 渲染接口存在（前端预览要落在这上面）',
+    docRoutesSrc.includes("'/api/docs/:id/preview'"),
+    'P2 的预览接口不见了',
+  );
+  const uiWiredPreview = aiEditUiSrc.includes('/preview');
+  check(
+    uiWiredPreview
+      ? '前端 ai-edit.js 走 P2 的 …/preview 渲染接口，且不再把块 JSON 铺进 <pre> 当正文'
+      : '前端 ai-edit.js 尚未接 …/preview（当前仍铺块 JSON）—— 这条记录现状，接口侧由上一行钉住',
+    uiWiredPreview
+      ? /api\/docs\/\$\{[^}]*\}\/preview/.test(aiEditUiSrc) &&
+          !/shortJson\(draft\.patch\?\.blocks/.test(aiEditUiSrc)
+      : !aiEditUiSrc.includes('/preview'),
+    uiWiredPreview ? '接了 /preview，但仍在 <pre> 里铺 draft.patch.blocks' : '未接 /preview（预期内的现状）',
+  );
+
+  /* ---------- 26. POST /api/ai-edit/ops 的两种新 scope ---------- */
+  //
+  // 老的单块行为（不带 scope）由第 7~22 节钉着；这一节补新加的两档。
+  // `/ops` 本身不调模型、不限流（限流只在草拟那两条上），所以随便打。
+  const anonOpsSection = await createClient().call('/api/ai-edit/ops', {
+    method: 'POST',
+    body: { scope: 'section', documentId: 'doc-scope', after: { markdown: 'x' } },
+  });
+  check('未登录提交带 scope 的操作仍然 401（不是 404）', anonOpsSection.status === 401, `实际 ${anonOpsSection.status}`);
+
+  const scopeUnknown = await admin.call('/api/ai-edit/ops', {
+    method: 'POST',
+    body: { scope: 'chapter', documentId: 'doc-scope', after: BLOCK_AFTER, confirm: true },
+  });
+  check('scope 是别的值 → 400', scopeUnknown.status === 400, `实际 ${scopeUnknown.status}`);
+  check('未知 scope 的错误代号是 bad_request', scopeUnknown.error?.code === 'bad_request', String(scopeUnknown.error?.code));
+
+  const scopeSectionBefore = [
+    { blockId: 'sb-1', type: 'heading', props: { text: '小节', level: 2 } },
+    { blockId: 'sb-2', type: 'paragraph', props: { text: '旧文案' } },
+  ];
+  const scopeSectionAfter = [
+    { blockId: 'sb-1', type: 'heading', props: { text: '小节', level: 2 } },
+    { blockId: 'sb-2', type: 'paragraph', props: { text: '新文案' } },
+  ];
+  const scopeSectionBody = {
+    scope: 'section',
+    documentId: 'doc-scope',
+    before: scopeSectionBefore,
+    after: scopeSectionAfter,
+  };
+
+  const scopeSectionPreview = await admin.call('/api/ai-edit/ops', { method: 'POST', body: scopeSectionBody });
+  check(
+    'section 预览（不带 confirm）返回 applied:false',
+    scopeSectionPreview.status === 200 && scopeSectionPreview.data?.applied === false,
+    JSON.stringify(scopeSectionPreview.data),
+  );
+  check(
+    'section 预览里带 targetType / targetId',
+    scopeSectionPreview.data?.preview?.targetType === 'doc_section' &&
+      scopeSectionPreview.data?.preview?.targetId === 'doc-scope:sb-1~sb-2',
+    JSON.stringify(scopeSectionPreview.data?.preview),
+  );
+  check(
+    'section 预览里 before / after 都是块数组',
+    Array.isArray(scopeSectionPreview.data?.preview?.before) && Array.isArray(scopeSectionPreview.data?.preview?.after),
+    JSON.stringify(scopeSectionPreview.data?.preview),
+  );
+  check('section 预览回带的 scope 是 section', scopeSectionPreview.data?.scope === 'section', String(scopeSectionPreview.data?.scope));
+
+  const scopeSectionApplied = await admin.call('/api/ai-edit/ops', {
+    method: 'POST',
+    body: { ...scopeSectionBody, confirm: true },
+  });
+  check(
+    'section 带 confirm 落盘成功（applied:true）',
+    scopeSectionApplied.status === 200 && scopeSectionApplied.data?.applied === true,
+    JSON.stringify(scopeSectionApplied.data),
+  );
+  check('section 落盘的 targetType 是 doc_section', scopeSectionApplied.data?.targetType === 'doc_section', String(scopeSectionApplied.data?.targetType));
+  check('section 落盘的 targetId 是 <documentId>:<首块>~<末块>', scopeSectionApplied.data?.targetId === 'doc-scope:sb-1~sb-2', String(scopeSectionApplied.data?.targetId));
+  check(
+    'section 的 writeTo 指向 P2 的 ops 接口',
+    scopeSectionApplied.data?.writeTo === '/api/docs/doc-scope/ops',
+    String(scopeSectionApplied.data?.writeTo),
+  );
+  check(
+    'section 落盘的 before / after 是块数组（不是 {type,props}）',
+    Array.isArray(scopeSectionApplied.data?.before) && Array.isArray(scopeSectionApplied.data?.after),
+    JSON.stringify({ before: scopeSectionApplied.data?.before, after: scopeSectionApplied.data?.after }),
+  );
+  check(
+    'section 落盘时 before / after 的块 id 一一对应',
+    JSON.stringify(scopeSectionApplied.data?.before?.map((item) => item.blockId)) ===
+      JSON.stringify(scopeSectionApplied.data?.after?.map((item) => item.blockId)),
+    JSON.stringify(scopeSectionApplied.data),
+  );
+  check(
+    'section 落盘不带 blockId（那是单块模式才有的字段）',
+    scopeSectionApplied.data?.blockId === undefined,
+    String(scopeSectionApplied.data?.blockId),
+  );
+
+  // id 集合对不上 → 400（回滚写回的是 before 那些块，集合对不上会出现「回滚漏改一半」/「凭空多一块」）。
+  const idMismatch = await admin.call('/api/ai-edit/ops', {
+    method: 'POST',
+    body: {
+      scope: 'section',
+      documentId: 'doc-scope',
+      before: scopeSectionBefore,
+      after: [scopeSectionAfter[0], { blockId: 'sb-other', type: 'paragraph', props: { text: 'x' } }],
+      confirm: true,
+    },
+  });
+  check('before / after 的 blockId 集合对不上 → 400', idMismatch.status === 400, `实际 ${idMismatch.status}`);
+  check('id 对不上的错误代号是 bad_request', idMismatch.error?.code === 'bad_request', String(idMismatch.error?.code));
+  const countMismatch = await admin.call('/api/ai-edit/ops', {
+    method: 'POST',
+    body: { scope: 'section', documentId: 'doc-scope', before: scopeSectionBefore, after: [scopeSectionAfter[0]], confirm: true },
+  });
+  check('before / after 的块数对不上 → 400', countMismatch.status === 400, `实际 ${countMismatch.status}`);
+  const missingSectionBefore = await admin.call('/api/ai-edit/ops', {
+    method: 'POST',
+    body: { scope: 'section', documentId: 'doc-scope', after: scopeSectionAfter, confirm: true },
+  });
+  check('section 缺 before → 400', missingSectionBefore.status === 400, `实际 ${missingSectionBefore.status}`);
+  const badSectionAfter = await admin.call('/api/ai-edit/ops', {
+    method: 'POST',
+    body: { scope: 'section', documentId: 'doc-scope', before: scopeSectionBefore, after: BLOCK_AFTER, confirm: true },
+  });
+  check('section 的 after 是单块（不是数组）→ 400', badSectionAfter.status === 400, `实际 ${badSectionAfter.status}`);
+  const duplicateSectionId = await admin.call('/api/ai-edit/ops', {
+    method: 'POST',
+    body: {
+      scope: 'section',
+      documentId: 'doc-scope',
+      before: [{ blockId: 'dup-b', type: 'paragraph', props: { text: '甲' } }],
+      after: [{ blockId: 'dup-b', type: 'paragraph', props: { text: '甲' } }],
+      confirm: true,
+    },
+  });
+  check('section 只有一块也能落盘（单块一节是合法的）', duplicateSectionId.status === 200, `实际 ${duplicateSectionId.status}`);
+  check(
+    '单块一节的 targetId 就是 <documentId>:<blockId>（不加波浪号）',
+    duplicateSectionId.data?.targetId === 'doc-scope:dup-b',
+    String(duplicateSectionId.data?.targetId),
+  );
+
+  // 整篇（document）
+  const scopeDocAfter = { markdown: '# 改完的整篇\n\n正文。', title: '改完的标题' };
+  const scopeDocBody = { scope: 'document', documentId: 'doc-scope', after: scopeDocAfter };
+  const scopeDocPreview = await admin.call('/api/ai-edit/ops', { method: 'POST', body: scopeDocBody });
+  check(
+    'document 预览（不带 confirm）返回 applied:false',
+    scopeDocPreview.status === 200 && scopeDocPreview.data?.applied === false,
+    JSON.stringify(scopeDocPreview.data),
+  );
+  check(
+    'document 预览的 targetType / targetId',
+    scopeDocPreview.data?.preview?.targetType === 'document' &&
+      scopeDocPreview.data?.preview?.targetId === 'doc-scope:*',
+    JSON.stringify(scopeDocPreview.data?.preview),
+  );
+  const scopeDocApplied = await admin.call('/api/ai-edit/ops', {
+    method: 'POST',
+    body: { ...scopeDocBody, confirm: true },
+  });
+  check(
+    'document 带 confirm 落盘成功',
+    scopeDocApplied.status === 200 && scopeDocApplied.data?.applied === true,
+    JSON.stringify(scopeDocApplied.data),
+  );
+  check('document 的 targetType 是 document', scopeDocApplied.data?.targetType === 'document', String(scopeDocApplied.data?.targetType));
+  check('document 的 targetId 是 <documentId>:*', scopeDocApplied.data?.targetId === 'doc-scope:*', String(scopeDocApplied.data?.targetId));
+  check(
+    'document 的 writeTo 是 /api/docs/<id>/markdown',
+    scopeDocApplied.data?.writeTo === '/api/docs/doc-scope/markdown',
+    String(scopeDocApplied.data?.writeTo),
+  );
+  check(
+    'document 的 after 是服务端清洗过的 {markdown, title}',
+    scopeDocApplied.data?.after?.markdown === scopeDocAfter.markdown && scopeDocApplied.data?.after?.title === scopeDocAfter.title,
+    JSON.stringify(scopeDocApplied.data?.after),
+  );
+  // 回滚要能取到「改前的样子」，所以再落一条**带 before** 的整篇操作。
+  // 上面那条故意不带 before，用来钉「整篇的 before 可以缺省」；而缺 before 的操作
+  // 回滚只能 409（没有恢复内容可交）—— 这两条语义是配套的，别把上面的改成带 before。
+  const scopeDocBefore = { markdown: '# 旧整篇\n\n旧正文。', title: '旧标题' };
+  const scopeDocWithBefore = await admin.call('/api/ai-edit/ops', {
+    method: 'POST',
+    body: { scope: 'document', documentId: 'doc-scope', before: scopeDocBefore, after: scopeDocAfter, confirm: true },
+  });
+  check(
+    '带 before 的整篇操作也能落盘',
+    scopeDocWithBefore.status === 200 && scopeDocWithBefore.data?.applied === true,
+    JSON.stringify(scopeDocWithBefore.data),
+  );
+
+  const docEmptyMarkdown = await admin.call('/api/ai-edit/ops', {
+    method: 'POST',
+    body: { scope: 'document', documentId: 'doc-scope', after: { markdown: '   ' }, confirm: true },
+  });
+  check('document 的 markdown 是空串 → 400', docEmptyMarkdown.status === 400, `实际 ${docEmptyMarkdown.status}`);
+  const docNoMarkdown = await admin.call('/api/ai-edit/ops', {
+    method: 'POST',
+    body: { scope: 'document', documentId: 'doc-scope', after: { title: '只有标题' }, confirm: true },
+  });
+  check('document 缺 markdown → 400', docNoMarkdown.status === 400, `实际 ${docNoMarkdown.status}`);
+  const docBadType = await admin.call('/api/ai-edit/ops', {
+    method: 'POST',
+    body: { scope: 'document', documentId: 'doc-scope', after: { markdown: 42 }, confirm: true },
+  });
+  check('document 的 markdown 不是字符串 → 400', docBadType.status === 400, `实际 ${docBadType.status}`);
+
+  // 落盘的 section / document 都能在**老的那条** GET 审计里查到，targetType / targetId 对得上。
+  const scopeOps = (await admin.call('/api/ai-edit/ops?limit=100')).data?.ops ?? [];
+  const sectionRow = scopeOps.find((row) => row.id === scopeSectionApplied.data?.opId);
+  const documentRow = scopeOps.find((row) => row.id === scopeDocApplied.data?.opId);
+  check('section 落盘记录在审计里', sectionRow?.targetType === 'doc_section' && sectionRow?.targetId === 'doc-scope:sb-1~sb-2', JSON.stringify(sectionRow));
+  check('document 落盘记录在审计里', documentRow?.targetType === 'document' && documentRow?.targetId === 'doc-scope:*', JSON.stringify(documentRow));
+  check(
+    'section 审计里的 before / after 是块数组（回滚要原样交回）',
+    Array.isArray(sectionRow?.before) && Array.isArray(sectionRow?.after),
+    JSON.stringify({ before: sectionRow?.before, after: sectionRow?.after }),
+  );
+  check(
+    'document 审计里的 before / after 是 {markdown}（before 可以缺省）',
+    documentRow?.after?.markdown === scopeDocAfter.markdown && documentRow?.before === null,
+    JSON.stringify({ before: documentRow?.before, after: documentRow?.after }),
+  );
+
+  /* ---------- 27. 回滚的三种 restore 形状 ---------- */
+  //
+  // `/ops/:id/rollback` 本身一行没改，但 `restore` 现在有**三种**形状：
+  // 老的块级 → `{type,props}`；小节 → 块数组；整篇 → `{markdown,…}`。
+  // 前端拿 restore 去写盘，形状认错就是「回滚把一节写成一块」。
+  const blockRollbackAgain = await admin.call(`/api/ai-edit/ops/${opId}/rollback`, { method: 'POST' });
+  check('第 9 节那条块级审计已经回滚过，重复回滚仍然 409（老用例没被影响）', blockRollbackAgain.status === 409, `实际 ${blockRollbackAgain.status}`);
+  const blockRestoreRow = (await admin.call('/api/ai-edit/ops?limit=100')).data?.ops?.find((row) => row.id === opId);
+  check(
+    '老的单块审计 restore 的形状仍然是 {type, props}',
+    blockRestoreRow?.before?.type === 'paragraph' && blockRestoreRow?.before?.props?.text === '旧文案',
+    JSON.stringify(blockRestoreRow?.before),
+  );
+
+  const sectionRollback = await admin.call(`/api/ai-edit/ops/${scopeSectionApplied.data?.opId}/rollback`, { method: 'POST' });
+  check(
+    '回滚一条 section 操作成功',
+    sectionRollback.status === 200 && sectionRollback.data?.rolledBack === true,
+    JSON.stringify(sectionRollback.data),
+  );
+  check(
+    'section 的 restore 是**块数组**（不是 {type,props}）',
+    Array.isArray(sectionRollback.data?.restore),
+    JSON.stringify(sectionRollback.data?.restore),
+  );
+  check(
+    'section 的 restore 就是原整节（改前的文案）',
+    sameJson(sectionRollback.data?.restore, scopeSectionBefore),
+    JSON.stringify(sectionRollback.data?.restore),
+  );
+  check(
+    'section 回滚也回带 targetType / targetId',
+    sectionRollback.data?.targetType === 'doc_section' && sectionRollback.data?.targetId === 'doc-scope:sb-1~sb-2',
+    JSON.stringify({ targetType: sectionRollback.data?.targetType, targetId: sectionRollback.data?.targetId }),
+  );
+  check('section 回滚带上了 rolledBackAt', Number.isInteger(sectionRollback.data?.rolledBackAt), String(sectionRollback.data?.rolledBackAt));
+
+  // 缺 before 的整篇操作：回滚取不到恢复内容，只能 409（不能假装回滚成功）。
+  const docNoBeforeRollback = await admin.call(`/api/ai-edit/ops/${scopeDocApplied.data?.opId}/rollback`, { method: 'POST' });
+  check('整篇操作缺 before 时回滚 409（没有恢复内容可交）', docNoBeforeRollback.status === 409, `实际 ${docNoBeforeRollback.status}`);
+
+  const documentRollback = await admin.call(`/api/ai-edit/ops/${scopeDocWithBefore.data?.opId}/rollback`, { method: 'POST' });
+  check(
+    '回滚一条 document 操作成功',
+    documentRollback.status === 200 && documentRollback.data?.rolledBack === true,
+    JSON.stringify(documentRollback.data),
+  );
+  check(
+    'document 的 restore 是 { markdown, … }',
+    documentRollback.data?.restore != null &&
+      typeof documentRollback.data.restore === 'object' &&
+      !Array.isArray(documentRollback.data.restore) &&
+      typeof documentRollback.data.restore.markdown === 'string',
+    JSON.stringify(documentRollback.data?.restore),
+  );
+  check(
+    'document 的 restore 就是改前的整篇（markdown / title 原样交回）',
+    sameJson(documentRollback.data?.restore, scopeDocBefore),
+    JSON.stringify(documentRollback.data?.restore),
+  );
+  check(
+    'document 的 restore.targetType 是 document、targetId 是 <documentId>:*',
+    documentRollback.data?.targetType === 'document' && documentRollback.data?.targetId === 'doc-scope:*',
+    JSON.stringify({ targetType: documentRollback.data?.targetType, targetId: documentRollback.data?.targetId }),
+  );
+
+  // 回滚后 canRollback / rolledBackAt 的行为与老用例一致（列表里立刻不可回滚、再回滚 409）。
+  const rollbackOps = (await admin.call('/api/ai-edit/ops?limit=100')).data?.ops ?? [];
+  const sectionRolled = rollbackOps.find((row) => row.id === scopeSectionApplied.data?.opId);
+  const documentRolled = rollbackOps.find((row) => row.id === scopeDocWithBefore.data?.opId);
+  check('section 回滚后状态变成 rolled_back', sectionRolled?.status === 'rolled_back', String(sectionRolled?.status));
+  check('section 回滚后 canRollback=false', sectionRolled?.canRollback === false, String(sectionRolled?.canRollback));
+  check('section 回滚后 rolledBackAt 有值', Number.isInteger(sectionRolled?.rolledBackAt), String(sectionRolled?.rolledBackAt));
+  check('document 回滚后状态变成 rolled_back', documentRolled?.status === 'rolled_back', String(documentRolled?.status));
+  check('document 回滚后 canRollback=false', documentRolled?.canRollback === false, String(documentRolled?.canRollback));
+  check('document 回滚后 rolledBackAt 有值', Number.isInteger(documentRolled?.rolledBackAt), String(documentRolled?.rolledBackAt));
+  const sectionRollbackAgain = await admin.call(`/api/ai-edit/ops/${scopeSectionApplied.data?.opId}/rollback`, { method: 'POST' });
+  check('section 重复回滚返回 409', sectionRollbackAgain.status === 409, `实际 ${sectionRollbackAgain.status}`);
+  const documentRollbackAgain = await admin.call(`/api/ai-edit/ops/${scopeDocWithBefore.data?.opId}/rollback`, { method: 'POST' });
+  check('document 重复回滚返回 409', documentRollbackAgain.status === 409, `实际 ${documentRollbackAgain.status}`);
+
+  /* ---------- 28. 没配 key 的 503 不该吃限流额度（requireModelConfigured 排在 rateLimit 之前） ---------- */
+  //
+  // 回归的是这么一件事：以前在**没配 key** 的服务器上连打 `draft-range`，每一次都是 503
+  // （一次模型都没用上、一分钱没花），却照样把「每分钟 5 次」的桶打满，第 6 次变成 429
+  // —— 用户看到的是「你操作太频繁」，可他其实什么都没干成。现在配置门排在限流之前：
+  // `src/modules/ai/routes.js:1108` / `:1197` 的 `requireModelConfigured(...)` 在
+  // `:1115` / `:1204` 的 `rateLimit(...)` 之前，`:973` 的 `/draft` 也在 `:975` 之前。
+  // 每日配额（`usedToday`）与全站闸门（`siteUsedToday`）本来就排除 `blocked` 行，
+  // 这三条用例钉的就是「限流跟它们同一个口径」——**一次 429 都不该出现**。
+  //
+  // 用 carol：她在**这台没配 key 的服务器**上还没有任何 AI 授权（第 23 节拿她验过权限边界），
+  // 所以两个限流桶（`ai-edit:draft-range:carol` / `ai-edit:draft:carol`）都是从 0 开始，
+  // 「第 6 次 / 第 11 次」这种边界才有确定性 —— 桶被别人提前用掉的话这条用例就废了。
+  const carolGrant = await carolPlain.call('/api/ai-edit/grants', {
+    method: 'POST',
+    body: { capability: 'edit_content', confirm: true, dailyQuota: 0 },
+  });
+  check(
+    'carol 拿到 edit_content（下面三条回归要用，桶从 0 开始）',
+    carolGrant.status === 200,
+    `实际 ${carolGrant.status} ${JSON.stringify(carolGrant.error ?? null)}`,
+  );
+
+  // ① `draft-range`：桶是 5 次/分钟，连打 6 次合法请求。改之前第 6 次必是 429。
+  const noKeyRangeAttempts = [];
+  for (let i = 0; i < 6; i += 1) {
+    noKeyRangeAttempts.push(await carolPlain.call('/api/ai-edit/draft-range', { method: 'POST', body: rangeSectionBody() }));
+  }
+  const noKeyRangeStatuses = noKeyRangeAttempts.map((item) => item.status);
+  check(
+    '没配 key 时 draft-range 连打 6 次全是 503（配置门不占限流额度）',
+    noKeyRangeStatuses.every((status) => status === 503),
+    JSON.stringify(noKeyRangeStatuses),
+  );
+  check(
+    'draft-range 没有一条被本机限流挡成 429（改之前第 6 次就是 429）',
+    noKeyRangeStatuses.every((status) => status !== 429),
+    JSON.stringify(noKeyRangeStatuses),
+  );
+  check(
+    '这 6 次的错误代号都是 ai_not_configured',
+    noKeyRangeAttempts.every((item) => item.error?.code === 'ai_not_configured'),
+    JSON.stringify(noKeyRangeAttempts.map((item) => item.error?.code ?? null)),
+  );
+  // 503 是「配置门」，不是「静默失败」：每一次都要留一条 blocked 审计（targetType 跟 scope 走）。
+  const carolOwnOps = await listOps(carolPlain);
+  const carolNoKeyRows = carolOwnOps.filter(
+    (row) =>
+      String(row.reason ?? '') === 'ai_not_configured' &&
+      row.status === 'blocked' &&
+      row.targetType === 'doc_section' &&
+      row.targetId === 'doc-range:rs1~rs2',
+  );
+  check(
+    '6 次 503 各留了一条 blocked 审计（targetType=doc_section，记在发起者名下）',
+    carolNoKeyRows.length >= 6,
+    String(carolNoKeyRows.length),
+  );
+
+  // ② `/draft`：桶是 10 次/分钟（FR-AI-14），连打 12 次也该全是 503、一条 429 都没有。
+  const noKeyDraftBody = { blockId: 'block-1', block: { type: 'paragraph', props: { text: '原文' } }, instruction: '改成投票' };
+  const noKeyDraftAttempts = [];
+  for (let i = 0; i < 12; i += 1) {
+    noKeyDraftAttempts.push(await carolPlain.call('/api/ai-edit/draft', { method: 'POST', body: noKeyDraftBody }));
+  }
+  const noKeyDraftStatuses = noKeyDraftAttempts.map((item) => item.status);
+  check(
+    '没配 key 时 /draft 连打 12 次全是 503（10 次/分钟的桶也没被吃）',
+    noKeyDraftStatuses.every((status) => status === 503),
+    JSON.stringify(noKeyDraftStatuses),
+  );
+  check(
+    '/draft 也没有一条 429',
+    noKeyDraftStatuses.every((status) => status !== 429),
+    JSON.stringify(noKeyDraftStatuses),
+  );
+  const carolDraftRows = (await listOps(carolPlain)).filter(
+    (row) => String(row.reason ?? '') === 'ai_not_configured' && row.status === 'blocked' && row.targetType === 'document_block',
+  );
+  check(
+    '/draft 的 12 次 503 也都留了 blocked 审计（targetType=document_block）',
+    carolDraftRows.length >= 12,
+    String(carolDraftRows.length),
+  );
+
+  // ③ `/draft` 的参数校验仍排在限流之前：11 次「instruction 为空」全该是 400（不吃额度），
+  //    紧接着的第 12 次合法请求仍然该是 503（配置门），而不是被限流挡成 429。
+  const noKeyDraftBad = [];
+  for (let i = 0; i < 11; i += 1) {
+    noKeyDraftBad.push(
+      await carolPlain.call('/api/ai-edit/draft', {
+        method: 'POST',
+        body: { blockId: 'block-1', block: { type: 'paragraph', props: { text: '原文' } }, instruction: '   ' },
+      }),
+    );
+  }
+  check(
+    '11 次「instruction 为空」全是 400（校验排在限流之前）',
+    noKeyDraftBad.every((item) => item.status === 400),
+    JSON.stringify(noKeyDraftBad.map((item) => item.status)),
+  );
+  check(
+    '这 11 次的错误代号都是 bad_request',
+    noKeyDraftBad.every((item) => item.error?.code === 'bad_request'),
+    JSON.stringify(noKeyDraftBad.map((item) => item.error?.code ?? null)),
+  );
+  const noKeyDraftAfterBad = await carolPlain.call('/api/ai-edit/draft', { method: 'POST', body: noKeyDraftBody });
+  check(
+    '校验不过的请求不吃额度：紧随其后的合法请求仍然是 503（不是 429）',
+    noKeyDraftAfterBad.status === 503 && noKeyDraftAfterBad.error?.code === 'ai_not_configured',
+    `实际 ${noKeyDraftAfterBad.status} ${noKeyDraftAfterBad.error?.code ?? ''}`,
   );
 
   await finish(failures.length ? 1 : 0);

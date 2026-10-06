@@ -26,7 +26,14 @@ import {
   AI_BLOCK_TYPE_NAMES,
   AI_BUDGET_ENV,
   AI_USAGE_TOP_USERS,
+  AI_SCOPES,
+  AI_MAX_SECTION_BLOCKS,
+  AI_MAX_RANGE_CHARS,
+  AI_MAX_SECTION_INPUT,
+  AI_RANGE_TARGET_TYPES,
+  AI_MAX_TITLE,
 } from './schema.js';
+import { splitSections, SECTION_OPENING_LABEL } from './sections.js';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -149,6 +156,23 @@ function guardSiteBudget(db) {
 }
 
 /**
+ * 没配模型就先给 503 —— 关键在于它**必须排在 `rateLimit` 之前**，一次额度都不许吃。
+ *
+ * 为什么单列一个函数：`rateLimit` 是 `src/core/http.js` 里的内存桶，只给「检查」
+ * 不给「退还」（core 文件我改不得）。以前 `/draft-range` 连打 5 次「没配 key 的 503」
+ * 就把每分钟 5 次用完，第 6 次是 429 —— 用户一次模型都没用上、一分钱没花。
+ * 每日配额（`usedToday`）与全站闸门（`siteUsedToday`）都排除 `blocked` 行，限流跟上同一个口径。
+ */
+function requireModelConfigured(
+  db,
+  { userId, capability, action, targetId, targetType = 'document_block' },
+) {
+  if (process.env.AI_API_KEY) return;
+  logBlocked(db, userId, capability, action, targetId, 'ai_not_configured', targetType);
+  throw new HttpError(503, 'ai_not_configured', '没有配置 AI_API_KEY，无法调用模型');
+}
+
+/**
  * 检查一个块补丁的**形状** —— 就是 P2 `document_blocks` 的那一套 `{ type, props }`。
  *
  * 返回空串表示合法；否则返回一句话的毛病描述。**故意不在这里抛**：
@@ -222,12 +246,12 @@ function logOp(db, entry) {
  * 返回坏 JSON 的几条**什么都不记** —— 同一次调用，网络失败有痕、被服务商拒绝没痕，
  * 审计就是缺的。
  */
-function logBlocked(db, userId, capability, action, targetId, reason) {
+function logBlocked(db, userId, capability, action, targetId, reason, targetType = 'document_block') {
   logOp(db, {
     userId,
     capability,
     action,
-    targetType: 'document_block',
+    targetType,
     targetId: String(targetId ?? ''),
     status: AI_BLOCKED_STATUS,
     reason,
@@ -249,6 +273,284 @@ function shapeOp(row) {
     rolledBackAt: row.rolled_back_at ?? null,
     canRollback: row.status === 'applied' && row.before_json != null && row.rolled_back_at == null,
   };
+}
+
+/** 一小节的块数组：必须是 `[{ blockId, type, props }]`。返回毛病描述，空串表示合法。 */
+function sectionBlocksProblem(list, label = 'blocks') {
+  if (!Array.isArray(list)) return `${label} 必须是数组`;
+  if (list.length === 0) return `${label} 不能是空数组`;
+  if (list.length > AI_MAX_SECTION_BLOCKS) {
+    return `${label} 有 ${list.length} 块，超过一批 ${AI_MAX_SECTION_BLOCKS} 条的上限（落盘走 POST /api/docs/:id/ops）`;
+  }
+  const seen = new Set();
+  for (let i = 0; i < list.length; i += 1) {
+    const item = list[i];
+    const problem = blockPatchProblem(item);
+    if (problem) return `${label}[${i}] ${problem}`;
+    const id = String(item.blockId ?? '').trim();
+    if (id === '') return `${label}[${i}] 缺 blockId —— 回写要靠它认块`;
+    if (id.length > 64) return `${label}[${i}] blockId 太长（上限 64）`;
+    if (id.includes(':')) return `${label}[${i}] blockId 里不能有冒号`;
+    if (seen.has(id)) return `${label}[${i}] blockId 重复（「${id}」出现两次）`;
+    seen.add(id);
+  }
+  return '';
+}
+
+/** 校验通过后取出干净的块数组：只留 `blockId` / `type` / `props`。 */
+function cleanSectionBlocks(list) {
+  return list.map((item) => ({
+    blockId: String(item.blockId).trim(),
+    type: item.type,
+    props: item.props ?? {},
+  }));
+}
+
+/** 两个 props 是不是同一份内容（键序无关 —— 数据库里的键序和模型吐的不一定一样）。 */
+function sameProps(a, b) {
+  const norm = (value) => {
+    if (value === null || typeof value !== 'object') return value;
+    if (Array.isArray(value)) return value.map(norm);
+    return Object.keys(value)
+      .sort()
+      .reduce((out, key) => {
+        out[key] = norm(value[key]);
+        return out;
+      }, {});
+  };
+  return JSON.stringify(norm(a ?? {})) === JSON.stringify(norm(b ?? {}));
+}
+
+/**
+ * 这一节里**真的改了**的块有几块。
+ *
+ * 不能用「模型返回了几块」充数：提示词要求它整节收齐，一字未动的块也会原样吐回来，
+ * 那样报出来的数字永远是整节的长度，用户看到的「改了 8 块」其实是「这一节有 8 块」。
+ */
+function countChangedBlocks(before, after) {
+  return after.filter((block) => {
+    const was = before.find((item) => item.blockId === block.blockId);
+    return !was || was.type !== block.type || !sameProps(was.props, block.props);
+  }).length;
+}
+
+/**
+ * 模型返回的一节改动：`{ blocks: [{ blockId, type, props }], markdown }`。
+ *
+ * 比用户提交的那条路严一档：`allowedIds` 是**我发过去的那一节**的块 id，
+ * 模型吐回来的每个 blockId 都必须在里面。模型很擅长发明 id（`b7`、`block-3`），
+ * 放过去就是往一篇文档里写一块并不属于这一节、甚至并不存在的东西。
+ *
+ * `markdown` 是给**界面**看的：用户明确要求「别给我 JSON，给渲染后的预览」，
+ * 而这一节要显示成什么样，只能由 P2 的渲染器说了算（`POST /api/docs/:id/preview`）。
+ * 所以同一节要两份：`blocks` 用于**精确落盘**（走 ops，块 id 不乱），
+ * `markdown` 只用于**渲染预览**，绝不参与写盘。两份不一致时以 `blocks` 为准。
+ */
+function sectionPatchProblem(value, allowedIds) {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) {
+    return '必须是一个对象 { blocks: [...], markdown }';
+  }
+  const problem = sectionBlocksProblem(value.blocks, 'blocks');
+  if (problem) return problem;
+  const allowed = new Set(allowedIds);
+  const returned = new Set();
+  for (let i = 0; i < value.blocks.length; i += 1) {
+    const id = String(value.blocks[i].blockId).trim();
+    if (!allowed.has(id)) return `blocks[${i}].blockId「${id}」不在我发过去的这一节里（块 id 必须原样照抄）`;
+    returned.add(id);
+  }
+  // 必须整节收齐：落盘走 `POST /api/docs/:id/ops`，那一步要求 before / after 的块
+  // id **一一对应**。模型少吐一块，这里放过就变成「草拟能成、落盘 400」—— 与其把
+  // 一个半成品交给用户点落盘，不如现在就说清楚。
+  for (const id of allowed) {
+    if (!returned.has(id)) {
+      return `这一节的块「${id}」没出现在 blocks 里 —— 一节要整节收齐（少一块就对不上盘）`;
+    }
+  }
+  if (typeof value.markdown !== 'string' || value.markdown.trim() === '') {
+    return 'markdown 不能为空 —— 界面靠它渲染这一节的预览（blocks 只用于落盘）';
+  }
+  if (value.markdown.length > AI_MAX_RANGE_CHARS) {
+    return `markdown 太长了（${value.markdown.length} 字符，上限 ${AI_MAX_RANGE_CHARS}）`;
+  }
+  return '';
+}
+
+/** 整篇的旧值 / 新值：`{ markdown, title? }`。返回毛病描述，空串表示合法。 */
+function documentPatchProblem(value, label) {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) {
+    return `${label} 必须是对象 { markdown }`;
+  }
+  if (typeof value.markdown !== 'string' || value.markdown.trim() === '') {
+    return `${label}.markdown 必须是非空字符串`;
+  }
+  if (value.markdown.length > AI_MAX_RANGE_CHARS) {
+    return `${label}.markdown 有 ${value.markdown.length} 字符，超过 ${AI_MAX_RANGE_CHARS} 的上限`;
+  }
+  if (value.title !== undefined && value.title !== null) {
+    if (typeof value.title !== 'string') return `${label}.title 必须是字符串`;
+    if (value.title.length > AI_MAX_TITLE) return `${label}.title 太长（上限 ${AI_MAX_TITLE}）`;
+  }
+  return '';
+}
+
+function cleanDocumentPatch(value) {
+  const patch = { markdown: value.markdown };
+  if (typeof value.title === 'string' && value.title.trim() !== '') patch.title = value.title.trim();
+  return patch;
+}
+
+/**
+ * 块级改写的系统提示词。
+ *
+ * 抽出来是因为它现在有三个用户：单块 `/draft`、按小节 `/draft-range`、以及
+ * `scripts/ai-smoke.mjs` 里对措辞的断言。同一段话在两处各写一份，
+ * 改了一处忘另一处，模型就按老规矩吐形状 —— 落盘时才炸（这条踩过一次了：
+ * 旧提示词用的是自造的 `{ blockType, content }`，模型照着发明了不存在的 `vote` 类型）。
+ */
+function blockPromptRules() {
+  return [
+    `type 只能取这些名字之一：${AI_BLOCK_TYPES.map((item) => `${item.name}（${item.label}）`).join('、')}。`,
+    'props 是各类型自己的字段：正文 {"text":"…"}；标题 {"text":"…","level":1}；',
+    '代码 {"text":"…","lang":"…"}；引用 {"text":"…","source":"…"}；',
+    '投票 {"question":"…","options":["选项一","选项二"],"multiple":false}；图片 {"src":"…","alt":"…","text":"…"}。',
+    '脚本 {"code":"…"}（浏览器里跑的 JS，服务端不执行）；',
+    '子页 {"doc":"…","mode":"card","title":"…","note":"…"}（doc 填页面标题或 id，拿不准就留空）。',
+    '用户没要求改的部分保持原样。',
+  ].join('');
+}
+
+function blockSystemPrompt() {
+  return [
+    '你是博客「积木帖子」的块编辑器。用户给你当前这一块，以及一句改写要求。',
+    '你只改这一块，绝不重写整篇，也不要碰别的块。',
+    '只输出一个 JSON 对象，形状必须是 {"type":"<块类型>","props":{…}}，',
+    '不要输出解释文字，也不要 Markdown 代码围栏。',
+    blockPromptRules(),
+  ].join('');
+}
+
+/** 按小节改写的系统提示词：输入是一节的若干块，输出**改过的块 + 这一节的 Markdown**。 */
+function sectionSystemPrompt() {
+  return [
+    '你是博客「积木帖子」的块编辑器。用户给你**一个小节**里的若干块（JSON 数组，按顺序，每块有 blockId）。',
+    '你只改这个小节里的内容，绝不改别的块，也不要增删块。',
+    '只输出一个 JSON 对象，形状必须是',
+    '{"blocks":[{"blockId":"原样的 id","type":"<块类型>","props":{…}}],"markdown":"<这一节改完之后的 Markdown>"}。',
+    'blocks 里只列出**你改动过**的块；blockId 必须原样照抄我给的那个，不许发明新的，也不许改 id。',
+    'markdown 是给界面渲染预览用的：把**整个小节**（包括没改的块）按顺序写成 Markdown，',
+    '标题用 # 开头，正文就是正文；它必须和 blocks 表达的是同一份内容（以 blocks 为准，markdown 不许夹带新东西）。',
+    '不要输出解释文字，也不要 Markdown 代码围栏。',
+    blockPromptRules(),
+  ].join('');
+}
+
+/** 整篇改写的系统提示词：输入整篇 Markdown，输出改完的整篇 Markdown。 */
+function documentSystemPrompt() {
+  return [
+    '你是博客「积木帖子」的整篇编辑器。用户给你**整篇 Markdown**，以及一句改写要求。',
+    '只输出一个 JSON 对象，形状必须是 {"markdown":"<改完的整篇>"}，',
+    '可选一个 "title" 字段（用户明确要求改标题时再给）。',
+    '没让改的部分照抄原样，不要顺手润色；不要输出解释文字，也不要 Markdown 代码围栏。',
+    '注意：本站的 Markdown 与积木块是互转的，转换有损（表格分隔行会被剥掉、嵌套列表会被并成一块），',
+    '能不动结构就别动结构。',
+  ].join('');
+}
+
+/**
+ * 真发一次模型调用，把模型返回的**原文**拿回来。
+ *
+ * 返回 `{ content, model }`：解析和形状校验留给调用方（块 / 小节 / 整篇三种形状不同，
+ * 但坏形状一律用既有的 `ai_bad_json`，不新造代号）。
+ *
+ * 所有「发不出去 / 被上游拒绝」的分支都在这里 `logBlocked` —— 以前只有「连不上」
+ * 和「超时」写日志，被 401/403/429/500 拒绝的那几条什么都不记，审计就是缺的。
+ * 抽成一个函数也是为了让下一个接口不可能漏掉这几行。
+ */
+async function callModel(
+  db,
+  { userId, capability, action, targetId, targetType = 'document_block', system, userText },
+) {
+  // 没配 key 的 503 在这里；路由在 `rateLimit` 之前已经先问过一次（同一个函数），
+  // 那次之后 key 不会凭空出现，所以这里通常只是兜底。
+  requireModelConfigured(db, { userId, capability, action, targetId, targetType });
+  // 上面那行不抛就说明 key 在，所以这里直接取来用（同一个环境变量，不复制一份判断）。
+  const apiKey = process.env.AI_API_KEY;
+
+  // 默认值必须和 `forum-ai/src/ai.mjs` 的 DEFAULT_BASE_URL / DEFAULT_MODEL 一致：
+  // 同一个项目里 `AI_BASE_URL` / `AI_MODEL` 只能有一个默认值。两边不一致的时候，
+  // 只配 `AI_API_KEY`（forum-ai/README.md 里的最小配法）就会把 key 发到另一个
+  // 服务商去 —— 既肯定调不通，也等于把密钥递给了第三方。
+  // `scripts/ai-smoke.mjs` 第 16 节直接读这两个源文件比对，只改一边会红。
+  // 超时默认 180000 是 FR-AI-13 写的「超时按 180 秒级」，跟 forum-ai 的 60000
+  // 不同是有意的，不参与这项比对。
+  const baseUrl = String(process.env.AI_BASE_URL || 'https://api.deepseek.com/v1').replace(/\/+$/, '');
+  const model = String(process.env.AI_MODEL || 'deepseek-chat');
+  const configured = Number(process.env.AI_TIMEOUT_MS);
+  const timeoutMs = Number.isFinite(configured) && configured > 0 ? configured : 180000;
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  let response;
+  try {
+    response = await fetch(`${baseUrl}/chat/completions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
+      body: JSON.stringify({
+        model,
+        temperature: 0.2,
+        messages: [
+          { role: 'system', content: system },
+          { role: 'user', content: userText },
+        ],
+      }),
+      signal: controller.signal,
+    });
+  } catch (error) {
+    const aborted = error?.name === 'AbortError';
+    logBlocked(db, userId, capability, action, targetId, aborted ? 'ai_timeout' : 'ai_unreachable', targetType);
+    throw new HttpError(
+      aborted ? 504 : 502,
+      aborted ? 'ai_timeout' : 'ai_unreachable',
+      aborted ? `模型调用超过 ${timeoutMs}ms` : '连不上模型服务',
+    );
+  } finally {
+    clearTimeout(timer);
+  }
+
+  if (response.status === 401 || response.status === 403) {
+    logBlocked(db, userId, capability, action, targetId, 'ai_unauthorized', targetType);
+    throw new HttpError(502, 'ai_unauthorized', '模型服务拒绝了这个 API key');
+  }
+  if (response.status === 429) {
+    logBlocked(db, userId, capability, action, targetId, 'ai_rate_limited', targetType);
+    throw new HttpError(429, 'ai_rate_limited', '模型服务限流了，请稍后再试');
+  }
+  if (!response.ok) {
+    logBlocked(db, userId, capability, action, targetId, `ai_upstream_error ${response.status}`, targetType);
+    throw new HttpError(502, 'ai_upstream_error', `模型服务返回 ${response.status}`);
+  }
+
+  let payload;
+  try {
+    payload = await response.json();
+  } catch {
+    logBlocked(db, userId, capability, action, targetId, 'ai_bad_json', targetType);
+    throw new HttpError(502, 'ai_bad_json', '模型返回的不是 JSON');
+  }
+
+  const content = String(payload?.choices?.[0]?.message?.content ?? '');
+  return { content, model };
+}
+
+/** 模型原文 → JSON。坏 JSON 一律 `ai_bad_json` 502，并在日志里留一条 blocked。 */
+function parseModelJson(content, { db, userId, capability, action, targetId, targetType = 'document_block' }) {
+  try {
+    return JSON.parse(String(content).replace(/```json/gi, '').replace(/```/g, '').trim());
+  } catch {
+    logBlocked(db, userId, capability, action, targetId, 'ai_bad_json', targetType);
+    throw new HttpError(502, 'ai_bad_json', '模型没有返回合法的 JSON 改动');
+  }
 }
 
 export function registerAiRoutes(ctx) {
@@ -410,29 +712,17 @@ export function registerAiRoutes(ctx) {
     const capability = AI_CONTENT_CAPABILITY;
     guardCapability(db, user.id, capability);
 
-    const after = body.after ?? null;
-    const afterProblem = blockPatchProblem(after);
+    // 粒度（用户 2026-10 的需求：块太碎，要么整篇、要么按小标题一节一节来）。
+    // 缺省 `block` 是历史行为，旧前端不传 scope 时逐字不变。
+    const scope =
+      body.scope === undefined || body.scope === null || body.scope === '' ? 'block' : String(body.scope);
     ensure(
-      !afterProblem,
+      scope === 'block' || scope === 'section' || scope === 'document',
       400,
       'bad_request',
-      `after 不是合法的块（${afterProblem}）—— 这一版只接受块级改动 { type, props }，不接受整篇重写`,
+      `scope 只能是 block（单块）/ section（一小节）/ document（整篇），收到「${scope}」`,
     );
-    const before = body.before ?? null;
-    if (before !== null) {
-      const beforeProblem = blockPatchProblem(before);
-      ensure(!beforeProblem, 400, 'bad_request', `before 不是合法的块（${beforeProblem}）`);
-    }
-    // 审计和返回里只能出现 `{ type, props }`：`after` / `before` 来自请求体，可能夹带
-    // 别的键（上一轮实测就存进过 `{"type":"poll","props":{…},"blockType":"vote","content":{…}}`
-    // —— 旧形状的键跟着新形状一起进了库）。`cleanBlockPatch` 只留 type / props。
-    const cleanAfter = cleanBlockPatch(after);
-    const cleanBefore = before === null ? null : cleanBlockPatch(before);
 
-    // 目标恒为「某个文档里的某一块」：`targetType` 由服务端写死，`targetId` 由服务端拼，
-    // 客户端塞不进任意字符串（以前 targetType 可以是 not_a_real_thing、
-    // targetId 能塞 5000 个字符）。
-    const targetType = 'document_block';
     // `documentId` 是必填的：落盘记的是「哪一篇的哪一块」，缺了它目标栏就是 `:b7`，
     // 回滚时写不回任何地方 —— 一条「已落盘」的审计却指不回文档，比不记还坏。
     const rawDocumentId = body.documentId;
@@ -445,17 +735,99 @@ export function registerAiRoutes(ctx) {
     ensure(documentId !== '', 400, 'bad_request', 'documentId 不能为空 —— 落盘要记清楚改的是哪一篇文档');
     // `targetId` 用 `:` 拼、回滚时按 `:` 拆，所以 id 里不能自带 `:`，否则拆出错的目标。
     ensure(!documentId.includes(':'), 400, 'bad_request', 'documentId 里不能有冒号');
-    const blockId = String(body.blockId ?? '').trim();
-    ensure(blockId.length >= 1, 400, 'bad_request', 'blockId 不能为空');
-    ensure(!blockId.includes(':'), 400, 'bad_request', 'blockId 里不能有冒号');
-    const targetId = composeTargetId(documentId, blockId);
+    const reason = String(body.reason ?? '').slice(0, AI_MAX_REASON);
+
+    // 两种粒度共用一套外壳，只有「校验什么形状 / targetType / targetId / 往哪儿写」不同。
+    let targetType = 'document_block';
+    let targetId = '';
+    let cleanBefore = null;
+    let cleanAfter = null;
+    let writeTo = '';
+    let blockId = '';
+
+    if (scope === 'document') {
+      // 整篇：`{ markdown, title? }`。写盘走 P2 的 `PUT /api/docs/:id/markdown`。
+      const afterProblem = documentPatchProblem(body.after, 'after');
+      ensure(!afterProblem, 400, 'bad_request', `after 不是合法的整篇改动（${afterProblem}）`);
+      if (body.before !== undefined && body.before !== null) {
+        const beforeProblem = documentPatchProblem(body.before, 'before');
+        ensure(!beforeProblem, 400, 'bad_request', `before 不是合法的整篇改动（${beforeProblem}）`);
+        cleanBefore = cleanDocumentPatch(body.before);
+      }
+      cleanAfter = cleanDocumentPatch(body.after);
+      targetType = AI_RANGE_TARGET_TYPES.document;
+      targetId = composeTargetId(documentId, '*');
+      writeTo = `/api/docs/${encodeURIComponent(documentId)}/markdown`;
+    } else if (scope === 'section') {
+      // 一小节：两边的块数组必须覆盖**同一批** blockId。回滚写回的是 `before` 那些块，
+      // 集合对不上就会出现「回滚漏改一半」或者「回滚凭空多出一块」。
+      const afterProblem = sectionBlocksProblem(body.after, 'after');
+      ensure(!afterProblem, 400, 'bad_request', `after 不是合法的一节改动（${afterProblem}）`);
+      const beforeProblem = sectionBlocksProblem(body.before, 'before');
+      ensure(!beforeProblem, 400, 'bad_request', `before 不是合法的一节改动（${beforeProblem}）`);
+      cleanAfter = cleanSectionBlocks(body.after);
+      cleanBefore = cleanSectionBlocks(body.before);
+      const idsOf = (list) => list.map((item) => item.blockId).sort().join('\u0000');
+      ensure(
+        idsOf(cleanBefore) === idsOf(cleanAfter),
+        400,
+        'bad_request',
+        'before / after 的 blockId 必须一一对应（回滚要按同一批块写回）',
+      );
+      targetType = AI_RANGE_TARGET_TYPES.section;
+      const label =
+        cleanAfter.length === 1
+          ? cleanAfter[0].blockId
+          : `${cleanAfter[0].blockId}~${cleanAfter[cleanAfter.length - 1].blockId}`;
+      targetId = composeTargetId(documentId, label);
+      // 一节 50 块时 `b1~b50` 还没问题，但 id 本身可以长到 64 —— 兜一下，
+      // 宁可目标栏写「这一节有几块」，也不要一条超长的 target_id 灌进日志。
+      if (targetId.length > AI_MAX_TARGET_ID) {
+        targetId = composeTargetId(documentId, `section(${cleanAfter.length})`);
+      }
+      writeTo = `/api/docs/${encodeURIComponent(documentId)}/ops`;
+    } else {
+      const after = body.after ?? null;
+      const afterProblem = blockPatchProblem(after);
+      ensure(
+        !afterProblem,
+        400,
+        'bad_request',
+        `after 不是合法的块（${afterProblem}）—— 单块模式只接受 { type, props }，要整篇或整节请带 scope`,
+      );
+      const before = body.before ?? null;
+      if (before !== null) {
+        const beforeProblem = blockPatchProblem(before);
+        ensure(!beforeProblem, 400, 'bad_request', `before 不是合法的块（${beforeProblem}）`);
+      }
+      // 审计和返回里只能出现 `{ type, props }`：`after` / `before` 来自请求体，可能夹带
+      // 别的键（上一轮实测就存进过 `{"type":"poll","props":{…},"blockType":"vote","content":{…}}`
+      // —— 旧形状的键跟着新形状一起进了库）。`cleanBlockPatch` 只留 type / props。
+      cleanAfter = cleanBlockPatch(after);
+      cleanBefore = before === null ? null : cleanBlockPatch(before);
+
+      // 目标恒为「某个文档里的某一块」：`targetType` 由服务端写死，`targetId` 由服务端拼，
+      // 客户端塞不进任意字符串（以前 targetType 可以是 not_a_real_thing、
+      // targetId 能塞 5000 个字符）。
+      blockId = String(body.blockId ?? '').trim();
+      ensure(blockId.length >= 1, 400, 'bad_request', 'blockId 不能为空');
+      ensure(!blockId.includes(':'), 400, 'bad_request', 'blockId 里不能有冒号');
+      targetId = composeTargetId(documentId, blockId);
+      ensure(
+        targetId.length <= AI_MAX_TARGET_ID,
+        400,
+        'bad_request',
+        `documentId + blockId 太长（上限 ${AI_MAX_TARGET_ID} 个字符）`,
+      );
+      writeTo = `/api/docs/${encodeURIComponent(documentId)}/blocks/${encodeURIComponent(blockId)}`;
+    }
+
     ensure(
       targetId.length <= AI_MAX_TARGET_ID,
       400,
       'bad_request',
-      `documentId + blockId 太长（上限 ${AI_MAX_TARGET_ID} 个字符）`,
+      `targetId 太长（上限 ${AI_MAX_TARGET_ID} 个字符）`,
     );
-    const reason = String(body.reason ?? '').slice(0, AI_MAX_REASON);
 
     // 全站闸门排在**校验之后**：预算用光时，一个畸形的请求体（比如缺 props）应该拿到
     // 400 告诉它请求写错了，而不是 429 让它以为「预算满了、等明天再来」。落盘才过闸门，
@@ -477,6 +849,7 @@ export function registerAiRoutes(ctx) {
       return ctx.http.ok(reqCtx.res, {
         applied: false,
         opId,
+        scope,
         preview: { targetType, targetId, before: cleanBefore, after: cleanAfter },
         hint: '这是预览，没有落盘。确认后带 confirm: true 再提交一次。',
       });
@@ -496,16 +869,18 @@ export function registerAiRoutes(ctx) {
     return ctx.http.ok(reqCtx.res, {
       applied: true,
       opId,
+      scope,
       targetType,
       targetId,
       documentId,
-      blockId,
+      // `blockId` 只在单块模式下有意义；两种新粒度用 `before` / `after` 的形状区分
+      // （块数组 = 一节，`{markdown}` = 整篇），回滚拿回来的 `restore` 也是同一套形状。
+      ...(scope === 'block' ? { blockId } : {}),
       before: cleanBefore,
       after: cleanAfter,
-      // 真正的写盘由调用方（前端拿这个 patch 去调 P2 的 PUT /api/docs/:id/blocks/:blockId）
-      // 完成：documents / document_blocks 归 P2，我只读。我这边的职责是
-      // 授权、审计和「改之前长什么样」。
-      writeTo: `/api/docs/${encodeURIComponent(documentId)}/blocks/${encodeURIComponent(blockId)}`,
+      // 真正的写盘由调用方完成：documents / document_blocks 归 P2，我只读。
+      // 我这边的职责是授权、审计和「改之前长什么样」。
+      writeTo,
     });
   });
 
@@ -567,9 +942,6 @@ export function registerAiRoutes(ctx) {
     // 真会发出去一次模型调用 —— 过全站闸门。
     guardSiteBudget(db);
 
-    // FR-AI-14：按用户限流，v1 是 10 次/分钟。
-    rateLimit(`ai-edit:draft:${user.id}`, 10, 60 * 1000);
-
     const instruction = typeof body.instruction === 'string' ? body.instruction.trim() : '';
     ensure(instruction.length >= 1, 400, 'bad_request', 'instruction 不能为空');
     ensure(instruction.length <= 2000, 400, 'bad_request', 'instruction 不能超过 2000 个字符');
@@ -596,104 +968,25 @@ export function registerAiRoutes(ctx) {
     // 审计目标：`<documentId>:<blockId>`。两者都可以缺省（纯试写），但要能对上文档。
     const targetId = composeTargetId(body.documentId, body.blockId);
 
-    const apiKey = process.env.AI_API_KEY;
-    if (!apiKey) {
-      logBlocked(db, user.id, capability, 'draft', targetId, 'ai_not_configured');
-      throw new HttpError(503, 'ai_not_configured', '没有配置 AI_API_KEY，无法调用模型');
-    }
+    // 顺序：先问「配没配 key」（不配则 503、不吃额度），再记一次限流，最后才发请求。
+    // 校验不过的请求（instruction 空、block 太大）在这之前就已经 400 了，同样不吃额度。
+    requireModelConfigured(db, { userId: user.id, capability, action: 'draft', targetId });
+    // FR-AI-14：按用户限流，v1 是 10 次/分钟。
+    rateLimit(`ai-edit:draft:${user.id}`, 10, 60 * 1000);
 
-    // 默认值必须和 `forum-ai/src/ai.mjs` 的 DEFAULT_BASE_URL / DEFAULT_MODEL 一致：
-    // 同一个项目里 `AI_BASE_URL` / `AI_MODEL` 只能有一个默认值。两边不一致的时候，
-    // 只配 `AI_API_KEY`（forum-ai/README.md 里的最小配法）就会把 key 发到另一个
-    // 服务商去 —— 既肯定调不通，也等于把密钥递给了第三方。
-    // `scripts/ai-smoke.mjs` 第 16 节直接读这两个源文件比对，只改一边会红。
-    // 超时默认 180000 是 FR-AI-13 写的「超时按 180 秒级」，跟 forum-ai 的 60000
-    // 不同是有意的，不参与这项比对。
-    const baseUrl = String(process.env.AI_BASE_URL || 'https://api.deepseek.com/v1').replace(/\/+$/, '');
-    const model = String(process.env.AI_MODEL || 'deepseek-chat');
-    const configured = Number(process.env.AI_TIMEOUT_MS);
-    const timeoutMs = Number.isFinite(configured) && configured > 0 ? configured : 180000;
-
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), timeoutMs);
-    let response;
-    try {
-      response = await fetch(`${baseUrl}/chat/completions`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
-        body: JSON.stringify({
-          model,
-          temperature: 0.2,
-          messages: [
-            {
-              role: 'system',
-              content: [
-                '你是博客「积木帖子」的块编辑器。用户给你当前这一块，以及一句改写要求。',
-                '你只改这一块，绝不重写整篇，也不要碰别的块。',
-                '只输出一个 JSON 对象，形状必须是 {"type":"<块类型>","props":{…}}，',
-                '不要输出解释文字，也不要 Markdown 代码围栏。',
-                `type 只能取这些名字之一：${AI_BLOCK_TYPES.map((item) => `${item.name}（${item.label}）`).join('、')}。`,
-                'props 是各类型自己的字段：正文 {"text":"…"}；标题 {"text":"…","level":1}；',
-                '代码 {"text":"…","lang":"…"}；引用 {"text":"…","source":"…"}；',
-                '投票 {"question":"…","options":["选项一","选项二"],"multiple":false}；图片 {"src":"…","alt":"…","text":"…"}。',
-                '脚本 {"code":"…"}（浏览器里跑的 JS，服务端不执行）；',
-                '子页 {"doc":"…","mode":"card","title":"…","note":"…"}（doc 填页面标题或 id，拿不准就留空）。',
-                '用户没要求改的部分保持原样。',
-              ].join(''),
-            },
-            {
-              role: 'user',
-              content: `当前块（JSON）：${blockJson}\n改写要求：${instruction}`,
-            },
-          ],
-        }),
-        signal: controller.signal,
-      });
-    } catch (error) {
-      const aborted = error?.name === 'AbortError';
-      logBlocked(db, user.id, capability, 'draft', targetId, aborted ? 'ai_timeout' : 'ai_unreachable');
-      throw new HttpError(
-        aborted ? 504 : 502,
-        aborted ? 'ai_timeout' : 'ai_unreachable',
-        aborted ? `模型调用超过 ${timeoutMs}ms` : '连不上模型服务',
-      );
-    } finally {
-      clearTimeout(timer);
-    }
-
-    if (response.status === 401 || response.status === 403) {
-      logBlocked(db, user.id, capability, 'draft', targetId, 'ai_unauthorized');
-      throw new HttpError(502, 'ai_unauthorized', '模型服务拒绝了这个 API key');
-    }
-    if (response.status === 429) {
-      logBlocked(db, user.id, capability, 'draft', targetId, 'ai_rate_limited');
-      throw new HttpError(429, 'ai_rate_limited', '模型服务限流了，请稍后再试');
-    }
-    if (!response.ok) {
-      logBlocked(db, user.id, capability, 'draft', targetId, `ai_upstream_error ${response.status}`);
-      throw new HttpError(502, 'ai_upstream_error', `模型服务返回 ${response.status}`);
-    }
-
-    let payload;
-    try {
-      payload = await response.json();
-    } catch {
-      logBlocked(db, user.id, capability, 'draft', targetId, 'ai_bad_json');
-      throw new HttpError(502, 'ai_bad_json', '模型返回的不是 JSON');
-    }
-
-    const content = String(payload?.choices?.[0]?.message?.content ?? '');
-    let patch;
-    try {
-      patch = JSON.parse(content.replace(/```json/gi, '').replace(/```/g, '').trim());
-    } catch {
-      logBlocked(db, user.id, capability, 'draft', targetId, 'ai_bad_json');
-      throw new HttpError(502, 'ai_bad_json', '模型没有返回合法的 JSON 改动');
-    }
+    const { content, model } = await callModel(db, {
+      userId: user.id,
+      capability,
+      action: 'draft',
+      targetId,
+      system: blockSystemPrompt(),
+      userText: `当前块（JSON）：${blockJson}\n改写要求：${instruction}`,
+    });
 
     // 合法的 JSON ≠ 合法的块。模型完全可以吐回 `{"blockType":"vote","content":{…}}`
     // 这种自造形状 —— 这时候落盘会直接失败，所以在这里就挡住。
     // 用 `ai_bad_json`（既有代号）而不是新造一个，代号表见 docs/skeleton.md。
+    const patch = parseModelJson(content, { db, userId: user.id, capability, action: 'draft', targetId });
     const patchProblem = blockPatchProblem(patch);
     if (patchProblem) {
       logBlocked(db, user.id, capability, 'draft', targetId, `ai_bad_json 块形状不对：${patchProblem}`);
@@ -725,7 +1018,248 @@ export function registerAiRoutes(ctx) {
     });
   });
 
-  // ── 9. 全站用量 + 预算状态（仅管理团队）────────────────────────────────
+  // ── 9. 小节清单（纯切分：不调模型、不落库、不花钱）──────────────────────
+  //
+  // 前端的「改哪一节」下拉就用这份清单。切分之所以放在服务端，是因为它有两个用处：
+  // 前端拿它渲染、`draft-range` 拿它校验「你发来的这堆块是连着的同一节」。
+  // 两边各切一份必然漂移，而漂移的表现是「下拉里选第 3 节，实际改到别的块」。
+  // 算法本体在 `src/modules/ai/sections.js`，`scripts/ai-smoke.mjs` 直接对它断言。
+  routes.add('POST', '/api/ai-edit/sections', (reqCtx) => {
+    viewer(reqCtx);
+    const body = reqCtx.body ?? {};
+    const blocks = body.blocks;
+    ensure(Array.isArray(blocks), 400, 'bad_request', 'blocks 必须是数组（把这一篇的块按顺序发过来）');
+    ensure(
+      blocks.length <= AI_MAX_SECTION_INPUT,
+      400,
+      'bad_request',
+      `块太多了（${blocks.length} 个，上限 ${AI_MAX_SECTION_INPUT}）`,
+    );
+    const sections = splitSections(blocks);
+    return ctx.http.ok(reqCtx.res, {
+      total: blocks.length,
+      count: sections.length,
+      maxSectionBlocks: AI_MAX_SECTION_BLOCKS,
+      opening: SECTION_OPENING_LABEL,
+      sections,
+    });
+  });
+
+  // ── 10. AI 草拟一次「一节 / 整篇」的改动 ────────────────────────────────
+  //
+  // 与第 8 节的 `/draft`（单块）并列，不合并：单块的契约已经被 171 项回归钉住了，
+  // 往里塞 scope 就得动它的返回形状。这一条只做两种粒度，失败代号与 `/draft` 完全一致
+  // （503 `ai_not_configured` / 504 `ai_timeout` / 429 `ai_rate_limited` / 502 `ai_*`）。
+  routes.add('POST', '/api/ai-edit/draft-range', async (reqCtx) => {
+    const user = viewer(reqCtx);
+    const body = reqCtx.body ?? {};
+    const capability = AI_CONTENT_CAPABILITY;
+    guardCapability(db, user.id, capability);
+    // 真会发出去一次模型调用 —— 过全站闸门。
+    guardSiteBudget(db);
+    // 限流（整篇/整节比单块贵，收得比 `/draft` 的 10 次/分钟更紧）**放在校验之后**：
+    // 与全站闸门同一个道理 —— 一个填错的请求（缺 blocks、scope 乱写）应该拿到 400
+    // 告诉它哪里错了，而不是被记一次限流、还以为「额度用完了」。见下面两处调用。
+    // 同样地，「没配 key」（`requireModelConfigured`）也排在那两处限流之前：
+    // 503 一次模型都没用上，不该把每分钟 5 次吃掉。
+
+    const scope = String(body.scope ?? '');
+    ensure(
+      AI_SCOPES.includes(scope),
+      400,
+      'bad_request',
+      `scope 只能是 ${AI_SCOPES.join(' / ')}（section = 按小节，document = 整篇）`,
+    );
+
+    const instruction = typeof body.instruction === 'string' ? body.instruction.trim() : '';
+    ensure(instruction.length >= 1, 400, 'bad_request', 'instruction 不能为空');
+    ensure(instruction.length <= 2000, 400, 'bad_request', 'instruction 不能超过 2000 个字符');
+
+    const rawDocumentId = body.documentId;
+    const documentId =
+      typeof rawDocumentId === 'number' && Number.isInteger(rawDocumentId) && rawDocumentId > 0
+        ? String(rawDocumentId)
+        : typeof rawDocumentId === 'string'
+          ? rawDocumentId.trim()
+          : '';
+    ensure(documentId !== '', 400, 'bad_request', 'documentId 不能为空 —— 改稿要记清楚改的是哪一篇文档');
+    ensure(!documentId.includes(':'), 400, 'bad_request', 'documentId 里不能有冒号');
+
+    if (scope === 'section') {
+      const blocksProblem = sectionBlocksProblem(body.blocks, 'blocks');
+      ensure(!blocksProblem, 400, 'bad_request', `blocks 不是合法的一节（${blocksProblem}）`);
+      const cleanBlocks = cleanSectionBlocks(body.blocks);
+      const ids = cleanBlocks.map((item) => item.blockId);
+      // 提示词体积就是账单（与 `/draft` 的 AI_MAX_BLOCK_CHARS 同一个理由）。
+      const sent = JSON.stringify(cleanBlocks);
+      ensure(
+        sent.length <= AI_MAX_RANGE_CHARS,
+        400,
+        'bad_request',
+        `这一节太大（${sent.length} 字符，上限 ${AI_MAX_RANGE_CHARS}）—— 拆成几节分别改`,
+      );
+
+      let targetId = composeTargetId(documentId, `${ids[0]}~${ids[ids.length - 1]}`);
+      if (targetId.length > AI_MAX_TARGET_ID) {
+        targetId = composeTargetId(documentId, `section(${cleanBlocks.length})`);
+      }
+      const heading = String(body.heading ?? '').trim().slice(0, 200);
+
+      requireModelConfigured(db, {
+        userId: user.id,
+        capability,
+        action: 'draft',
+        targetId,
+        targetType: AI_RANGE_TARGET_TYPES.section,
+      });
+      rateLimit(`ai-edit:draft-range:${user.id}`, 5, 60 * 1000);
+      const { content, model } = await callModel(db, {
+        userId: user.id,
+        capability,
+        action: 'draft',
+        targetId,
+        targetType: AI_RANGE_TARGET_TYPES.section,
+        system: sectionSystemPrompt(),
+        userText:
+          `${heading ? `这一节的小标题：${heading}\n` : ''}` +
+          `这一节的块（JSON 数组，按顺序）：${sent}\n改写要求：${instruction}`,
+      });
+      const patch = parseModelJson(content, {
+        db,
+        userId: user.id,
+        capability,
+        action: 'draft',
+        targetId,
+        targetType: AI_RANGE_TARGET_TYPES.section,
+      });
+      const patchProblem = sectionPatchProblem(patch, ids);
+      if (patchProblem) {
+        logBlocked(
+          db,
+          user.id,
+          capability,
+          'draft',
+          targetId,
+          `ai_bad_json 一节形状不对：${patchProblem}`,
+          AI_RANGE_TARGET_TYPES.section,
+        );
+        throw new HttpError(502, 'ai_bad_json', `模型没有返回合法的一节改动（${patchProblem}）`);
+      }
+      const changed = cleanSectionBlocks(patch.blocks);
+      // 预览用（给界面渲染，不落盘）：见 sectionPatchProblem 的注释。
+      const previewMarkdown = String(patch.markdown).trim();
+      const opId = logOp(db, {
+        userId: user.id,
+        capability,
+        action: 'draft',
+        targetType: AI_RANGE_TARGET_TYPES.section,
+        targetId,
+        status: 'preview',
+        reason: instruction.slice(0, 200),
+        before: cleanBlocks,
+        after: changed,
+      });
+      return ctx.http.ok(reqCtx.res, {
+        applied: false,
+        opId,
+        scope,
+        patch: { blocks: changed, markdown: previewMarkdown },
+        before: cleanBlocks,
+        changedCount: countChangedBlocks(cleanBlocks, changed),
+        targetType: AI_RANGE_TARGET_TYPES.section,
+        targetId,
+        documentId,
+        model,
+        writeTo: `/api/docs/${encodeURIComponent(documentId)}/ops`,
+        hint: '这是预览，没有落盘。落盘由前端完成：先 POST /api/docs/:id/ops 写盘，再带 confirm: true 调 /api/ai-edit/ops 记一条 applied 审计。',
+      });
+    }
+
+    const markdown = typeof body.markdown === 'string' ? body.markdown : '';
+    ensure(
+      markdown.trim() !== '',
+      400,
+      'bad_request',
+      'markdown 不能为空（整篇模式要先把当前的 Markdown 发过来）',
+    );
+    ensure(
+      markdown.length <= AI_MAX_RANGE_CHARS,
+      400,
+      'bad_request',
+      `整篇有 ${markdown.length} 字符，超过上限 ${AI_MAX_RANGE_CHARS} —— 整篇改写是最贵的动作，这一篇请改用「按小节」`,
+    );
+    const targetId = composeTargetId(documentId, '*');
+    const before = { markdown };
+    if (typeof body.title === 'string' && body.title.trim() !== '') {
+      before.title = body.title.trim().slice(0, AI_MAX_TITLE);
+    }
+
+    requireModelConfigured(db, {
+      userId: user.id,
+      capability,
+      action: 'draft',
+      targetId,
+      targetType: AI_RANGE_TARGET_TYPES.document,
+    });
+    rateLimit(`ai-edit:draft-range:${user.id}`, 5, 60 * 1000);
+    const { content, model } = await callModel(db, {
+      userId: user.id,
+      capability,
+      action: 'draft',
+      targetId,
+      targetType: AI_RANGE_TARGET_TYPES.document,
+      system: documentSystemPrompt(),
+      userText: `当前整篇 Markdown：\n${markdown}\n改写要求：${instruction}`,
+    });
+    const patch = parseModelJson(content, {
+      db,
+      userId: user.id,
+      capability,
+      action: 'draft',
+      targetId,
+      targetType: AI_RANGE_TARGET_TYPES.document,
+    });
+    const patchProblem = documentPatchProblem(patch, 'patch');
+    if (patchProblem) {
+      logBlocked(
+        db,
+        user.id,
+        capability,
+        'draft',
+        targetId,
+        `ai_bad_json 整篇形状不对：${patchProblem}`,
+        AI_RANGE_TARGET_TYPES.document,
+      );
+      throw new HttpError(502, 'ai_bad_json', `模型没有返回合法的整篇改动（${patchProblem}）`);
+    }
+    const cleanPatch = cleanDocumentPatch(patch);
+    const opId = logOp(db, {
+      userId: user.id,
+      capability,
+      action: 'draft',
+      targetType: AI_RANGE_TARGET_TYPES.document,
+      targetId,
+      status: 'preview',
+      reason: instruction.slice(0, 200),
+      before,
+      after: cleanPatch,
+    });
+    return ctx.http.ok(reqCtx.res, {
+      applied: false,
+      opId,
+      scope,
+      patch: cleanPatch,
+      before,
+      targetType: AI_RANGE_TARGET_TYPES.document,
+      targetId,
+      documentId,
+      model,
+      writeTo: `/api/docs/${encodeURIComponent(documentId)}/markdown`,
+      hint: '这是预览，没有落盘。落盘由前端完成：先 PUT /api/docs/:id/markdown 写盘（块数暴跌时 P2 会 409，要带 ?confirm=1），再带 confirm: true 调 /api/ai-edit/ops 记一条 applied 审计。',
+    });
+  });
+
+  // ── 11. 全站用量 + 预算状态（仅管理团队）────────────────────────────────
   //
   // 补的是「配额按用户算、钱按 key 算」留下的那个洞：在这之前，全站今天调了多少次、
   // 谁在用、有没有顶到上限，管理员一概看不见，唯一的全局约束就是账单本身。
