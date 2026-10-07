@@ -75,6 +75,10 @@ const AI_SCHEMA_SRC = readFileSync(join(ROOT, 'src', 'modules', 'ai', 'schema.js
 // 第 22 节末尾的漂移哨兵：`AI_MAX_SECTION_BLOCKS` 抄的是 P2 的 `MAX_OPS`，
 // 两边必须是同一个数 —— 一小节的落盘就是一批 `POST /api/docs/:id/ops`。
 const P2_OPS_SRC = readFileSync(join(ROOT, 'src', 'modules', 'doc', 'blocks', 'ops.js'), 'utf8');
+// 第 19 节的第二组漂移哨兵：AI 的「模板菜单」抄的是 P2 的 `TEMPLATES`
+//（修复 3b：整篇改写可以直接回 `{"template":"<key>"}`，key 必须是站里真有的那 8 个）。
+const AI_SYNTAX_SRC = readFileSync(join(ROOT, 'src', 'modules', 'ai', 'syntax.js'), 'utf8');
+const P2_TEMPLATES_SRC = readFileSync(join(ROOT, 'src', 'modules', 'doc', 'templates.js'), 'utf8');
 
 /** `export const BUILTIN_TYPES = [ … ];` 里每个块的 `name`。 */
 function grabP2BlockTypeNames(src) {
@@ -88,8 +92,22 @@ function grabAiBlockTypeNames(src) {
   return [...String(array?.[1] ?? '').matchAll(/\bname: '([a-z][a-z0-9_]*)'/g)].map((item) => item[1]);
 }
 
+/** `export const TEMPLATES = [ … ];` 里每个模板的 `key`。 */
+function grabTemplateKeys(src) {
+  const array = src.match(/export const TEMPLATES = \[([\s\S]*?)\n\];/);
+  return [...String(array?.[1] ?? '').matchAll(/\bkey: '([a-z][a-z0-9_]*)'/g)].map((item) => item[1]);
+}
+
+/** `export const AI_TEMPLATE_KEYS = Object.freeze([ … ]);` 里每个模板的 `key`。 */
+function grabAiTemplateKeys(src) {
+  const array = src.match(/export const AI_TEMPLATE_KEYS = Object\.freeze\(\[([\s\S]*?)\n\]\);/);
+  return [...String(array?.[1] ?? '').matchAll(/\bkey: '([a-z][a-z0-9_]*)'/g)].map((item) => item[1]);
+}
+
 const P2_BLOCK_TYPE_NAMES = grabP2BlockTypeNames(P2_TYPES_SRC);
 const AI_BLOCK_TYPE_NAMES = grabAiBlockTypeNames(AI_SCHEMA_SRC);
+const P2_TEMPLATE_KEYS = grabTemplateKeys(P2_TEMPLATES_SRC);
+const AI_TEMPLATE_KEYS_STATIC = grabAiTemplateKeys(AI_SYNTAX_SRC);
 
 /** 键序无关的深比较：审计里存的是 JSON，键序不该影响判定，多余键必须影响。 */
 function sameJson(left, right) {
@@ -1009,6 +1027,43 @@ try {
           choices: [{ message: { content: '{"blocks":[{"blockId":"b1","type":"paragraph","props":{}}]}' } }],
         });
       }
+      // ── 第 18.5 节（审查）用的分支 ──────────────────────────────────────
+      //
+      // 合法形状，但故意混进一条「引用在原文里根本找不到」的意见（模型编引用是审查
+      // 这一类功能最常见的坏法）。服务端必须把它丢掉、并把条数当 `dropped` 报回来
+      // —— 不然界面上会显示一份「比模型实际说的少」的意见而没人知道为什么。
+      if (modelMode === 'review-ok') {
+        const payload = {
+          summary: '总体还行，但有一处事实要核对。',
+          findings: [
+            { blockId: 'r1', kind: 'clarity', severity: 'low', quote: '这是一段要审查的正文', issue: '指代不明', suggestion: '把「它」换成具体名字' },
+            { blockId: 'r1', kind: 'fact', severity: 'high', quote: '这一句根本不在原文里', issue: '数据对不上', suggestion: '核对来源' },
+            { blockId: 'r1', kind: 'logic', severity: 'medium', quote: '要审查的正文', issue: '推理跳跃', suggestion: '补上中间一步', patch: '补上一步之后' },
+            { blockId: 'r1', kind: 'structure', severity: 'low', quote: '里面有几个问题', issue: '段落切得乱', suggestion: '拆成两段' },
+          ],
+          strengths: ['结构清楚'],
+        };
+        return send(200, { choices: [{ message: { content: `\`\`\`json\n${JSON.stringify(payload)}\n\`\`\`` } }] });
+      }
+      // 形状不对：`findings` 不是数组（合法 JSON，但不是合法的审查结果）。
+      if (modelMode === 'review-badshape') {
+        return send(200, { choices: [{ message: { content: '{"findings":"nope"}' } }] });
+      }
+      // ── 整篇的第二种合法形状：直接点名「套站里现成的模板」（修复 3b） ──────
+      //
+      // 站里 8 个模板是维护好的成品；用户说「改成投票问卷的样子」时，让模型现编
+      // Markdown 既容易编歪、也容易撑爆 AI_MAX_RANGE_CHARS。所以让它能只回一个 key。
+      if (modelMode === 'document-template') {
+        return send(200, { choices: [{ message: { content: '{"template":"poll"}' } }] });
+      }
+      // 编造的模板 key：合法 JSON，但不是站里的模板 —— 必须被挡住，不能当成「新模板」用。
+      if (modelMode === 'document-template-bogus') {
+        return send(200, { choices: [{ message: { content: '{"template":"量子投票"}' } }] });
+      }
+      // 形状不对：同时给了 template 与 markdown（两者只能二选一）。
+      if (modelMode === 'document-template-both') {
+        return send(200, { choices: [{ message: { content: '{"template":"poll","markdown":"# 两套解释"}' } }] });
+      }
       // 故意套一层 ```json 围栏：模型经常这么干，代码里必须剥掉才能解析。
       return send(200, {
         choices: [
@@ -1092,6 +1147,25 @@ try {
   );
   check('带上了 Authorization: Bearer <key>', lastAuth === 'Bearer stub-key', lastAuth);
 
+  // ——— 修复 3a 的验收：块级提示词要**教会模型怎么造功能**，而不是只列几个类型 ———
+  //
+  // 老提示词只写了七种块、poll 的 options 还写成字符串数组，`app`（小应用）压根没出现
+  // —— 所以用户说「帮我做个投票 / 写个小工具」时，模型只会把这些字写进正文。
+  // 这些断言盯的是「说明书还在不在」，不是措辞：改几个字不会红，删掉一整段才会。
+  const draftSystem = String(lastRequestBody?.messages?.[0]?.content ?? '');
+  for (const [needle, label] of [
+    ['{"app":"计数器"', '小应用 app 的 props 示例'],
+    ['{"id":"o1","text":"甲"}', 'poll 的 options 元素是 {id,text} 而不是字符串数组'],
+    ['Sandbox.request', '沙箱里怎么申请能力'],
+    ['超时 5 秒', '能力申请会超时'],
+    ['blocks.derived', '画派生块的能力'],
+    ['没有网络', '沙箱里没有网络'],
+    ['{"code":"', 'script 块的 props'],
+    ['{"doc":"页面标题"', 'subpage 块的 props'],
+  ]) {
+    check(`块提示词里写了${label}`, draftSystem.includes(needle), `缺 ${needle}`);
+  }
+
   const draftBody = { blockId: 'block-1', block: { type: 'paragraph', props: { text: '原文' } }, instruction: '改' };
 
   modelMode = 'unauthorized';
@@ -1168,14 +1242,135 @@ try {
     JSON.stringify(shapeRow ?? null),
   );
 
+  /* ---------- 18.5 审查（原「AI 学术审查」的接班人） ---------- */
+  //
+  // 审查**不改稿**：它只回一堆「带原文引用的意见」，落盘仍然要走
+  // `/draft` → `/ops`（预览、确认、审计一步都不少）。这一节验四件事：
+  //   · 权限与参数的门（未登录 401 / 没开能力 403 / 缺 documentId 400 / 没内容 400）；
+  //   · 引用能不能对上原文（对不上、或短于 6 个字的必须丢掉，并把丢掉的条数报回来）；
+  //   · 意见按 severity 从高到低排、留一条 preview 审计；
+  //   · 坏形状 502 ai_bad_json（与块/整篇同一条代号）。
+  //
+  // 用一个**新注册的账号**跑：限流是按用户算的（`ai-edit:review:<userId>`，5 次/分钟），
+  // 借上面 admin 的桶会把第 23 节那些用例挤成 429（上一版就是这么被坑过一次的）。
+  const keyedReviewer = createClient(KEYED_BASE);
+  const reviewerReg = await keyedReviewer.call('/api/auth/register', {
+    method: 'POST',
+    body: { username: 'ai_reviewer', password: 'reviewer1234' },
+  });
+  check(
+    'keyed 服务器上注册一个专跑审查的账号',
+    reviewerReg.status === 200 || reviewerReg.status === 201,
+    JSON.stringify(reviewerReg.error ?? null),
+  );
+
+  const reviewSource = '这是一段要审查的正文，里面有几个问题。';
+  const reviewBody = {
+    documentId: 'doc-review',
+    blocks: [{ blockId: 'r1', type: 'paragraph', props: { text: reviewSource } }],
+  };
+  const anonReview = await createClient(KEYED_BASE).call('/api/ai-edit/review', {
+    method: 'POST',
+    body: reviewBody,
+  });
+  check('未登录不能审查 → 401', anonReview.status === 401, `实际 ${anonReview.status}`);
+
+  const noGrantReview = await keyedReviewer.call('/api/ai-edit/review', { method: 'POST', body: reviewBody });
+  check(
+    '没开 edit_content 能力就审查 → 403（不是 500，也不是「审了但不告诉你」）',
+    noGrantReview.status === 403,
+    `${noGrantReview.status} ${JSON.stringify(noGrantReview.error ?? null)}`,
+  );
+  await keyedReviewer.call('/api/ai-edit/grants', {
+    method: 'POST',
+    body: { capability: 'edit_content', confirm: true, dailyQuota: 0 },
+  });
+
+  const noDocReview = await keyedReviewer.call('/api/ai-edit/review', {
+    method: 'POST',
+    body: { ...reviewBody, documentId: '' },
+  });
+  check('审查缺 documentId → 400（审计要指得回文档）', noDocReview.status === 400, `实际 ${noDocReview.status}`);
+
+  const emptyReview = await keyedReviewer.call('/api/ai-edit/review', {
+    method: 'POST',
+    body: { documentId: 'doc-review' },
+  });
+  check(
+    '既不给 blocks 也不给 markdown → 400（没东西可审要当场说清）',
+    emptyReview.status === 400,
+    `${emptyReview.status} ${JSON.stringify(emptyReview.error ?? null)}`,
+  );
+
+  modelMode = 'review-ok';
+  const okReview = await keyedReviewer.call('/api/ai-edit/review', { method: 'POST', body: reviewBody });
+  check(
+    '上游正常时审查成功，而且**不落盘**（applied 恒 false）',
+    okReview.status === 200 && okReview.data?.applied === false,
+    `${okReview.status} ${JSON.stringify(okReview.error ?? null)}`,
+  );
+  const reviewData = okReview.data ?? {};
+  check(
+    '审查结果里有 summary / findings / strengths 三样',
+    typeof reviewData.summary === 'string' &&
+      Array.isArray(reviewData.findings) &&
+      Array.isArray(reviewData.strengths),
+    JSON.stringify(reviewData).slice(0, 200),
+  );
+  check(
+    '引用在原文里找不到的意见被丢掉，并报出 dropped=1',
+    reviewData.dropped === 1 && reviewData.findings.length === 3,
+    `dropped=${reviewData.dropped} 留下=${reviewData.findings.length}`,
+  );
+  check(
+    '留下的意见按 severity 从高到低排（medium 在最前）',
+    reviewData.findings.map((item) => item.severity).join(',') === 'medium,low,low',
+    JSON.stringify(reviewData.findings.map((item) => item.severity)),
+  );
+  check(
+    '每条留下的意见 quote 都能在原文里逐字找到',
+    reviewData.findings.every((item) => reviewSource.includes(item.quote)),
+    JSON.stringify(reviewData.findings.map((item) => item.quote)),
+  );
+  check(
+    '审查只给意见：回的是 opId + 「要落盘得走 /draft」的提示',
+    Number.isInteger(reviewData.opId) && String(reviewData.hint ?? '').includes('/api/ai-edit/draft'),
+    String(reviewData.hint ?? ''),
+  );
+  check(
+    '审查的 system 提示词说明了 findings 的形状（否则模型只会回一段散文）',
+    String(lastRequestBody?.messages?.[0]?.content ?? '').includes('findings'),
+    '',
+  );
+
+  const reviewOps = (await keyedReviewer.call('/api/ai-edit/ops?limit=50')).data?.ops ?? [];
+  check(
+    '审查留了一条 preview 审计（reason 以「审查」开头）',
+    reviewOps.some((row) => String(row.reason ?? '').startsWith('审查') && row.status === 'preview'),
+    JSON.stringify(reviewOps.slice(0, 3)),
+  );
+
+  modelMode = 'review-badshape';
+  const badShapeReview = await keyedReviewer.call('/api/ai-edit/review', { method: 'POST', body: reviewBody });
+  check(
+    'findings 不是数组 → 502 ai_bad_json（与块 / 整篇同一条代号）',
+    badShapeReview.status === 502 && badShapeReview.error?.code === 'ai_bad_json',
+    `${badShapeReview.status} ${badShapeReview.error?.code}`,
+  );
+  const reviewBlocked = ((await keyedReviewer.call('/api/ai-edit/ops?limit=50')).data?.ops ?? []).find(
+    (row) => row.status === 'blocked' && String(row.reason ?? '').includes('审查形状不对'),
+  );
+  check('坏形状也留下了 blocked 审计', reviewBlocked?.status === 'blocked', JSON.stringify(reviewBlocked ?? null));
+  modelMode = 'ok';
+
   /* ---------- 19. 块类型清单不许漂移（静态哨兵 + 行为级对拍） ---------- */
   //
   // `AI_BLOCK_TYPES` 是从 P2 的 `src/modules/doc/blocks/types.js` **抄的一份**
   // （骨架规范禁止 import 隔壁模块的文件，所以只能复制）。抄来的东西会漂：
   // P2 以后加/改块类型，我的提示词就会教模型输出错的东西，而错是静默的 ——
   // 模型照着新名字吐，落盘时才炸。这一节让漂移在测试里立刻红，而不是等线上。
-  check('从 P2 的 types.js 抓到 14 个内置块类型名', P2_BLOCK_TYPE_NAMES.length === 14, JSON.stringify(P2_BLOCK_TYPE_NAMES));
-  check('从 AI 的 schema.js 抓到 14 个类型名', AI_BLOCK_TYPE_NAMES.length === 14, JSON.stringify(AI_BLOCK_TYPE_NAMES));
+  check('从 P2 的 types.js 抓到 15 个内置块类型名', P2_BLOCK_TYPE_NAMES.length === 15, JSON.stringify(P2_BLOCK_TYPE_NAMES));
+  check('从 AI 的 schema.js 抓到 15 个类型名', AI_BLOCK_TYPE_NAMES.length === 15, JSON.stringify(AI_BLOCK_TYPE_NAMES));
   check(
     '两边的块类型清单完全一致（名字与顺序都对齐）',
     JSON.stringify(P2_BLOCK_TYPE_NAMES) === JSON.stringify(AI_BLOCK_TYPE_NAMES),
@@ -1197,13 +1392,13 @@ try {
     `运行时=${JSON.stringify(AI_RUNTIME_TYPE_NAMES)} 字面量=${JSON.stringify(AI_BLOCK_TYPE_NAMES)}`,
   );
   check(
-    '运行时导出的 AI_BLOCK_TYPE_NAMES 与 P2 的清单一致（白名单真的只放行这 14 个）',
+    '运行时导出的 AI_BLOCK_TYPE_NAMES 与 P2 的清单一致（白名单真的只放行这 15 个）',
     JSON.stringify(AI_RUNTIME_TYPE_NAMES) === JSON.stringify(P2_BLOCK_TYPE_NAMES),
     `运行时=${JSON.stringify(AI_RUNTIME_TYPE_NAMES)} P2=${JSON.stringify(P2_BLOCK_TYPE_NAMES)}`,
   );
 
   // 行为级对拍：清单的真实出口是 P2 的 `GET /api/docs/meta/block-types`。
-  // 它给的是「内置 ∪ 库里注册的」，所以只比 `builtin: true` 的那 14 个 ——
+  // 它给的是「内置 ∪ 库里注册的」，所以只比 `builtin: true` 的那 15 个 ——
   // 静默漂移的另一半是「接口加了类型、AI 的清单没跟上」。
   const metaTypes = await admin.call('/api/docs/meta/block-types');
   check('GET /api/docs/meta/block-types 返回 200', metaTypes.status === 200, `实际 ${metaTypes.status}`);
@@ -1212,6 +1407,27 @@ try {
     '接口给的内置类型清单和 AI 的清单逐项一致',
     JSON.stringify(metaBuiltinNames) === JSON.stringify(AI_BLOCK_TYPE_NAMES),
     `接口=${JSON.stringify(metaBuiltinNames)} AI=${JSON.stringify(AI_BLOCK_TYPE_NAMES)}`,
+  );
+
+  // —— 模板 key 的漂移哨兵（修复 3b）——
+  //
+  // 整篇改写现在可以被模型一句 `{"template":"poll"}` 带过，落盘走 P2 的
+  // `POST /api/docs/:id/apply-template`。`AI_TEMPLATE_KEYS` 是手抄的 `TEMPLATES`：
+  // P2 以后加/删/改名模板时，提示词里的菜单就会和站里对不上 —— 模型会点名一个
+  // 不存在的模板（用户拿到 400「不认识的模板」），或者压根不知道新模板能用。
+  check('从 P2 的 templates.js 抓到 8 个模板 key', P2_TEMPLATE_KEYS.length === 8, JSON.stringify(P2_TEMPLATE_KEYS));
+  check(
+    '从 AI 的 syntax.js 抓到同样的 8 个 key（名字与顺序都对齐）',
+    JSON.stringify(AI_TEMPLATE_KEYS_STATIC) === JSON.stringify(P2_TEMPLATE_KEYS),
+    `P2=${JSON.stringify(P2_TEMPLATE_KEYS)} AI=${JSON.stringify(AI_TEMPLATE_KEYS_STATIC)}`,
+  );
+  const metaTemplates = await admin.call('/api/docs/meta/templates');
+  check('GET /api/docs/meta/templates 返回 200', metaTemplates.status === 200, `实际 ${metaTemplates.status}`);
+  check(
+    '接口给的模板清单和 AI 的菜单逐项一致（AI 不会点名一个站里没有的模板）',
+    JSON.stringify((metaTemplates.data?.templates ?? []).map((item) => item.key)) ===
+      JSON.stringify(AI_TEMPLATE_KEYS_STATIC),
+    `接口=${JSON.stringify((metaTemplates.data?.templates ?? []).map((item) => item.key))}`,
   );
 
   /* ---------- 20. 全站每日预算闸门（AI_DAILY_TOTAL_LIMIT） ---------- */
@@ -2075,6 +2291,66 @@ try {
       typeof documentDraftRow?.before?.markdown === 'string',
     JSON.stringify(documentDraftRow),
   );
+
+  // ——— 整篇的第二种合法形状：模型直接「点一个站内模板」（修复 3b）
+  //
+  // 借 reviewer 的桶：`ai-edit:draft-range:<userId>` 是 5 格/分钟，admin 那 5 格已经被
+  // 上面 section/document 的用例占满，再来一次只会拿到 429 —— 那种红看起来像服务端坏了。
+  modelMode = 'document-template';
+  const templateDraft = await keyedReviewer.call('/api/ai-edit/draft-range', {
+    method: 'POST',
+    body: { scope: 'document', documentId: 'doc-range', markdown: '# 原稿', instruction: '改成投票问卷的样子' },
+  });
+  check(
+    '整篇可以只回一个 template（200，而且依然只是预览）',
+    templateDraft.status === 200 && templateDraft.data?.applied === false,
+    `${templateDraft.status} ${JSON.stringify(templateDraft.error ?? null)}`,
+  );
+  check(
+    'template 被原样透传（poll）',
+    templateDraft.data?.patch?.template === 'poll',
+    JSON.stringify(templateDraft.data?.patch ?? null),
+  );
+  check(
+    'template 形态不带 markdown（二选一，别给界面两套互相打架的解释）',
+    templateDraft.data?.patch?.markdown === undefined,
+    JSON.stringify(templateDraft.data?.patch ?? null),
+  );
+  check(
+    'writeTo 指向 P2 的 apply-template（不是 markdown）',
+    templateDraft.data?.writeTo === '/api/docs/doc-range/apply-template',
+    String(templateDraft.data?.writeTo),
+  );
+  check(
+    'hint 说清了落盘走 apply-template',
+    String(templateDraft.data?.hint ?? '').includes('apply-template'),
+    String(templateDraft.data?.hint ?? ''),
+  );
+  check(
+    '整篇的 system 提示词交出了模板菜单（8 个 key 都在）',
+    ['blank', 'station', 'page', 'academic', 'wiki', 'poll', 'datatable', 'lab'].every((key) =>
+      String(lastRequestBody?.messages?.[0]?.content ?? '').includes(key),
+    ),
+    String(lastRequestBody?.messages?.[0]?.content ?? '').slice(0, 200),
+  );
+  check(
+    '整篇的 system 提示词明说 template 与 markdown 只能二选一',
+    String(lastRequestBody?.messages?.[0]?.content ?? '').includes('二选一'),
+    '',
+  );
+
+  modelMode = 'document-template-bogus';
+  const bogusTemplate = await keyedReviewer.call('/api/ai-edit/draft-range', {
+    method: 'POST',
+    body: { scope: 'document', documentId: 'doc-range', markdown: '# 原稿', instruction: '随便套一个模板' },
+  });
+  check(
+    '模型编出站里没有的模板 key → 502 ai_bad_json（不许当成「新模板」用）',
+    bogusTemplate.status === 502 && bogusTemplate.error?.code === 'ai_bad_json',
+    `${bogusTemplate.status} ${bogusTemplate.error?.code}`,
+  );
+
+  modelMode = 'ok';
 
   // ——— 模型跑偏的几条：blockId 不属于这一节 / 缺 type / markdown 形状不对 / 整篇吐成 {blocks}
   //

@@ -351,25 +351,28 @@ forum/
 
 | 路由 | 页面 |
 | --- | --- |
-| `#/` | 首页：Hero + 讨论列表（全部 / 我关注的）+ 排序切换 |
+| `#/` | **起始页**（m05506 起就是网站的默认落点，**不论登录与否**）：左边站务公告，右边三块入口（动态 / 积木广场 / 团队） |
+| `#/feed` | 动态流：全部 / 我关注的 / 我的，`?filter=following`、`?filter=mine`、`?q=关键词`、`?page=`。**以前这是 `#/`，m05506 与起始页对调了地址**（老书签请改用这里） |
+| `#/start` | 起始页的老地址，保留成别名（进的是同一页，不会断链） |
 | `#/board/tech` | 板块页（`general` / `tech` / `qa` / `share` / `meta`） |
 | `#/post/:id` | 帖子详情：Markdown 正文、赞/踩/收藏/关注作者、回复列表与回复框 |
 | `#/new`、`#/edit/:id` | 发帖 / 编辑，带 Markdown 工具栏、分类选择与「主页置顶」开关 |
 | `#/settings` | 账号设置：资料、密码、账号信息 |
 | `#/u/:username` | 个人主页：分类筛选、三种排版、置顶推荐、关注者与关注列表 |
 | `#/notifications` | 消息通知（全部 / 只看未读） |
-| `#/following` | 📋 关注列表：我关注了**谁**（头像 + 昵称 + 一键取关）。关注**流**（只看 TA 们发的帖子）是动态流的一个筛选，走 `#/?filter=following` |
+| `#/following` | 📋 关注列表：我关注了**谁**（头像 + 昵称 + 一键取关）。关注**流**（只看 TA 们发的帖子）是动态流的一个筛选，走 `#/feed?filter=following` |
 | `#/bookmarks` | 我的收藏 |
-| `#/search?q=关键词` | 全文搜索（标题 + 正文） |
+| `#/search?q=关键词` | 全文搜索（标题 + 正文），落在动态流上（等价于 `#/feed?q=…`） |
 | `#/login`、`#/register` | 登录 / 注册 |
 | `#/admin` | 管理后台（仅管理员） |
 | `#/docs` | 积木广场：可编程帖子 / 笔记 / 主页文档的列表，支持 `?kind=` `?scope=` `?mine=1` `?q=` `?tag=标签`（点卡片上的标签就是跳到这儿）；两种排法 `▦ 网格` / `☰ 列表`（从上往下列下来），选择记在本地偏好 `forum:docsLayout` 里 |
 | `#/doc/:id` | 积木阅读页：块渲染结果、降级警告、修订记录、导出/导入、顶部挂着**标签**（点一下看同标签的积木），底下是**互动条**（点赞 / 踩 / 收藏 / 转发 / 关注作者 + AI 解读）—— 它挂在文档的锚点帖上，走 `GET /api/docs/:id/anchor`，不再需要跳到帖子页 |
-| `#/doc/:id/edit` | 积木编辑器：逐块编辑、上下移动、Markdown 双向、`ops` 增量改动、套模板、回滚、沙箱开关、标签（跟着同一个「保存」一起存） |
+| `#/doc/:id/edit` | 积木编辑器：逐块编辑、上下移动、Markdown 双向、`ops` 增量改动、套模板、回滚、沙箱开关、标签（跟着同一个「保存」一起存）；**Markdown / 源码模式左侧挂着一个 AI 抽屉**（`public/views/doc-ai.js`）—— 对着它说一句话，右边这段正文就跟着改（整理格式、学术审查、加个积木块、写积木脚本），走的是 `/api/ai-edit/*` 同一套，结果只写回编辑区，落盘还是那颗「保存」 |
 | `#/doc/:id/blocks` | 同一个编辑器的高级入口（默认落在积木模式）：块列表 + 当前块的 props 表单 |
 | `#/blocks` | 块类型表的老地址：进的是同一页 `#/dev`（页面没下线，收藏夹里的链接照样能开） |
 | `#/dev` | 开发者功能：块类型表（内置/自定义类型的 schema 速查 + 注册自己的块类型）+「我的脚本模板」（把自己常写的沙箱代码存下来，一键新建一篇只带这一块的积木） |
 | `#/guide` | 积木教程：写给用积木的人 —— 新建一篇、编辑器三档怎么用、一次「保存」都存什么、谁可以看、怎么分享、**标签（怎么打、怎么按标签找）**、读者能做什么，后半截是进阶（让积木跑代码的两种块、能申请的六项能力、超时与失败怎么接、七个能直接抄的样例、存脚本模板、给全站加新块类型） |
+| `#/ai-edit` | **AI 编辑台**：给模型授权（六项能力，默认全关）→ 草拟（**只预览**）→ 确认才落盘 → 每一步都留审计、可回滚。也能**审查**一篇（原「AI 学术审查」的接班人：按块给意见、引用不到原文的意见会被丢掉）与让模型整篇**套站内模板**。入口在 AI 页面里的「🎛 AI 编辑台」 |
 | `#/notes` | **（已下线，入口不再出现）** 老的学术笔记宿主页：路由与页面都留着，直接输地址还能看以前写的笔记，顶上写着「已经并进积木了 —— 给积木打 `#学术笔记` 标签」。代码没删（`public/views/notes.js`、`src/notes.js`、`note-studio/`），只是界面上不再提它 |
 | `#/wiki/:name` | Wiki 多页面：`[[双链]]` 的落点；左侧是分类边栏（页内筛选 + 新建页，作者多一个「改分类」），有这一页就渲染它，没有就给「建这一页」（`?create=1` 一步进编辑器） |
 | `#/teams` | 团队列表：公开团队广场（**被创建者藏起来的团队不出现**），`?mine=1` 只看我加入的，`?page=` 翻页；未登录也能看。顶上是「🔑 用团队号加入」，填 6 位号直接进队（登录后才显示） |
@@ -452,7 +455,7 @@ forum/
 | GET | `/api/docs/:id/anchor` | 这篇的**互动锚点帖**：`{ post }`（帖子列表形状），还没同步出锚点就是 `{ post: null }`；**不涨浏览量**（阅读页的互动条用它，而不是去调 `/api/posts/:id`） | 按 scope |
 | GET | `/api/docs/by-anchor/:postId` | 反查：这条帖子是哪篇积木的影子行？`{ doc: { id, title, scope } }`，看不见就是 `{ doc: null }`（帖子页用它挂「已经搬进积木」横幅） | 按 scope |
 | GET | `/api/docs/meta/templates` | 模板清单 + `kinds` + `scopes` 枚举（唯一真相） | 公开 |
-| GET | `/api/docs/meta/block-types` | 块类型清单（内置 14 种 ∪ 库里注册的），含声明式 schema | 公开 |
+| GET | `/api/docs/meta/block-types` | 块类型清单（内置 15 种 ∪ 库里注册的），含声明式 schema | 公开 |
 | POST | `/api/docs/meta/block-types` | 注册自定义块类型（名字 `^[a-z][a-z0-9_]{0,31}$`，内置名与重名 409）；`rendererKind:'declarative'` 可带 `renderer:{html:'…{{字段}}…'}`（会剥掉 script/内联事件/`javascript:`），`'sandbox'` 则用 schema 里的 `code` 走玻璃房 | 登录 |
 | POST | `/api/docs/meta/import` | 按 `forum-doc/1` 格式导入一份新文档 | 登录 |
 | GET | `/api/docs/meta/script-templates` | 我的脚本模板清单：`{ templates, limit, maxName, maxDescription, maxCode }`（模板只自己可见） | 登录 |
@@ -496,6 +499,29 @@ forum/
 | GET | `/api/teams/:id/messages` | 群聊记录 `{ items, latestId, total }`；`?after=<id>` 只取新的（前端 5 秒轮询用）、`?limit=`（默认 30，上限 100） | 团队成员 |
 | POST | `/api/teams/:id/messages` | 发消息，body `{ content }`（1-1000 字） | 团队成员（每分钟 60 条） |
 | DELETE | `/api/teams/:id/messages/:messageId` | 删消息 | 作者 / 团队管理员 |
+
+**AI 编辑台（`/api/ai-edit`）** —— 前缀为什么不是 `/api/ai/`：`forum-ai` 的挂载层把 `/api/ai/` 下**所有**路径都短路了（没命中它那 14 条路由就直接 404，永远不回宿主路由表），所以宿主自己的 AI 路由另起一段前缀。
+这一套的链路是「**先授权能力 → 再草拟（只预览）→ 确认后才落盘 → 每一步留审计**」；落盘本身仍由前端调上面那张表里的 P2 接口完成，AI 模块不自己写文档（这样沙箱、块校验、快照、`blocks.derived` 那套规则一套都不用重写）。
+
+| 方法 | 路径 | 说明 | 权限 |
+| --- | --- | --- | --- |
+| GET | `/api/ai-edit/capabilities` | 六项能力的目录 + 我的授权状态（`read_post` / `read_site` / `network` / `edit_content` / `site_tools` / `publish`，默认全关） | 登录 |
+| GET | `/api/ai-edit/grants` | 我的授权列表（有效期 + 每日额度） | 登录 |
+| POST | `/api/ai-edit/grants` | 授权；高风险能力（`edit_content` / `publish`）要 `confirm: true` | 登录 |
+| DELETE | `/api/ai-edit/grants/:capability` | 收回授权（立即失效） | 登录 |
+| GET | `/api/ai-edit/ops` | 我的 AI 操作日志（预览 / 已落盘 / 被拦下三类） | 登录 |
+| POST | `/api/ai-edit/ops` | 提交一次改动：不带 `confirm` 只预览；带 `confirm: true` 过全站预算闸门并记一条 applied 审计。`scope` 支持 `block` / `section` / `document` | 登录 + `edit_content` |
+| POST | `/api/ai-edit/ops/:id/rollback` | 回滚一次操作 | 登录 + `edit_content` |
+| POST | `/api/ai-edit/draft` | 草拟**一块**，body `{ instruction, block, documentId?, blockId? }` | 登录 + `edit_content`（10 次/分钟） |
+| POST | `/api/ai-edit/sections` | 按 `#` 标题把块切成小节（纯切分：不调模型、不落库、不花钱） | 登录 |
+| POST | `/api/ai-edit/draft-range` | 草拟**一节或整篇**；整篇的 patch 要么是 `{ markdown }`，要么只回 `{ template: '<模板 key>' }`（此时 `writeTo` 指向 `/api/docs/:id/apply-template`，模板 key 只能是站里那 8 个） | 登录 + `edit_content`（5 次/分钟） |
+| POST | `/api/ai-edit/review` | **审查**（原「AI 学术审查」的接班人）：body `{ documentId, blocks? \| markdown?, instruction? }` → `{ summary, findings: [{ blockId, kind, severity, quote, issue, suggestion, patch }], strengths, dropped }`。**只出意见、不落盘**；`quote` 在原文里找不到的意见会被丢掉并计入 `dropped` | 登录 + `edit_content`（5 次/分钟） |
+| GET | `/api/ai-edit/usage` | 全站今日用量 + 预算状态 | 站长/管理员 |
+
+> **提示词才是这一层真正的产品**：块类型有十几种、其中两种还会**跑代码**（`app` 小应用 / `script` 脚本），光把类型名字丢给模型，它既不知道 `poll` 的 `options` 是 `[{id,text}]`、也不知道沙箱里能申请什么能力、更不知道申请会 5 秒超时 —— 于是用户说「帮我做个投票」，回来的只是一段正文。
+> 所以 `src/modules/ai/syntax.js` 里手写了一份**给模型看的积木说明书**：每类块的 props 逐字示例、结构化围栏写法、沙箱六项能力与超时、以及「什么时候该用 `app` 而不是正文」的取舍规则；`blockPromptRules()` 每次把它拼进系统提示词。
+> 这份说明书是**手抄**的（骨架规范不许业务模块互相 import），漂移由 `scripts/ai-smoke.mjs` 第 19 节的哨兵盯着：块类型清单与 8 个模板 key 都跟 P2 的真相逐项对拍，对不上就红。
+
 
 > **团队为什么没有站长后门**：团队管理只认 `team_members` 里的 owner / admin，站长（`role='owner'`）也不例外。
 > 一旦站长能管理任意团队，他就能把自己加进一个「需要申请」的团队然后读到里面的帖子 —— 那是一条提权通道。
@@ -583,7 +609,7 @@ document_blocks(id, document_id, block_id, type, type_version, position, props_j
 document_revisions(id, document_id, revision, blocks_json, reason, author_id, created_at)
                     -- reason: create | edit | ops | template | import | rollback，每篇保留最近 50 条
 doc_block_types(name, version, label, icon, props_schema_json, renderer_kind, renderer_json,
-                created_by, created_at, updated_at)   -- 全局注册表，内置 14 种优先、不可被覆盖
+                created_by, created_at, updated_at)   -- 全局注册表，内置 15 种优先、不可被覆盖
 doc_script_templates(id, user_id, name, description, code, created_at, updated_at)
                     -- 「我的脚本模板」（开发者功能）：(user_id, name) 唯一，每人最多 50 个，
                     --   code 是沙箱脚本原文；存下来只为「一键新建一篇」时少粘一次
@@ -697,12 +723,12 @@ node scripts/check-markdown.mjs    # ★ 正文渲染回归：56 项（站内链
 node scripts/check-frontend.mjs    # ★ 前端渲染冒烟：39 个页面全部渲染一遍 + 关注列表 / 团队的文件柜/群聊/成员名单/团队号/公告/加入申请与审核/隐藏开关/设置与申请改右侧抽屉/帖子预览与详情回复（「💬 回复」按钮、编辑权只归作者）交互 + 裸调用未定义名字的静态扫描
 node scripts/smoke.mjs             # 后端端到端：227 项（临时独立库+端口，跑完自动清理）
 node scripts/smoke-ai.mjs          # AI 接口端到端：61 项
-node scripts/ai-smoke.mjs          # AI 接口端到端（更细的一套：校验 / 限流 / 额度）：387 项
+node scripts/ai-smoke.mjs          # AI 接口端到端（更细的一套：校验 / 限流 / 额度 / 审查 / 模板与提示词漂移哨兵）：422 项
 node scripts/feed-smoke.mjs        # 动态流端到端：95 项
-node scripts/doc-smoke.mjs         # 积木（可编程帖子）端到端：567 项
+node scripts/doc-smoke.mjs         # 积木（可编程帖子）端到端：572 项
 node scripts/team-smoke.mjs        # 团队端到端：301 项（可见范围 / 越权 / 版本冲突 / 编辑权只归作者 / 文件柜 / 群聊 / 团队号 / 公告通知 / Markdown 与公式 / 帖子回复 / 加入申请与审核 / 隐藏团队 / 老库升级与坏库自愈）
 node scripts/check-ui-contract.mjs # 前端契约：CSS 类名 + API 字段 + 主题/头像/角色/私信/团队号/公告/剪贴板/公式/关注列表/详情与回复/申请与隐藏结构/编辑权与侧边抽屉/表重建与自愈/币已下线（通过项数不下降哨兵：314）
-node scripts/ui-smoke.mjs          # 首页外壳轻量化 + 右侧栏抽屉：71 项
+node scripts/ui-smoke.mjs          # 首页外壳轻量化 + 右侧栏抽屉 + 起始页与动态流地址（m05506 契约）：73 项
 node scripts/check-encoding.mjs    # 源码编码体检：BOM / 乱码 / 关键中文内容
 node scripts/check-notes-ui.mjs    # 笔记 UI
 node scripts/notes-smoke.mjs       # 笔记接口
@@ -720,10 +746,10 @@ node scripts/capture-fixtures.mjs  # 重采前端冒烟用的假数据（改了�
 一次跑完（`npm test` 就是上面这些，15 组）：
 
 ```
-check-encoding 199 文件 / 83 断言 · check-skeleton 47 项 · check-golden 88 项 0 差异
-check-markdown 56 · check-frontend 39 个页面 + 33 个模块静态扫描 · smoke 227 · smoke-ai 61
-ai-smoke 387 · feed-smoke 95 · doc-smoke 567 · team-smoke 301
-check-ui-contract 314 · check-notes-ui 33 · notes-smoke 44 · ui-smoke 71
+check-encoding 201 文件 / 84 断言 · check-skeleton 47 项 · check-golden 88 项 0 差异
+check-markdown 56 · check-frontend 39 个页面 + 34 个模块静态扫描 · smoke 227 · smoke-ai 61
+ai-smoke 422 · feed-smoke 95 · doc-smoke 572 · team-smoke 301
+check-ui-contract 314 · check-notes-ui 33 · notes-smoke 44 · ui-smoke 73
 ```
 
 > 知识网络图（`knowledge-pack/` + `#/graph` + `/api/knowledge/*`）已在 2026-10 整条链路删除：
@@ -855,7 +881,7 @@ AI 解读面板（`public/views/ai.js` 的 `aiPostPanelHtml`）也一起搬了�
 | 缺口 | 现状 |
 | --- | --- |
 | **积木阅读页没有回复框** | 点赞 / 踩 / 收藏 / 转发 / AI 解读都已经在阅读页上（见 10.1），但**评论还没有**：回复框仍在 `#/post/:anchorPostId` 上 |
-| **AI 只在 Markdown 模式** | AI 抽屉挂在 Markdown 的 textarea 上（`createTextareaAdapter`）；块模式没有「让 AI 写一块」这种能力 |
+| **积木编辑器的 AI 抽屉只在文本视图里** | 抽屉（`public/views/doc-ai.js`）挂在 Markdown 与源码模式**左侧**，改的就是右边那段文本；积木模式没有一段完整正文可发，所以那儿只有块列表（要 AI 就切到源码模式），块模式也没有「让 AI 写一块」这种能力 |
 | **块类型撤不掉** | 注册接口 `POST /api/docs/meta/block-types` 对**所有登录用户**开放（记 `created_by`），但没有删除/停用接口，也没有管理后台界面 —— 注册错了只能改库 |
 | **沙箱能力只有六个，而且有一个没实装** | 白名单是 `doc-meta` / `doc-blocks` / `viewer` / `state` / `blocks.derived` / `site.read`（见 `src/modules/doc/schema.js` 的 `SANDBOX_CAPABILITIES`）。没有网络请求、没有跨文档读、也不能通过沙箱改文档正文（`POST /api/docs/:id/ops` 存在但沙箱没接）。**`site.read` 目前走的是 `requestCapability` 的兜底分支，回的载荷和 `doc-meta` 一样**（`src/modules/doc/store.js:1795`）—— 名单里留着这个名字，但还没有站内数据给它 |
 | **块间联动只会取值** | `bind` 只支持「取另一块的某个字段来渲染」，没有条件、循环、计算 |

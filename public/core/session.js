@@ -55,7 +55,7 @@ function renderUserArea() {
     <div class="menu" id="user-menu" hidden>
       <a class="menu-item" href="#/u/${encodeURIComponent(me.username)}">👤 我的主页</a>
       <a class="menu-item" href="#/messages">✉️ 私信${state.messageUnread > 0 ? ` <span class="menu-badge">${state.messageUnread}</span>` : ''}</a>
-      <a class="menu-item" href="#/start">🏠 起始页</a>
+      <a class="menu-item" href="#/">🏠 起始页</a>
       <a class="menu-item" href="#/notifications">🔔 消息通知${state.unread > 0 ? ` <span class="menu-badge">${state.unread}</span>` : ''}</a>
       <a class="menu-item" href="#/following">📋 关注列表</a>
       <a class="menu-item" href="#/bookmarks">⭐ 我的收藏</a>
@@ -263,12 +263,12 @@ function renderSidebar() {
            </div>`
     }
     <div class="card card-tight">
-      <div class="card-head"><span class="card-title">🌊 动态</span><a class="tag" href="#/">去发一条</a></div>
+      <div class="card-head"><span class="card-title">🌊 动态</span><a class="tag" href="#/feed">去发一条</a></div>
       <div class="side-links">
-        <a class="side-link" href="#/start">🏠 起始页</a>
-        <a class="side-link" href="#/">🌍 全部动态</a>
-        <a class="side-link" href="#/?filter=following">👥 我关注的</a>
-        <a class="side-link" href="#/?filter=mine">📝 我的动态</a>
+        <a class="side-link" href="#/">🏠 起始页</a>
+        <a class="side-link" href="#/feed">🌍 全部动态</a>
+        <a class="side-link" href="#/feed?filter=following">👥 我关注的</a>
+        <a class="side-link" href="#/feed?filter=mine">📝 我的动态</a>
         <a class="side-link" href="#/following">📋 关注列表</a>
       </div>
     </div>

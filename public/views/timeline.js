@@ -1,6 +1,8 @@
 // 动态时间线（P1）。
 //
-// 这是 v2 的首页：`#/` 不再显示「板块 + 帖子列表」，而是一条按时间倒序的动态流。
+// 地址是 `#/feed`（m05506 起）：`#/` 让给了起始页，这里从首页搬到了后缀地址。
+//   这一页本身没变 —— 还是一行行按时间倒序的动态流，不再显示「板块 + 帖子列表」。
+//   老链接 `#/?filter=mine` 之类跟着变成 `#/feed?filter=…`。
 //
 // 三条设计约束来自需求文档（01-需求规格说明书.md §5.2）：
 //   FR-FEED-09 没有专用编辑界面 —— 发布入口就是页面顶部的**内联纯编辑框**，不跳页
@@ -291,7 +293,7 @@ function filterTabsHtml() {
 // ── 主视图 ──────────────────────────────────────────────────────────────
 
 /**
- * 首页（也是 `#/search` 的去处）：一条动态流。
+ * 动态流页（`#/feed`，也是 `#/search` 的去处）：一条按时间倒序的动态流。
  *
  * 先画骨架再取数，是为了让「刷新」不闪白屏；同时把 composer 的状态保住。
  */
@@ -339,7 +341,7 @@ async function viewTimeline(query = new Map()) {
 function renderShell() {
   ui.app.innerHTML = `
     ${composerHtml()}
-    ${feedQuery ? `<div class="card card-tight feed-searchbar">搜索「${esc(feedQuery)}」<a class="tag" href="#/">清空</a></div>` : ''}
+    ${feedQuery ? `<div class="card card-tight feed-searchbar">搜索「${esc(feedQuery)}」<a class="tag" href="#/feed">清空</a></div>` : ''}
     ${filterTabsHtml()}
     <div class="feed-stream" data-feed-list>${loadingCardsHtml()}</div>
     <div data-feed-pager></div>`;

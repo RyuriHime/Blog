@@ -402,3 +402,189 @@
 }
 
 /* @hand-written */
+
+/*
+ * 积木编辑器**左侧**的 AI 抽屉（画它的是 `public/views/doc-ai.js`）。
+ *
+ * 布局是「AI | 编辑 | 预览」三栏，只在外壳 `.doc-md-wrap` 里生效 —— 没去动
+ * 41-doc.css 那张两列的 `.doc-md-grid`（别处也在用它）。收起来只剩一条 46px 的竖标签：
+ * 与既有那套 AI 抽屉一个脾气，常驻在左边、不挡路。
+ */
+.doc-md-wrap {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 14px;
+  align-items: start;
+}
+
+.doc-ai {
+  width: 264px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  position: sticky;
+  top: 12px;
+}
+
+.doc-ai-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.doc-ai-docid {
+  color: var(--muted);
+  font-size: 12px;
+  margin-left: auto;
+}
+
+.doc-ai-body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.doc-ai-log {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-height: 360px;
+  overflow: auto;
+}
+
+.doc-ai-note {
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.doc-ai-turn {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+/* 作者那句话靠右站：一句一答，扫一眼就分得清谁说的。 */
+.doc-ai-said {
+  align-self: flex-end;
+  max-width: 92%;
+  padding: 6px 10px;
+  border-radius: 10px;
+  background: var(--accent-soft);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.doc-ai-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--panel);
+}
+
+.doc-ai-card-head {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.doc-ai-error {
+  border-color: var(--danger);
+  color: var(--danger);
+}
+
+.doc-ai-pre {
+  margin: 0;
+  max-height: 220px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: var(--mono);
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.doc-ai-quick {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.doc-ai-input {
+  min-height: 66px;
+}
+
+.doc-ai-finding {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 8px;
+  padding-top: 8px;
+  border-top: 1px dashed var(--border);
+}
+
+.doc-ai-sev {
+  height: fit-content;
+  padding: 0 6px;
+  border-radius: 8px;
+  background: var(--accent-soft);
+  font-size: 12px;
+}
+
+.doc-ai-sev[data-sev="high"] {
+  background: rgba(255, 107, 107, 0.18);
+  color: var(--danger);
+}
+
+.doc-ai-sev[data-sev="medium"] {
+  background: rgba(214, 158, 46, 0.2);
+  color: #8a6a12;
+}
+
+.doc-ai-issue {
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.doc-ai-quote {
+  padding-left: 8px;
+  border-left: 2px solid var(--border);
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.doc-ai-tab {
+  display: none;
+}
+
+.doc-ai.is-collapsed {
+  width: 46px;
+  padding: 6px;
+}
+
+.doc-ai.is-collapsed .doc-ai-head,
+.doc-ai.is-collapsed .doc-ai-body {
+  display: none;
+}
+
+.doc-ai.is-collapsed .doc-ai-tab {
+  display: block;
+  width: 100%;
+  padding: 8px 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--panel);
+  cursor: pointer;
+}
+
+@media (max-width: 900px) {
+  .doc-md-wrap {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .doc-ai,
+  .doc-ai.is-collapsed {
+    width: auto;
+    position: static;
+  }
+}

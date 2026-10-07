@@ -1,4 +1,4 @@
-// 12 种内置块类型。
+// 15 种内置块类型。
 //
 // 前 7 种（heading paragraph list code table formula image）**是从 note-agent 冻结下来的契约**：
 // 名字、`b\d+` 的 id 形状、markdown 输出，全部逐字节保持一致 ——
@@ -7,7 +7,10 @@
 // `src/modules/doc/blocks/agent.js` 负责两种表示之间的搬运，
 // `scripts/doc-smoke.mjs` 里有一条对拍测试守着这个契约。
 //
-// 后 5 种（quote poll wiki embed app）是这个模块新增的。
+// 后 8 种（quote poll wiki embed app script subpage prose）是这个模块新增的。
+// 其中 `prose` 不给人手写：解析器把同一小节里连续的正文（paragraph / list / quote）
+// 并成一段 `prose`（见 blocks/markdown.js 的 `mergeProse`），
+// 免得一篇正常文章被拆成几十个一段话一块的块。
 //
 // 每个类型的形状：
 //   { name, version, label, icon, editor, schema, toMarkdown, toPlain, toHtml }
@@ -15,6 +18,8 @@
 // `toHtml` 是**服务端**渲染（唯一的安全边界：所有文本都已经转义）。
 import { BLOCK_TYPE_PATTERN, MAX_APP_CODE, MAX_SCRIPT_CODE } from '../schema.js';
 import { sandboxInner } from '../sandbox.js';
+// `prose` 用站内那套 markdown 渲染器画（它没有任何 import，不会与 registry 打环）。
+import { renderMarkdown } from '../../../markdown.js';
 import {
   escapeCell,
   escapeHtml,
@@ -416,6 +421,30 @@ export const BUILTIN_TYPES = [
           '</a>',
       );
     },
+  },
+  {
+    name: 'prose',
+    version: 1,
+    label: '小节正文',
+    icon: '¶¶',
+    // 前端按 `editor` 自动画表单，`text` 就是一个多行文本框，不用另写界面。
+    editor: 'text',
+    schema: {
+      text: { type: 'string', required: true, maxLength: 60000, label: '正文（markdown）' },
+    },
+    // 原样进出：`props.text` 就是这一小节的 markdown，一个字都不许改
+    // （改了 `toSource → parseSourceBlocks → toSource` 的逐字节往返就断了）。
+    toMarkdown: (props) => props.text,
+    toPlain: (props) => props.text,
+    // 与 `paragraph` 不同的是它走**块级** markdown 渲染器：
+    // 列表会真的变成 `<ul><li>`、引用会变成 `<blockquote>`、表格与代码围栏也都认。
+    // `wikiLinks: true` 打开行内双链 `[[目标]]`，与老的 `paragraph` 行为一致。
+    toHtml: (props, block, options) =>
+      shell(
+        'prose',
+        block,
+        renderMarkdown(props.text, { wikiLinks: true, wikiExisting: options?.wikiTitles }),
+      ),
   },
 ];
 

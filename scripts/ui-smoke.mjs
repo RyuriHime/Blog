@@ -167,10 +167,10 @@ check(
 );
 
 /* ================================================================== */
-/* 三·4、起始页（#/start）                                             */
+/* 三·4、起始页（`#/`）与动态流（`#/feed`）—— m05506 起两个地址对调     */
 /* ================================================================== */
 
-console.log('\n▶ 起始页（#/start）');
+console.log('\n▶ 起始页（#/）与动态流（#/feed）');
 
 const routerJs = read('core/router.js');
 const styleEntryCss = read('style.css');
@@ -178,15 +178,23 @@ const startJs = read('views/start.js');
 const startCss = read('css/25-start.css');
 
 check('新页面文件存在并导出 viewStart', /async function viewStart\s*\(/.test(startJs) && /export \{ viewStart \}/.test(startJs));
-check('路由登记了 #/start', /first === 'start'[\s\S]{0,60}?Start\.viewStart\(\)/.test(routerJs));
 check(
-  '未登录访问 #/ 会转去起始页（登录用户仍然是动态流）',
-  /if \(!first\)[\s\S]{0,260}?!state\.me[\s\S]{0,140}?'#\/start'/.test(routerJs),
-  'router.js 的 #/ 分支里没看到「未登录 → #/start」',
+  '`#/` 直接渲染起始页 —— 无论登录与否（不再有 state.me 那半条件）',
+  /if \(!first\) return await Start\.viewStart\(\)/.test(routerJs)
+    && !/!state\.me[\s\S]{0,120}?'#\/start'/.test(routerJs),
+  'router.js 的 #/ 分支还是「只有未登录的第一次访问才转起始页」的老逻辑',
 );
 check(
-  '三块入口分别指向 动态 #/ · 积木广场 #/docs · 团队 #/teams',
-  /href="\$\{href\}"/.test(startJs) && /href: '#\/'/.test(startJs) && /href: '#\/docs'/.test(startJs) && /href: '#\/teams'/.test(startJs),
+  '老地址 #/start 保留成别名（进的是同一页，不是死链）',
+  /first === 'start'[\s\S]{0,40}?Start\.viewStart\(\)/.test(routerJs),
+);
+check(
+  '动态流搬到 #/feed（查询串也跟着走）',
+  /first === 'feed'[\s\S]{0,40}?Timeline\.viewTimeline\(query\)/.test(routerJs),
+);
+check(
+  '三块入口分别指向 动态 #/feed · 积木广场 #/docs · 团队 #/teams',
+  /href="\$\{href\}"/.test(startJs) && /href: '#\/feed'/.test(startJs) && /href: '#\/docs'/.test(startJs) && /href: '#\/teams'/.test(startJs),
 );
 check('公告取「站务公告」板块（/api/posts?board=meta），不用新后端', /\/api\/posts\?board=meta/.test(startJs));
 check('公告取不到时有兜底文案（不是空白一块）', /还没有公告|emptyHtml\(/.test(startJs));
@@ -201,8 +209,13 @@ check(
 );
 check('≤900px 两栏堆成一栏', /@media\s*\(max-width:\s*900px\)[\s\S]*?\.start-columns\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\)/.test(startCss + responsiveCss));
 check(
-  '起始页有两个常驻入口：用户菜单 + 侧栏',
-  /menu-item" href="#\/start"/.test(session) && /side-link" href="#\/start"/.test(session),
+  '起始页有两个常驻入口：用户菜单 + 侧栏（都指向 #/）',
+  /menu-item" href="#\/"/.test(session) && /side-link" href="#\/"/.test(session),
+);
+check(
+  '侧栏的动态入口全部改指 #/feed（不再拿 #/ 当动态）',
+  /side-link" href="#\/feed"/.test(session) && /side-link" href="#\/feed\?filter=following"/.test(session) && !/#\/\?filter=/.test(session),
+  'session.js 里还留着 #/?filter=… 那种老地址',
 );
 
 /* ================================================================== */

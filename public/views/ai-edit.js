@@ -21,8 +21,8 @@
 //   · src/modules/doc/routes.js  —— /api/docs*（文档与块，PUT / POST 才是真写进库）
 //
 // ⚠️ 块的形状是 P2 的原生 `{ blockId, type, version, props }`，type 只能是内置类型之一
-// （heading/paragraph/list/code/table/formula/image/quote/poll/wiki/embed/app/script/subpage，
-// 目前 14 种；清单以 P2 的 src/modules/doc/blocks/types.js 为准）。这一页发出去的块
+// （heading/paragraph/prose/list/code/table/formula/image/quote/poll/wiki/embed/app/script/subpage，
+// 目前 15 种；清单以 P2 的 src/modules/doc/blocks/types.js 为准）。这一页发出去的块
 // 一律裁成 `{ blockId, type, props }` —— 服务端的 sectionBlocksProblem() 会逐项校验。
 //
 // ⚠️ 小节**不在前端切**。切分算法只有一个实现：src/modules/ai/sections.js。前端把整篇的
@@ -55,13 +55,14 @@ const MAX_SECTION_BLOCKS = 50;
 const MAX_RANGE_CHARS = 40000;
 
 /**
- * 内置块类型的中文名（目前 14 种）。只用在预览与操作记录里做显示，
+ * 内置块类型的中文名（目前 15 种）。只用在预览与操作记录里做显示，
  * 真正管放行的是服务端的 AI_BLOCK_TYPE_NAMES —— 少一项不会报错，
  * 只会让那一类块显示成英文原名（`BLOCK_LABEL[t] || t`）。
  */
 const BLOCK_LABEL = {
   heading: '标题',
   paragraph: '段落',
+  prose: '小节正文',
   list: '列表',
   code: '代码',
   table: '表格',

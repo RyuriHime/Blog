@@ -37,7 +37,7 @@ async function viewCompose(postId) {
     <section class="card">
       <div class="card-head">
         <h1 style="font-size:20px">${post ? '✏️ 编辑帖子' : '✏️ 发布新帖'}</h1>
-        <a class="tag" href="${post ? `#/post/${post.id}` : '#/'}">取消</a>
+        <a class="tag" href="${post ? `#/post/${post.id}` : '#/feed'}">取消</a>
       </div>
       <form class="form" id="composeForm" data-action="compose" data-id="${post?.id ?? ''}">
         <div class="field">

@@ -971,12 +971,12 @@ const feedMod = () => import(pathToFileURL(join(ROOT, 'public', 'views', 'feed.j
 const view = (file) => import(pathToFileURL(join(ROOT, 'public', 'views', file)).href);
 
 const CASES = [
-  // P5 的起始页 `#/start`：未登录的人第一次落在 `#/` 会被转到这里（见 core/router.js）。
-  // 它拉四个现成接口（站务公告 / 动态 / 积木 / 团队），任何一个挂了都要照常出页面 ——
-  // 正好是「渲染会不会炸」这条检查最该盯的一页。
+  // P5 的起始页：m05506 起它就占 `#/`（不论登录与否都是默认落点），老地址 `#/start` 是别名
+  // （见 core/router.js）。它拉四个现成接口（站务公告 / 动态 / 积木 / 团队），任何一个挂了
+  // 都要照常出页面 —— 正好是「渲染会不会炸」这条检查最该盯的一页。
   ['起始页', 'start.js', 'viewStart', []],
-  // v2 首页 = 动态时间线
-  ['动态首页', 'timeline.js', 'viewTimeline', [new Map()]],
+  // 动态流：以前它是 `#/`，m05506 起搬到 `#/feed`（`#/?filter=…` 之类也跟着搬过去）。
+  ['动态流', 'timeline.js', 'viewTimeline', [new Map()]],
   ['动态·我关注的', 'timeline.js', 'viewTimeline', [new URLSearchParams({ filter: 'following' })]],
   ['动态·搜索', 'timeline.js', 'viewTimeline', [new URLSearchParams({ q: '采样' })]],
   // 「关注列表」= 我关注了谁的**名单**（头像 + 一键取关），跟上面那条「动态·我关注的」

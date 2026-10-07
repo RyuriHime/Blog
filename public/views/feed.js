@@ -61,7 +61,7 @@ async function viewBoard(slug, query) {
     <section class="card">
       <div class="card-head" style="margin-bottom:6px">
         <h1 style="font-size:21px">${board ? board.icon : '📁'} ${esc(board?.name || slug)}</h1>
-        <a class="tag" href="#/">← 全部帖子</a>
+        <a class="tag" href="#/feed">← 全部动态</a>
       </div>
       <div class="page-sub">${esc(board?.description || '板块不存在或已删除')}</div>
       ${
@@ -126,7 +126,7 @@ async function viewFollowing() {
       </div>
       <div class="page-sub">你关注的人都在下面。点名字进 TA 的主页，点「已关注」就取关。</div>
       <div class="form-actions" style="margin-top:12px">
-        <a class="btn btn-sm" href="#/?filter=following">去看 TA 们发的动态 →</a>
+        <a class="btn btn-sm" href="#/feed?filter=following">去看 TA 们发的动态 →</a>
         <a class="btn btn-sm" href="#/u/${encodeURIComponent(state.me.username)}">我的主页（含粉丝名单）→</a>
       </div>
     </section>

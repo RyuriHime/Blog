@@ -32,6 +32,7 @@ import * as Ai from './ai.js';
 import { reactionBarHtml } from './post.js';
 import { attachSandbox, unmountSandboxes } from '../core/sandbox.js';
 import { ntRenderMath } from './notes.js';
+import * as DocAi from './doc-ai.js';
 
 /** 元数据只拉一次：块类型表 / 模板表 / 两个枚举，整个会话里不会变。 */
 const docState = {
@@ -51,9 +52,9 @@ const docState = {
 /** 开发者功能里的「我的脚本模板」：只对登录用户有意义，没登录就是一份空表。 */
 const scriptTemplateState = { templates: [], limit: 0, maxCode: 0, loaded: false, failed: false };
 
-/** Markdown 模式的两件外挂的生命周期手柄（防抖句柄 + AI 抽屉实例）。 */
+/** 两个文本视图的两件外挂的生命周期手柄（预览防抖句柄 + 左侧 AI 抽屉实例）。 */
 let mdPreviewTimer = null;
-let mdNotesPanel = null;
+let mdAiPanel = null;
 
 async function loadMeta(force = false) {
   if (!force && docState.types.length > 0) return;
@@ -347,14 +348,13 @@ function leaveDocPage() {
     clearTimeout(mdPreviewTimer);
     mdPreviewTimer = null;
   }
-  if (mdNotesPanel && typeof mdNotesPanel.destroy === 'function') {
-    try {
-      mdNotesPanel.destroy();
-    } catch (error) {
-      console.warn('[notes-agent] 积木工作台销毁失败：', error);
-    }
+  // 左侧 AI 抽屉自己收：它挂的是它自己的监听（`./doc-ai.js`），这里只管把它拆掉。
+  try {
+    DocAi.destroyDocAi();
+  } catch (error) {
+    console.warn('[doc-ai] 积木编辑器左侧抽屉销毁失败：', error);
   }
-  mdNotesPanel = null;
+  mdAiPanel = null;
   unmountSandboxes();
   // wiki 站是三栏（左树 / 中正文 / 右目录），再叠上论坛自己的 306px 侧栏
   //（我的账户、热榜）正文就只剩三百来像素 —— 所以站页面挂 `body.doc-wide`
@@ -1003,19 +1003,21 @@ function blocksEditorHtml(blocks) {
  * 没有网络、拉不到 vendor。一个 `textarea` + 服务端预览已经能写脚本、能看结果。
  */
 function sourceEditorHtml(source) {
-  // `name="content"` 与 Markdown 模式同款：AI 抽屉的 textarea 适配器按它找人。
+  // `name="content"` 与 Markdown 模式同款：两个文本视图在外挂眼里是一样的东西。
   return `<div class="card doc-panel">
     <div class="card-head">
       <span class="card-title">⚡ 源码模式</span>
       <span class="hint">整篇就是这段文本；右边实时预览，脚本会真的跑起来</span>
     </div>
-    <div class="doc-md-grid">
-      <div class="doc-md-edit" data-doc-editor-host>
-        <textarea class="doc-input doc-textarea doc-md" name="content" data-doc-source rows="26" spellcheck="false">${esc(source ?? '')}</textarea>
-      </div>
-      <div class="doc-md-side">
-        <div class="doc-md-preview" data-doc-preview><div class="md"><div class="hint">右边跟着打字实时更新。</div></div></div>
-        <div id="docNotesMount" class="notes-mount"></div>
+    <div class="doc-md-wrap">
+      ${DocAi.docAiHtml(docState.editor?.id ?? '')}
+      <div class="doc-md-grid">
+        <div class="doc-md-edit" data-doc-editor-host>
+          <textarea class="doc-input doc-textarea doc-md" name="content" data-doc-source rows="26" spellcheck="false">${esc(source ?? '')}</textarea>
+        </div>
+        <div class="doc-md-side">
+          <div class="doc-md-preview" data-doc-preview><div class="md"><div class="hint">右边跟着打字实时更新。</div></div></div>
+        </div>
       </div>
     </div>
     <div class="doc-actions">
@@ -1082,7 +1084,7 @@ function mountSourceTools() {
   });
 
   paint();
-  mountNotesPanel(document.getElementById('docNotesMount'), $('[data-doc-editor-host]'), status);
+  mountDocAiPanel(status);
 }
 
 /**
@@ -1161,7 +1163,7 @@ async function reloadSource() {
  * 是**看见的和你改的不是一回事**：`poll` / `app` / `script` / 自定义块在纯 Markdown 里
  * 只能退化成一坨围栏 JSON（` ```doc:poll `），作者在其中改错一个字符就毁了整块。
  */
-const MARKDOWN_VIEW_TYPES = new Set(['heading', 'paragraph', 'list', 'quote', 'code', 'table', 'formula', 'image', 'wiki']);
+const MARKDOWN_VIEW_TYPES = new Set(['heading', 'paragraph', 'prose', 'list', 'quote', 'code', 'table', 'formula', 'image', 'wiki']);
 
 /** 这篇能不能用纯 Markdown 编辑？不能就回一句「为什么」（能就回空串）。 */
 function markdownViewBlocked(blocks) {
@@ -1172,19 +1174,21 @@ function markdownViewBlocked(blocks) {
 }
 
 function markdownEditorHtml(markdown, blocked = '') {
-  // `name="content"` 不是装饰：`NotesAgent.createTextareaAdapter()` 就是按 `#content`
-  // 或 `[name="content"]` 找编辑区的，改了它 AI 抽屉就挂不上去。
+  // `name="content"` 是从 AI 抽屉那条契约里留下来的：源码模式那个 textarea 也叫它，
+  // 两个文本视图长得一样，抽屉（以及还在用它的旧脚本）就不用分辨自己在哪一页。
   const ro = blocked ? ' readonly' : '';
   return `<div class="card doc-panel">
     <div class="card-head"><span class="card-title">📝 纯 Markdown</span><span class="hint">右边跟着打字实时更新；保存会把整篇的块换成这份 Markdown 解析出来的块</span></div>
     ${blocked ? `<div class="doc-hint doc-md-blocked">⚠ ${esc(blocked)}</div>` : ''}
-    <div class="doc-md-grid">
-      <div class="doc-md-edit" id="docMdHost" data-doc-editor-host>
-        <textarea class="doc-input doc-textarea doc-md" name="content" data-doc-markdown rows="18" spellcheck="false"${ro}>${esc(markdown ?? '')}</textarea>
-      </div>
-      <div class="doc-md-side">
-        <div class="doc-md-preview" data-doc-preview><div class="md"><span class="hint">开始打字就有预览。</span></div></div>
-        <div id="docNotesMount"></div>
+    <div class="doc-md-wrap">
+      ${DocAi.docAiHtml(docState.editor?.id ?? '')}
+      <div class="doc-md-grid">
+        <div class="doc-md-edit" id="docMdHost" data-doc-editor-host>
+          <textarea class="doc-input doc-textarea doc-md" name="content" data-doc-markdown rows="18" spellcheck="false"${ro}>${esc(markdown ?? '')}</textarea>
+        </div>
+        <div class="doc-md-side">
+          <div class="doc-md-preview" data-doc-preview><div class="md"><span class="hint">开始打字就有预览。</span></div></div>
+        </div>
       </div>
     </div>
     <div class="doc-actions">
@@ -1196,12 +1200,12 @@ function markdownEditorHtml(markdown, blocked = '') {
 }
 
 /**
- * Markdown 模式的两件外挂：实时预览 + 现有的 AI 抽屉。
+ * Markdown 模式的两件外挂：实时预览 + 左侧的 AI 抽屉。
  *
  * 预览复用站点既有的 `POST /api/markdown/preview`（compose 的「预览」按钮走的就是
  * 它，LaTeX 也在这一层渲染），只是这里改成**防抖自动跑**，不需要点按钮。
- * AI 抽屉复用 `/notes-panel.js` 的 `window.NotesAgent.attach`（与 compose 同一份），
- * 所以「AI 改文本」的能力是白捡的，没有第二份实现。
+ * AI 抽屉是这一轮新写的（`./doc-ai.js`）：左边说一句话，右边这段文本跟着改 ——
+ * 它打的是 `/api/ai-edit/*`（与 `#/ai-edit` 页面同一个后端，不另造模型调用链）。
  *
  * 两个都**只做锦上添花**：拿不到就把原因写在状态里，绝不让编辑器本身挂掉。
  */
@@ -1239,39 +1243,51 @@ function mountMarkdownTools(blocked = '') {
     paint();
   }
 
-  const mount = document.getElementById('docNotesMount');
-  const host = document.getElementById('docMdHost');
-  // 只读的 Markdown 页**不挂 AI 抽屉**：适配器的 `setDoc` 直接写 `textarea.value`，
+  const mount = $('[data-doc-ai]');
+  // 只读的 Markdown 页**不挂 AI 抽屉**：抽屉的「写入编辑区」就是直接写 `textarea.value`，
   // readonly 拦不住它 —— 挂上去就等于留了一条绕过「这一页改不了」的后门。
   if (blocked) {
     if (status) status.textContent = '这一页只读，AI 抽屉在源码模式里可用';
     return;
   }
-  mountNotesPanel(mount, host, status);
+  mountDocAiPanel(status);
 }
 
 /**
- * AI 抽屉（`/notes-panel.js` 的 `window.NotesAgent.attach`，与 compose 同一份）。
+ * 编辑区**左侧**那个 AI 抽屉（画它的是 `./doc-ai.js`）。
  *
- * 适配器就是契约里的 `createTextareaAdapter`：它按 `[name="content"]` 找编辑区，
- * 所以源码模式那个 textarea 特意也叫 `content` —— 编辑器换了形态，契约不用换。
- * 挂不上（脚本没加载、假 DOM）就只写一句状态：**绝不让编辑器本身挂掉**。
+ * 它只管一块地方，所以三件事都得说清楚：
+ *   - **文本从哪来**：现读文本框（`currentDraft()`），不缓存 —— 作者一边打一边改，
+ *     缓存必然过期，而过期的文本发给模型就是让它改一份不存在的稿子。
+ *   - **结果去哪**：写回同一个文本框并 `input` 一下，让右边的实时预览跟着重画。
+ *     落盘仍然是页面上那颗「保存」的事 —— 抽屉不替作者做「这次改动算数」的决定。
+ *   - **模板分支**：套模板是服务端动手换块，客户端推演不出来，所以拉一次服务端版本重画。
+ *
+ * 积木模式**没有**这个抽屉：那儿没有一段完整文本可发，硬挂上去只会多一个不知道在改什么的框。
  */
-function mountNotesPanel(mount, host, status) {
-  const agent = typeof window === 'undefined' ? null : window.NotesAgent;
-  if (!mount || !agent || typeof agent.attach !== 'function' || typeof agent.createTextareaAdapter !== 'function') {
-    if (status) status.textContent = mount ? 'AI 抽屉没加载（/notes-panel.js 不在）' : '';
-    return null;
-  }
-  try {
-    mdNotesPanel = agent.attach({ mount, editor: agent.createTextareaAdapter(host) });
-    return mdNotesPanel;
-  } catch (error) {
-    console.warn('[notes-agent] 积木编辑器挂载失败：', error);
-    mdNotesPanel = null;
-    if (status) status.textContent = 'AI 抽屉挂载失败，编辑照常能用';
-    return null;
-  }
+function mountDocAiPanel(status) {
+  const mount = $('[data-doc-ai]');
+  if (!mount || !currentDraft()) return null;
+  mdAiPanel = DocAi.mountDocAi({
+    mount,
+    documentId: docState.editor?.id ?? docState.viewing?.id ?? '',
+    getText: () => currentDraft()?.text ?? '',
+    setText: async (text, options = {}) => {
+      if (options.reload) {
+        // 服务端已经写盘了（套模板那条路），客户端只负责把新版本拿回来重画。
+        await reloadSource();
+        return;
+      }
+      const target = currentDraft();
+      if (!target) {
+        if (status) status.textContent = '这个视图没有可写的文本框 —— 切到 Markdown / 源码模式再让 AI 改。';
+        return;
+      }
+      target.el.value = text;
+      if (typeof target.el.dispatchEvent === 'function') target.el.dispatchEvent(new Event('input'));
+    },
+  });
+  return mdAiPanel;
 }
 
 /**

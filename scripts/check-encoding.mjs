@@ -36,8 +36,11 @@ const TARGETS = ['src', 'public', 'scripts', 'forum-ai/src', 'note-agent/src', '
  * 起始页（P5：public/views/start.js、public/css/25-start.css）进来之后加回两个，实测 196，抬到 196。
  * 正文渲染器返工（scripts/check-markdown.mjs、scripts/sync-markdown-core.mjs 两个新脚本）
  * 之后实测 199，抬到 199。
+ * AI 编辑台教模型「积木语法」（src/modules/ai/syntax.js）之后实测 200，抬到 200：
+ * 这就是那句「新文件要登记」的落地 —— 忘了登记，这里就悄悄少一个。
+ * 编辑区左侧的 AI 抽屉（public/views/doc-ai.js）之后实测 201，抬到 201。
  */
-const MIN_CHECKED = Number(process.env.MIN_CHECKED || 199);
+const MIN_CHECKED = Number(process.env.MIN_CHECKED || 201);
 
 /** 新布局里必须存在的关键文件。少一个就说明有人把文件搬走却没同步这份检查。 */
 const REQUIRED_FILES = [
@@ -132,6 +135,8 @@ const REQUIRED_FILES = [
   'public/core/sandbox.js',
   'public/views/doc.js',
   'public/views/doc-blocks.js',
+  // 编辑区左侧的 AI 抽屉：左边说一句话，右边那段正文跟着改（打 /api/ai-edit/*）。
+  'public/views/doc-ai.js',
   'public/css/41-doc.css',
   'scripts/doc-smoke.mjs',
   // 团队（P4）：三张表、SQL、路由、形状、页面、样式分片与它自己的冒烟脚本。
@@ -236,6 +241,8 @@ const EXPECTED = [
   ['8 个内置模板', ['src/modules/doc/templates.js']],
   ['积木广场', ['public/views/doc.js']],
   ['块类型表', ['public/views/doc.js']],
+  // 编辑区左侧的 AI 抽屉：作者对着它说话，右边那段正文跟着改（P3 修复 3 的前口）。
+  ['在下面说一句话，AI 就改右边这片正文', ['public/views/doc-ai.js']],
   ['这个积木还没写代码', ['src/modules/doc/sandbox.js']],
   ['积木广场', ['public/core/session.js']],
   ['端到端', ['scripts/doc-smoke.mjs']],

@@ -2,12 +2,13 @@
 // 
 // 三条硬约定：
 //   1) 页面地址是**对外契约**（收藏夹、通知里的链接），新增页面只能加不能改；
+//      （唯一一次破例是 m05506：`#/` 与动态流对调 —— 起始页占 `#/`、动态流搬去
+//      `#/feed`。老地址 `#/start` 保留成别名，所以老链接没断。）
 //   2) 未登录访问需要登录的页面时，先跳 #/login 并把原地址记进 state.redirect；
 //   3) 每个 viewXxx 自己负责把 ui.app.innerHTML 填好，route() 不兜底。
 
 import { $, emptyHtml, toast, ui } from './dom.js';
 import { apiErrorText } from './errors.js';
-import { state } from './state.js';
 import * as Admin from '../views/admin.js';
 import * as Ai from '../views/ai.js';
 import * as AiEdit from '../views/ai-edit.js';
@@ -28,12 +29,6 @@ import * as Start from '../views/start.js';
 import * as Team from '../views/team.js';
 import * as Timeline from '../views/timeline.js';
 import * as User from '../views/user.js';
-
-/**
- * P5：本次页面加载里，动态首页（#/）有没有被访问过。
- * 只用来判断「未登录的人是不是刚打开站点」—— 见 route() 里 !first 那一段。
- */
-let homeSeen = false;
 
 function parseHash() {
   const raw = location.hash.replace(/^#/, '');
@@ -86,33 +81,26 @@ async function route() {
   if (first !== 'search') ui.searchInput.value = query.get('q') || '';
 
   try {
-    // v2：首页是**动态**时间线，不再是「板块 + 帖子列表」。
-    //
-    // P5：未登录的人**第一次**落在 #/ 时先看起始页（左公告 + 右三块入口）。
-    //   为什么要分「第一次」：起始页上那块「动态」指向的就是 #/，
-    //   要是每次 #/ 都转走，点「动态」会立刻被弹回起始页 —— 死循环一样的体验。
-    //   只认不带查询串的 #/；`#/?filter=mine` 这类筛选照常进动态流。
-    if (!first) {
-      const firstHomeVisit = !homeSeen;
-      homeSeen = true;
-      if (firstHomeVisit && !state.me && !query.toString()) {
-        location.replace('#/start');
-        return await Start.viewStart();
-      }
-      return await Timeline.viewTimeline(query);
-    }
+    // m05506：`#/` 就是**起始页**（左公告 + 右三块入口），动态流搬到 `#/feed`。
+    //   以前是反的：`#/` 是动态流、起始页在 `#/start`，而且只对「未登录的第一次访问」生效；
+    //   用户要求「无论是否登录，进站先看起始页」，于是两个地址对调。
+    //   查询串同理：`#/feed?filter=mine` / `#/feed?filter=following` / `#/feed?q=…`。
+    //   `#/start` 留成别名（用户菜单、老链接还在用），直接渲染同一页、不再 replace —— 免得来回跳。
+    if (!first) return await Start.viewStart();
+    if (first === 'start') return await Start.viewStart();
+    if (first === 'feed') return await Timeline.viewTimeline(query);
     // 论坛形态下线（FR-FEED-12）：板块页没有替代页面，但**也不能变成死链**，
-    // 统一回首页。`replace` 而不是赋值，免得用户按返回又弹回来。
+    // 统一回动态流。`replace` 而不是赋值，免得用户按返回又弹回来。
     if (first === 'board') {
-      toast('板块已经下线了，这里是新的动态首页', 'info');
-      location.replace('#/');
+      toast('板块已经下线了，这里是新的动态页', 'info');
+      location.replace('#/feed');
       return await Timeline.viewTimeline(query);
     }
     // 搜索框搜的是动态（论坛没了，搜索的主要对象也就跟着变了）
     if (first === 'search') return await Timeline.viewTimeline(query);
     // `#/following` 是「我关注的人」**名单**（`public/views/feed.js` 的 viewFollowing：
     // 头像 + 昵称 + 一键取关）。关注**流**（只看 TA 们发的动态）是动态流的一个筛选，
-    // 走 `#/?filter=following`。两件事别再并成一个 ——
+    // 走 `#/feed?filter=following`。两件事别再并成一个 ——
     // 并了之后名单页就没了入口（函数还在，只是没有任何地址能到达），
     // 于是「我到底关注了谁」反而没地方看。这个坑真踩过。
     if (first === 'following') return await Feed.viewFollowing();
@@ -158,8 +146,7 @@ async function route() {
     // `#/wiki`：所有看得见的站（一个帖子一个 wiki 里的「一个帖子」列表）。
     if (first === 'wiki') return await Doc.viewWikiIndex();
     if (first === 'settings') return await Settings.viewSettings();
-    // P5：起始页（左公告 / 右三块入口）。独立地址，`#/` 的语义一个字没改。
-    if (first === 'start') return await Start.viewStart();
+    // P5 的起始页现在占 `#/`（见文件开头那一大段）—— 别名 `#/start` 在上面的开头分支里就处理掉了。
     if (first === 'notifications') return await Notif.viewNotifications(query);
     if (first === 'messages' && second) return await Message.viewThread(second);
     if (first === 'messages') return await Message.viewMessages();

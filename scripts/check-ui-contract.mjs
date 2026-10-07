@@ -35,6 +35,10 @@ const BASE = `http://127.0.0.1:${PORT}`;
  * 第二次**故意调小**：删掉投币系统之后，投币相关的存在性断言（列表 coinCount/myCoins、
  * 详情 post.coin、投币返回值、me.coinBalance 等）改成「不再有」，另加 8 条静态守卫
  * （路由 / 常量 / coins 表 / 形状 / site / 通知类型 / 前端 / CSS），实测 314，抬到 314。
+ * 第三次**不改数字**：积木新增第 15 种内置块类型 `prose`（同一小节的正文并成一块），
+ * 块类型清单断言从 14 改 15 —— 这不是新增断言，通过项数回到 314。
+ * 教训：「通过项数掉了」有两个原因，一是有人撤了断言，二是**有一条断言正在失败**；
+ * 抬下限把后一种一并盖住，等于把哨兵调哑，所以这里老老实实留在 314。
  */
 const MIN_CHECKS = Number(process.env.MIN_UI_CHECKS || 314);
 
@@ -333,7 +337,7 @@ check(
 /* 「关注列表」是同一个坑的第三遍：`public/views/feed.js` 的 `viewFollowing()` 一直写在那儿
  * （头像 + 昵称 + 一键取关，数据走 `/api/me/following`），但 `#/following` 被改道去了动态流，
  * 于是名单页谁也到不了 —— 函数还在、测试还在，只是没有地址能进得去。
- * 「关注流」（只看 TA 们发的动态，`#/?filter=following`）和「关注列表」（我关注了谁）
+ * 「关注流」（只看 TA 们发的动态，`#/feed?filter=following`）和「关注列表」（我关注了谁）
  * 是两件事，别再并成一个。
  */
 const feedCode = codeOnly.get(join(publicDir, 'views', 'feed.js')) ?? '';
@@ -350,7 +354,7 @@ check(
 check('关注列表页画的是名单（标题 + 计数）', /📋 关注列表/.test(feedCode) && /关注列表（/.test(feedCode));
 check(
   '名单页「去看 TA 们发的动态」指到动态流的筛选（`?feed=` 那个地址没人认）',
-  /href="#\/\?filter=following"/.test(feedCode) && !/feed=following/.test(appJs),
+  /href="#\/feed\?filter=following"/.test(feedCode) && !/feed=following/.test(appJs),
 );
 
 /* 团队第二批（成员管理 / 文件柜 / 群聊）的契约。
@@ -1479,9 +1483,9 @@ try {
   );
   const docTypes = await dmA('/api/docs/meta/block-types');
   check(
-    '积木：块类型清单给出 14 种内置类型且带声明式 schema',
+    '积木：块类型清单给出 15 种内置类型且带声明式 schema',
     docTypes.status === 200 &&
-      docTypes.json.data?.types?.length === 14 &&
+      docTypes.json.data?.types?.length === 15 &&
       docTypes.json.data.types.every((type) => type.builtin === true && type.schema && typeof type.schema === 'object'),
     JSON.stringify(docTypes.json).slice(0, 200),
   );

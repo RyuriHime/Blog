@@ -34,6 +34,12 @@ import {
   AI_MAX_TITLE,
 } from './schema.js';
 import { splitSections, SECTION_OPENING_LABEL } from './sections.js';
+import {
+  AI_TEMPLATE_KEYS,
+  AI_BLOCK_PROP_GUIDE,
+  AI_SANDBOX_GUIDE,
+  AI_AUTHORING_GUIDE,
+} from './syntax.js';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -376,15 +382,33 @@ function sectionPatchProblem(value, allowedIds) {
   return '';
 }
 
-/** 整篇的旧值 / 新值：`{ markdown, title? }`。返回毛病描述，空串表示合法。 */
+/**
+ * 整篇的旧值 / 新值：`{ markdown, title? }`，或者「直接套站内模板」的 `{ template, title? }`。
+ *
+ * `template` 这条路径是给「帮我做个投票问卷」这类要求用的：站里已经有维护好的成品，
+ * 让模型现编 Markdown 反而更容易编歪（也更容易超出 `AI_MAX_RANGE_CHARS`）。
+ * 两种形状**二选一**：同时给 template 与 markdown 就报错，免得两个解释打架。
+ */
 function documentPatchProblem(value, label) {
   if (value === null || typeof value !== 'object' || Array.isArray(value)) {
     return `${label} 必须是对象 { markdown }`;
   }
-  if (typeof value.markdown !== 'string' || value.markdown.trim() === '') {
+  const hasTemplate = typeof value.template === 'string' && value.template.trim() !== '';
+  if (value.template !== undefined && value.template !== null && !hasTemplate) {
+    return `${label}.template 必须是非空字符串`;
+  }
+  if (hasTemplate) {
+    const key = value.template.trim();
+    if (!AI_TEMPLATE_KEYS.some((item) => item.key === key)) {
+      return `${label}.template「${key}」不是站里的模板（可选：${AI_TEMPLATE_KEYS.map((item) => item.key).join('、')}）`;
+    }
+    if (typeof value.markdown === 'string' && value.markdown.trim() !== '') {
+      return `${label} 同时给了 template 与 markdown，只能二选一`;
+    }
+  } else if (typeof value.markdown !== 'string' || value.markdown.trim() === '') {
     return `${label}.markdown 必须是非空字符串`;
   }
-  if (value.markdown.length > AI_MAX_RANGE_CHARS) {
+  if (typeof value.markdown === 'string' && value.markdown.length > AI_MAX_RANGE_CHARS) {
     return `${label}.markdown 有 ${value.markdown.length} 字符，超过 ${AI_MAX_RANGE_CHARS} 的上限`;
   }
   if (value.title !== undefined && value.title !== null) {
@@ -395,9 +419,127 @@ function documentPatchProblem(value, label) {
 }
 
 function cleanDocumentPatch(value) {
-  const patch = { markdown: value.markdown };
+  const patch = {};
+  if (typeof value.template === 'string' && value.template.trim() !== '') patch.template = value.template.trim();
+  if (typeof value.markdown === 'string') patch.markdown = value.markdown;
   if (typeof value.title === 'string' && value.title.trim() !== '') patch.title = value.title.trim();
   return patch;
+}
+
+/** 站里有哪些模板 —— 拼进整篇提示词，让模型知道「可以只回一个 template」。 */
+function templateMenu() {
+  return `站里现成的模板：${AI_TEMPLATE_KEYS.map((item) => `${item.key}（${item.title}：${item.description}）`).join('；')}。`;
+}
+
+/* ---------------- 审查（原「AI 学术审查」的接班人） ---------------- */
+
+/**
+ * 审查的六类问题 —— 口径与 `note-agent/src/prompts.mjs` 的 `REVIEW_SYSTEM` 一致。
+ *
+ * 那边是「学术笔记」抽屉里的学术审查，入口已经下线（笔记功能整体隐掉了），
+ * 但用户要的**能力**没下线：换成在积木这一侧提供同样的审查。这里手抄一份口径，
+ * 是因为两边代码零共享（骨架规范不许业务模块互相 import）。
+ */
+const AI_REVIEW_KINDS = Object.freeze(['logic', 'fact', 'structure', 'clarity', 'citation', 'formula']);
+const AI_REVIEW_SEVERITIES = Object.freeze(['high', 'medium', 'low']);
+const AI_MAX_FINDINGS = 12;
+const AI_MAX_REVIEW_TEXT = 400;
+
+/**
+ * 审查的系统提示词。
+ *
+ * 与块/整篇提示词的区别：审查**不改稿、不落盘**，只回意见；而且每条意见必须
+ * 原样引用草稿里的一段文字（少于 6 个字或引用不到的会被 `reviewFindings` 丢掉）
+ * ——「建议补充更多细节」这种无法验证的空话就是这么挡掉的。
+ */
+function reviewSystemPrompt() {
+  return [
+    '你是一个严格的中文编辑，审查一篇「积木帖子」草稿的内容、逻辑与结构。',
+    '你**只提意见，不改稿**：不要重写整篇，也不要输出改完的正文。',
+    '只指出**有证据的问题**，不要写「建议补充更多细节」「建议增加例子」这类无法验证的空话。',
+    '只输出一个 JSON 对象，不要解释文字，也不要 Markdown 代码围栏，形状必须是：',
+    '{"summary":"≤200 字的总体评价",',
+    '"findings":[{"blockId":"涉及的那一块 id（我给你的清单里标了，判断不出就填空串）",',
+    '"kind":"logic|fact|structure|clarity|citation|formula","severity":"high|medium|low",',
+    '"quote":"草稿里**原样出现**的一段文字（不少于 6 个字，必须逐字照抄）",',
+    '"issue":"≤120 字，问题是什么","suggestion":"≤200 字，应该怎么改",',
+    '"patch":"如果建议就是「把 quote 换成另一段文字」，给出替换后的文字；否则空串"}],',
+    '"strengths":["草稿做得好的地方，最多 3 条"]}',
+    '每条发现都必须能原样引用草稿里的文字 —— 引用不出来就别写这一条，宁可少写。',
+    `findings 最多 ${AI_MAX_FINDINGS} 条，按 severity 从高到低排。`,
+    '六类问题的含义：logic 推理跳跃、结论与前提不符；fact 事实、数据、定义、公式写错；',
+    'structure 层级混乱、内容放错位置；clarity 指代不明、术语前后不一致；',
+    'citation 声称有来源却没有出处；formula LaTeX 写错、符号未定义、公式与文字矛盾。',
+    '积木特有的毛病也属于审查范围：投票的选项不合理、小应用/脚本的代码跑不起来、',
+    '代码里申请了沙箱没有的能力、图片没写 alt、表格口径没交代。',
+  ].join('\n');
+}
+
+/** 把要审查的内容拼成一段带块 id 的文本 —— 让模型能引用 `blockId`，也让 `quote` 可核对。 */
+function reviewTextOf({ blocks, markdown }) {
+  if (Array.isArray(blocks) && blocks.length) {
+    return blocks
+      .map((item) => {
+        const props = item.props && typeof item.props === 'object' ? item.props : {};
+        const text = typeof props.text === 'string' && props.text !== '' ? props.text : JSON.stringify(props);
+        return `【${item.blockId} · ${item.type}】\n${text}`;
+      })
+      .join('\n\n');
+  }
+  return markdown;
+}
+
+/**
+ * 清洗 + 核对模型给的审查结果：`reviewFindings({ raw, source })`。
+ * 返回 `{ value, dropped }` —— `dropped` 是「引用对不上草稿」被丢掉的条数，
+ * 要报给调用方，不能悄悄吞掉（否则界面上会显示一份「比模型说的少」的意见而无人知情）。
+ */
+function reviewFindings({ raw, source }) {
+  const findings = [];
+  let dropped = 0;
+  const rawList = Array.isArray(raw.findings) ? raw.findings : [];
+  for (const item of rawList) {
+    if (!item || typeof item !== 'object') {
+      dropped += 1;
+      continue;
+    }
+    const quote = typeof item.quote === 'string' ? item.quote.trim() : '';
+    if (quote.length < 6 || (source !== '' && !source.includes(quote))) {
+      dropped += 1;
+      continue;
+    }
+    const issue = typeof item.issue === 'string' ? item.issue.trim() : '';
+    if (issue === '') {
+      dropped += 1;
+      continue;
+    }
+    const kind = AI_REVIEW_KINDS.includes(item.kind) ? item.kind : 'logic';
+    const severity = AI_REVIEW_SEVERITIES.includes(item.severity) ? item.severity : 'low';
+    findings.push({
+      blockId: typeof item.blockId === 'string' ? item.blockId.trim().slice(0, 40) : '',
+      kind,
+      severity,
+      quote: quote.slice(0, 400),
+      issue: issue.slice(0, 200),
+      suggestion: typeof item.suggestion === 'string' ? item.suggestion.trim().slice(0, 300) : '',
+      patch: typeof item.patch === 'string' ? item.patch.slice(0, AI_MAX_RANGE_CHARS) : '',
+    });
+    if (findings.length >= AI_MAX_FINDINGS) break;
+  }
+  const order = { high: 0, medium: 1, low: 2 };
+  findings.sort((a, b) => order[a.severity] - order[b.severity]);
+  const summary = typeof raw.summary === 'string' ? raw.summary.trim().slice(0, AI_MAX_REVIEW_TEXT) : '';
+  const strengths = Array.isArray(raw.strengths)
+    ? raw.strengths.filter((line) => typeof line === 'string' && line.trim() !== '').slice(0, 3)
+    : [];
+  return { value: { summary, findings, strengths }, dropped };
+}
+
+/** 审查结果必须是对象，且 `findings` 要是个数组（空数组也算，模型可以说「没毛病」）。 */
+function reviewShapeProblem(value) {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) return '顶层必须是对象';
+  if (!Array.isArray(value.findings)) return 'findings 必须是数组';
+  return '';
 }
 
 /**
@@ -407,17 +549,20 @@ function cleanDocumentPatch(value) {
  * `scripts/ai-smoke.mjs` 里对措辞的断言。同一段话在两处各写一份，
  * 改了一处忘另一处，模型就按老规矩吐形状 —— 落盘时才炸（这条踩过一次了：
  * 旧提示词用的是自造的 `{ blockType, content }`，模型照着发明了不存在的 `vote` 类型）。
+ *
+ * 具体的字段表 / 沙箱说明 / 取舍规则放在 `./syntax.js`（骨架规范不许业务模块互相
+ * import，所以那边是手抄的一份，靠 `scripts/ai-smoke.mjs` 第 19 节的哨兵盯漂移）。
+ * 这里只负责把它们拼成一段话 —— 老版本只写了七种块、poll 的 options 还写成字符串
+ * 数组，结果模型不知道该用 `app` 做小工具，也不知道 vote 不存在。
  */
 function blockPromptRules() {
   return [
     `type 只能取这些名字之一：${AI_BLOCK_TYPES.map((item) => `${item.name}（${item.label}）`).join('、')}。`,
-    'props 是各类型自己的字段：正文 {"text":"…"}；标题 {"text":"…","level":1}；',
-    '代码 {"text":"…","lang":"…"}；引用 {"text":"…","source":"…"}；',
-    '投票 {"question":"…","options":["选项一","选项二"],"multiple":false}；图片 {"src":"…","alt":"…","text":"…"}。',
-    '脚本 {"code":"…"}（浏览器里跑的 JS，服务端不执行）；',
-    '子页 {"doc":"…","mode":"card","title":"…","note":"…"}（doc 填页面标题或 id，拿不准就留空）。',
+    AI_BLOCK_PROP_GUIDE.join('\n'),
+    AI_SANDBOX_GUIDE.join('\n'),
+    AI_AUTHORING_GUIDE.join('\n'),
     '用户没要求改的部分保持原样。',
-  ].join('');
+  ].join('\n');
 }
 
 function blockSystemPrompt() {
@@ -445,15 +590,22 @@ function sectionSystemPrompt() {
   ].join('');
 }
 
-/** 整篇改写的系统提示词：输入整篇 Markdown，输出改完的整篇 Markdown。 */
+/** 整篇改写的系统提示词：输入整篇 Markdown，输出改完的整篇 Markdown，或「套某个模板」。 */
 function documentSystemPrompt() {
   return [
     '你是博客「积木帖子」的整篇编辑器。用户给你**整篇 Markdown**，以及一句改写要求。',
     '只输出一个 JSON 对象，形状必须是 {"markdown":"<改完的整篇>"}，',
     '可选一个 "title" 字段（用户明确要求改标题时再给）。',
+    templateMenu(),
+    '如果用户要的整篇**正好就是某个模板**（例如「改成投票问卷的样子」「按实验记录来写」），',
+    '你可以只输出 {"template":"<模板 key>"} —— 前端会把站里维护好的模板套上去；',
+    '给了 template 就不要再给 markdown，两者只能二选一。',
+    '模板都不合适时才自己写 markdown：',
     '没让改的部分照抄原样，不要顺手润色；不要输出解释文字，也不要 Markdown 代码围栏。',
     '注意：本站的 Markdown 与积木块是互转的，转换有损（表格分隔行会被剥掉、嵌套列表会被并成一块），',
     '能不动结构就别动结构。',
+    '要「能跑的东西」（投票、小工具、小界面）时，直接在 markdown 里写 ```doc:poll / ```doc:app 围栏，',
+    '围栏里的 JSON 规则见块编辑器的说明（形状写错会退化成普通代码块）。',
   ].join('');
 }
 
@@ -1254,12 +1406,132 @@ export function registerAiRoutes(ctx) {
       targetId,
       documentId,
       model,
-      writeTo: `/api/docs/${encodeURIComponent(documentId)}/markdown`,
-      hint: '这是预览，没有落盘。落盘由前端完成：先 PUT /api/docs/:id/markdown 写盘（块数暴跌时 P2 会 409，要带 ?confirm=1），再带 confirm: true 调 /api/ai-edit/ops 记一条 applied 审计。',
+      writeTo: cleanPatch.template
+        ? `/api/docs/${encodeURIComponent(documentId)}/apply-template`
+        : `/api/docs/${encodeURIComponent(documentId)}/markdown`,
+      hint: cleanPatch.template
+        ? `这是预览，没有落盘。模型选的是站内模板「${cleanPatch.template}」：落盘由前端完成 —— POST ${`/api/docs/${encodeURIComponent(documentId)}/apply-template`}（body {"key":"${cleanPatch.template}","mode":"replace"}），再带 confirm: true 调 /api/ai-edit/ops 记一条 applied 审计。`
+        : '这是预览，没有落盘。落盘由前端完成：先 PUT /api/docs/:id/markdown 写盘（块数暴跌时 P2 会 409，要带 ?confirm=1），再带 confirm: true 调 /api/ai-edit/ops 记一条 applied 审计。',
     });
   });
 
-  // ── 11. 全站用量 + 预算状态（仅管理团队）────────────────────────────────
+  // ── 11. 审查（原「AI 学术审查」的接班人：只出意见，不改稿）──────────────
+  //
+  // 为什么不塞进 `/ops`：审查的形状不是「before → after」的补丁，而是「一堆带原文
+  // 引用的意见」。落盘仍然走既有路径 —— 前端挑一条意见，把它的 `suggestion` 当改写
+  // 要求交给 `/draft`（单块）或 `/draft-range`（一节），预览确认后写盘、再带 `confirm`
+  // 调 `/ops`。所以这条接口**不写任何东西**，也不会让「审查」变成一条能绕过预览的捷径。
+  routes.add('POST', '/api/ai-edit/review', async (reqCtx) => {
+    const user = viewer(reqCtx);
+    const body = reqCtx.body ?? {};
+    const capability = AI_CONTENT_CAPABILITY;
+    guardCapability(db, user.id, capability);
+
+    const rawDocumentId = body.documentId;
+    const documentId =
+      typeof rawDocumentId === 'number' && Number.isInteger(rawDocumentId) && rawDocumentId > 0
+        ? String(rawDocumentId)
+        : typeof rawDocumentId === 'string'
+          ? rawDocumentId.trim()
+          : '';
+    ensure(documentId !== '', 400, 'bad_request', 'documentId 不能为空 —— 审查要记清楚审的是哪一篇');
+    ensure(!documentId.includes(':'), 400, 'bad_request', 'documentId 里不能有冒号');
+
+    const instruction = typeof body.instruction === 'string' ? body.instruction.trim().slice(0, 2000) : '';
+    const hasBlocks = Array.isArray(body.blocks) && body.blocks.length > 0;
+    let blocks = null;
+    let markdown = '';
+    if (hasBlocks) {
+      const blocksProblem = sectionBlocksProblem(body.blocks, 'blocks');
+      ensure(!blocksProblem, 400, 'bad_request', `blocks 不是合法的一节（${blocksProblem}）`);
+      blocks = cleanSectionBlocks(body.blocks);
+      const sent = JSON.stringify(blocks);
+      ensure(sent.length <= AI_MAX_RANGE_CHARS, 400, 'bad_request', `要审的内容太大（${sent.length} 字符，上限 ${AI_MAX_RANGE_CHARS}）—— 分几节审`);
+    } else {
+      markdown = typeof body.markdown === 'string' ? body.markdown : '';
+      ensure(
+        markdown.trim() !== '',
+        400,
+        'bad_request',
+        '要审的内容不能为空：给 blocks（按块审，意见能挂到块上）或 markdown（整篇审）',
+      );
+      ensure(
+        markdown.length <= AI_MAX_RANGE_CHARS,
+        400,
+        'bad_request',
+        `要审的正文有 ${markdown.length} 字符，超过 ${AI_MAX_RANGE_CHARS} 的上限`,
+      );
+    }
+
+    const targetId = composeTargetId(documentId, '*');
+    ensure(targetId.length <= AI_MAX_TARGET_ID, 400, 'bad_request', `targetId 太长（上限 ${AI_MAX_TARGET_ID} 个字符）`);
+    requireModelConfigured(db, {
+      userId: user.id,
+      capability,
+      action: 'draft',
+      targetId,
+      targetType: AI_RANGE_TARGET_TYPES.document,
+    });
+    rateLimit(`ai-edit:review:${user.id}`, 5, 60 * 1000);
+
+    const source = reviewTextOf({ blocks, markdown });
+    const { content, model } = await callModel(db, {
+      userId: user.id,
+      capability,
+      action: 'draft',
+      targetId,
+      targetType: AI_RANGE_TARGET_TYPES.document,
+      system: reviewSystemPrompt(),
+      userText: `要审查的内容：\n${source}${instruction ? `\n额外要求：${instruction}` : ''}`,
+    });
+    const parsed = parseModelJson(content, {
+      db,
+      userId: user.id,
+      capability,
+      action: 'draft',
+      targetId,
+      targetType: AI_RANGE_TARGET_TYPES.document,
+    });
+    const shapeProblem = reviewShapeProblem(parsed);
+    if (shapeProblem) {
+      logBlocked(
+        db,
+        user.id,
+        capability,
+        'draft',
+        targetId,
+        `ai_bad_json 审查形状不对：${shapeProblem}`,
+        AI_RANGE_TARGET_TYPES.document,
+      );
+      throw new HttpError(502, 'ai_bad_json', `模型没有返回合法的审查结果（${shapeProblem}）`);
+    }
+    const { value: review, dropped } = reviewFindings({ raw: parsed, source });
+    const opId = logOp(db, {
+      userId: user.id,
+      capability,
+      action: 'draft',
+      targetType: AI_RANGE_TARGET_TYPES.document,
+      targetId,
+      status: 'preview',
+      reason: instruction ? `审查：${instruction.slice(0, 180)}` : '审查',
+      before: null,
+      after: review,
+    });
+    return ctx.http.ok(reqCtx.res, {
+      applied: false,
+      opId,
+      documentId,
+      model,
+      // 「引用对不上草稿」被丢掉的条数：界面要能说出「少了几条」，不能假装模型只写了这些。
+      dropped,
+      targetType: AI_RANGE_TARGET_TYPES.document,
+      targetId,
+      ...review,
+      hint: '这只是意见，没有落盘。要采纳某一条：把它的 suggestion 当 instruction 交给 /api/ai-edit/draft（单块）或 /api/ai-edit/draft-range（一节），预览确认后再写盘，最后带 confirm: true 调 /api/ai-edit/ops 记审计。',
+    });
+  });
+
+  // ── 12. 全站用量 + 预算状态（仅管理团队）────────────────────────────────
   //
   // 补的是「配额按用户算、钱按 key 算」留下的那个洞：在这之前，全站今天调了多少次、
   // 谁在用、有没有顶到上限，管理员一概看不见，唯一的全局约束就是账单本身。

@@ -245,15 +245,15 @@ try {
   /* ---------- 2.1 类型清单与契约对拍 ---------- */
 
   const typeNames = engine.listBlockTypes().map((type) => type.name);
-  check('内置 14 种块类型', typeNames.length === 14, typeNames.join(','));
+  check('内置 15 种块类型', typeNames.length === 15, typeNames.join(','));
   check(
     '前 7 种与 note-agent 的 BLOCK_TYPES 逐字同序（契约对拍，两边块序列可互换）',
     JSON.stringify(typeNames.slice(0, 7)) === JSON.stringify(agent.BLOCK_TYPES),
     `${JSON.stringify(typeNames.slice(0, 7))} vs ${JSON.stringify(agent.BLOCK_TYPES)}`,
   );
   check(
-    '新增 7 种是 quote / poll / wiki / embed / app / script / subpage',
-    JSON.stringify(typeNames.slice(7)) === JSON.stringify(['quote', 'poll', 'wiki', 'embed', 'app', 'script', 'subpage']),
+    '新增 8 种是 quote / poll / wiki / embed / app / script / subpage / prose',
+    JSON.stringify(typeNames.slice(7)) === JSON.stringify(['quote', 'poll', 'wiki', 'embed', 'app', 'script', 'subpage', 'prose']),
     JSON.stringify(typeNames.slice(7)),
   );
   check('每种类型都有 name / version / label / icon / schema / editor', engine.listBlockTypes().every(
@@ -373,10 +373,29 @@ try {
 
   const roundTripMd = engine.blocksToMarkdown(ROUND_TRIP);
   const roundTripBack = engine.markdownToBlocks(roundTripMd);
+
+  // 段落 / 列表 / 引用这些「正文」块会按小节合并成一个 prose（见 src/modules/doc/blocks/markdown.js
+  // 的 mergeProse），所以**块级恒等只对结构化块成立**，块号也会跟着挪；正文那一层的恒等契约是
+  // 「Markdown 文本级无损」，见下面第二条。
+  const STRUCTURED_TYPES = new Set(['heading', 'code', 'table', 'formula', 'image', 'poll', 'wiki', 'embed', 'app', 'script', 'subpage']);
+  const onlyStructured = (blocks) => blocks.filter((block) => STRUCTURED_TYPES.has(block.type));
+  const withoutIds = (blocks) => blocks.map(({ block_id: _ignored, ...rest }) => rest);
   check(
-    'markdown 往返：12 种类型一次走完，序列完全一致',
-    isDeepStrictEqual(roundTripBack, ROUND_TRIP),
-    JSON.stringify([roundTripBack.filter((b, i) => !isDeepStrictEqual(b, ROUND_TRIP[i])), roundTripMd]),
+    'markdown 往返：结构化块逐块恒等（正文块按小节并成 prose，块号会挪）',
+    isDeepStrictEqual(withoutIds(onlyStructured(roundTripBack)), withoutIds(onlyStructured(ROUND_TRIP)))
+      && JSON.stringify(roundTripBack.map((block) => block.type))
+        === JSON.stringify(['heading', 'prose', 'code', 'table', 'formula', 'image', 'prose', 'poll', 'wiki', 'embed', 'app']),
+    JSON.stringify({
+      types: roundTripBack.map((block) => block.type),
+      back: onlyStructured(roundTripBack).map((block) => block.type),
+      want: onlyStructured(ROUND_TRIP).map((block) => block.type),
+    }),
+  );
+
+  check(
+    'markdown 往返：12 个块的正文文本级无损（块粒度变了，Markdown 一个字节都没变）',
+    engine.blocksToMarkdown(roundTripBack) === roundTripMd,
+    JSON.stringify([roundTripMd, engine.blocksToMarkdown(roundTripBack)]).slice(0, 400),
   );
 
   check('markdown 输出里没有非法的裸块标记', !roundTripMd.includes('undefined'), roundTripMd.slice(0, 200));
@@ -424,6 +443,8 @@ try {
       }
     };
     let broken = null;
+    let leaked = null;
+    const TEXT_TYPES = new Set(['paragraph', 'list', 'quote']);
     for (let doc = 0; doc < 100 && !broken; doc += 1) {
       const count = 1 + Math.floor(rnd() * 8);
       const document = [];
@@ -433,9 +454,16 @@ try {
       }
       const markdown = engine.blocksToMarkdown(document);
       const back = engine.markdownToBlocks(markdown);
-      if (!isDeepStrictEqual(back, document)) broken = { doc, document, markdown, back };
+      // 块的粒度不再是恒等契约（正文会按小节并成 prose），恒等的是 Markdown 文本本身：
+      // 解析回来的块再序列化一次，必须一个字节都不差。
+      const again = engine.blocksToMarkdown(back);
+      if (again !== markdown) broken = { doc, document, markdown, back, again };
+      if (!leaked && back.some((block) => TEXT_TYPES.has(block.type))) {
+        leaked = { doc, types: back.map((block) => block.type) };
+      }
     }
-    check('属性测试：100 篇随机文档 markdown 往返全部无损', broken === null, JSON.stringify(broken).slice(0, 700));
+    check('属性测试：100 篇随机文档 markdown 往返文本级全部无损', broken === null, JSON.stringify(broken).slice(0, 700));
+    check('属性测试：小节粒度下不再产出 paragraph / list / quote（正文一律并进 prose）', leaked === null, JSON.stringify(leaked));
   }
 
   /* ---------- 2.6 块间联动与环检测 ---------- */
@@ -548,7 +576,7 @@ try {
     );
 
     const types = await anon.call('/api/docs/meta/block-types');
-    check('GET /api/docs/meta/block-types 给出 14 个内置类型', types.status === 200 && types.data?.types?.length === 14, `len=${types.data?.types?.length}`);
+    check('GET /api/docs/meta/block-types 给出 15 个内置类型', types.status === 200 && types.data?.types?.length === 15, `len=${types.data?.types?.length}`);
     check(
       '内置类型都标了 builtin:true 且带声明式 schema',
       types.data?.types?.every((type) => type.builtin === true && type.schema && typeof type.schema === 'object'),
@@ -735,10 +763,10 @@ try {
     check('GET markdown 给出当前块序列的投影', before.status === 200 && typeof before.data?.markdown === 'string' && before.data.title === '第一篇积木', `${before.status} ${JSON.stringify(before.error)}`);
 
     const put = await author.call(`/api/docs/${docId}/markdown`, { method: 'PUT', body: { markdown: MARKDOWN } });
-    check('PUT markdown 整篇覆盖 → 块序列被重建', put.status === 200 && put.data?.blocks?.length === 3, `${put.status} ${JSON.stringify(put.error ?? put.data?.blocks)}`);
+    check('PUT markdown 整篇覆盖 → 块序列被重建', put.status === 200 && put.data?.blocks?.length === 2, `${put.status} ${JSON.stringify(put.error ?? put.data?.blocks)}`);
     check(
-      '覆盖后的块类型与 markdown 对得上',
-      put.data?.blocks?.map((block) => block.type).join(',') === 'heading,paragraph,list',
+      '覆盖后的块类型与 markdown 对得上（正文按小节并成一个 prose）',
+      put.data?.blocks?.map((block) => block.type).join(',') === 'heading,prose',
       put.data?.blocks?.map((block) => block.type).join(','),
     );
 
@@ -990,8 +1018,8 @@ try {
     const types = await anon.call('/api/docs/meta/block-types');
     const timeline = types.data?.types?.find((type) => type.name === 'timeline');
     check(
-      '注册表变成 15 种，新类型 builtin=false 且带自己的 schema',
-      types.data?.types?.length === 15 && timeline?.builtin === false && timeline?.schema?.text,
+      '注册表变成 16 种，新类型 builtin=false 且带自己的 schema',
+      types.data?.types?.length === 16 && timeline?.builtin === false && timeline?.schema?.text,
       JSON.stringify(timeline),
     );
 
@@ -1066,18 +1094,33 @@ try {
       '',
     );
 
-    // §5.1 的两件外挂：实时 LaTeX 预览（复用 /api/markdown/preview）与 AI 抽屉（复用 NotesAgent）。
+    // §5.1 的两件外挂：实时 LaTeX 预览（复用 /api/markdown/preview）与**编辑区左侧的 AI 抽屉**
+    //（`public/views/doc-ai.js`，打 `/api/ai-edit/*` —— 与 `#/ai-edit` 页面同一个后端）。
     // 它们都是「嵌得进去」就够，所以只钉接线本身，不钉面板内部。
     const editorJs = readText('public/views/doc.js');
+    const drawerJs = readText('public/views/doc-ai.js');
     check('编辑器接了实时预览', editorJs.includes("'/api/markdown/preview'"), '');
     check('预览是防抖自动跑的（不是按钮）', editorJs.includes('mdPreviewTimer') && editorJs.includes('setTimeout'), '');
-    check('编辑器挂了 AI 抽屉', editorJs.includes('window.NotesAgent') && editorJs.includes('createTextareaAdapter'), '');
+    check('编辑器挂了 AI 抽屉', editorJs.includes('DocAi.mountDocAi('), '');
     check(
-      'Markdown 编辑区带 name="content"（NotesAgent 靠它找编辑区）',
-      editorJs.includes('name="content"'),
-      '改了它就挂不上 AI 抽屉',
+      'AI 抽屉在编辑区左侧（三栏外壳里它排在编辑框前面）',
+      editorJs.includes('class="doc-md-wrap"') &&
+        editorJs.indexOf('DocAi.docAiHtml(') > 0 &&
+        editorJs.indexOf('DocAi.docAiHtml(') < editorJs.indexOf('class="doc-md-edit"'),
+      '左侧 = 在外壳的第一个格子',
     );
-    check('离开页面时收掉预览定时器与 AI 抽屉', editorJs.includes('mdNotesPanel.destroy()'), '');
+    check(
+      'AI 抽屉复用 /api/ai-edit 的两个接口（没另造模型调用链）',
+      drawerJs.includes('/api/ai-edit/draft-range') && drawerJs.includes('/api/ai-edit/review'),
+      '',
+    );
+    check(
+      'AI 抽屉只把结果写回编辑区，落盘仍是「保存」的事',
+      !drawerJs.includes('/markdown'),
+      '抽屉里出现 PUT /markdown 就等于绕过了作者那颗保存键',
+    );
+    check('Markdown 编辑区带 name="content"（抽屉与旧脚本都靠它认编辑区）', editorJs.includes('name="content"'), '');
+    check('离开页面时收掉预览定时器与 AI 抽屉', editorJs.includes('DocAi.destroyDocAi()'), '');
 
     const docCss = readText('public/css/41-doc.css');
     for (const cls of ['.doc-md-grid', '.doc-md-edit', '.doc-md-side', '.doc-md-preview']) {
@@ -1287,7 +1330,7 @@ try {
       `${res.status} ${JSON.stringify(res.error ?? res.body).slice(0, 240)}`,
     );
     noteDocId = res.data?.doc?.id ?? 0;
-    check('导入的块数与 Markdown 对得上（3 块）', res.data?.blocks?.length === 3, JSON.stringify(res.data?.blocks));
+    check('导入的块数与 Markdown 对得上（2 块：标题 + 一节正文）', res.data?.blocks?.length === 2, JSON.stringify(res.data?.blocks));
     check('导入的块号是 b1..bn', res.data?.blocks?.every((block, index) => block.blockId === `b${index + 1}`), JSON.stringify(res.data?.blocks?.map((b) => b.blockId)));
     check('导入出来的文档归属作者本人', res.data?.doc?.author?.id === authorId, JSON.stringify(res.data?.doc?.author));
     check('private 笔记的文档影子行 hidden=1（不该出现在帖子列表里）', (() => {
@@ -2046,7 +2089,7 @@ try {
       const saved = await author.call(`/api/docs/${docId}/markdown?confirm=1`, { method: 'PUT', body: { markdown: src } });
       check('9.1 源码里能直接写 JS（doc:script 的块体不是 JSON）', saved.status === 200, `${saved.status} ${JSON.stringify(saved.error)}`);
       const savedTypes = (saved.data?.blocks ?? []).map((block) => block.type);
-      check('9.1 解析成 script + heading + paragraph', JSON.stringify(savedTypes) === JSON.stringify(['script', 'heading', 'paragraph']), JSON.stringify(savedTypes));
+      check('9.1 解析成 script + heading + prose（作者那段正文并成小节正文）', JSON.stringify(savedTypes) === JSON.stringify(['script', 'heading', 'prose']), JSON.stringify(savedTypes));
       check('9.1 源码逐字节原样回来了（编辑器往返靠它）', saved.data?.source === src, JSON.stringify(saved.data?.source));
       check('9.1 script 块的 code 就是那段原文', String((saved.data?.blocks ?? [])[0]?.props?.code ?? '').includes('Sandbox.render.put'), JSON.stringify((saved.data?.blocks ?? [])[0]?.props));
       check('9.1 沙箱代码按 20000 字卡（不是 app 的那条路）', typeof (saved.data?.blocks ?? [])[0]?.props?.code === 'string', '');

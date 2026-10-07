@@ -40,6 +40,66 @@ function markdownForBlock(block) {
   return piece === undefined || piece === null ? '' : String(piece);
 }
 
+/**
+ * 哪些块算「正文」——可以并成一段 `prose` 的纯文字块。
+ *
+ * 只有这三种：它们既不挂服务端副数据，也没有专属的渲染器与样式。
+ * `table` / `formula` / `image` / `code` 各自有 CSS 与测试钉着（`doc-block-formula`
+ * 之类），`heading` 是分块的天然边界，结构化围栏（`doc:poll` …）更不用说。
+ */
+const PROSE_TYPES = new Set(['paragraph', 'list', 'quote']);
+
+/** 一段 `prose` 最多装多少字符；超了就切一刀，别让一个块变成整篇文章。 */
+const PROSE_MAX_CHARS = 16000;
+
+/**
+ * 把连续的「正文块」并成一个 `prose` 块。
+ *
+ * 为什么要有这一步：源 markdown 里句子之间常有空行，逐行状态机就会把一篇正常文章
+ * 拆成几十个一段话一块的块（用户的原话是「避免出现一句话一块」）。
+ * 合并只发生在**被切点隔开的同一小节内部**，切点是：标题、代码/表格/公式/图片/双链、
+ * 任何结构化围栏块、任何自己带 id 的块。
+ *
+ * 合并后的 `props.text` 就是这些小块的 markdown 原样、用空行连接 ——
+ * 所以 `toMarkdown` 原样吐出去以后，重新解析还是同一段文字（往返逐字节成立）。
+ * 带 id 的块不参与合并（除了作为一段的**开头**）：`<!-- b3 -->` 标记只作用于下一个块，
+ * 并进来就会把它吃掉，`bind.from` 的指向会漂。
+ */
+function mergeProse(raw) {
+  const merged = [];
+  let text = '';
+  let entry = null;
+
+  const flush = () => {
+    if (entry) merged.push(entry);
+    entry = null;
+    text = '';
+  };
+
+  for (const item of raw) {
+    const piece = PROSE_TYPES.has(item.type) && item.structured !== true ? markdownForBlock(item).trim() : '';
+    if (piece === '') {
+      flush();
+      merged.push(item);
+      continue;
+    }
+    const hasId = String(item.blockId ?? '') !== '';
+    const tooLong = text !== '' && text.length + piece.length + 2 > PROSE_MAX_CHARS;
+    // 一段的第一项永远接住（它自己带 id 就把 id 挂到合并后的块上）；
+    // 之后的项只要自己带 id、或本段快满了，就切一刀另起一段。
+    if (entry !== null && (hasId || tooLong)) flush();
+    if (entry === null) {
+      entry = { type: 'prose', props: { text: piece }, blockId: item.blockId };
+      text = piece;
+      continue;
+    }
+    text = `${text}\n\n${piece}`;
+    entry.props.text = text;
+  }
+  flush();
+  return merged;
+}
+
 /** 块数组 → markdown（与 note-agent 一样用空行连接，丢空片段）。 */
 export function blocksToMarkdown(blocks) {
   const list = Array.isArray(blocks) ? blocks : [];
@@ -139,7 +199,7 @@ function readFence(lines, start) {
  * 给我对齐一个 id」的信号，给 store 的按 id 对齐写入用（见 `parseSourceBlocks`）。
  * 默认 `true`：老路径照旧按位置发号，`markdownToBlocks` 的调用方一字不用改。
  */
-export function parseBlocks(markdown, { positionalIds = true } = {}) {
+export function parseBlocks(markdown, { positionalIds = true, granularity = 'section' } = {}) {
   const text = String(markdown ?? '').replace(/\r\n?/g, '\n');
   const lines = text.split('\n');
   const raw = [];
@@ -157,8 +217,8 @@ export function parseBlocks(markdown, { positionalIds = true } = {}) {
   };
 
   /** 推入一个块；`explicitId`（写在围栏信息串里的）优先于上一行的标记行。 */
-  const pushRaw = (type, props, explicitId = '') => {
-    raw.push({ type, props, blockId: explicitId || pendingId });
+  const pushRaw = (type, props, explicitId = '', structured = false) => {
+    raw.push({ type, props, blockId: explicitId || pendingId, structured });
     pendingId = '';
   };
 
@@ -176,7 +236,7 @@ export function parseBlocks(markdown, { positionalIds = true } = {}) {
         const type = getBlockType(kind);
         if (type && type.sourceBody === 'raw') {
           // 源码体就是原始代码（`doc:script`），不做 JSON 解析。
-          pushRaw(kind, { code: body }, explicitId);
+          pushRaw(kind, { code: body }, explicitId, true);
         } else {
           let parsed = null;
           try {
@@ -185,14 +245,14 @@ export function parseBlocks(markdown, { positionalIds = true } = {}) {
             parsed = null;
           }
           if (type && parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-            pushRaw(kind, parsed, explicitId);
+            pushRaw(kind, parsed, explicitId, true);
           } else {
             // 结构化块坏了就退回代码块 —— 至少内容还在，不会被悄悄丢掉。
-            pushRaw('code', { text: body, lang: kind });
+            pushRaw('code', { text: body, lang: kind }, '', true);
           }
         }
       } else {
-        pushRaw('code', { text: body, lang: info });
+        pushRaw('code', { text: body, lang: info }, '', true);
       }
       index = next;
       continue;
@@ -301,17 +361,21 @@ export function parseBlocks(markdown, { positionalIds = true } = {}) {
 
   flushParagraph();
 
+  // 分块粒度：`section`（默认）把同一小节里的正文并成 `prose` 块，
+  // `block` 保留「一段话一个块」的老行为（老调用方 / 需要逐块对齐时用）。
+  const entries = granularity === 'section' ? mergeProse(raw) : raw;
+
   const blocks = [];
   const warnings = [];
   // 显式 id 先占位：位置发号要绕开它们，免得撞号（也免得整篇重排）。
   const claimed = new Set();
-  for (const entry of raw) {
+  for (const entry of entries) {
     const id = String(entry.blockId ?? '');
     if (id !== '' && BLOCK_ID_PATTERN.test(id)) claimed.add(id);
   }
   const used = new Set();
   let next = 1;
-  for (const entry of raw) {
+  for (const entry of entries) {
     const type = getBlockType(entry.type);
     if (!type) {
       warnings.push({ block_id: '', code: 'unknown_type', message: `解析出未注册的块类型「${entry.type}」` });

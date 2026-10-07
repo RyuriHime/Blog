@@ -277,7 +277,8 @@ document.addEventListener('click', async (event) => {
         await withButtonBusy(actionNode, () => api(`/api/posts/${postId}`, { method: 'DELETE' }));
         toast('帖子已删除', 'success');
         if (actionNode.dataset.back === 'admin') Router.route();
-        else Router.navigate('/');
+        // m05506 起 `#/` 是起始页，删完帖子该回动态流（`#/feed`），不是回起始页。
+        else Router.navigate('/feed');
         break;
       }
       case 'delete-reply': {

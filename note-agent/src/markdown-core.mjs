@@ -162,8 +162,14 @@ const TRAILING_PUNCT_RE = /[.,;:!?、。，；：！？）】」』’”]+$/u;
  * 行内渲染。输入是**原文**（不是转义过的），输出是安全的 HTML。
  * `noLinks` 用于链接标签的内部：HTML 不允许 `<a>` 套 `<a>`，
  * 浏览器会把外层强行闭合，整块排版就散了（通知列表踩过这个坑）。
+ *
+ * `wikiLinks` / `wikiExisting`：把积木页的**行内双链** `[[目标]]`（可写 `[[目标|显示字]]`）
+ * 也认成链接。默认关着 —— 普通帖子里 `[[x]]` 就是两个字面方括号，不能偷偷改语义；
+ * 只有积木的正文（`prose` 块的渲染）才打开它，那里 `[[x]]`
+ * 与 `blocks/text.js` 的 `escapeHtmlWithWikiLinks` 是同一种约定（红链也一致）。
  */
-export function renderInline(source, { noLinks = false } = {}) {
+export function renderInline(source, options = {}) {
+  const { noLinks = false, wikiLinks = false, wikiExisting = null } = options;
   const src = String(source ?? '');
   const out = [];
   let text = '';
@@ -241,11 +247,29 @@ export function renderInline(source, { noLinks = false } = {}) {
       }
     }
 
+    // 积木页的行内双链：`[[目标]]`、`[[目标|显示字]]`。
+    // 必须在下面的 `[标签](地址)` 分支**之前**：`[[x]]` 不满足那条规则（没有 `](`），
+    // 顺序不换也不会被吃掉，但放在前面读起来才像「先认双链、再认普通链接」。
+    if (wikiLinks && ch === '[' && src[i + 1] === '[') {
+      const wiki = /^\[\[([^[\]|]+)(?:\|([^[\]]*))?\]\]/.exec(src.slice(i));
+      const name = wiki ? String(wiki[1]).trim() : '';
+      if (name !== '') {
+        const text = String(wiki[2] ?? '').trim() || name;
+        const missing = wikiExisting instanceof Set && !wikiExisting.has(name.toLowerCase()) ? ' is-missing' : '';
+        push(
+          `<a class="doc-wiki-link${missing}" data-wiki="${escapeHtml(name)}"` +
+            ` href="#/wiki/${encodeURIComponent(name)}">${escapeHtml(text)}</a>`,
+        );
+        i += wiki[0].length;
+        continue;
+      }
+    }
+
     // 链接 [标签](url "标题")
     if (ch === '[' && !noLinks) {
       const link = matchLink(src, i);
       if (link) {
-        push(anchorHtml(renderInline(link.label, { noLinks: true }), link.url, link.title));
+        push(anchorHtml(renderInline(link.label, { ...options, noLinks: true }), link.url, link.title));
         i = link.end;
         continue;
       }
@@ -287,7 +311,7 @@ export function renderInline(source, { noLinks = false } = {}) {
     if (ch === '~' && src[i + 1] === '~') {
       const close = src.indexOf('~~', i + 2);
       if (close > i + 2 && !src.slice(i + 2, close).includes('\n')) {
-        push(`<del>${renderInline(src.slice(i + 2, close))}</del>`);
+        push(`<del>${renderInline(src.slice(i + 2, close), options)}</del>`);
         i = close + 2;
         continue;
       }
@@ -297,7 +321,7 @@ export function renderInline(source, { noLinks = false } = {}) {
     if ((ch === '*' || ch === '_') && src[i + 1] === ch) {
       const close = findEmphasis(src, i, 2, ch);
       if (close !== -1) {
-        push(`<strong>${renderInline(src.slice(i + 2, close))}</strong>`);
+        push(`<strong>${renderInline(src.slice(i + 2, close), options)}</strong>`);
         i = close + 2;
         continue;
       }
@@ -307,7 +331,7 @@ export function renderInline(source, { noLinks = false } = {}) {
     if (ch === '*' || ch === '_') {
       const close = findEmphasis(src, i, 1, ch);
       if (close !== -1) {
-        push(`<em>${renderInline(src.slice(i + 1, close))}</em>`);
+        push(`<em>${renderInline(src.slice(i + 1, close), options)}</em>`);
         i = close + 1;
         continue;
       }
@@ -384,7 +408,7 @@ function splitAlign(cell) {
   return '';
 }
 
-function buildTable(lines, start, html) {
+function buildTable(lines, start, html, inlineOpts) {
   const head = splitTableRow(lines[start]);
   const aligns = splitTableRow(lines[start + 1]).map(splitAlign);
   let i = start + 2;
@@ -396,7 +420,7 @@ function buildTable(lines, start, html) {
   const cell = (tag, content, index) => {
     const align = aligns[index] ?? '';
     const style = align && align !== 'left' ? ` style="text-align:${align}"` : '';
-    return `<${tag}${style}>${renderInline(content)}</${tag}>`;
+    return `<${tag}${style}>${renderInline(content, inlineOpts)}</${tag}>`;
   };
   const headRow = `<tr>${head.map((item, n) => cell('th', item, n)).join('')}</tr>`;
   const bodyRows = rows
@@ -418,7 +442,7 @@ function buildTable(lines, start, html) {
  * 所以 `- 一级` + 缩进两格的 `- 二级` 会真的渲染成嵌套的 `<ul>`，
  * 而不是像以前那样被压平成同级条目。
  */
-function buildList(lines, start) {
+function buildList(lines, start, inlineOpts) {
   const first = listItemOf(lines[start]);
   if (!first) return null;
   const ordered = first.ordered;
@@ -443,12 +467,12 @@ function buildList(lines, start) {
       i += 1;
     }
 
-    const nested = childLines.length ? buildList(childLines, 0) : null;
-    const body = renderInline(parts.join(' '));
+    const nested = childLines.length ? buildList(childLines, 0, inlineOpts) : null;
+    const body = renderInline(parts.join(' '), inlineOpts);
     const child = nested
       ? nested.html
       : childLines.length
-        ? `<p>${renderInline(childLines.map((line) => line.trim()).join(' '))}</p>`
+        ? `<p>${renderInline(childLines.map((line) => line.trim()).join(' '), inlineOpts)}</p>`
         : '';
     items.push(`<li>${body}${child}</li>`);
   }
@@ -456,7 +480,14 @@ function buildList(lines, start) {
   return { html: `<${tag}>${items.join('')}</${tag}>`, next: i };
 }
 
-export function renderMarkdown(source) {
+/**
+ * 渲染一段 Markdown。
+ *
+ * `wikiLinks` / `wikiExisting` 只给积木的正文用（见上面的 `renderInline`）：
+ * 打开之后 `[[目标]]` 会渲染成 `#/wiki/<目标>` 的站内链接。普通帖子不传，行为与以前一致。
+ */
+export function renderMarkdown(source, { wikiLinks = false, wikiExisting = null } = {}) {
+  const inlineOpts = { wikiLinks, wikiExisting };
   const lines = String(source ?? '').replace(/\r\n?/g, '\n').split('\n');
   const html = [];
   let i = 0;
@@ -507,7 +538,7 @@ export function renderMarkdown(source) {
     const heading = line.match(HEADING_RE);
     if (heading) {
       const level = heading[1].length;
-      html.push(`<h${level}>${renderInline(heading[2])}</h${level}>`);
+      html.push(`<h${level}>${renderInline(heading[2], inlineOpts)}</h${level}>`);
       i += 1;
       continue;
     }
@@ -524,17 +555,17 @@ export function renderMarkdown(source) {
         buffer.push(lines[i].replace(QUOTE_RE, ''));
         i += 1;
       }
-      html.push(`<blockquote>${renderMarkdown(buffer.join('\n'))}</blockquote>`);
+      html.push(`<blockquote>${renderMarkdown(buffer.join('\n'), inlineOpts)}</blockquote>`);
       continue;
     }
 
     if (startsTable(lines, i)) {
-      i = buildTable(lines, i, html);
+      i = buildTable(lines, i, html, inlineOpts);
       continue;
     }
 
     if (LIST_ITEM_RE.test(line)) {
-      const list = buildList(lines, i);
+      const list = buildList(lines, i, inlineOpts);
       if (list) {
         html.push(list.html);
         i = list.next;
@@ -565,11 +596,11 @@ export function renderMarkdown(source) {
       // 上面那个分支故意不接、这里又刚被新加的停止条件挡住）。
       // 必须**强制前进一行**，否则 while 原地打转、i 永不增加 —— 会直接把
       // node 跑到 OOM。把这一行当纯文字输出即可。
-      html.push(`<p>${renderInline(line)}</p>`);
+      html.push(`<p>${renderInline(line, inlineOpts)}</p>`);
       i += 1;
       continue;
     }
-    html.push(`<p>${paragraph.map((item) => renderInline(item)).join('<br>')}</p>`);
+    html.push(`<p>${paragraph.map((item) => renderInline(item, inlineOpts)).join('<br>')}</p>`);
   }
 
   return html.join('\n');
