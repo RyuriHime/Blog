@@ -34,8 +34,10 @@ const TARGETS = ['src', 'public', 'scripts', 'forum-ai/src', 'note-agent/src', '
  * 删掉签到功能时 `public/views/checkin.js` 整个文件被删，受检数从 195 落到 194：
  * 这是**故意的减一**，所以下限跟着降到 194；片段断言也同步删掉了签到 / 排行榜那几条。
  * 起始页（P5：public/views/start.js、public/css/25-start.css）进来之后加回两个，实测 196，抬到 196。
+ * 正文渲染器返工（scripts/check-markdown.mjs、scripts/sync-markdown-core.mjs 两个新脚本）
+ * 之后实测 199，抬到 199。
  */
-const MIN_CHECKED = Number(process.env.MIN_CHECKED || 196);
+const MIN_CHECKED = Number(process.env.MIN_CHECKED || 199);
 
 /** 新布局里必须存在的关键文件。少一个就说明有人把文件搬走却没同步这份检查。 */
 const REQUIRED_FILES = [

@@ -232,6 +232,50 @@
   color: var(--muted);
 }
 
+/* 嵌套列表：子列表贴着上一行，别再多顶出一段行距 */
+.md li > ul,
+.md li > ol {
+  margin: 4px 0 2px;
+}
+
+/*
+ * 表格（GFM）。
+ * 外面这层 `.md-table` 负责横向滚动 —— 帖子正文在窄屏和侧栏里都可能很窄，
+ * 一张六七列的表格不带滚动条就会把整页撑破。
+ * 配色只用主题变量，五种主题都要好看。
+ */
+.md-table {
+  margin: 14px 0;
+  overflow-x: auto;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+
+.md-table table {
+  border-collapse: collapse;
+  width: 100%;
+  font-size: 14.2px;
+}
+
+.md-table th,
+.md-table td {
+  padding: 8px 12px;
+  text-align: left;
+  vertical-align: top;
+  border-bottom: 1px solid var(--border-soft);
+}
+
+.md-table th {
+  background: var(--code-block-bg);
+  color: var(--text);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.md-table tbody tr:last-child td {
+  border-bottom: 0;
+}
+
 /* ---------------- 回复 ---------------- */
 
 .reply {

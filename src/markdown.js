@@ -1,7 +1,20 @@
 /**
  * 极简 Markdown 渲染器（服务器端使用）。
  * 设计目标：安全第一 —— 先转义全部 HTML，再只注入白名单标签，因此不存在 XSS 注入面。
- * 支持：标题、粗体、斜体、删除线、行内代码、代码块、引用、有序/无序列表、分割线、链接、图片、自动链接。
+ *
+ * 支持：标题、粗体、斜体、删除线、行内代码、代码块、引用、**嵌套**有序/无序列表、
+ *       **表格**、分割线、图片（含标题）、链接（含站内 `#/…` 与相对路径）、
+ *       自动链接、裸链接、公式、反斜杠转义。
+ *
+ * ── 为什么行内部分要手写扫描而不是一串 replace ──
+ * 以前是「先把整段转义、再按顺序正则替换」，于是每一轮替换的产物都会成为下一轮的输入：
+ *   · 链接目标里出现 `)`（`…/Foo_(bar)`）就被截断，多出来的 `)` 掉进正文；
+ *   · 链接标签里出现 `]`（`[a [b] c](/x)`）整条不成链接；
+ *   · 图片一旦带标题（`![图](/a.png "标题")`）就连图片规则都匹配不上，
+ *     被后面的链接规则吃掉，还留下一个孤零零的 `!`；
+ *   · 转义后的 `&quot;` 逼着链接正则去写 HTML 实体，谁也不敢动。
+ * 现在改成对着**原文**从左到右扫一遍，每种语法匹配什么、消耗多长都写在明处，
+ * 转义只在最后拼装的那一刻做。
  */
 
 const HTML_ESCAPES = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
@@ -10,66 +23,439 @@ export function escapeHtml(value) {
   return String(value ?? '').replace(/[&<>"']/g, (char) => HTML_ESCAPES[char]);
 }
 
-/** 只允许 http(s)/mailto/站内相对路径，其余一律降级为 #，防止 javascript: 等伪协议。 */
-function sanitizeUrl(raw) {
+const ABSOLUTE_URL_RE = /^(?:https?:\/\/|mailto:)/i;
+const HAS_SCHEME_RE = /^[a-z][a-z0-9+.-]*:/i;
+
+/**
+ * 把链接目标分成两类。
+ *
+ *   { kind: 'external', href } —— http(s)/mailto，开新标签打开
+ *   { kind: 'internal', href } —— 站内（`#/post/12`、`/docs/a.md`、`./a.md`），原地跳转
+ *   null                       —— 不认识或不安全，调用方应退化成纯文字
+ *
+ * 这张白名单以前只放行 `http(s)/mailto` 和 `/` 开头的绝对路径，于是 `#/post/12`
+ * 这种站内路由和 `./a.md` 这种相对路径**全部**被替换成 `href="#"` —— 帖子里
+ * 互相指路的链接一个都点不动，还看不出哪里错了（渲染出来仍是个蓝色链接）。
+ */
+function resolveUrl(raw) {
   const url = String(raw ?? '').trim().replace(/^["']|["']$/g, '');
-  if (/^(https?:\/\/|mailto:)/i.test(url)) return escapeHtml(url);
-  if (url.startsWith('/') && !url.startsWith('//')) return escapeHtml(url);
-  return '#';
+  if (url === '') return null;
+  // 控制字符与换行一律不认：`java\nscript:` 这类拆分把戏要在这里就断掉。
+  if (/[\u0000-\u001f\u007f]/.test(url)) return null;
+  if (ABSOLUTE_URL_RE.test(url)) return { kind: 'external', href: url };
+  // `//evil.com` 是协议相对地址，会跳到站外 —— 不能当成站内路径放过去。
+  if (url.startsWith('//')) return null;
+  // 剩下还带协议头的（javascript:、data:、vbscript:…）一律拒绝。
+  if (HAS_SCHEME_RE.test(url)) return null;
+  return { kind: 'internal', href: url };
 }
 
-function renderInline(escapedText) {
-  const codeSpans = [];
+/** 生成 `<a>`。目标不合法时退化成纯文字，而不是留一个点不动的 `#` 假装能点。 */
+function anchorHtml(labelHtml, rawUrl, rawTitle = '') {
+  const target = resolveUrl(rawUrl);
+  if (!target) return labelHtml;
+  const href = escapeHtml(target.href);
+  // `[文字](url "提示")` 里的提示要真的挂上去 —— 否则用户写了也看不见。
+  const title = rawTitle ? ` title="${escapeHtml(rawTitle)}"` : '';
+  if (target.kind === 'external') {
+    return `<a href="${href}"${title} target="_blank" rel="noopener nofollow">${labelHtml}</a>`;
+  }
+  return `<a href="${href}"${title}>${labelHtml}</a>`;
+}
 
-  // 行内代码先抽成占位符，避免其中的 * _ [ ] 被后续规则误处理。
-  let out = escapedText.replace(/`([^`\n]+)`/g, (_match, code) => {
-    codeSpans.push(code);
-    return `\u0000C${codeSpans.length - 1}\u0000`;
-  });
+/**
+ * 从 `[` 开始解析 `[标签](目标 "标题")`。
+ * 标签里允许**配平**的方括号与转义反斜杠；目标里的括号也要配平，
+ * 所以 `https://zh.wikipedia.org/wiki/Foo_(bar)` 不会被截成 `Foo_(bar`。
+ */
+function matchLink(src, start) {
+  if (src[start] !== '[') return null;
 
-  // 公式也要先抽走。`$\sum _{i = 0} ^n a_i$` 里那对下划线在 markdown 眼里是
-  // 斜体标记，会被替换成 <em>…</em> —— 于是开头和收尾的 `$` 落到两个不同的
-  // 文本节点里，KaTeX 的 auto-render 再也配不上这对定界符，公式就原样显示成
-  // 一串源码。抽成占位符之后，强调规则再也碰不到公式内部。
-  // 必须在行内代码**之后**：「`$5`」里的美元号不是公式。
-  const mathSpans = [];
-  out = out.replace(/\$\$([^\n]+?)\$\$|\$([^\n$]+?)\$/g, (match) => {
-    mathSpans.push(match);
-    return `\u0000M${mathSpans.length - 1}\u0000`;
-  });
+  let depth = 0;
+  let close = -1;
+  for (let at = start; at < src.length; at += 1) {
+    const ch = src[at];
+    if (ch === '\\') {
+      at += 1;
+      continue;
+    }
+    if (ch === '[') depth += 1;
+    else if (ch === ']') {
+      depth -= 1;
+      if (depth === 0) {
+        close = at;
+        break;
+      }
+    } else if (ch === '\n') {
+      return null; // 标签不跨行
+    }
+  }
+  if (close === -1 || src[close + 1] !== '(') return null;
+  const label = src.slice(start + 1, close);
+  if (label === '') return null;
 
-  out = out.replace(
-    /!\[([^\]]*)\]\(([^)\s]+)\)/g,
-    (_match, alt, url) => `<img src="${sanitizeUrl(url)}" alt="${alt}" loading="lazy">`,
-  );
-  out = out.replace(
-    /\[([^\]]+)\]\(([^)\s]+)(?:\s+&quot;[^&]*&quot;)?\)/g,
-    (_match, label, url) =>
-      `<a href="${sanitizeUrl(url)}" target="_blank" rel="noopener nofollow">${label}</a>`,
-  );
-  out = out.replace(
-    /&lt;((?:https?:\/\/|mailto:)[^\s&]+)&gt;/g,
-    (_match, url) =>
-      `<a href="${sanitizeUrl(url)}" target="_blank" rel="noopener nofollow">${url}</a>`,
-  );
-  out = out.replace(/\*\*([^*\n]+)\*\*|__([^_\n]+)__/g, (_m, a, b) => `<strong>${a ?? b}</strong>`);
-  out = out.replace(/(^|[^*\w])\*([^*\n]+)\*(?!\*)/g, (_m, pre, inner) => `${pre}<em>${inner}</em>`);
-  out = out.replace(/(^|[^_\w])_([^_\n]+)_(?!_)/g, (_m, pre, inner) => `${pre}<em>${inner}</em>`);
-  out = out.replace(/~~([^~\n]+)~~/g, (_m, inner) => `<del>${inner}</del>`);
+  let at = close + 2;
+  let url = '';
+  let parens = 0;
+  for (; at < src.length; at += 1) {
+    const ch = src[at];
+    if (ch === '\\' && at + 1 < src.length) {
+      url += src[at + 1];
+      at += 1;
+      continue;
+    }
+    if (ch === '(') {
+      parens += 1;
+      url += ch;
+      continue;
+    }
+    if (ch === ')') {
+      if (parens === 0) break;
+      parens -= 1;
+      url += ch;
+      continue;
+    }
+    if (/\s/.test(ch)) break;
+    url += ch;
+  }
+  if (url === '') return null;
 
-  // 公式占位符要**在**代码占位符之前还原，两者互不嵌套，顺序其实无所谓；
-  // 分开写只是为了让「抽走的东西一定被放回来」这件事一眼可见。
-  out = out.replace(/\u0000M(\d+)\u0000/g, (_match, index) => mathSpans[Number(index)]);
+  if (src[at] === ')') return { label, url, title: '', end: at + 1 };
 
-  return out.replace(/\u0000C(\d+)\u0000/g, (_m, index) => `<code>${codeSpans[Number(index)]}</code>`);
+  // 目标后面还跟着东西：只可能是可选的标题（其余一律当格式错误）。
+  if (!(at < src.length && /\s/.test(src[at]))) return null;
+  let t = at;
+  while (t < src.length && /\s/.test(src[t])) t += 1;
+  const quote = src[t];
+  if (quote !== '"' && quote !== "'") return null;
+  const endQuote = src.indexOf(quote, t + 1);
+  if (endQuote === -1) return null;
+  const title = src.slice(t + 1, endQuote);
+  t = endQuote + 1;
+  while (t < src.length && /\s/.test(src[t])) t += 1;
+  if (src[t] !== ')') return null;
+  return { label, url, title, end: t + 1 };
+}
+
+/** 找强调收尾标记。内容不能为空、不能跨行；`***x***` 这种更长的 run 留给更长的规则。 */
+function findEmphasis(src, start, width, marker) {
+  const open = marker.repeat(width);
+  const contentStart = start + width;
+  if (width === 2 && src[contentStart] === marker) return -1;
+  let at = contentStart + 1;
+  while (at <= src.length) {
+    const found = src.indexOf(open, at);
+    if (found === -1) return -1;
+    if (src.slice(contentStart, found).includes('\n')) return -1;
+    if (src[found - 1] === marker || src[found + width] === marker) {
+      at = found + 1;
+      continue;
+    }
+    return found;
+  }
+  return -1;
+}
+
+/** 裸链接的收尾标点不算 URL 的一部分（「见 https://a.com/b。」里的句号）。 */
+const TRAILING_PUNCT_RE = /[.,;:!?、。，；：！？）】」』’”]+$/u;
+
+/**
+ * 行内渲染。输入是**原文**（不是转义过的），输出是安全的 HTML。
+ * `noLinks` 用于链接标签的内部：HTML 不允许 `<a>` 套 `<a>`，
+ * 浏览器会把外层强行闭合，整块排版就散了（通知列表踩过这个坑）。
+ */
+export function renderInline(source, { noLinks = false } = {}) {
+  const src = String(source ?? '');
+  const out = [];
+  let text = '';
+  let i = 0;
+
+  const flush = () => {
+    if (text) {
+      out.push(escapeHtml(text));
+      text = '';
+    }
+  };
+  const push = (html) => {
+    flush();
+    out.push(html);
+  };
+
+  while (i < src.length) {
+    const ch = src[i];
+
+    // 反斜杠转义：`\*` 就是字面的星号，反斜杠本身不显示。
+    if (ch === '\\' && i + 1 < src.length && /[\\`*_{}[\]()#+\-.!>~$|]/.test(src[i + 1])) {
+      text += src[i + 1];
+      i += 2;
+      continue;
+    }
+
+    // 行内代码：两边反引号的数量必须一致（``` 不能和 ` 配对）。
+    if (ch === '`') {
+      const open = /^`+/.exec(src.slice(i))[0];
+      const closeAt = src.indexOf(open, i + open.length);
+      if (closeAt !== -1) {
+        let code = src.slice(i + open.length, closeAt);
+        // CommonMark：首尾各去掉一个空格（`` ` `` 这种写法用来把反引号包进去）。
+        if (code.length > 1 && code.startsWith(' ') && code.endsWith(' ') && code.trim() !== '') {
+          code = code.slice(1, -1);
+        }
+        push(`<code>${escapeHtml(code.replace(/\n/g, ' '))}</code>`);
+        i = closeAt + open.length;
+        continue;
+      }
+      text += open;
+      i += open.length;
+      continue;
+    }
+
+    // 公式原样留着交给前端 KaTeX 的 auto-render，但**不能被强调规则碰到**。
+    // `$\sum _{i = 0} ^n a_i$` 里那对下划线在 markdown 眼里是斜体标记，
+    // 一旦被替换成 <em>…</em>，开头和收尾的 `$` 就落到两个不同的文本节点里，
+    // auto-render 再也配不上这对定界符，公式永远显示成源码。
+    if (ch === '$') {
+      const math = /^\$\$([^\n]+?)\$\$|^\$([^\n$]+?)\$/.exec(src.slice(i));
+      if (math) {
+        push(escapeHtml(math[0]));
+        i += math[0].length;
+        continue;
+      }
+    }
+
+    // 图片 ![alt](url "标题")
+    if (ch === '!' && src[i + 1] === '[') {
+      const img = matchLink(src, i + 1);
+      if (img) {
+        const target = resolveUrl(img.url);
+        if (target) {
+          const title = img.title ? ` title="${escapeHtml(img.title)}"` : '';
+          push(
+            `<img src="${escapeHtml(target.href)}" alt="${escapeHtml(img.label)}"` +
+              ` loading="lazy"${title}>`,
+          );
+        } else {
+          push(escapeHtml(src.slice(i, img.end)));
+        }
+        i = img.end;
+        continue;
+      }
+    }
+
+    // 链接 [标签](url "标题")
+    if (ch === '[' && !noLinks) {
+      const link = matchLink(src, i);
+      if (link) {
+        push(anchorHtml(renderInline(link.label, { noLinks: true }), link.url, link.title));
+        i = link.end;
+        continue;
+      }
+    }
+
+    // 自动链接 <https://…> / <mailto:…>
+    if (ch === '<') {
+      const auto = /^<(https?:\/\/[^\s<>]+|mailto:[^\s<>]+)>/i.exec(src.slice(i));
+      if (auto) {
+        push(anchorHtml(escapeHtml(auto[1]), auto[1]));
+        i += auto[0].length;
+        continue;
+      }
+    }
+
+    // 裸链接。前一个字符必须是分隔符，否则 `abc://` 或 URL 中间那一截会被当成新链接。
+    if (
+      (ch === 'h' || ch === 'H') &&
+      !noLinks &&
+      /^https?:\/\//i.test(src.slice(i)) &&
+      !/[\w/]/.test(src[i - 1] ?? '')
+    ) {
+      let end = i;
+      while (end < src.length && !/[\s<]/.test(src[end])) end += 1;
+      let url = src.slice(i, end).replace(TRAILING_PUNCT_RE, '');
+      // 括号要配平：「(见 https://a.com/(x))」里最后那个 `)` 属于外层括号。
+      while (
+        url.endsWith(')') &&
+        (url.match(/\(/g) ?? []).length < (url.match(/\)/g) ?? []).length
+      ) {
+        url = url.slice(0, -1);
+      }
+      push(anchorHtml(escapeHtml(url), url));
+      i += url.length;
+      continue;
+    }
+
+    // 删除线
+    if (ch === '~' && src[i + 1] === '~') {
+      const close = src.indexOf('~~', i + 2);
+      if (close > i + 2 && !src.slice(i + 2, close).includes('\n')) {
+        push(`<del>${renderInline(src.slice(i + 2, close))}</del>`);
+        i = close + 2;
+        continue;
+      }
+    }
+
+    // 粗体
+    if ((ch === '*' || ch === '_') && src[i + 1] === ch) {
+      const close = findEmphasis(src, i, 2, ch);
+      if (close !== -1) {
+        push(`<strong>${renderInline(src.slice(i + 2, close))}</strong>`);
+        i = close + 2;
+        continue;
+      }
+    }
+
+    // 斜体
+    if (ch === '*' || ch === '_') {
+      const close = findEmphasis(src, i, 1, ch);
+      if (close !== -1) {
+        push(`<em>${renderInline(src.slice(i + 1, close))}</em>`);
+        i = close + 1;
+        continue;
+      }
+    }
+
+    text += ch;
+    i += 1;
+  }
+
+  flush();
+  return out.join('');
 }
 
 const FENCE_RE = /^\s*(```|~~~)\s*([\w+#.-]*)\s*$/;
 const HEADING_RE = /^\s{0,3}(#{1,6})\s+(.*?)\s*#*\s*$/;
 const HR_RE = /^\s{0,3}([-*_])(\s*\1){2,}\s*$/;
 const QUOTE_RE = /^\s{0,3}>\s?/;
-const UL_RE = /^\s*[-*+]\s+/;
-const OL_RE = /^\s*\d+[.)]\s+/;
+const LIST_ITEM_RE = /^(\s*)([-*+]|\d+[.)])\s+(.*)$/;
+
+function listItemOf(line) {
+  const match = LIST_ITEM_RE.exec(line);
+  if (!match) return null;
+  return {
+    indent: match[1].replace(/\t/g, '    ').length,
+    ordered: /\d/.test(match[2]),
+    text: match[3],
+  };
+}
+
+/** 拆一行表格：去掉首尾的 `|`，按未转义的 `|` 切，各格 trim。 */
+function splitTableRow(line) {
+  const trimmed = line.trim().replace(/^\|/, '').replace(/\|$/, '');
+  const cells = [];
+  let cell = '';
+  for (let at = 0; at < trimmed.length; at += 1) {
+    const ch = trimmed[at];
+    if (ch === '\\' && trimmed[at + 1] === '|') {
+      cell += '|';
+      at += 1;
+      continue;
+    }
+    if (ch === '|') {
+      cells.push(cell);
+      cell = '';
+      continue;
+    }
+    cell += ch;
+  }
+  cells.push(cell);
+  return cells.map((item) => item.trim());
+}
+
+function isDelimiterRow(line) {
+  if (!line.includes('-')) return false;
+  const cells = splitTableRow(line);
+  return cells.length > 0 && cells.every((cell) => /^:?-+:?$/.test(cell));
+}
+
+/** 这一行是不是一张表格的开头（本行带 `|`，下一行是 `---` 分隔行）。 */
+function startsTable(lines, index) {
+  return (
+    typeof lines[index] === 'string' &&
+    lines[index].includes('|') &&
+    typeof lines[index + 1] === 'string' &&
+    isDelimiterRow(lines[index + 1])
+  );
+}
+
+function splitAlign(cell) {
+  const left = cell.startsWith(':');
+  const right = cell.endsWith(':');
+  if (left && right) return 'center';
+  if (right) return 'right';
+  return '';
+}
+
+function buildTable(lines, start, html) {
+  const head = splitTableRow(lines[start]);
+  const aligns = splitTableRow(lines[start + 1]).map(splitAlign);
+  let i = start + 2;
+  const rows = [];
+  while (i < lines.length && !/^\s*$/.test(lines[i]) && lines[i].includes('|')) {
+    rows.push(splitTableRow(lines[i]));
+    i += 1;
+  }
+  const cell = (tag, content, index) => {
+    const align = aligns[index] ?? '';
+    const style = align && align !== 'left' ? ` style="text-align:${align}"` : '';
+    return `<${tag}${style}>${renderInline(content)}</${tag}>`;
+  };
+  const headRow = `<tr>${head.map((item, n) => cell('th', item, n)).join('')}</tr>`;
+  const bodyRows = rows
+    .map((row) => {
+      const padded = head.map((_unused, n) => row[n] ?? '');
+      return `<tr>${padded.map((item, n) => cell('td', item, n)).join('')}</tr>`;
+    })
+    .join('');
+  html.push(
+    `<div class="md-table"><table><thead>${headRow}</thead>` +
+      (bodyRows ? `<tbody>${bodyRows}</tbody>` : '') +
+      `</table></div>`,
+  );
+  return i;
+}
+
+/**
+ * 收集一段列表。缩进更深的行归上一级（子列表或续行），
+ * 所以 `- 一级` + 缩进两格的 `- 二级` 会真的渲染成嵌套的 `<ul>`，
+ * 而不是像以前那样被压平成同级条目。
+ */
+function buildList(lines, start) {
+  const first = listItemOf(lines[start]);
+  if (!first) return null;
+  const ordered = first.ordered;
+  const baseIndent = first.indent;
+  const tag = ordered ? 'ol' : 'ul';
+  const items = [];
+  let i = start;
+
+  while (i < lines.length) {
+    const item = listItemOf(lines[i]);
+    if (!item || item.indent !== baseIndent || item.ordered !== ordered) break;
+    const parts = [item.text];
+    const childLines = [];
+    i += 1;
+
+    while (i < lines.length && !/^\s*$/.test(lines[i])) {
+      const raw = lines[i];
+      const indent = raw.match(/^\s*/)[0].replace(/\t/g, '    ').length;
+      if (indent <= baseIndent) break;
+      // 子块统一按「父项缩进 + 2」剥掉一层，递归时就是干净的顶层列表。
+      childLines.push(raw.slice(Math.min(indent, baseIndent + 2)));
+      i += 1;
+    }
+
+    const nested = childLines.length ? buildList(childLines, 0) : null;
+    const body = renderInline(parts.join(' '));
+    const child = nested
+      ? nested.html
+      : childLines.length
+        ? `<p>${renderInline(childLines.map((line) => line.trim()).join(' '))}</p>`
+        : '';
+    items.push(`<li>${body}${child}</li>`);
+  }
+
+  return { html: `<${tag}>${items.join('')}</${tag}>`, next: i };
+}
 
 export function renderMarkdown(source) {
   const lines = String(source ?? '').replace(/\r\n?/g, '\n').split('\n');
@@ -122,7 +508,7 @@ export function renderMarkdown(source) {
     const heading = line.match(HEADING_RE);
     if (heading) {
       const level = heading[1].length;
-      html.push(`<h${level}>${renderInline(escapeHtml(heading[2]))}</h${level}>`);
+      html.push(`<h${level}>${renderInline(heading[2])}</h${level}>`);
       i += 1;
       continue;
     }
@@ -143,19 +529,18 @@ export function renderMarkdown(source) {
       continue;
     }
 
-    if (UL_RE.test(line) || OL_RE.test(line)) {
-      const ordered = OL_RE.test(line);
-      const itemRe = ordered ? OL_RE : UL_RE;
-      const items = [];
-      while (i < lines.length && itemRe.test(lines[i])) {
-        items.push(lines[i].replace(itemRe, ''));
-        i += 1;
-      }
-      const tag = ordered ? 'ol' : 'ul';
-      html.push(
-        `<${tag}>${items.map((item) => `<li>${renderInline(escapeHtml(item))}</li>`).join('')}</${tag}>`,
-      );
+    if (startsTable(lines, i)) {
+      i = buildTable(lines, i, html);
       continue;
+    }
+
+    if (LIST_ITEM_RE.test(line)) {
+      const list = buildList(lines, i);
+      if (list) {
+        html.push(list.html);
+        i = list.next;
+        continue;
+      }
     }
 
     const paragraph = [];
@@ -169,9 +554,9 @@ export function renderMarkdown(source) {
       !/^\s*\$\$\s*$/.test(lines[i]) &&
       !HEADING_RE.test(lines[i]) &&
       !QUOTE_RE.test(lines[i]) &&
-      !UL_RE.test(lines[i]) &&
-      !OL_RE.test(lines[i]) &&
-      !HR_RE.test(lines[i])
+      !LIST_ITEM_RE.test(lines[i]) &&
+      !HR_RE.test(lines[i]) &&
+      !startsTable(lines, i)
     ) {
       paragraph.push(lines[i]);
       i += 1;
@@ -181,11 +566,11 @@ export function renderMarkdown(source) {
       // 上面那个分支故意不接、这里又刚被新加的停止条件挡住）。
       // 必须**强制前进一行**，否则 while 原地打转、i 永不增加 —— 会直接把
       // node 跑到 OOM。把这一行当纯文字输出即可。
-      html.push(`<p>${renderInline(escapeHtml(line))}</p>`);
+      html.push(`<p>${renderInline(line)}</p>`);
       i += 1;
       continue;
     }
-    html.push(`<p>${paragraph.map((item) => renderInline(escapeHtml(item))).join('<br>')}</p>`);
+    html.push(`<p>${paragraph.map((item) => renderInline(item)).join('<br>')}</p>`);
   }
 
   return html.join('\n');
@@ -196,12 +581,18 @@ export function markdownToPlainText(source, limit = 160) {
   const plain = String(source ?? '')
     .replace(/\r\n?/g, '\n')
     .replace(/```[\s\S]*?```/g, ' ')
+    .replace(/~~~[\s\S]*?~~~/g, ' ')
     .replace(/`([^`]*)`/g, '$1')
     .replace(/!\[([^\]]*)\]\([^)]*\)/g, '$1')
     .replace(/\[([^\]]+)\]\([^)]*\)/g, '$1')
     .replace(/^\s{0,3}>+\s?/gm, '')
     .replace(/^\s{0,3}#{1,6}\s+/gm, '')
+    // 表格分隔行整行丢掉，其余行的 `|` 换成空格，别让摘要里竖着一排管道符。
+    .replace(/^\s*\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)*\|?\s*$/gm, '')
+    .replace(/^\s*\|(.*)\|\s*$/gm, (_m, inner) => inner.replace(/\|/g, ' '))
     .replace(/^\s*[-*+]\s+/gm, '')
+    .replace(/^\s*\d+[.)]\s+/gm, '')
+    .replace(/\\/g, '')
     .replace(/[*_~]/g, '')
     .replace(/\s+/g, ' ')
     .trim();

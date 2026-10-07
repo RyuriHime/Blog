@@ -23,10 +23,12 @@
     "check:encoding": "node scripts/check-encoding.mjs",
     "check:notes": "node scripts/notes-smoke.mjs",
     "check:notes:ui": "node scripts/check-notes-ui.mjs",
+    "check:markdown": "node scripts/check-markdown.mjs",
+    "sync:markdown": "node scripts/sync-markdown-core.mjs",
     "check:ui": "node scripts/ui-smoke.mjs",
     "test:notes": "node note-agent/scripts/run-tests.mjs",
     "fix:cmd": "node scripts/fix-cmd.mjs",
-    "test": "node scripts/check-encoding.mjs && node scripts/check-skeleton.mjs && node scripts/check-golden.mjs && node scripts/check-frontend.mjs && node scripts/smoke.mjs && node scripts/smoke-ai.mjs && node scripts/feed-smoke.mjs && node scripts/doc-smoke.mjs && node scripts/team-smoke.mjs && node scripts/ai-smoke.mjs && node scripts/check-ui-contract.mjs && node scripts/check-notes-ui.mjs && node scripts/notes-smoke.mjs && node scripts/ui-smoke.mjs"
+    "test": "node scripts/check-encoding.mjs && node scripts/check-skeleton.mjs && node scripts/check-golden.mjs && node scripts/check-markdown.mjs && node scripts/check-frontend.mjs && node scripts/smoke.mjs && node scripts/smoke-ai.mjs && node scripts/feed-smoke.mjs && node scripts/doc-smoke.mjs && node scripts/team-smoke.mjs && node scripts/ai-smoke.mjs && node scripts/check-ui-contract.mjs && node scripts/check-notes-ui.mjs && node scripts/notes-smoke.mjs && node scripts/ui-smoke.mjs"
   },
   "engines": {
     "node": ">=22.5.0"

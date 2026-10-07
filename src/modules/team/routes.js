@@ -9,6 +9,7 @@
 import { HttpError, ensure, field, rateLimit } from '../../core/http.js';
 import { requireUser } from '../../core/guards.js';
 import { ANON } from '../../core/paths.js';
+import { markdownToPlainText } from '../../markdown.js';
 import {
   MAX_TEAM_ANNOUNCEMENT,
   MAX_TEAM_FILE_BYTES,
@@ -394,7 +395,9 @@ export function registerTeamRoutes(ctx, { queries }) {
           actorId: user.id,
           type: 'team_announcement',
           teamId: teamRow.id,
-          excerpt: announcement.slice(0, 120),
+          // 摘要先过一遍纯文本：直接截原始 Markdown 的话，
+          // 通知列表里会出现「12 345678+9」这种半截表格、以及一堆 `**` 和 `[]()`。
+          excerpt: markdownToPlainText(announcement, 120),
           dedupe: false,
         });
         if (created) notified += 1;

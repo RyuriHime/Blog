@@ -326,6 +326,8 @@ forum/
 │   ├── check-skeleton.mjs       # ★ 骨架自检：模块解耦证明 + 薄入口行数
 │   ├── check-ui-contract.mjs    # 前端契约检查：CSS 类名 + API 字段 + 主题/头像/角色/私信结构
 │   ├── check-encoding.mjs       # 源码编码体检（BOM / 乱码 / 批处理换行与 ASCII）
+│   ├── check-markdown.mjs       # ★ 正文渲染回归：链接 / 表格 / 嵌套列表 / 转义
+│   ├── sync-markdown-core.mjs   # 同步 note-agent 的兜底渲染器（--check 当漂移守卫）
 │   ├── check-notes-ui.mjs / check-frontend.mjs / notes-smoke.mjs / smoke-ai.mjs
 │   ├── ai-smoke.mjs / ui-smoke.mjs / feed-smoke.mjs / doc-smoke.mjs / team-smoke.mjs
 │   ├── fix-cmd.mjs              # 把 .cmd 规范化为 CRLF + 去 BOM
@@ -691,29 +693,37 @@ team_messages(id, team_id, user_id, content, deleted, created_at)
 ```bash
 node scripts/check-golden.mjs      # ★ 行为金标准：88 条请求的状态码 + 响应结构，一条都不能变
 node scripts/check-skeleton.mjs    # ★ 骨架自检：模块能不能独立拆掉、薄入口有没有变胖
-node scripts/check-frontend.mjs    # ★ 前端渲染冒烟：36 个页面全部渲染一遍 + 关注列表 / 团队的文件柜/群聊/成员名单/团队号/公告/加入申请与审核/隐藏开关/设置与申请改右侧抽屉/帖子预览与详情回复（「💬 回复」按钮、编辑权只归作者）交互 + 裸调用未定义名字的静态扫描
+node scripts/check-markdown.mjs    # ★ 正文渲染回归：56 项（站内链接 / 带括号 URL / 表格 / 嵌套列表 / 转义 / 危险协议 / 兜底拷贝同步）
+node scripts/check-frontend.mjs    # ★ 前端渲染冒烟：39 个页面全部渲染一遍 + 关注列表 / 团队的文件柜/群聊/成员名单/团队号/公告/加入申请与审核/隐藏开关/设置与申请改右侧抽屉/帖子预览与详情回复（「💬 回复」按钮、编辑权只归作者）交互 + 裸调用未定义名字的静态扫描
 node scripts/smoke.mjs             # 后端端到端：227 项（临时独立库+端口，跑完自动清理）
 node scripts/smoke-ai.mjs          # AI 接口端到端：61 项
 node scripts/ai-smoke.mjs          # AI 接口端到端（更细的一套：校验 / 限流 / 额度）：387 项
 node scripts/feed-smoke.mjs        # 动态流端到端：95 项
-node scripts/doc-smoke.mjs         # 积木（可编程帖子）端到端：470 项
+node scripts/doc-smoke.mjs         # 积木（可编程帖子）端到端：567 项
 node scripts/team-smoke.mjs        # 团队端到端：301 项（可见范围 / 越权 / 版本冲突 / 编辑权只归作者 / 文件柜 / 群聊 / 团队号 / 公告通知 / Markdown 与公式 / 帖子回复 / 加入申请与审核 / 隐藏团队 / 老库升级与坏库自愈）
 node scripts/check-ui-contract.mjs # 前端契约：CSS 类名 + API 字段 + 主题/头像/角色/私信/团队号/公告/剪贴板/公式/关注列表/详情与回复/申请与隐藏结构/编辑权与侧边抽屉/表重建与自愈/币已下线（通过项数不下降哨兵：314）
-node scripts/ui-smoke.mjs          # 首页外壳轻量化 + 右侧栏抽屉：42 项
+node scripts/ui-smoke.mjs          # 首页外壳轻量化 + 右侧栏抽屉：71 项
 node scripts/check-encoding.mjs    # 源码编码体检：BOM / 乱码 / 关键中文内容
 node scripts/check-notes-ui.mjs    # 笔记 UI
 node scripts/notes-smoke.mjs       # 笔记接口
+node scripts/sync-markdown-core.mjs        # 改了 src/markdown.js 之后同步 note-agent 的兜底拷贝
+node scripts/sync-markdown-core.mjs --check # 只检查有没有漂移（CI 也跑这条）
 node scripts/capture-fixtures.mjs  # 重采前端冒烟用的假数据（改了接口形状才需要跑）
 ```
 
 > ⚠️ `scripts/reset-db.mjs` **不属于测试流程**（它以前被列在上面这段里，容易照着复制粘贴）：它会删掉 `data/forum.db`（连带 `-wal` / `-shm`）再重新播种，用户、帖子、私信全部**不可恢复**，`data/` 又不在版本库里。要清库请按「常见问题」里那条走，并且必须显式加 `--yes`。
 
-一次跑完（`npm test` 就是上面这些，14 组）：
+> ⚠️ **正文渲染器只有一份**：`src/markdown.js`。`note-agent/src/markdown-core.mjs` 是它发给浏览器的**逐字拷贝**（面板在宿主没有 `/markdown/preview` 时用它兜底）。
+> 改了宿主就必须跑一次 `node scripts/sync-markdown-core.mjs`，否则 `check-markdown.mjs` 与 note-agent 的测试都会红。
+> 这条守卫是补上的：这份拷贝曾经漏掉块级 `$$` 公式而没有任何测试发现 —— 原来那条「与宿主一致」的断言比较的是宿主**自己**，恒真。
+
+一次跑完（`npm test` 就是上面这些，15 组）：
 
 ```
-check-encoding 194 文件 / 82 断言 · check-skeleton 47 项 · check-golden 88 项 0 差异
-check-frontend 36 个页面 + 31 个模块静态扫描 · smoke 227 · smoke-ai 61 · ai-smoke 387 · feed-smoke 95
-doc-smoke 470 · team-smoke 301 · check-ui-contract 314 · check-notes-ui 33 · notes-smoke 44 · ui-smoke 42
+check-encoding 199 文件 / 83 断言 · check-skeleton 47 项 · check-golden 88 项 0 差异
+check-markdown 56 · check-frontend 39 个页面 + 33 个模块静态扫描 · smoke 227 · smoke-ai 61
+ai-smoke 387 · feed-smoke 95 · doc-smoke 567 · team-smoke 301
+check-ui-contract 314 · check-notes-ui 33 · notes-smoke 44 · ui-smoke 71
 ```
 
 > 知识网络图（`knowledge-pack/` + `#/graph` + `/api/knowledge/*`）已在 2026-10 整条链路删除：

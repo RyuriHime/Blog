@@ -61,6 +61,12 @@ jobs:
       - name: 行为金标准（状态码 + 响应结构指纹）
         run: node scripts/check-golden.mjs
 
+      # 正文渲染器：帖子 / 回复 / 团队帖 / 积木页段落 / 通知摘要全走同一个 `src/markdown.js`。
+      # 它原来是「先转义整段、再一串 replace」，链接会被后面几轮啃掉，
+      # 而金标准只比状态码与响应结构，照不出正文里的错字。
+      - name: Markdown 渲染回归（链接 / 表格 / 嵌套列表 / 转义 / 兜底拷贝）
+        run: node scripts/check-markdown.mjs
+
       - name: 冒烟测试（起真服务，打一遍接口）
         run: node scripts/smoke.mjs
 
@@ -92,10 +98,10 @@ jobs:
         run: node scripts/check-ui-contract.mjs
 
       # 前端整页渲染冒烟：用最小 DOM 垫片 + 从真服务器采回来的假数据，
-      # 把 public/ 的入口 import 进来、把 38 个页面依次渲染一遍，
+      # 把 public/ 的入口 import 进来、把 39 个页面依次渲染一遍，
       # 再模拟一次「编辑框重画」验证草稿 / 可见范围 / 引用编号没有丢。
       # 它抓的是「搬家把函数体切坏了」「漏了一条 import」「状态没同步」这类只有真执行才炸的问题。
-      - name: 前端渲染冒烟（38 个页面 + 编辑框状态）
+      - name: 前端渲染冒烟（39 个页面 + 编辑框状态）
         run: node scripts/check-frontend.mjs
 
       # ---------------------------------------------------------------

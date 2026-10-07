@@ -11,6 +11,7 @@ import { readFileSync } from 'node:fs';
 import { createChecker } from './helpers/check.mjs';
 import { loadMarkdown, markdownSource } from '../src/markdown.mjs';
 import * as core from '../src/markdown-core.mjs';
+import { inSync } from '../../scripts/sync-markdown-core.mjs';
 
 const { check, skip, summary } = createChecker();
 
@@ -51,33 +52,64 @@ check('先转义 HTML 再注入白名单标签（没有裸 img）', !xss.include
 check('先转义 HTML 再注入白名单标签（没有裸 script）', !xss.includes('<script'), xss);
 check('被转义的内容确实变成了实体', xss.includes('&lt;script&gt;'), xss);
 check(
-  'javascript: 伪协议被降级成 #',
-  !loadMarkdown().renderMarkdown('[点我](javascript:alert(1))').includes('javascript:'),
+  'javascript: 伪协议被丢掉，不会变成链接',
+  !loadMarkdown().renderMarkdown('[点我](javascript:alert(1))').includes('javascript:') &&
+    !loadMarkdown().renderMarkdown('[点我](javascript:alert(1))').includes('<a '),
 );
 check(
   '行内代码里的星号不会被当成斜体',
   !loadMarkdown().renderMarkdown('看 `a * b * c` 这段').includes('<em>'),
 );
 
-// ── 3. 宿主在场时行为要一致 ─────────────────────────────────────────────
+// ── 3. 兜底拷贝必须与宿主「逐字一致」（真正的漂移守卫）───────────────────
+// 这里原来比较的是 `loadMarkdown()` 与宿主本身 —— 而宿主在的时候 `loadMarkdown()`
+// 返回的**就是**宿主自己的函数（见 src/markdown.mjs），所以那条断言恒真。
+// 后果是真出过一次：宿主后来加了块级 `$$` 公式处理，这份拷贝没跟上，
+// 面板「效果」预览里多行公式永远显示成源码，而所有测试还是绿的。
+// 现在两层都查：先比两个文件的正文，再拿同一批输入比渲染输出。
 if (hasHost) {
-  // 宿主渲染器只在文件系统里，单独 import 一份来逐字对照。
   const host = await import(HOST_RENDERER.href);
-  const mine = loadMarkdown();
 
-  const renderSamples = [SAMPLE, '', '> 引用\n\n---\n\n**粗体** 与 *斜体*', '1. 甲\n2. 乙'];
-  const renderDiff = renderSamples.find((s) => mine.renderMarkdown(s) !== host.renderMarkdown(s));
-  check('用宿主渲染器时输出与宿主逐字一致', renderDiff === undefined, `样本「${String(renderDiff).slice(0, 24)}」输出不同`);
+  check(
+    '兜底拷贝的正文与宿主渲染器逐字一致（漂移守卫）',
+    inSync(),
+    '两个文件已经漂移 —— 跑一次 `node scripts/sync-markdown-core.mjs`',
+  );
 
-  const plainSamples = ['# 标题\n\n正文 *强调* 与 `代码`', '![图](a.png) 说明', 'x'.repeat(200)];
-  const plainDiff = plainSamples.find((s) => mine.markdownToPlainText(s) !== host.markdownToPlainText(s));
+  const corpus = [
+    SAMPLE,
+    '',
+    '> 引用\n\n---\n\n**粗体** 与 *斜体*',
+    '1. 甲\n2. 乙',
+    '- 一级\n  - 二级\n    - 三级',
+    '上面一行\n$$\nE = mc^2\n$$\n下面一行',
+    '| 列 | 值 |\n| --- | ---: |\n| 甲 | 1 |',
+    '[站内](#/post/1) 和 [站外](https://a.com) 和 ![图](/a.png "标题")',
+    '字面 \\*星号\\* 与 `代码` 与 ~~删掉~~',
+  ];
+  const renderDiff = corpus.find((s) => core.renderMarkdown(s) !== host.renderMarkdown(s));
+  check(
+    '同一批输入下，兜底渲染器与宿主逐字一致',
+    renderDiff === undefined,
+    `样本「${String(renderDiff).slice(0, 24)}」输出不同`,
+  );
+
+  const plainSamples = [
+    '# 标题\n\n正文 *强调* 与 `代码`',
+    '![图](a.png) 说明',
+    'x'.repeat(200),
+    '| 列 | 值 |\n| --- | --- |\n| 甲 | 1 |',
+    '- 一\n  - 二',
+  ];
+  const plainDiff = plainSamples.find((s) => core.markdownToPlainText(s) !== host.markdownToPlainText(s));
   check(
     'markdownToPlainText 与宿主逐字一致',
     plainDiff === undefined,
     `样本「${String(plainDiff).slice(0, 24)}」输出不同`,
   );
 } else {
-  skip('用宿主渲染器时输出与宿主逐字一致', '单独拷走的包，旁边没有宿主');
+  skip('兜底拷贝的正文与宿主渲染器逐字一致（漂移守卫）', '单独拷走的包，旁边没有宿主');
+  skip('同一批输入下，兜底渲染器与宿主逐字一致', '单独拷走的包，旁边没有宿主');
   skip('markdownToPlainText 与宿主逐字一致', '单独拷走的包，旁边没有宿主');
 }
 

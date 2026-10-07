@@ -2,6 +2,8 @@
 //
 // 全是纯函数，不碰数据库、不碰 HTTP —— 这样块引擎可以脱离服务器单测。
 
+import { renderInline } from '../../../markdown.js';
+
 /** HTML 转义。块的内容全部来自用户，**任何**输出到 HTML 的地方都要先过这里。 */
 export function escapeHtml(value) {
   return String(value ?? '')
@@ -32,6 +34,11 @@ const WIKI_TOKEN = /\[\[([^[\]|]+)(?:\|([^[\]]*))?\]\]/g;
  * 顺序不能反：先 `escapeHtml` 的话，标题里的 `&` 会变成 `&amp;`，
  * 再 `encodeURIComponent` 就编成 `%26amp%3B`，链接直接指到不存在的页。
  * 所以这里对**原文**切片：链接之外的片段照常转义，链接的目标与显示字各自转义。
+ *
+ * 双链**之外**的片段交给 `markdown.js` 的 `renderInline`，不再只是 `escapeHtml`。
+ * 于是积木页正文里的 `[文字](url)`、`**粗体**`、`` `代码` `` 也能用了 ——
+ * 以前这些在积木页里是一堆原样的星号和方括号，而同一个作者写的普通帖子却能正常渲染。
+ * 两边收的都是**原文**，正好对得上。
  */
 export function escapeHtmlWithWikiLinks(value, { multiline = false, existing = null } = {}) {
   const raw = String(value ?? '');
@@ -39,8 +46,12 @@ export function escapeHtmlWithWikiLinks(value, { multiline = false, existing = n
   // 没传就当作「不知道」，一律画成蓝链 —— 老调用点与预览（没有库可查）都不会因此变红。
   const known = existing instanceof Set ? existing : null;
   const plain = (chunk) => {
-    const text = escapeHtml(chunk);
-    return multiline ? text.replace(/\n/g, '<br>') : text;
+    if (!multiline) return renderInline(chunk);
+    // 行内渲染器不跨行，所以按行渲染再用 <br> 接起来。
+    return chunk
+      .split('\n')
+      .map((line) => renderInline(line))
+      .join('<br>');
   };
   let out = '';
   let last = 0;
