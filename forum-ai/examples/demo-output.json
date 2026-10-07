@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-10-01T09:40:30.467Z",
+  "generatedAt": "2026-10-07T14:36:03.442Z",
   "note": "本文件由 examples/demo.mjs 用「假的 OpenAI 兼容服务」生成，用于展示真实数据结构；换成真实模型后字段完全一致。",
   "environment": {
     "AI_API_KEY": "(demo)",
@@ -63,23 +63,23 @@
         "recommend": [
           {
             "documentId": 1,
-            "external": false,
+            "wikiId": null,
             "title": "SQLite 分页优化",
             "reason": "同主题的性能侧",
             "relation": "延伸"
           },
           {
             "documentId": null,
-            "external": true,
-            "title": "（编造的编号）",
-            "reason": "验证幻觉过滤",
-            "relation": "对比"
+            "wikiId": 501,
+            "title": "线段树",
+            "reason": "站内 OI Wiki 词条",
+            "relation": "先读"
           }
         ]
       },
       "model": "demo-mock",
       "usage": {
-        "prompt": 1102,
+        "prompt": 1180,
         "completion": 200
       },
       "truncated": false
@@ -240,7 +240,7 @@
       "documents": 5,
       "replies": 5,
       "chars": 184,
-      "updatedAt": 1790761230336
+      "updatedAt": 1791297363400
     },
     "reviewStats": {
       "analyzed": 5,
@@ -248,7 +248,7 @@
       "documents": 5
     },
     "pending": 0,
-    "corpusHash": "5:1790761230336:5:184",
+    "corpusHash": "5:1791297363400:5:184",
     "report": {
       "id": 1,
       "status": "done",
@@ -320,13 +320,13 @@
       ],
       "documentCount": 5,
       "model": "demo-mock",
-      "corpusHash": "5:1790761230336:5:184",
+      "corpusHash": "5:1791297363400:5:184",
       "tokens": {
         "prompt": 1425,
         "completion": 200
       },
       "error": "",
-      "createdAt": 1790847630457
+      "createdAt": 1791383763440
     }
   },
   "http": {
@@ -372,7 +372,7 @@
           "documents": 5,
           "replies": 5,
           "chars": 184,
-          "updatedAt": 1790761230336
+          "updatedAt": 1791297363400
         }
       },
       "topics": [

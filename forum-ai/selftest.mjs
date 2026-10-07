@@ -50,6 +50,7 @@ const mock = { calls: [], mode: 'ok' };
 
 function mockReply(userText) {
   const ids = [...userText.matchAll(/\[#([\w.-]+)\]/g)].map((m) => m[1]);
+  const wikiIds = [...userText.matchAll(/\[W#([\w.-]+)\]/g)].map((m) => m[1]);
   if (mock.mode === 'bad-json') return '抱歉，我无法回答。';
   if (mock.mode === 'fenced') {
     return null; // 由调用方包成 ```json
@@ -77,6 +78,10 @@ function mockReply(userText) {
       recommend: [
         { documentId: ids[1], title: '相关文档', reason: '延伸', relation: '延伸' },
         { documentId: '999999', title: '不存在的文档', reason: '假的', relation: '对比' },
+        // 真正的鬼篇目：连编号都没有，纯标题（2026-10 线上解读里出现过《XX 手册》这类）
+        { documentId: null, title: '不存在的指南', reason: '编的', relation: '延伸' },
+        { wikiId: wikiIds[0], title: '线段树', reason: 'OI 词条', relation: '先读' },
+        { wikiId: '999999', title: '不存在的词条', reason: '假的', relation: '延伸' },
       ],
     };
   }
@@ -210,15 +215,34 @@ try {
 
   /* ---------------- 三个能力 ---------------- */
   console.log('\n▶ 单篇解读 / 全库整理 / 问答');
-  const single = await reviewDocument(DOCS[0], DOCS.slice(1), { chatOptions: { env } });
+  const WIKI = [
+    { id: 501, title: '线段树', station: 'OI Wiki', category: '数据结构' },
+    { id: 502, title: 'string', station: 'OI Wiki', category: 'STL' },
+  ];
+  const single = await reviewDocument(DOCS[0], DOCS.slice(1), { chatOptions: { env }, wikiPages: WIKI });
   check('解读返回分类', single.review.category === '后端', single.review.category);
   check('解读返回 token 用量', single.usage.prompt === 11 && single.usage.completion === 7);
   check('解读带上模型名', single.model === 'mock-model');
   check('推荐里的真实编号保留', single.review.recommend.some((item) => item.documentId === 2), JSON.stringify(single.review.recommend));
-  check('推荐里的假编号被标成外部而非内链', single.review.recommend.some((item) => item.documentId === 999999) === false && single.review.recommend.some((item) => item.external === true), JSON.stringify(single.review.recommend));
-  check('外部推荐仍然保留标题供 UI 展示', single.review.recommend.find((item) => item.external)?.title === '不存在的文档');
-  const strictReview = normalizeReview({ recommend: [{ documentId: 999999, title: 'x' }] }, {}, { knownIds: [1, 2] });
-  check('传 knownIds 时未知编号被清成 null', strictReview.recommend[0].documentId === null && strictReview.recommend[0].external === true);
+  check('推荐里的站内 Wiki 词条保留 wikiId', single.review.recommend.some((item) => item.wikiId === 501), JSON.stringify(single.review.recommend));
+  check(
+    '每条推荐都有真实落点（没有只剩标题的鬼篇目）',
+    single.review.recommend.length > 0 && single.review.recommend.every((item) => item.documentId || item.wikiId),
+    JSON.stringify(single.review.recommend),
+  );
+  check(
+    '编造的篇目（假编号 / 无编号）整条丢掉',
+    ['不存在的文档', '不存在的指南', '不存在的词条'].every((title) => !single.review.recommend.some((item) => item.title === title)),
+    JSON.stringify(single.review.recommend),
+  );
+  const strictReview = normalizeReview(
+    { recommend: [{ documentId: 999999, title: 'x' }, { wikiId: 999, title: 'y' }, { documentId: 2, wikiId: 501, title: '两边都对得上' }] },
+    {},
+    { knownIds: [1, 2], knownWikiIds: [501] },
+  );
+  check('未知帖子编号被整条丢弃', strictReview.recommend.every((item) => item.title !== 'x'), JSON.stringify(strictReview.recommend));
+  check('未知 wiki 编号被整条丢弃', strictReview.recommend.every((item) => item.title !== 'y'), JSON.stringify(strictReview.recommend));
+  check('同时给两个编号时两个都保留', strictReview.recommend[0]?.documentId === 2 && strictReview.recommend[0]?.wikiId === 501, JSON.stringify(strictReview.recommend));
 
   const corpus = await reviewCorpus(DOCS, { chatOptions: { env } });
   check('全库整理返回主题', corpus.report.topics.length === 1 && corpus.report.topics[0].documentIds.length >= 1, JSON.stringify(corpus.report.topics));

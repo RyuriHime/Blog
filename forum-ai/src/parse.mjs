@@ -76,19 +76,30 @@ const idOf = (value) => {
   return Number.isInteger(num) && num > 0 ? num : null;
 };
 
+/** 站内 Wiki 词条的编号（文档编号，与帖子编号是两套序列）。 */
+const wikiIdOf = (value) => {
+  const candidate = value?.wikiId ?? value?.wikiDocumentId;
+  const num = Number(candidate);
+  return Number.isInteger(num) && num > 0 ? num : null;
+};
+
 /**
  * 单篇解读归一化。
  *
- * 关于 recommend 里的编号：**不直接丢弃**，因为「库里没有、但值得补的一本书/一篇外链」
- * 也是有价值的推荐。做法是标出 `external: true`，让宿主的 UI 决定是渲染成内链还是纯文本；
- * 宿主也可以传 knownIds 让本函数把未知编号清成 null。
+ * 关于 recommend 里的编号：**只留清单里真实存在的**。
+ *   - `documentId` 必须落在本次给出的帖子清单（knownIds）里；
+ *   - `wikiId` 必须落在本次给出的站内 Wiki 词条里（knownWikiIds）；
+ *   - 两个都不成立的条目**直接丢掉** —— 模型自己编的《XX 指南》这类篇目名
+ *     没有任何落点，留在结果里只会让读者点到一个不存在的页面。
+ * 宿主没传某一组编号时（例如没接 wiki），那一组不做校验、按原样保留。
  *
  * @param {object} parsed 模型返回的对象
  * @param {object} doc 原始文档（用于兜底摘要）
- * @param {{ knownIds?: Iterable<string|number> }} [options]
+ * @param {{ knownIds?: Iterable<string|number>, knownWikiIds?: Iterable<string|number> }} [options]
  */
-export function normalizeReview(parsed, doc = {}, { knownIds = null } = {}) {
+export function normalizeReview(parsed, doc = {}, { knownIds = null, knownWikiIds = null } = {}) {
   const known = knownIds ? new Set([...knownIds].map(String)) : null;
+  const knownWiki = knownWikiIds ? new Set([...knownWikiIds].map(String)) : null;
   const review = {
     category: clampText(parsed.category, 20) || '其他',
     difficulty: oneOf(parsed.difficulty, DIFFICULTIES, '进阶'),
@@ -105,17 +116,19 @@ export function normalizeReview(parsed, doc = {}, { knownIds = null } = {}) {
     recommend: (Array.isArray(parsed.recommend) ? parsed.recommend : [])
       .map((item) => {
         const id = idOf(item);
-        const isKnown = id !== null && (known ? known.has(String(id)) : true);
+        const wikiId = wikiIdOf(item);
+        const keepPost = id !== null && (!known || known.has(String(id)));
+        const keepWiki = wikiId !== null && (!knownWiki || knownWiki.has(String(wikiId)));
+        if (!keepPost && !keepWiki) return null;
         return {
-          documentId: id !== null && isKnown ? id : null,
-          // 模型给了编号但不在材料里 → 外部推荐，UI 可以只显示标题
-          external: id !== null && !isKnown,
+          documentId: keepPost ? id : null,
+          wikiId: keepWiki ? wikiId : null,
           title: clampText(item?.title, 80),
           reason: clampText(item?.reason, 60),
           relation: clampText(item?.relation, 8) || '延伸',
         };
       })
-      .filter((item) => item.title)
+      .filter((item) => item && item.title)
       .slice(0, 4),
   };
   if (!review.summary) review.summary = clampText(doc.content ?? doc.text ?? '', 120);

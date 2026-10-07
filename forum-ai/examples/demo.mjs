@@ -94,6 +94,7 @@ const mock = { calls: [] };
 
 function reply(userText) {
   const ids = [...new Set([...userText.matchAll(/\[#([\w.-]+)\]/g)].map((m) => m[1]))];
+  const wikiIds = [...new Set([...userText.matchAll(/\[W#([\w.-]+)\]/g)].map((m) => m[1]))];
   if (userText.includes('全库材料')) {
     return {
       summary: '这批文档围绕三条线展开：零依赖的 Node 全栈实践、SQLite 的查询与分页优化、以及前端路由与写作规范这类工程细节。',
@@ -146,7 +147,9 @@ function reply(userText) {
       ],
       recommend: [
         { documentId: ids.find((id) => id !== '2') ?? null, title: 'SQLite 分页优化', reason: '同主题的性能侧', relation: '延伸' },
-        { documentId: '999999', title: '（编造的编号）', reason: '验证幻觉过滤', relation: '对比' },
+        // 没编号的纯标题：验证「编造的篇目」整条被丢掉
+        { documentId: null, title: '（编造的指南）', reason: '验证幻觉过滤', relation: '对比' },
+        { wikiId: wikiIds[0], title: '线段树', reason: '站内 OI Wiki 词条', relation: '先读' },
       ],
     };
   }
@@ -187,10 +190,21 @@ try {
   console.log('▶ 环境:', JSON.stringify({ ...env, AI_API_KEY: '(hidden)' }));
 
   console.log('\n▶ 1. 单篇解读');
-  const single = await reviewDocument(SEED, DOCUMENTS.filter((doc) => doc.id !== SEED.id), { chatOptions: { env } });
+  const DEMO_WIKI = [
+    { id: 501, title: '线段树', station: 'OI Wiki', category: '数据结构' },
+    { id: 502, title: 'string', station: 'OI Wiki', category: 'STL' },
+  ];
+  const single = await reviewDocument(SEED, DOCUMENTS.filter((doc) => doc.id !== SEED.id), {
+    chatOptions: { env },
+    wikiPages: DEMO_WIKI,
+  });
   console.log(`  分类=${single.review.category} 难度=${single.review.difficulty} 标签=${single.review.tags.join('/')}`);
   console.log(`  前置知识: ${single.review.prereq.map((item) => item.name).join('、')}`);
-  console.log(`  推荐阅读: ${single.review.recommend.map((item) => `${item.title}${item.documentId ? `(#${item.documentId})` : '(外部)'}`).join('、')}`);
+  console.log(
+    `  推荐阅读: ${single.review.recommend
+      .map((item) => `${item.title}${item.documentId ? `(#${item.documentId})` : item.wikiId ? `(wiki #${item.wikiId})` : '(无落点)'}`)
+      .join('、')}`,
+  );
 
   console.log('\n▶ 2. 全库整理');
   const corpus = await reviewCorpus(DOCUMENTS, { chatOptions: { env } });

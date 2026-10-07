@@ -70,14 +70,18 @@ await reviewDocument(doc, [], { chatOptions: { env: { AI_API_KEY: 'sk-x', AI_MOD
   "prereq": [                        // 前置知识
     { "name": "JavaScript 基础", "why": "读懂示例代码", "level": "入门" }
   ],
-  "recommend": [                     // 推荐阅读
-    { "documentId": 5, "external": false, "title": "SQLite 分页优化", "reason": "同主题性能侧", "relation": "延伸" },
-    { "documentId": null, "external": true, "title": "（库里没有的推荐）", "reason": "…", "relation": "对比" }
+  "recommend": [                     // 推荐阅读：只能落在真实存在的篇目上
+    { "documentId": 5, "wikiId": null, "title": "SQLite 分页优化", "reason": "同主题性能侧", "relation": "延伸" },
+    { "documentId": null, "wikiId": 118, "title": "string", "reason": "先看 STL 定义", "relation": "先读" }
   ]
 }
 ```
 
-> **关于 `recommend` 的编号**：编号必须来自本次材料。模型编造的编号会被清成 `documentId: null` 并标 `external: true`，宿主的 UI 看到 `external` 就只显示标题、不生成站内链接——这样既不会把编造的编号变成死链，又保留了「值得补读但库里没有」的建议。
+> **关于 `recommend` 的编号**：每一条都必须落在本次给出的两份清单里 ——
+> `documentId` 来自「可推荐的站内帖子」，`wikiId` 来自「站内 Wiki 词条」（宿主接的是本站积木模块的
+> `documents` 表，编号是**文档编号**，UI 走 `#/doc/<编号>`，因为 wiki 页的影子帖是隐藏的）。
+> 两个编号都不成立的条目**整条丢弃**：模型自己编的《XX 指南》《XX 手册》这类没有落点的标题不会进结果，
+> 宁可 `recommend` 是空数组。想推荐「还没写、但值得先学的知识点」就放进 `prereq`。
 
 ### 3.2 全库整理 `report`
 

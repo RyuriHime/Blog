@@ -114,6 +114,32 @@ ai: forumAiStatus(),                                                       // GE
 
 ---
 
+## F. 站内 Wiki 推荐（乙类，本轮新增）—— 让 `recommend` 只落在真实存在的地方
+
+**现象**：线上每篇帖子底下的「📚 推荐阅读」里会出现《积木使用指南》《AI 编辑台：改写与回滚实战》《Sandbox API 完整参考手册》这类**站里根本没有的篇目**。点不了（没有链接），但读者会以为站里有这些文章。
+
+**原因**（作者包的原始设计，不是 bug，但会在我们的站上出问题）：
+
+1. 提示词 `src/prompts.mjs` 的 `ANALYZE_SYSTEM` 原文是「recommend 给 2-4 条：材料里列出的其它文档，documentId 必须填真实存在的编号；**没有合适的就填 null 并给出标题建议**」——「给标题建议」就是邀请模型编篇目名。
+2. `src/parse.mjs` 的 `normalizeReview()` 对没有编号的条目保留 `{documentId: null, external: false, title}`：作者原本用 `external: true` 表示"库里没有、只是建议"，但**模型自己编的条目连编号都没给**（`id === null` ⇒ `external: false`），于是走了"内链"分支却只有标题，前端渲染成一段纯文本。
+3. 更根本的是：作者包的语料里只有宿主喂给它的材料，**模型无从知道站里到底有什么**。我们的站还有一整套「积木」文档（含 519 页的 OI Wiki 站点），模型完全看不到。
+
+**我们的修法**（四层，缺一不可）：
+
+| 位置 | 改动 |
+|---|---|
+| `src/mount.mjs` | 新增 `createWikiPageSource(db)`：只读地枚举本站积木模块里 `template='page'` 且 `station_id > 0` 的文档（`documents` ⨝ `doc_settings` ⨝ 站点标题，能读到 `doc_wiki_pages.category` 就带上）。**缺表/缺列时退化成空数组**（作者包单独跑或宿主的插件模块没装时不报错）。经 `createAiHandlers({ …, wikiPages })` 注入。 |
+| `src/routes.mjs` | `wikiPool(doc)`：拿上一步的整份 wiki 清单，按「命中文档标题或正文 +6 / 与本篇标题的二字重合 ×2」做**站内检索**，取分数最高的 24 条进提示词。另外 `recommendPool()` 里把 **wiki 页的影子帖**（`anchorPostId`）从「可推荐的其它帖子」清单里剔除——影子帖是隐藏的，给出去就是死链。 |
+| `src/prompts.mjs` | 新增 `renderWikiList()` 与提示词的 `【站内 Wiki 词条】` 段；recommend 的规则改成**只能从「可推荐的站内帖子」与「站内 Wiki 词条」两份清单里挑**，`documentId` / `wikiId` 必须照抄清单里的编号、标题必须照抄，**编造一律丢弃**（宁可空数组）；「还没写、但值得先学的知识点」改放 `prereq`。 |
+| `src/parse.mjs` | `normalizeReview()` 新增 `knownWikiIds` 与 `wikiId` 字段：**`documentId` 与 `wikiId` 两个编号都不在清单里的条目整条丢弃**（不再是"标成 external 留着"）。`external` 字段随之删除。 |
+| `public/views/ai.js` | `recommend` 渲染多一条分支：`wikiId` 优先，走 `#/doc/<编号>`（**文档编号不是帖子编号**，wiki 页的影子帖是隐藏的，只能链到积木阅读页），并挂一个「站内 Wiki」标签。 |
+
+**注意编号体系**：本站 `documents.id` 与 `posts.id` 是**两套序列**（wiki 页 `documents/118` 的影子帖是 `posts/142`）。给读者的链接必须用**文档编号**走 `#/doc/…`，所以提示词里两个编号分开列（`[#12]` = 帖子、`[W#118]` = wiki 词条）。
+
+**同步改过的作者文件**（作者更新包时按上面表格重打）：`README.md` 3.1 节的 `recommend` 示例与"关于编号"的说明、`selftest.mjs`（新增 wiki 用例与四条断言）、`selftest-mount.mjs`（断言改成"没有落点的条目被丢掉"）、`examples/demo.mjs`（示例数据与打印格式；`examples/demo-output.json` 是它的产物，改完要重跑一次 `node forum-ai/examples/demo.mjs` 覆盖生成）。
+
+---
+
 ## 附：作者包的其它小问题（不影响功能，仅记录）
 
 1. `forum-ai/src/mount.mjs` 顶部的用法注释写的是 `mountForumAi({ db, resolveUser, baseDir: ROOT, aiDir: join(ROOT,'forum-ai') })`，但**实际函数签名没有 `baseDir` / `aiDir` 这两个参数**（注释与实现不一致）。
@@ -129,10 +155,11 @@ ai: forumAiStatus(),                                                       // GE
 
 | 测试 | 期望 |
 |---|---|
-| `node forum-ai/selftest-mount.mjs` | 通过 34 项，失败 0 项 |
-| `node forum-ai/selftest.mjs` | 通过 92 项，失败 0 项 |
+| `node forum-ai/selftest-mount.mjs` | 通过 35 项，失败 0 项 |
+| `node forum-ai/selftest.mjs` | 通过 95 项，失败 0 项 |
 | `node scripts/smoke-ai.mjs` | 通过 61 项，失败 0 项 |
-| `node scripts/smoke.mjs` | 通过 242 项，失败 0 项 |
-| `node scripts/check-ui-contract.mjs` | 通过 175 项，问题 0 项 |
+| `node scripts/smoke.mjs` | 通过 231 项，失败 0 项 |
+| `node scripts/check-ui-contract.mjs` | 通过 317 项（下限 317），问题 0 项 |
+| `node scripts/check-encoding.mjs` | 已检查 205 个文件（下限 205），中文片段断言 84 条 |
 
-合计 **604 项**。另外 `node scripts/check-encoding.mjs` 在 Linux 上会报 `ENOENT ... start.cmd` —— 它硬编码要检查 `start.cmd`（Windows 专用文件、故意不上传），**这个失败是预期的，不是问题**。
+合计 **739 项**（2026-10 复跑实测；数量随轮次增删会变，以各脚本自己打印的下限为准）。另外 `node scripts/check-encoding.mjs` 在 Linux 上会报 `ENOENT ... start.cmd` —— 它硬编码要检查 `start.cmd`（Windows 专用文件、故意不上传），**这个失败是预期的，不是问题**。
