@@ -244,6 +244,26 @@ AI 接口没有返回内容（finish_reason=length，提示 8840 / 生成 3000 t
 归并失败用草案兜底并把失败记下来、兜底也给概述），假 AI 服务再加 `truncateIndex` / `truncatePartOver`（按
 「本部分 N 篇」超过阈值就回截断）两个开关。
 
+### I2（甲类，同日补）半截 JSON 也算截断
+
+这一版上线后线上确实出图了，但响应里 `failures = 6` —— 有 6 片内容被跳过。看现场就知道漏在哪：
+模型有时不是「一个字没写」，而是**写了半截 JSON 就被 `max_tokens` 掐掉**，`content` 非空、`extractJson`
+解析失败，于是被归成 `ai_bad_json`，而我们只把「正文为空的 `ai_empty_response`」当成截断，
+这 6 片既没对半切、也没重试，直接算失败。
+
+**修法**：
+
+| 位置 | 改动 |
+|---|---|
+| `src/ai.mjs` | `chatOnce()` 的返回值带上 `finishReason`（原来只在报错时才带），这样「解析失败」也能知道是不是被掐断的 |
+| `src/ai.mjs` | `isTruncated()` 认两种：`ai_empty_response`（正文空）**或** `ai_bad_json`（半截 JSON），都要求 `finishReason === 'length'` |
+| `src/ai.mjs` | `chatJson()` 解析失败时把 `finishReason` / `usage` 记进错误；**被截断就不重问第二遍**（同样预算还是半截），把现场交给调用方去「少问一点」 |
+| `src/ai.mjs` | 2 级（只发目录）的兜底从「被截断」放宽到「截断或半截 JSON」——一次问太大问不出合法 JSON，就落到分块去问小片 |
+
+**同步改过的作者文件**：`selftest.mjs` 再 +5 项（半截 JSON 认得出是截断、不重问第二遍、现场留着模型原文、
+目录问成半截 JSON 也改走分块、块问成半截 JSON 时对半切开后没有失败块），假 AI 服务再加
+`truncateIndexJson` / `truncatePartJsonOver` 两个开关（回半截 JSON + `finish_reason=length`）。
+
 ---
 
 ## 附：作者包的其它小问题（不影响功能，仅记录）
@@ -262,11 +282,11 @@ AI 接口没有返回内容（finish_reason=length，提示 8840 / 生成 3000 t
 | 测试 | 期望 |
 |---|---|
 | `node forum-ai/selftest-mount.mjs` | 通过 35 项，失败 0 项 |
-| `node forum-ai/selftest.mjs` | 通过 146 项，失败 0 项 |
+| `node forum-ai/selftest.mjs` | 通过 151 项，失败 0 项 |
 | `node scripts/smoke-ai.mjs` | 通过 65 项，失败 0 项 |
 | `node scripts/smoke.mjs` | 通过 238 项，失败 0 项 |
 | `node scripts/check-golden.mjs` | 通过 88 项，差异 0 项（对外行为与改造前一致） |
 | `node scripts/check-ui-contract.mjs` | 通过 317 项（下限 317），问题 0 项 |
 | `node scripts/check-encoding.mjs` | 已检查 207 个文件（下限 205），中文片段断言 84 条 |
 
-合计 **801 项**（2026-10 复跑实测；数量随轮次增删会变，以各脚本自己打印的下限为准）。另外 `node scripts/check-encoding.mjs` 在 Linux 上会报 `ENOENT ... start.cmd` —— 它硬编码要检查 `start.cmd`（Windows 专用文件、故意不上传），**这个失败是预期的，不是问题**。
+合计 **806 项**（2026-10 复跑实测；数量随轮次增删会变，以各脚本自己打印的下限为准）。另外 `node scripts/check-encoding.mjs` 在 Linux 上会报 `ENOENT ... start.cmd` —— 它硬编码要检查 `start.cmd`（Windows 专用文件、故意不上传），**这个失败是预期的，不是问题**。
