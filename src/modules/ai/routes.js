@@ -32,6 +32,7 @@ import {
   AI_MAX_SECTION_INPUT,
   AI_RANGE_TARGET_TYPES,
   AI_MAX_TITLE,
+  AI_TOKEN_USAGE_TABLE,
 } from './schema.js';
 import { splitSections, SECTION_OPENING_LABEL } from './sections.js';
 import {
@@ -42,6 +43,18 @@ import {
   AI_FENCE_GUIDE,
 } from './syntax.js';
 import { repairBlock, repairBlockList, repairMarkdown, describeRepairs } from './programs.js';
+import {
+  AI_PRICE_CURRENCY,
+  AI_PRICE_UNIT,
+  AI_PRICE_SOURCE,
+  AI_PRICE_ENV_KEYS,
+  AI_OFF_PEAK_FACTOR,
+  isPeakHour,
+  shapeTokenUsage,
+  summarizeCost,
+  priceFor,
+  priceNote,
+} from './pricing.js';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -269,6 +282,38 @@ function logBlocked(db, userId, capability, action, targetId, reason, targetType
     status: AI_BLOCKED_STATUS,
     reason,
   });
+}
+
+/**
+ * 把一次模型调用的 token 用量记进 `ai_token_usage`（成本面板的钱就靠这张表）。
+ *
+ * **只记真的打到上游、且上游答了的那次**（`callModel` 里 HTTP 200 拿到 payload 之后）：
+ * 内容是不是合法 JSON 与花不花钱无关 —— 坏 JSON 的应答上游照样计费，
+ * 所以这一行在 `parseModelJson` 之前就写下了。
+ *
+ * `peak` 按**此刻**判并落库，不留给读的时候再算（计费看调用那一刻，见 pricing.js）。
+ * 记账本身不许抛：一次成功的模型调用不该因为记不上账而变成 500。
+ */
+function recordTokenUsage(db, { userId, action, model, usage, at = Date.now() }) {
+  try {
+    db.prepare(
+      `INSERT INTO ${AI_TOKEN_USAGE_TABLE}
+         (user_id, action, model, prompt_tokens, cached_tokens, completion_tokens, peak, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      userId,
+      String(action ?? ''),
+      String(model ?? ''),
+      usage.promptTokens,
+      usage.cachedTokens,
+      usage.completionTokens,
+      isPeakHour(at) ? 1 : 0,
+      at,
+    );
+  } catch {
+    // 表在、列在（schema.js 建的是它），能失败只有磁盘/权限这类环境问题 ——
+    // 吞掉它，调用方拿到的仍然是一次正常的模型结果。
+  }
 }
 
 function shapeOp(row) {
@@ -631,12 +676,20 @@ function documentSystemPrompt() {
 /**
  * 真发一次模型调用，把模型返回的**原文**拿回来。
  *
- * 返回 `{ content, model }`：解析和形状校验留给调用方（块 / 小节 / 整篇三种形状不同，
+ * 返回 `{ content, model, usage }`：解析和形状校验留给调用方（块 / 小节 / 整篇三种形状不同，
  * 但坏形状一律用既有的 `ai_bad_json`，不新造代号）。
+ *
+ * `usage` 是上游报的 token 用量（`{ promptTokens, cachedTokens, completionTokens }`），
+ * 到手就顺手记进 `ai_token_usage`（成本面板的钱靠它）。**记在这里而不是调用方**：
+ * 四个调用点里有两个（草拟、评审）拿到内容就走自己的岔路，放调用方迟早漏一个；
+ * 而且上游是**按 token 计费**的 —— 返回半截 JSON、调用方要报 `ai_bad_json` 的那次
+ * 照样收钱，所以这一行必须写在「HTTP 200 拿到 payload」之后、「解析」之前。
+ * 上游没报 usage（例如某些兼容网关）时三个数都是 0，金额按 0 算，不猜。
  *
  * 所有「发不出去 / 被上游拒绝」的分支都在这里 `logBlocked` —— 以前只有「连不上」
  * 和「超时」写日志，被 401/403/429/500 拒绝的那几条什么都不记，审计就是缺的。
- * 抽成一个函数也是为了让下一个接口不可能漏掉这几行。
+ * 抽成一个函数也是为了让下一个接口不可能漏掉这几行。被拒的分支**没有** token 可记：
+ * 上游没生成内容，也就没有用量。
  */
 async function callModel(
   db,
@@ -711,7 +764,10 @@ async function callModel(
   }
 
   const content = String(payload?.choices?.[0]?.message?.content ?? '');
-  return { content, model };
+  // 计费与「内容合不合法」无关：先记账，再让调用方去解析（坏 JSON 也是花过钱的）。
+  const usage = shapeTokenUsage(payload?.usage);
+  recordTokenUsage(db, { userId, action, model: String(payload?.model || model), usage });
+  return { content, model, usage };
 }
 
 /** 模型原文 → JSON。坏 JSON 一律 `ai_bad_json` 502，并在日志里留一条 blocked。 */
@@ -1611,17 +1667,23 @@ export function registerAiRoutes(ctx) {
     });
   });
 
-  // ── 12. 全站用量 + 预算状态（仅管理团队）────────────────────────────────
+  // ── 12. 全站用量 + 预算状态 + 花的钱（仅管理团队）────────────────────────
   //
   // 补的是「配额按用户算、钱按 key 算」留下的那个洞：在这之前，全站今天调了多少次、
   // 谁在用、有没有顶到上限，管理员一概看不见，唯一的全局约束就是账单本身。
   //
-  // 口径：`billed` 只数 AI_QUOTA_ACTIONS 里**没失败**的行 —— 与用户额度、全站预算
-  // 逐字一致；`total` 是当天的全部日志行（含预览、授权、被挡掉的）。
+  // 口径分两套，故意**分开报**，因为它们回答的是不同的问题：
+  //   · 次数（`total` / `billed` / `blocked` / `users` / `byAction` / `topUsers`）
+  //     —— 配额闸门用的就是它：`billed` 只数 AI_QUOTA_ACTIONS 里**没失败**的行，
+  //     与用户额度、全站预算逐字一致；`total` 是当天的全部日志行（含预览、授权、被挡的）。
+  //   · 钱（`tokens` + `cost`）—— 来自 `ai_token_usage`（每次真打到上游的调用一行），
+  //     次数当不了成本的代理：一次整篇改写和一次单块草拟都算「1 次」，账单差几十倍。
   //
-  // **没有 token 数**：这张表没存模型返回的 usage；`ctx.schema.add` 只有
-  // CREATE TABLE IF NOT EXISTS，没有加列的迁移通道（`src/core/table.js` 全文 87 行），
-  // 所以这里把「次数」当成本的代理指标，并在返回值里写清楚。
+  // 金额按**每行自己的 `model` 与落库时的 `peak` 档位**算：换模型不会改写历史账单，
+  // 半夜打开面板看白天的账也不会跟着变价（理由见 pricing.js 文件头）。
+  //
+  // 这是**估算**，面板上要说清：单价抄自官方价目表（官方调价后要对齐 pricing.js）；
+  // 上游没报 usage 的调用金额按 0 算，单独用 `tokens.missing` 报出来，别让 0 元像免费。
   routes.add('GET', '/api/ai-edit/usage', (reqCtx) => {
     requireStaff(reqCtx);
     const at = Date.now();
@@ -1660,12 +1722,78 @@ export function registerAiRoutes(ctx) {
     );
     const allTime = Number(db.prepare('SELECT COUNT(*) AS n FROM ai_op_logs').get()?.n ?? 0);
 
+    // 用量按 `(peak, model)` 分组取，汇总时每组按自己的档位与模型单价算钱。
+    // 分组而不是「拿总 token 乘一个价」：历史账单里可能混着好几个模型、
+    // 也可能跨了高峰与空闲两档，混着乘出来的数看着精确，其实每一段都不对。
+    const usageOf = (from) => {
+      const base = `SELECT peak, model,
+                           SUM(prompt_tokens) AS promptTokens,
+                           SUM(cached_tokens) AS cachedTokens,
+                           SUM(completion_tokens) AS completionTokens,
+                           COUNT(*) AS calls,
+                           SUM(CASE WHEN prompt_tokens = 0 AND completion_tokens = 0 THEN 1 ELSE 0 END) AS missing
+                      FROM ${AI_TOKEN_USAGE_TABLE}`;
+      const rows =
+        from == null
+          ? db.prepare(`${base} GROUP BY peak, model`).all()
+          : db.prepare(`${base} WHERE created_at >= ? GROUP BY peak, model`).all(from);
+      return summarizeCost(
+        rows.map((row) => ({ ...row, peak: Number(row.peak) === 1 })),
+        { env: process.env },
+      );
+    };
+    const todayUsage = usageOf(since);
+    const allTimeUsage = usageOf(null);
+    const counts = (sum) => ({
+      prompt: sum.promptTokens,
+      cached: sum.cachedTokens,
+      completion: sum.completionTokens,
+      total: sum.totalTokens,
+      calls: sum.calls,
+      missing: sum.missing,
+    });
+    const money = (sum) => ({
+      yuan: sum.yuan,
+      peakYuan: sum.peakYuan,
+      offPeakYuan: sum.offPeakYuan,
+      currency: AI_PRICE_CURRENCY,
+      unit: AI_PRICE_UNIT,
+    });
+
     const limit = readSiteBudget();
+    const peakNow = isPeakHour(at);
+    const price = priceFor(process.env.AI_MODEL || 'deepseek-chat', process.env);
     return ctx.http.ok(reqCtx.res, {
       scope: 'site',
       since,
-      today: { total, billed, blocked, users, byAction, topUsers },
-      allTime: { total: allTime },
+      today: {
+        total,
+        billed,
+        blocked,
+        users,
+        byAction,
+        topUsers,
+        tokens: counts(todayUsage),
+        cost: money(todayUsage),
+      },
+      allTime: { total: allTime, tokens: counts(allTimeUsage), cost: money(allTimeUsage) },
+      // 面板要把「这份账按什么单价、哪个时段算的」原样写出来（含出处链接）：
+      // 金额是估算，来历不明的话管理员没办法判断该不该信它。
+      pricing: {
+        model: price.model,
+        known: price.known,
+        label: price.label,
+        inputMiss: price.inputMiss,
+        inputHit: price.inputHit,
+        output: price.output,
+        unit: AI_PRICE_UNIT,
+        currency: AI_PRICE_CURRENCY,
+        offPeakFactor: AI_OFF_PEAK_FACTOR,
+        peakNow,
+        source: AI_PRICE_SOURCE,
+        envKeys: AI_PRICE_ENV_KEYS,
+        note: priceNote(price, { peak: peakNow }),
+      },
       budget: {
         envKey: AI_BUDGET_ENV,
         unlimited: limit <= 0,
@@ -1673,7 +1801,7 @@ export function registerAiRoutes(ctx) {
         used: billed,
         remaining: limit <= 0 ? null : Math.max(limit - billed, 0),
       },
-      note: '按调用次数统计；这张表没有存模型返回的 token 用量，所以没有金额。',
+      note: '次数与 token 用量分开统计：次数是配额闸门的口径，金额 = token × 单价（按调用时刻的高峰/空闲档位估算，单价抄自官方价目表）。',
     });
   });
 }

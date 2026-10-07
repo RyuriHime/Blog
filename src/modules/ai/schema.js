@@ -3,6 +3,7 @@
 // 归属：
 //   ai_capability_grants —— 能力授权（谁、授予哪项能力、何时、有效期、每日配额、是否已收回）
 //   ai_op_logs           —— AI 操作日志（每次能力使用一行，存 before/after，可回滚）
+//   ai_token_usage       —— 每次真的打到上游的模型调用一行 token 用量（成本面板的钱）
 //
 // 不在这里，也不许写进 owns：
 //   ai_post_reviews / ai_site_reports —— forum-ai 运行时自建自管，不归任何一个模块登记。
@@ -173,14 +174,28 @@ export const AI_BUDGET_ENV = 'AI_DAILY_TOTAL_LIMIT';
 export const AI_USAGE_TOP_USERS = 10;
 
 /**
+ * token 用量落库的粒度：**一次真的打到上游的模型调用一行**。
+ *
+ * 为什么不往 `ai_op_logs` 上加列：`ctx.schema.add` 只有 `CREATE TABLE IF NOT EXISTS`，
+ * 没有加列的迁移通道（`src/core/table.js`），而这张表还必须是启动即有的 ——
+ * 加列要另造一套迁移，收益却只是少一次 INSERT。所以用量单独一张表，
+ * 靠 `user_id` / `action` / `created_at` 与审计行对齐（`op_id` 不存：
+ * 草拟的审计行是在模型返回**之后**才写的，这里存不了它的 id）。
+ *
+ * `peak` 是**调用时刻**所处的档位（北京时间工作日高峰 / 空闲），落库时定死：
+ * 计费看的是调用那一刻，不是管理员半夜打开面板的那一刻（详见 pricing.js）。
+ */
+export const AI_TOKEN_USAGE_TABLE = 'ai_token_usage';
+
+/**
  * 建表 SQL。
  *
  * 顶层分号会被 `src/core/table.js` 的切分器拆成一条条语句：
- * 两条 `CREATE TABLE IF NOT EXISTS` 进表名册（就是 `owns` 里的那两个名字），
+ * 三条 `CREATE TABLE IF NOT EXISTS` 进表名册（就是 `owns` 里的那三个名字），
  * `CREATE INDEX` 照常执行但不进名册。
  *
  * `user_id` 引用 `users(id)`：`src/server.js` 先 import `./store.js`（登记 14 张 core 表）
- * 再 import `./modules/index.js`（登记这两张），所以外键目标那时已经存在。
+ * 再 import `./modules/index.js`（登记这三张），所以外键目标那时已经存在。
  */
 export const AI_SCHEMA = `
 CREATE TABLE IF NOT EXISTS ai_capability_grants (
@@ -209,4 +224,18 @@ CREATE TABLE IF NOT EXISTS ai_op_logs (
 );
 CREATE INDEX IF NOT EXISTS idx_ai_capability_grants_user ON ai_capability_grants (user_id, revoked_at);
 CREATE INDEX IF NOT EXISTS idx_ai_op_logs_user ON ai_op_logs (user_id, id DESC);
+
+CREATE TABLE IF NOT EXISTS ai_token_usage (
+  id                INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id           INTEGER NOT NULL REFERENCES users(id),
+  action            TEXT    NOT NULL DEFAULT '',
+  model             TEXT    NOT NULL DEFAULT '',
+  prompt_tokens     INTEGER NOT NULL DEFAULT 0,
+  cached_tokens     INTEGER NOT NULL DEFAULT 0,
+  completion_tokens INTEGER NOT NULL DEFAULT 0,
+  peak              INTEGER NOT NULL DEFAULT 0,
+  created_at        INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_ai_token_usage_created ON ai_token_usage (created_at);
+CREATE INDEX IF NOT EXISTS idx_ai_token_usage_user ON ai_token_usage (user_id, created_at);
 `;

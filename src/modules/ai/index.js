@@ -1,6 +1,6 @@
 // AI 参与编辑（P3）—— 能力授权 + 操作审计 + 回滚。
 //
-//   owns  ai_capability_grants / ai_op_logs  —— 只有这两张表，别的表一律只读
+//   owns  ai_capability_grants / ai_op_logs / ai_token_usage —— 只有这三张表，别的表一律只读
 //   api   /api/ai-edit/*                     —— 见下面「为什么不是 /api/ai」的说明
 //
 // 不拥有：ai_post_reviews / ai_site_reports（forum-ai 运行时自建自管，写进 owns 会被
@@ -25,15 +25,15 @@ import { schemas } from '../../core/schema.js';
 import { registerAiRoutes } from './routes.js';
 import { AI_SCHEMA } from './schema.js';
 
-// 副作用：登记本模块的两张表（必须在开库之前，见文件头注释）。
+// 副作用：登记本模块的三张表（必须在开库之前，见文件头注释）。
 schemas.addScript(AI_SCHEMA, 'ai');
 
 export default {
   name: 'ai',
   /** 只做加法；具体前缀取值理由见文件头。 */
   apiPrefix: '/api/ai-edit',
-  /** 本模块**拥有**的表。两张都是新增表，既有表一张都不动。 */
-  owns: ['ai_capability_grants', 'ai_op_logs'],
+  /** 本模块**拥有**的表。三张都是新增表，既有表一张都不动。 */
+  owns: ['ai_capability_grants', 'ai_op_logs', 'ai_token_usage'],
   /**
    * 会读、但不拥有的表（只读，绝不写）。
    * `documents` / `document_blocks` 归 P2，`users` / `posts` 归 core。
