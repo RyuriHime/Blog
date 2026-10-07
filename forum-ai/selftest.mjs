@@ -32,6 +32,7 @@ import {
   createAiRouter,
   toResponse,
   rawOutputHead,
+  isTruncated,
 } from './src/index.mjs';
 
 let passed = 0;
@@ -50,7 +51,7 @@ function check(name, condition, detail = '') {
 /* 假 AI 服务                                                          */
 /* ------------------------------------------------------------------ */
 
-const mock = { calls: [], mode: 'ok', emptyTimes: 0, failPart: null };
+const mock = { calls: [], mode: 'ok', emptyTimes: 0, failPart: null, truncateOverChars: 0, truncateIndex: false, truncatePartOver: 0, failMerge: false };
 
 function mockReply(userText) {
   const ids = [...userText.matchAll(/\[#([\w.-]+)\]/g)].map((m) => m[1]);
@@ -114,6 +115,37 @@ const server = http.createServer((req, res) => {
   req.on('end', () => {
     const parsed = JSON.parse(body || '{}');
     mock.calls.push({ url: req.url, headers: req.headers, body: parsed });
+    const userText = String(parsed?.messages?.at(-1)?.content ?? '');
+    const partCount = Number(/本部分 (\d+) 篇/.exec(userText)?.[1] ?? 0);
+    const truncate = () => {
+      // 输出撞上 max_tokens：正文为空、finish_reason=length、生成量正好等于预算（线上 554 篇时就是这样）
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(
+        JSON.stringify({
+          model: 'mock-model',
+          choices: [{ message: { content: '' }, finish_reason: 'length' }],
+          usage: { prompt_tokens: 11, completion_tokens: 3000 },
+        }),
+      );
+    };
+    if (mock.truncateOverChars && userText.length > mock.truncateOverChars) {
+      truncate();
+      return;
+    }
+    if (mock.truncateIndex && userText.includes('【全库材料】')) {
+      truncate();
+      return;
+    }
+    if (mock.truncatePartOver && partCount > mock.truncatePartOver) {
+      // 一次问的篇数太多 → 模型想不完，被输出预算截断
+      truncate();
+      return;
+    }
+    if (mock.failMerge && userText.includes('【全库概况】')) {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ model: 'mock-model', choices: [{ message: { content: '这张地图我拼不出来。' } }], usage: { prompt_tokens: 11, completion_tokens: 7 } }));
+      return;
+    }
     if (mock.emptyTimes > 0) {
       // 上游偶尔会 200 但内容为空 —— 这正是线上全站总览失败的样子
       mock.emptyTimes -= 1;
@@ -121,7 +153,7 @@ const server = http.createServer((req, res) => {
       res.end(JSON.stringify({ model: 'mock-model', choices: [{ message: { content: '' }, finish_reason: 'stop' }], usage: { prompt_tokens: 11, completion_tokens: 0 } }));
       return;
     }
-    if (mock.failPart && String(parsed?.messages?.[1]?.content ?? '').includes(`第 ${mock.failPart}/`)) {
+    if (mock.failPart && userText.includes(`第 ${mock.failPart}/`)) {
       // 让指定的那一块目录整理不出 JSON
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ model: 'mock-model', choices: [{ message: { content: '这批目录我看不出来。' } }], usage: { prompt_tokens: 11, completion_tokens: 7 } }));
@@ -142,7 +174,6 @@ const server = http.createServer((req, res) => {
       res.end('{}');
       return;
     }
-    const userText = String(parsed?.messages?.[1]?.content ?? '');
     const reply = mockReply(userText);
     const content =
       reply === null
@@ -389,6 +420,53 @@ try {
     partialCorpus.failures.length === 1 && partialCorpus.failures[0]?.part === 2 && typeof partialCorpus.failures[0]?.error === 'string',
     JSON.stringify(partialCorpus.failures),
   );
+
+  /* ---------------- 输出被截断（finish_reason=length） ---------------- */
+  console.log('\n▶ 输出被截断（max_tokens 不够，不是上游抖动）');
+  mock.calls.length = 0;
+  mock.truncateOverChars = 10;
+  let truncatedError = null;
+  try {
+    await chat([{ role: 'user', content: '这一句足够长，会被假服务判成截断' }], { env: retryEnv });
+  } catch (error) {
+    truncatedError = error;
+  }
+  check('截断报的是 ai_empty_response', truncatedError?.code === 'ai_empty_response', truncatedError?.code);
+  check('截断不当成抖动：一次就放弃，不浪费重试', mock.calls.length === 1, `calls=${mock.calls.length}`);
+  check('截断现场带上 finish_reason=length 与生成量', truncatedError?.details?.finishReason === 'length' && Number(truncatedError?.details?.usage?.completion) === 3000, JSON.stringify(truncatedError?.details));
+  check(
+    'isTruncated 只认 finish_reason=length',
+    isTruncated(truncatedError) === true && isTruncated(new AiError('ai_empty_response', '空', { finishReason: 'stop' })) === false,
+    JSON.stringify({ truncated: isTruncated(truncatedError) }),
+  );
+  mock.truncateOverChars = 0;
+
+  // 目录一次问不完 → 自动落到分块（而不是整页失败）
+  mock.calls.length = 0;
+  mock.truncateIndex = true;
+  const overlongIndex = await reviewCorpus(bigDocs, { chatOptions: { env: retryEnv }, charLimit: 24000, chunkChars: 400 });
+  mock.truncateIndex = false;
+  check('目录被截断时自动改走分块（mode=chunked）', overlongIndex.mode === 'chunked' && overlongIndex.chunks > 1, `${overlongIndex.mode}/${overlongIndex.chunks}`);
+  check('地图类调用的生成预算给到 6000', mock.calls[0]?.body?.max_tokens === 6000, String(mock.calls[0]?.body?.max_tokens));
+  check('落到分块后照样出地图', overlongIndex.report.topics.length > 0 && overlongIndex.failures.length === 0, JSON.stringify(overlongIndex.failures));
+
+  // 块本身被截断 → 对半切开再问，直到问得完（问的篇数越少，越问得完）
+  mock.calls.length = 0;
+  mock.truncatePartOver = 12;
+  const halved = await reviewCorpus(bigDocs, { chatOptions: { env: retryEnv }, charLimit: 600, chunkChars: 400 });
+  mock.truncatePartOver = 0;
+  check('块被截断时对半切开（比块数多问了若干次）', halved.mode === 'chunked' && mock.calls.length > halved.chunks + 1, `calls=${mock.calls.length} chunks=${halved.chunks}`);
+  check('切开之后每一片都问得完（没有失败块）', halved.failures.length === 0, JSON.stringify(halved.failures));
+  check('对半切之后地图仍是完整的', halved.report.topics.length > 0, JSON.stringify(halved.report.topics.map((topic) => topic.name)));
+
+  // 归并失败 → 用各块草案兜底，别存一份空地图
+  mock.calls.length = 0;
+  mock.failMerge = true;
+  const draftsFallback = await reviewCorpus(bigDocs, { chatOptions: { env: retryEnv }, charLimit: 600, chunkChars: 400 });
+  mock.failMerge = false;
+  check('归并失败时用各块草案兜底，地图仍有主题', draftsFallback.report.topics.length > 0, JSON.stringify(draftsFallback.report.topics.map((topic) => topic.name)));
+  check('兜底时把归并失败记进 failures', draftsFallback.failures.some((failure) => failure.part === 'merge') === true, JSON.stringify(draftsFallback.failures));
+  check('兜底也给出概述文本', String(draftsFallback.report.summary ?? '').length > 0, draftsFallback.report.summary);
 
   /* ---------------- 上游错误 ---------------- */
   console.log('\n▶ 上游错误映射');

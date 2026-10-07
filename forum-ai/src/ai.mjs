@@ -53,6 +53,17 @@ const DEFAULT_RETRY_DELAY_MS = 600;
 const CORPUS_CHAR_LIMIT = 24000;
 /** 分块整理时每块的字符上限。 */
 const CORPUS_CHUNK_CHARS = 12000;
+/**
+ * 地图类调用（材料 / 目录 / 归并）的输出预算。
+ *
+ * 这几种调用要的是一整张地图的 JSON，而推理型模型会把预算先烧在思考上 ——
+ * 实测线上 554 篇时 `finish_reason=length`、生成正好卡在 3000、正文为空。
+ */
+const CORPUS_MAP_MAX_TOKENS = 6000;
+/** 分块草案的输出预算：每块只要 2-5 组，比整张地图小得多。 */
+const CORPUS_PART_MAX_TOKENS = 2500;
+/** 分块草案被截断时最多对半切几次（3 次 = 一块最多切成 1/8，再小就单篇了）。 */
+const CORPUS_SPLIT_DEPTH = 3;
 
 /** 统一的错误类型：带稳定的 code，便于宿主映射成自己的 HTTP 状态码。 */
 export class AiError extends Error {
@@ -189,15 +200,18 @@ async function chatOnce(messages, options = {}) {
     throw new AiError('ai_bad_response', 'AI 接口返回的不是合法 JSON');
   }
 
-  const content = payload?.choices?.[0]?.message?.content;
+  const choice = payload?.choices?.[0];
+  const content = choice?.message?.content;
   if (typeof content !== 'string' || !content.trim()) {
-    // 上游偶尔会返回 200 但内容为空（大提示词更容易触发）；把现场带上，便于排查与重试
+    // 上游偶尔会返回 200 但内容为空（大提示词、长输出更容易触发）；把现场带上，便于排查与重试
     throw new AiError('ai_empty_response', 'AI 接口没有返回内容', {
-      finishReason: String(payload?.choices?.[0]?.finish_reason ?? ''),
+      finishReason: String(choice?.finish_reason ?? ''),
       usage: {
         prompt: Number(payload?.usage?.prompt_tokens ?? 0),
         completion: Number(payload?.usage?.completion_tokens ?? 0),
       },
+      // 推理型模型把预算烧在思考上时，正文是空的、思考内容另有一栏
+      hadReasoning: Boolean(choice?.message?.reasoning_content),
       rawHead: raw.replace(/\s+/g, ' ').slice(0, 200),
     });
   }
@@ -213,9 +227,20 @@ async function chatOnce(messages, options = {}) {
   };
 }
 
+/**
+ * 输出被 `max_tokens` 截断（`finish_reason=length`，正文为空）。
+ *
+ * 这不是上游抖动：同样的预算再问一遍，结果只会一样。所以它**不重试**，
+ * 而是让调用方「少问一点」（分块、对半切）或「给更多预算」。
+ */
+export function isTruncated(error) {
+  return error?.code === 'ai_empty_response' && String(error?.details?.finishReason ?? '') === 'length';
+}
+
 /** 这些错误重试有意义：上游抖动，而不是请求本身有问题。 */
 function isTransient(error) {
   if (!(error instanceof AiError)) return false;
+  if (isTruncated(error)) return false; // 预算不够，重试救不了
   if (error.code === 'ai_empty_response' || error.code === 'ai_unreachable' || error.code === 'ai_timeout') return true;
   // 429（限流）是「等一会儿再来」，不是请求错了
   if (error.code === 'ai_rate_limited') return true;
@@ -330,6 +355,11 @@ export async function reviewDocument(doc, siblings = [], options = {}) {
  *   2) 改用**目录**（编号+标题+归类，不带正文）仍超预算 → 只发目录；
  *   3) 目录也超预算 → 按 chunkChars 分块整理，再把各块的分组草案归并成最终地图。
  *
+ * 另外两处「宁可地图糙一点，也别整页空白」的兜底：
+ *   - 输出被 `max_tokens` 截断（`finish_reason=length`，推理模型常见）时，不重试，
+ *     而是**落到下一级**：目录被截断就改分块，某一块被截断就把它对半切开再问（直到单篇）；
+ *   - 归并那一次失败时，直接用各块草案拼出主题与概述（并把失败记进 `failures`）。
+ *
  * @param {Array<object>} docs
  * @param {{ charLimit?: number, chunkChars?: number, chatOptions?: object, onProgress?: Function }} [options]
  * @returns {Promise<{ report: object, model: string, usage: object, mode: string, included: number,
@@ -353,7 +383,7 @@ export async function reviewCorpus(docs, options = {}) {
         { role: 'system', content: SITE_SYSTEM },
         { role: 'user', content: renderSiteUser({ count: list.length, material: full.text }) },
       ],
-      { temperature: 0.2, maxTokens: 3000, badJsonMessage, ...chatOptions },
+      { temperature: 0.2, maxTokens: CORPUS_MAP_MAX_TOKENS, badJsonMessage, ...chatOptions },
     );
     return { report: normalizeSiteReport(parsed, list), model, usage, mode: 'material', included: full.included, truncated: false };
   }
@@ -363,17 +393,22 @@ export async function reviewCorpus(docs, options = {}) {
   const entries = list.map((doc, index) => ({ doc, line: lines[index] }));
   const indexText = lines.join('\n');
   if (indexText.length <= charLimit) {
-    const { parsed, model, usage } = await chatJson(
-      [
-        { role: 'system', content: SITE_SYSTEM },
-        { role: 'user', content: renderSiteUser({ count: list.length, material: indexText }) },
-      ],
-      { temperature: 0.2, maxTokens: 3000, badJsonMessage, ...chatOptions },
-    );
-    return { report: normalizeSiteReport(parsed, list), model, usage, mode: 'index', included: list.length, truncated: false };
+    try {
+      const { parsed, model, usage } = await chatJson(
+        [
+          { role: 'system', content: SITE_SYSTEM },
+          { role: 'user', content: renderSiteUser({ count: list.length, material: indexText }) },
+        ],
+        { temperature: 0.2, maxTokens: CORPUS_MAP_MAX_TOKENS, badJsonMessage, ...chatOptions },
+      );
+      return { report: normalizeSiteReport(parsed, list), model, usage, mode: 'index', included: list.length, truncated: false };
+    } catch (error) {
+      // 目录不长、但**输出**被截断：别在这里失败，落到分块去「一次只问一小片」
+      if (!isTruncated(error)) throw error;
+    }
   }
 
-  // 3) 目录也塞不下：分块整理 → 归并
+  // 3) 目录也塞不下（或一次问不完）：分块整理 → 归并
   const chunks = splitByBudget(entries, chunkChars, (entry) => entry.line);
   const parts = [];
   const failures = [];
@@ -382,8 +417,14 @@ export async function reviewCorpus(docs, options = {}) {
   let model = '';
   let lastError = null;
 
-  for (const [index, chunk] of chunks.entries()) {
-    const chunkDocs = chunk.map((entry) => entry.doc);
+  /**
+   * 问一块的分组草案。
+   *
+   * 这一块要是**输出被截断**（模型想太久），就把它对半切开再问 —— 一次问的篇数越少，
+   * 输出越短，越问得完；切到单篇还截断才算这块失败（不重试，重试也是同样的结果）。
+   */
+  const collect = async (chunkEntries, partIndex, depth) => {
+    const chunkDocs = chunkEntries.map((entry) => entry.doc);
     try {
       const { parsed, model: chunkModel, usage } = await chatJson(
         [
@@ -391,24 +432,34 @@ export async function reviewCorpus(docs, options = {}) {
           {
             role: 'user',
             content: renderSitePartUser({
-              index: index + 1,
+              index: partIndex,
               total: chunks.length,
-              count: chunk.length,
-              material: chunk.map((entry) => entry.line).join('\n'),
+              count: chunkEntries.length,
+              material: chunkEntries.map((entry) => entry.line).join('\n'),
             }),
           },
         ],
-        { temperature: 0.2, maxTokens: 1500, badJsonMessage: 'AI 返回的分组草案不是合法 JSON', ...chatOptions },
+        { temperature: 0.2, maxTokens: CORPUS_PART_MAX_TOKENS, badJsonMessage: 'AI 返回的分组草案不是合法 JSON', ...chatOptions },
       );
       prompt += usage.prompt;
       completion += usage.completion;
       model = chunkModel || model;
       const part = normalizeSiteReport(parsed, chunkDocs);
-      parts.push({ index: index + 1, count: chunk.length, summary: part.summary, topics: part.topics });
+      parts.push({ index: partIndex, count: chunkEntries.length, summary: part.summary, topics: part.topics });
     } catch (error) {
       lastError = error;
-      failures.push({ part: index + 1, count: chunk.length, error: String(error?.message ?? error).slice(0, 120) });
+      if (isTruncated(error) && chunkEntries.length > 1 && depth < CORPUS_SPLIT_DEPTH) {
+        const mid = Math.ceil(chunkEntries.length / 2);
+        await collect(chunkEntries.slice(0, mid), partIndex, depth + 1);
+        await collect(chunkEntries.slice(mid), partIndex, depth + 1);
+        return;
+      }
+      failures.push({ part: partIndex, count: chunkEntries.length, error: String(error?.message ?? error).slice(0, 120) });
     }
+  };
+
+  for (const [index, chunk] of chunks.entries()) {
+    await collect(chunk, index + 1, 0);
     if (typeof onProgress === 'function') onProgress({ index: index + 1, total: chunks.length, failures: failures.length });
   }
 
@@ -427,24 +478,32 @@ export async function reviewCorpus(docs, options = {}) {
     )
     .join('\n\n');
 
-  const merged = await chatJson(
-    [
-      { role: 'system', content: SITE_MERGE_SYSTEM },
-      { role: 'user', content: renderSiteMergeUser({ count: list.length, parts: digest }) },
-    ],
-    { temperature: 0.2, maxTokens: 3000, badJsonMessage, ...chatOptions },
-  );
-  prompt += merged.usage.prompt;
-  completion += merged.usage.completion;
-  model = merged.model || model;
+  let merged = null;
+  try {
+    merged = await chatJson(
+      [
+        { role: 'system', content: SITE_MERGE_SYSTEM },
+        { role: 'user', content: renderSiteMergeUser({ count: list.length, parts: digest }) },
+      ],
+      { temperature: 0.2, maxTokens: CORPUS_MAP_MAX_TOKENS, badJsonMessage, ...chatOptions },
+    );
+    prompt += merged.usage.prompt;
+    completion += merged.usage.completion;
+    model = merged.model || model;
+  } catch (error) {
+    // 归并失败不抛：还有各块草案可以拼出一张地图，页面上有分组总比存一份空地图强
+    lastError = error;
+    failures.push({ part: 'merge', count: list.length, error: String(error?.message ?? error).slice(0, 120) });
+  }
 
-  const report = normalizeSiteReport(merged.parsed, list);
+  const report = merged ? normalizeSiteReport(merged.parsed, list) : normalizeSiteReport({}, list);
   if (!report.topics.length) {
     // 归并没给出可用分组时，退回草案本身 —— 页面上有分组，总比存一份空地图强
     report.topics = parts
       .flatMap((part) => part.topics)
       .map((topic, index) => ({ ...topic, order: index + 1 }))
       .slice(0, 6);
+    report.summary = report.summary || parts.map((part) => part.summary).filter(Boolean).join(' ').slice(0, 400);
     report.dropped = { ...report.dropped, topics: 0 };
   }
 

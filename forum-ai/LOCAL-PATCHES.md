@@ -214,6 +214,38 @@ ai: forumAiStatus(),                                                       // GE
 
 ---
 
+## I. 全站总览仍然失败：这次是**输出被截断**，不是上游抖动（甲类，本轮新增）
+
+**现象**：重试 + 三级降级上线后，线上 `POST /api/ai/site/analyze` 还是 502 `ai_empty_response`。
+但 `GET /api/ai/site` 的 `report.error`（H 节里刚加的那点现场线索）写得很清楚：
+
+```
+AI 接口没有返回内容（finish_reason=length，提示 8840 / 生成 3000 tokens）
+```
+
+**原因**：`finish_reason=length` + 生成量正好卡在 3000 = **撞上了 `max_tokens` 的墙**，正文还没开始写就没了。
+也就是说「重试」这条修法在这里是错的药：同样的预算再问一百遍，还是同样的截断。554 篇的目录一次问一整张地图，
+推理型模型把预算先烧在思考上，就轮不到正文了。
+
+**我们的修法**（思路：截断说明「一次问得太多」，那就少问一点 / 多给一点预算，而不是重试）：
+
+| 位置 | 改动 |
+|---|---|
+| `src/ai.mjs` | 新增 `export function isTruncated(error)`（`ai_empty_response` 且 `details.finishReason === 'length'`），并从 `isTransient()` 里**排除**它 —— 截断一次就放弃，不浪费两次重试 |
+| `src/ai.mjs` | 地图类调用（材料 / 目录 / 归并）生成预算 3000 → `CORPUS_MAP_MAX_TOKENS = 6000`；分块草案 1500 → `CORPUS_PART_MAX_TOKENS = 2500` |
+| `src/ai.mjs` | 2 级（只发目录）包上 try/catch：**被截断就落到分块**，别在这里整页失败 |
+| `src/ai.mjs` | 3 级的每一块被截断时**对半切开再问**（`CORPUS_SPLIT_DEPTH = 3`，最多切到 1/8，再小就是单篇）：问的篇数越少，输出越短，越问得完。切到单篇还截断才算这块失败 |
+| `src/ai.mjs` | 归并那一次失败**不抛错**：用各块草案拼出主题与概述（并把 `{ part: 'merge', … }` 记进 `failures`）—— 页面上有分组，总比存一份空地图强 |
+| `src/routes.mjs` | `errorHint()` 多带一句「模型只产出了思考内容」（`details.hadReasoning`），下次一眼能分清是「被截断」还是「上游发抖」 |
+| `README.md` | 3.2 节补「输出被截断怎么办」 |
+
+**同步改过的作者文件**：`selftest.mjs` 再加 13 项断言（截断一次就放弃、截断现场带 `finish_reason` / 生成量、
+`isTruncated` 只认 `length`、目录被截断自动改走分块、地图调用预算 6000、块被截断对半切开后每一片都问得完、
+归并失败用草案兜底并把失败记下来、兜底也给概述），假 AI 服务再加 `truncateIndex` / `truncatePartOver`（按
+「本部分 N 篇」超过阈值就回截断）两个开关。
+
+---
+
 ## 附：作者包的其它小问题（不影响功能，仅记录）
 
 1. `forum-ai/src/mount.mjs` 顶部的用法注释写的是 `mountForumAi({ db, resolveUser, baseDir: ROOT, aiDir: join(ROOT,'forum-ai') })`，但**实际函数签名没有 `baseDir` / `aiDir` 这两个参数**（注释与实现不一致）。
@@ -230,10 +262,11 @@ ai: forumAiStatus(),                                                       // GE
 | 测试 | 期望 |
 |---|---|
 | `node forum-ai/selftest-mount.mjs` | 通过 35 项，失败 0 项 |
-| `node forum-ai/selftest.mjs` | 通过 133 项，失败 0 项 |
+| `node forum-ai/selftest.mjs` | 通过 146 项，失败 0 项 |
 | `node scripts/smoke-ai.mjs` | 通过 65 项，失败 0 项 |
-| `node scripts/smoke.mjs` | 通过 231 项，失败 0 项 |
+| `node scripts/smoke.mjs` | 通过 238 项，失败 0 项 |
+| `node scripts/check-golden.mjs` | 通过 88 项，差异 0 项（对外行为与改造前一致） |
 | `node scripts/check-ui-contract.mjs` | 通过 317 项（下限 317），问题 0 项 |
-| `node scripts/check-encoding.mjs` | 已检查 205 个文件（下限 205），中文片段断言 84 条 |
+| `node scripts/check-encoding.mjs` | 已检查 207 个文件（下限 205），中文片段断言 84 条 |
 
-合计 **754 项**（2026-10 复跑实测；数量随轮次增删会变，以各脚本自己打印的下限为准）。另外 `node scripts/check-encoding.mjs` 在 Linux 上会报 `ENOENT ... start.cmd` —— 它硬编码要检查 `start.cmd`（Windows 专用文件、故意不上传），**这个失败是预期的，不是问题**。
+合计 **801 项**（2026-10 复跑实测；数量随轮次增删会变，以各脚本自己打印的下限为准）。另外 `node scripts/check-encoding.mjs` 在 Linux 上会报 `ENOENT ... start.cmd` —— 它硬编码要检查 `start.cmd`（Windows 专用文件、故意不上传），**这个失败是预期的，不是问题**。
