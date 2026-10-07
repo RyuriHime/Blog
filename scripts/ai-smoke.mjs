@@ -2650,10 +2650,19 @@ try {
     sectionBranchSrc.includes('patch: { blocks:') && sectionBranchSrc.includes('markdown: previewMarkdown'),
     sectionBranchSrc ? sectionBranchSrc.slice(0, 200) : '没抓到这个分支',
   );
+  // 变量名会变（形状纠正先跑一遍，`patch` 现在落到 `fixedPatch` 上），所以这里**捕获**
+  // 变量名而不是写死；要求校验与清洗吃同一个值、且校验排在前。
+  const docCheckCall = aiRoutesSrc.match(/=\s*documentPatchProblem\(([A-Za-z_$][\w$]*),/);
+  const docCleanCall = aiRoutesSrc.match(/=\s*cleanDocumentPatch\(([A-Za-z_$][\w$]*)\)/);
   check(
     '整篇分支的 markdown 校验 / 清洗还在（没被 section 的新字段串味）',
-    aiRoutesSrc.includes('documentPatchProblem(patch') && aiRoutesSrc.includes('cleanDocumentPatch(patch)'),
-    '整篇的形状校验 / 清洗不见了',
+    !!docCheckCall &&
+      !!docCleanCall &&
+      docCheckCall[1] === docCleanCall[1] &&
+      docCheckCall.index < docCleanCall.index,
+    docCheckCall && docCleanCall
+      ? `整篇校验用 \`${docCheckCall[1]}\`、清洗用 \`${docCleanCall[1]}\`（要同一个值，且校验在前）`
+      : '整篇的形状校验 / 清洗不见了',
   );
 
   // 静态哨兵（父代理点名）：预览必须走 P2 的渲染接口，而不是把块 JSON 铺在 <pre> 里。

@@ -40,6 +40,7 @@ import {
   AI_SANDBOX_GUIDE,
   AI_AUTHORING_GUIDE,
 } from './syntax.js';
+import { repairBlock, repairBlockList, repairMarkdown, describeRepairs } from './programs.js';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -210,6 +211,11 @@ function blockPatchProblem(value) {
 /** 校验通过后取出干净的 `{ type, props }`：多余的键不入库。 */
 function cleanBlockPatch(value) {
   return { type: value.type, props: value.props ?? {} };
+}
+
+/** 是不是一个普通的 JSON 对象（不是 null / 数组 / 标量）。 */
+function isRecord(value) {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 }
 
 /** 审计日志里的目标 id：`<documentId>:<blockId>`，回滚时能拆回来源。 */
@@ -601,7 +607,17 @@ function documentSystemPrompt() {
     '你可以只输出 {"template":"<模板 key>"} —— 前端会把站里维护好的模板套上去；',
     '给了 template 就不要再给 markdown，两者只能二选一。',
     '模板都不合适时才自己写 markdown：',
-    '没让改的部分照抄原样，不要顺手润色；不要输出解释文字，也不要 Markdown 代码围栏。',
+    '没让改的部分照抄原样，不要顺手润色；不要输出解释文字；最外层不要把整个 JSON 包进代码围栏。',
+    // 整篇模式最容易栽在这里：模型知道本站有 ```` ```doc:<类型> ```` 围栏，却只写了
+    // `doc:app` 那半行、围栏没写 —— P2 的解析器（`blocks/markdown.js`）只认围栏，
+    // 裸文本一律变成普通正文（`prose`），程序就变成了一堆打印出来的 JSON。
+    'Markdown 里的积木块必须写成围栏块：三个反引号开头、紧跟 doc:<块类型>、换行后是 JSON、再用三个反引号收尾，例如：',
+    '```doc:poll\\n{"question":"…","options":[{"id":"o1","text":"甲"},{"id":"o2","text":"乙"}]}\\n```',
+    '**围栏不能省**：光写 doc:poll 那半行，它只会被当成普通正文打印出来。',
+    '小应用（能在浏览器里跑的程序）的围栏体是 {"app":"应用名","config":{},"code":"<button>…</button><script>…<\\/script>"}，',
+    '代码全部在 code 里（样式写 <style>、脚本写 <script>），**没有 title / html / css / js 这些字段**；',
+    '代码跑在隔离 iframe 里：只有内联脚本与内联样式、**没有网络**，不许写 <link>、外链 CDN 或 fetch / XMLHttpRequest；',
+    '照抄已有的围栏块时，类型名与字段名一个字都别改；没见过的块类型不要发明（每类块的 props 见块编辑器的说明）。',
     '注意：本站的 Markdown 与积木块是互转的，转换有损（表格分隔行会被剥掉、嵌套列表会被并成一块），',
     '能不动结构就别动结构。',
     '要「能跑的东西」（投票、小工具、小界面）时，直接在 markdown 里写 ```doc:poll / ```doc:app 围栏，',
@@ -889,6 +905,31 @@ export function registerAiRoutes(ctx) {
     ensure(!documentId.includes(':'), 400, 'bad_request', 'documentId 里不能有冒号');
     const reason = String(body.reason ?? '').slice(0, AI_MAX_REASON);
 
+    // 落盘前的最后一道形状纠正（见 `programs.js`）。前端送来的 `after` 一般已经是被
+    // `/draft` 摆正过的，但这条接口是公开契约：手工拼的请求、或者没跟上的旧前端，都可能
+    // 把「模型原样吐出来的自造形状」直接送到这里。就地摆正后再走校验 —— 摆完还是非法
+    // （缺 blockId、超长、类型不认识）一样 400。`before` 一律不动：它描述的是改动前的
+    // 样子，回滚要写回的正是它。
+    const repairNotes = [];
+    if (scope === 'document') {
+      if (isRecord(body.after) && typeof body.after.markdown === 'string') {
+        const fixed = repairMarkdown(body.after.markdown);
+        body.after.markdown = fixed.value;
+        repairNotes.push(...fixed.notes);
+      }
+    } else if (scope === 'section') {
+      if (Array.isArray(body.after)) {
+        const fixed = repairBlockList(body.after, body.before);
+        body.after = fixed.value;
+        repairNotes.push(...fixed.notes);
+      }
+    } else if (isRecord(body.after) || Array.isArray(body.after)) {
+      const fixed = repairBlock(body.after);
+      body.after = fixed.value;
+      repairNotes.push(...fixed.notes);
+    }
+    const repairs = describeRepairs(repairNotes);
+
     // 两种粒度共用一套外壳，只有「校验什么形状 / targetType / targetId / 往哪儿写」不同。
     let targetType = 'document_block';
     let targetId = '';
@@ -1002,6 +1043,8 @@ export function registerAiRoutes(ctx) {
         applied: false,
         opId,
         scope,
+        // 形状纠正做了什么，明说（见 `programs.js`）。
+        ...(repairs === '' ? {} : { repairs }),
         preview: { targetType, targetId, before: cleanBefore, after: cleanAfter },
         hint: '这是预览，没有落盘。确认后带 confirm: true 再提交一次。',
       });
@@ -1028,6 +1071,8 @@ export function registerAiRoutes(ctx) {
       // `blockId` 只在单块模式下有意义；两种新粒度用 `before` / `after` 的形状区分
       // （块数组 = 一节，`{markdown}` = 整篇），回滚拿回来的 `restore` 也是同一套形状。
       ...(scope === 'block' ? { blockId } : {}),
+      // 形状纠正做了什么，明说（见 `programs.js`）。
+      ...(repairs === '' ? {} : { repairs }),
       before: cleanBefore,
       after: cleanAfter,
       // 真正的写盘由调用方完成：documents / document_blocks 归 P2，我只读。
@@ -1139,12 +1184,17 @@ export function registerAiRoutes(ctx) {
     // 这种自造形状 —— 这时候落盘会直接失败，所以在这里就挡住。
     // 用 `ai_bad_json`（既有代号）而不是新造一个，代号表见 docs/skeleton.md。
     const patch = parseModelJson(content, { db, userId: user.id, capability, action: 'draft', targetId });
-    const patchProblem = blockPatchProblem(patch);
+    // 形状纠正（见 `programs.js`）：模型爱把「能跑的程序」写成正文里的 `doc:app` + JSON，
+    // 或者自造 `{title,html,css,js}` 这种本站没有的形状。先摆正，再走原来那道校验
+    // —— 摆完还是非法（缺 props、类型不认识）一样 502，规则一条都没放松。
+    const salvaged = repairBlock(patch, cleanBlock);
+    const patchProblem = blockPatchProblem(salvaged.value);
     if (patchProblem) {
       logBlocked(db, user.id, capability, 'draft', targetId, `ai_bad_json 块形状不对：${patchProblem}`);
       throw new HttpError(502, 'ai_bad_json', `模型没有返回合法的块（${patchProblem}）`);
     }
-    const cleanPatch = cleanBlockPatch(patch);
+    const cleanPatch = cleanBlockPatch(salvaged.value);
+    const repairs = describeRepairs(salvaged.notes);
 
     const opId = logOp(db, {
       userId: user.id,
@@ -1166,6 +1216,8 @@ export function registerAiRoutes(ctx) {
       targetType: 'document_block',
       targetId,
       ...splitTargetId(targetId),
+      // 形状纠正做了什么，明说 —— 静悄悄改掉模型给的东西比报错更难查。
+      ...(repairs === '' ? {} : { repairs }),
       model,
     });
   });
@@ -1284,7 +1336,18 @@ export function registerAiRoutes(ctx) {
         targetId,
         targetType: AI_RANGE_TARGET_TYPES.section,
       });
-      const patchProblem = sectionPatchProblem(patch, ids);
+      // 形状纠正（见 `programs.js`）：整节里可能混着被写成正文的程序块、或字段自造的小应用。
+      // blockId 一个都不动，所以下面「整节收齐、id 一一对应」的校验该过还是过、该红还是红；
+      // 预览用的 Markdown 一并摆正，免得块与预览各说一套。
+      const patchObject = isRecord(patch) ? patch : null;
+      const fixedBlocks = repairBlockList(patchObject ? patchObject.blocks : null, cleanBlocks);
+      const fixedMarkdown =
+        patchObject && typeof patchObject.markdown === 'string' ? repairMarkdown(patchObject.markdown) : null;
+      const fixedPatch = patchObject
+        ? { ...patchObject, blocks: fixedBlocks.value, ...(fixedMarkdown ? { markdown: fixedMarkdown.value } : {}) }
+        : patchObject;
+      const repairs = describeRepairs([...fixedBlocks.notes, ...(fixedMarkdown ? fixedMarkdown.notes : [])]);
+      const patchProblem = sectionPatchProblem(fixedPatch, ids);
       if (patchProblem) {
         logBlocked(
           db,
@@ -1297,9 +1360,9 @@ export function registerAiRoutes(ctx) {
         );
         throw new HttpError(502, 'ai_bad_json', `模型没有返回合法的一节改动（${patchProblem}）`);
       }
-      const changed = cleanSectionBlocks(patch.blocks);
+      const changed = cleanSectionBlocks(fixedPatch.blocks);
       // 预览用（给界面渲染，不落盘）：见 sectionPatchProblem 的注释。
-      const previewMarkdown = String(patch.markdown).trim();
+      const previewMarkdown = String(fixedPatch.markdown).trim();
       const opId = logOp(db, {
         userId: user.id,
         capability,
@@ -1322,6 +1385,8 @@ export function registerAiRoutes(ctx) {
         targetId,
         documentId,
         model,
+        // 形状纠正做了什么，明说（见 `programs.js`）。
+        ...(repairs === '' ? {} : { repairs }),
         writeTo: `/api/docs/${encodeURIComponent(documentId)}/ops`,
         hint: '这是预览，没有落盘。落盘由前端完成：先 POST /api/docs/:id/ops 写盘，再带 confirm: true 调 /api/ai-edit/ops 记一条 applied 审计。',
       });
@@ -1371,7 +1436,17 @@ export function registerAiRoutes(ctx) {
       targetId,
       targetType: AI_RANGE_TARGET_TYPES.document,
     });
-    const patchProblem = documentPatchProblem(patch, 'patch');
+    // 形状纠正（见 `programs.js`）：裸写的 `doc:app` 补围栏、围栏体里的自造字段就地摆正。
+    // 连「模型把原文照抄回来」这种最坏情况都救得回来 —— 原文里那段跑不起来的 JSON，
+    // 会在这里变成一块真正的小应用。摆完还是非法就照旧 502。
+    const patchObject = isRecord(patch) ? patch : null;
+    const fixedMarkdown =
+      patchObject && typeof patchObject.markdown === 'string' ? repairMarkdown(patchObject.markdown) : null;
+    const fixedPatch = patchObject
+      ? { ...patchObject, ...(fixedMarkdown ? { markdown: fixedMarkdown.value } : {}) }
+      : patchObject;
+    const repairs = describeRepairs(fixedMarkdown ? fixedMarkdown.notes : []);
+    const patchProblem = documentPatchProblem(fixedPatch, 'patch');
     if (patchProblem) {
       logBlocked(
         db,
@@ -1384,7 +1459,7 @@ export function registerAiRoutes(ctx) {
       );
       throw new HttpError(502, 'ai_bad_json', `模型没有返回合法的整篇改动（${patchProblem}）`);
     }
-    const cleanPatch = cleanDocumentPatch(patch);
+    const cleanPatch = cleanDocumentPatch(fixedPatch);
     const opId = logOp(db, {
       userId: user.id,
       capability,
@@ -1406,6 +1481,8 @@ export function registerAiRoutes(ctx) {
       targetId,
       documentId,
       model,
+      // 形状纠正做了什么，明说（见 `programs.js`）。
+      ...(repairs === '' ? {} : { repairs }),
       writeTo: cleanPatch.template
         ? `/api/docs/${encodeURIComponent(documentId)}/apply-template`
         : `/api/docs/${encodeURIComponent(documentId)}/markdown`,
