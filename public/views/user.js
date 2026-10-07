@@ -79,6 +79,38 @@ async function viewUser(username, query) {
   const pinnedPosts = filter === 'all' ? posts.filter((post) => post.profilePinned) : [];
   const otherPosts = filter === 'all' ? posts.filter((post) => !post.profilePinned) : posts;
 
+  // 两张关注名单卡（关注者 / 我关注的人）。文案按视角变：自己看自己时是「我的关注者 /
+  // 我关注的人」，看别人时还是「关注者 / TA 关注的人」。
+  // 为什么要攒成一个字符串、在模板里出现两次：**自己看自己时它们必须排在文章列表上面**。
+  // 排在页面最底下时，文章一多就得整页滚到底才看得见 —— 用户反馈的「在自己的主页上
+  // 看不到我关注的人」就是这么来的（接口一直是对的，是位置太靠后）。
+  // 自己视角再多给一个「全部名单」入口：`#/following` 那个名单页只认这个地址。
+  const followCards = `
+    <section class="card">
+      <div class="card-head"><span class="card-title">👥 ${isOwner ? '我的关注者' : '关注者'}（${user.followerCount}）</span></div>
+      <div class="chip-list">
+        ${
+          followers.length
+            ? followers.map((person) => Widgets.personChipHtml(person, { follow: true })).join('')
+            : `<div class="hint">${isOwner ? '还没有人关注你' : '还没有关注者'}</div>`
+        }
+      </div>
+    </section>
+
+    <section class="card">
+      <div class="card-head">
+        <span class="card-title">➡️ ${isOwner ? '我关注的人' : 'TA 关注的人'}（${user.followingCount}）</span>
+        ${isOwner ? '<a class="btn btn-sm" href="#/following">全部名单</a>' : ''}
+      </div>
+      <div class="chip-list">
+        ${
+          following.length
+            ? following.map((person) => Widgets.personChipHtml(person, { follow: true })).join('')
+            : `<div class="hint">${isOwner ? '你还没有关注任何人：去 <a href="#/feed">动态流</a> 里找人关注一下' : '还没有关注任何人'}</div>`
+        }
+      </div>
+    </section>`;
+
   ui.app.innerHTML = `
     <section class="card">
       <div class="profile-head">
@@ -141,6 +173,8 @@ async function viewUser(username, query) {
         : ''
     }
 
+    ${isOwner ? followCards : ''}
+
     ${
       hasProfileDoc
         ? `<section class="card doc-panel"><div class="doc-body">${profileDocHtml}</div></section>`
@@ -163,19 +197,7 @@ async function viewUser(username, query) {
     </section>`
     }
 
-    <section class="card">
-      <div class="card-head"><span class="card-title">👥 关注者（${user.followerCount}）</span></div>
-      <div class="chip-list">
-        ${followers.length ? followers.map((person) => Widgets.personChipHtml(person, { follow: true })).join('') : '<div class="hint">还没有关注者</div>'}
-      </div>
-    </section>
-
-    <section class="card">
-      <div class="card-head"><span class="card-title">➡️ TA 关注的人（${user.followingCount}）</span></div>
-      <div class="chip-list">
-        ${following.length ? following.map((person) => Widgets.personChipHtml(person, { follow: true })).join('') : '<div class="hint">还没有关注任何人</div>'}
-      </div>
-    </section>`;
+    ${isOwner ? '' : followCards}`;
 }
 
 /* ------------------------------------------------------------------ */

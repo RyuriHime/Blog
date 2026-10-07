@@ -417,6 +417,13 @@ const TEAM_REPLY_FIXTURES = [
 ];
 
 const EXTRA = {
+  // 「看别人的主页」视角：把采样到的**自己**主页夹具翻一个 `isMe`。
+  // 页面用例里那一条个人主页跑的是自己视角（夹具 `/api/users/admin` 的 `user.isMe`
+  // 就是 true），文案与卡片位置都跟自己视角绑着，所以别人视角得单独摆一份。
+  '/api/users/not-me': {
+    ...FIXTURES['/api/users/admin'],
+    user: { ...FIXTURES['/api/users/admin'].user, isMe: false, username: 'not-me', displayName: '别人' },
+  },
   '/api/markdown/preview': { html: '<p>ok</p>' },
   '/api/ai/site': { configured: false, ready: false },
   // 非成员视角的团队主页：详情里没有团队号、也没有公告（服务端就不给）。
@@ -1064,6 +1071,8 @@ function nestedAnchorAt(html) {
 
 let rendered = 0;
 let pagesScanned = 0;
+/** 「自己看自己」那条关注名单卡守卫到底跑没跑（守卫的自检，见上面的哨兵传统）。 */
+let ownerFollowCardsChecked = 0;
 for (const [label, file, fn, argv] of CASES) {
   let target;
   try {
@@ -1089,12 +1098,54 @@ for (const [label, file, fn, argv] of CASES) {
         `${label}：渲染出的 HTML 里有一个 <a> 套着另一个 <a> —— 浏览器会强行闭合外层，布局会散架。外层是 ${nested}`,
       );
     }
+    // 自己看自己时，两张关注名单卡必须在文章列表**上面**，文案也要换成「我的…」。
+    // 它们原先钉在页面最底下：文章一多就得整页滚到底才看得见，用户反馈的
+    // 「在自己的主页上看不到我关注的人」就是这么来的（接口一直是对的，是位置太靠后）。
+    if (label === '个人主页') {
+      ownerFollowCardsChecked += 1;
+      const followAt = pageHtml.indexOf('我关注的人');
+      const postsAt = pageHtml.indexOf('profile-posts');
+      if (followAt < 0) problems.push('个人主页（自己视角）：没有渲染出「我关注的人」卡');
+      if (!pageHtml.includes('我的关注者')) problems.push('个人主页（自己视角）：「关注者」那张卡没有换成「我的关注者」');
+      if (followAt >= 0 && postsAt >= 0 && followAt > postsAt) {
+        problems.push('个人主页（自己视角）：「我关注的人」卡排在文章列表下面，文章一多就又看不见了');
+      }
+    }
   } catch (error) {
     const top = (error.stack ?? '').split('\n').slice(0, 3).join(' | ');
     problems.push(`${label}（${file}.${fn}）渲染失败：${error.message}  ← ${top}`);
   }
 }
 console.log(`  ${problems.length ? '❌' : '✅'} 渲染 ${rendered}/${CASES.length} 个页面`);
+
+/* ---- 个人主页的「别人视角」：文案必须变回「关注者 / TA 关注的人」，卡片仍在最底下 ----
+ *
+ * 为什么单独跑一遍：上面那条只覆盖自己视角（夹具 isMe:true）。两张关注名单卡现在
+ * 是**同一个字符串**在两个位置各插一次，`isOwner` 三元要是写反了，自己视角照样全绿，
+ * 而别人主页会变成「我的关注者 / 我关注的人」、卡片还会莫名跑到文章前面。
+ */
+{
+  let outsiderOk = false;
+  try {
+    const userView = await view('user.js');
+    await userView.viewUser('not-me', new Map());
+    const html = String(app.innerHTML);
+    const followAt = html.indexOf('TA 关注的人');
+    const postsAt = html.indexOf('profile-posts');
+    outsiderOk = true;
+    if (followAt < 0) problems.push('个人主页（别人视角）：没有渲染出「TA 关注的人」卡');
+    if (!html.includes('关注者')) problems.push('个人主页（别人视角）：「关注者」那张卡不见了');
+    if (html.includes('我关注的人') || html.includes('我的关注者')) {
+      problems.push('个人主页（别人视角）：文案串成自己视角了（「我关注的人 / 我的关注者」只该出现在自己的主页上）');
+    }
+    if (followAt >= 0 && postsAt >= 0 && followAt < postsAt) {
+      problems.push('个人主页（别人视角）：关注名单卡跑到文章列表上面了 —— 提前只该发生在自己视角');
+    }
+  } catch (error) {
+    problems.push(`个人主页（别人视角）渲染失败：${error.message}`);
+  }
+  if (!outsiderOk) problems.push('个人主页（别人视角）那条检查没跑起来');
+}
 
 /* 守卫的自检与覆盖哨兵。一个「什么都不报」的检测器跟没有检测器一样糟：
  * 假 DOM 不解析 HTML，万一以后 `app.innerHTML` 取不到东西，上面那条扫描会一路绿灯地假通过。 */
@@ -1103,6 +1154,11 @@ if (!nestedAnchorAt('<a href="#/a">x<a href="#/b">y</a></a>')) {
 }
 if (pagesScanned < 30) {
   problems.push(`只拿到 ${pagesScanned} 个页面的 HTML（正常是三十多个），嵌套 <a> 那条守卫等于没生效`);
+}
+// 同理：CASES 里要是哪天没有「自己看自己」的个人主页，上面那条关注名单卡的检查
+// 会一声不吭地跳过（`label` 对不上），看起来还是全绿。
+if (ownerFollowCardsChecked !== 1) {
+  problems.push(`「自己看自己」的关注名单卡守卫跑了 ${ownerFollowCardsChecked} 次（应该正好 1 次）—— 检查等于没生效`);
 }
 void feedMod;
 
