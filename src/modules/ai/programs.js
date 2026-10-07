@@ -1,5 +1,6 @@
 /**
- * 「程序块」的形状纠正器 —— 小应用（app）与脚本（script）。
+ * 「程序块」的形状纠正器 —— 小应用（app）、脚本（script）、投票（poll）这些
+ * **在源码里本来就是一个围栏块**的类型（完整清单见下面的 `FENCED_TYPES`）。
  *
  * 为什么要有这个文件（真实事故）：
  * 线上那篇文档里，「小恐龙游戏」最后变成了正文里的一大段 JSON 文字。模型知道
@@ -15,13 +16,21 @@
  * `src/modules/doc/blocks/markdown.js` 当成普通正文（现在默认并成 `prose` 块）。
  * 两处一起错，结果就是一段谁也跑不起来的文字。
  *
- * 这里做两件事，原则都是「模型可以写歪，落地不能歪」：
+ * 第二次事故（线上文档 548 的「让他写投票」）：模型把源码里**本来写得好好的**
+ * ```` ```doc:poll {#b2} ```` 抄成了裸的一行 `doc:poll {#b2}` + JSON —— 上下两行
+ * 反引号丢了，只留下信息串和 JSON。`{#b2}` 是 P2 的块 id（自己凭空写根本写不出这种
+ * 后缀），它恰好证明「模型是在照抄源码、抄漏了围栏」。这次连纠正层都没救回来，两条
+ * 原因：① `PROGRAM_TYPES` 里没有 `poll`；② 所有正则都不认识 `{#id}` 后缀。都已修。
+ *
+ * 这里做三件事，原则都是「模型可以写歪，落地不能歪」：
  *   1. `normalizeProgramProps` —— 把 `{title,html,css,js}` 这类自造形状拼成合法的
  *      `{app,config,code}`；模型漏给 `code` 时用**原块的代码**补上（只想改个应用名，
  *      不该把几千行代码清空），代码超过 20000 字符照样交给校验去报错。
  *   2. `repairMarkdown` / `repairBlock` —— 整篇改写时把裸的 `doc:<类型>` + JSON
- *      补成 P2 认识的围栏；单块 / 整节改写时，把「正文里写着 `doc:app` 的那一段」
- *      整段换成一块真正的小应用。
+ *      补成 P2 认识的围栏（`{#id}` 原样带回去）；单块 / 整节改写时，把「正文里写着
+ *      `doc:app` 的那一段」整段换成一块真正的小应用。
+ *   3. `normalizePollProps` —— 投票的选项，模型爱写成 `["选项一","选项二"]`，这里
+ *      归一成 P2 要的 `[{id, text}]`（2~10 项、每项 ≤80 字）。
  *
  * **这里只修形状，不放松任何一条校验**：`routes.js` 里的 `*Problem` 照旧在跑，
  * 修完还是非法（缺 blockId、超过长度上限、块类型不认识）一样 400 / 502。
@@ -29,6 +38,37 @@
 
 /** 认得出形状的两种程序块，与 `src/modules/ai/schema.js` 的 `AI_BLOCK_TYPES` 一致。 */
 export const PROGRAM_TYPES = Object.freeze(['app', 'script']);
+
+/**
+ * P2 里「在源码中就是一个 ```` ```doc:<类型> ```` 围栏块」的类型 —— 手抄
+ * `src/modules/doc/blocks/types.js` 各个 `toMarkdown` 的用法：`poll`(投票)、
+ * `embed`、`app`、`subpage`、`fold`、`script`（`sourceBody: 'raw'`，围栏体是原始 JS）。
+ * 不在名单里的类型本来就用普通 Markdown 表达、没有围栏（heading / paragraph / code /
+ * table / formula / image / quote），`list` 只在 `props.source` 非空时才结构化。
+ * **只有这些类型的裸写才值得补围栏** —— 别的 `doc:xxx` 更可能是正文里的一句说明，
+ * 补错了就是把人家好好的一段话改成块。
+ */
+export const FENCED_TYPES = Object.freeze(['poll', 'fold', 'embed', 'app', 'subpage', 'script']);
+
+/**
+ * 我们认得出字段形状、可以就地摆正 props 的类型。其余围栏类型只保证「把围栏补回来」，
+ * 不动它的字段 —— 不知道 P2 要什么，乱改不如不改。
+ */
+export const FIXABLE_TYPES = Object.freeze(['app', 'script', 'poll']);
+
+/** 给用户看的人话里的块名。 */
+const TYPE_LABELS = Object.freeze({
+  app: '小应用',
+  script: '脚本',
+  poll: '投票',
+  fold: '折叠块',
+  embed: '嵌入块',
+  subpage: '子页面',
+});
+
+function labelOf(type) {
+  return TYPE_LABELS[type] ?? `doc:${type}`;
+}
 
 /** 与 P2 的 `MAX_APP_CODE` / `MAX_SCRIPT_CODE` 同值，只用来写提示与注释。 */
 export const PROGRAM_MAX_CODE = 20000;
@@ -53,7 +93,10 @@ function blobInTextBlock(value) {
   const text = isPlainObject(value.props) ? value.props.text : '';
   if (typeof text !== 'string' || !text.includes('doc:')) return null;
   const blob = parseProgramBlob(text);
-  return blob && PROGRAM_TYPES.includes(blob.type) ? blob : null;
+  // 只在 `FIXABLE_TYPES` 里换块：整段正文换成一块 **验证得了形状** 的块才安全。
+  // 别的围栏类型（fold / embed / subpage）我们不知道它要什么字段，硬换过去可能换来
+  // 一块谁也渲染不出的东西 —— 那一类交给 `repairMarkdown` 只把围栏补回来就好。
+  return blob && FIXABLE_TYPES.includes(blob.type) ? blob : null;
 }
 
 /**
@@ -96,6 +139,26 @@ function parseJsonObject(text) {
   }
 }
 
+/**
+ * 围栏信息串：`doc:poll` / `doc:poll {#b2}`。
+ *
+ * `{#b2}` 是 P2 的块 id —— P2 自己认的形态见 `src/modules/doc/blocks/markdown.js` 的
+ * `DOC_FENCE_INFO`，而 `blocksToSource` 在把块导成源码时**就会带上它**。模型是从源码
+ * 抄的，所以它写出来的信息串天生带 `{#id}`；反引号可以丢，**这一段必须原样带回去**：
+ * 票数、评论这些是挂在块 id 上的，id 变了内容就跟丢了。
+ */
+const FENCE_INFO = /^doc:([A-Za-z0-9_-]+)(?:[ \t]*\{#([A-Za-z0-9_-]+)\})?$/;
+
+function infoOf(type, id) {
+  return id ? `doc:${type} {#${id}}` : `doc:${type}`;
+}
+
+/** 把一行信息串拆成 `{ type, id }`；不是 `doc:<类型>` 就回 null。 */
+function splitInfo(raw) {
+  const info = FENCE_INFO.exec(String(raw ?? '').trim());
+  return info ? { type: info[1], id: info[2] ?? '' } : null;
+}
+
 /** 把模型拆开的 css / html / js 拼成本站唯一认识的那一大块 `code`。 */
 function assembleCode(props) {
   const parts = [];
@@ -130,6 +193,8 @@ export function normalizeProgramProps(type, props, original = null) {
     return { props: { code }, notes };
   }
 
+  if (type === 'poll') return normalizePollProps(props, original);
+
   if (type !== 'app') return { props, notes };
 
   let app = firstString(props, NAME_FIELDS).slice(0, 40);
@@ -161,25 +226,98 @@ export function normalizeProgramProps(type, props, original = null) {
 }
 
 /**
+ * 投票（`poll`）的 props 摆正。P2 只认
+ * `{ question: string(≤200), options: [{ id, text }] (2~10 项、每项 ≤80 字), multiple: boolean }`。
+ * 模型的常见写法是 `"options": ["选项一", "选项二"]`、或者 `{ label }` / 少给 id ——
+ * 这里一并归一成 `{id, text}`（id 缺了就发 `o1`、`o2`…，重复的补下划线）。
+ * 认不出选项就把原样交回去，让 P2 的校验去报错 —— 好过这里替它编一张假票。
+ */
+export function normalizePollProps(props, original = null) {
+  const notes = [];
+  if (!isPlainObject(props)) return { props, notes };
+
+  const raw = Array.isArray(props.options)
+    ? props.options
+    : Array.isArray(props.choices)
+      ? props.choices
+      : Array.isArray(props.items)
+        ? props.items
+        : null;
+  if (raw === null) return { props, notes };
+
+  let question = firstString(props, ['question', 'title', '问题']).trim().slice(0, 200);
+  if (question === '' && isPlainObject(original)) {
+    question = firstString(original, ['question', 'title', '问题']).trim().slice(0, 200);
+    if (question !== '') notes.push('投票：模型没给问题，沿用了原来的问题');
+  }
+
+  const seen = new Set();
+  const options = [];
+  let reshaped = false;
+  for (const item of raw) {
+    if (options.length >= 10) break;
+    let text = '';
+    let id = '';
+    if (typeof item === 'string') {
+      text = item;
+      reshaped = true;
+    } else if (isPlainObject(item)) {
+      text = firstString(item, ['text', 'label', 'name', 'value', '内容', '选项']);
+      id = firstString(item, ['id', 'key', 'value']);
+      if (id === '') reshaped = true;
+    } else {
+      continue;
+    }
+    text = String(text ?? '')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .slice(0, 80);
+    if (text === '') continue;
+    let clean = id.replace(/[^A-Za-z0-9_-]/g, '').slice(0, 32);
+    if (clean === '') clean = `o${options.length + 1}`;
+    while (seen.has(clean)) clean = `${clean}_`;
+    seen.add(clean);
+    options.push({ id: clean, text });
+  }
+
+  if (reshaped && options.length > 0) notes.push('投票：选项摆成了本站要的 { id, text } 形状');
+  if (options.length !== raw.length) {
+    notes.push(`投票：选项从 ${raw.length} 个收敛到 ${options.length} 个（本站上限 10 个、每项 80 字）`);
+  }
+  if (options.length < 2) notes.push('投票：有效选项不足 2 个，P2 会拒收，得让模型重写一次');
+
+  const multiple = props.multiple === true || props.multiple === 'true';
+  const dropped = extraKeys(props, ['question', 'options', 'multiple', 'title', 'choices', 'items']);
+  if (dropped.length > 0) notes.push(`投票：丢掉了本站没有的字段 ${dropped.join(' / ')}`);
+
+  return { props: { question, options, multiple }, notes };
+}
+
+/**
  * ```` ```doc:app ```` 围栏体 / 裸的 `doc:app` 加 JSON，解析成块；认不出返回 null。
  * `script` 的围栏体是**原始代码**（P2 的 `sourceBody: 'raw'`），不是 JSON。
  */
 export function parseProgramBlob(text) {
   const body = String(text ?? '').trim();
-  const fenced = /^(`{3,})doc:([a-z0-9_-]+)[ \t]*\r?\n([\s\S]*?)\r?\n\1[ \t]*$/.exec(body);
-  if (fenced) return blobFrom(fenced[2], fenced[3]);
-  const bare = /^doc:([a-z0-9_-]+)[ \t]*\r?\n([\s\S]+)$/.exec(body);
-  if (bare) return blobFrom(bare[1], bare[2]);
+  const fenced = /^(`{3,})([^\r\n]+)\r?\n([\s\S]*?)\r?\n\1[ \t]*$/.exec(body);
+  if (fenced) {
+    const info = splitInfo(fenced[2]);
+    if (info) return blobFrom(info.type, fenced[3], info.id);
+  }
+  const lines = body.split(/\r?\n/);
+  const head = splitInfo(lines[0]);
+  if (head) return blobFrom(head.type, lines.slice(1).join('\n'), head.id);
   return null;
 }
 
-function blobFrom(type, body) {
+function blobFrom(type, body, id = '') {
+  const blobId = typeof id === 'string' ? id : '';
   if (type === 'script') {
     const code = String(body).trim();
-    return code === '' ? null : { type: 'script', props: { code } };
+    return code === '' ? null : { type: 'script', props: { code }, id: blobId };
   }
   const props = parseJsonObject(body);
-  return props ? { type, props } : null;
+  return props ? { type, props, id: blobId } : null;
 }
 
 /**
@@ -190,7 +328,7 @@ export function repairBlock(value, original = null) {
   const notes = [];
   if (!isPlainObject(value)) return { value, notes };
 
-  if (PROGRAM_TYPES.includes(value.type)) {
+  if (FIXABLE_TYPES.includes(value.type)) {
     const { props, notes: inner } = normalizeProgramProps(value.type, value.props, original);
     return { value: { ...value, props }, notes: inner };
   }
@@ -199,11 +337,10 @@ export function repairBlock(value, original = null) {
   if (!blob) return { value, notes };
 
   const { props, notes: inner } = normalizeProgramProps(blob.type, blob.props, original);
-  const label = blob.type === 'app' ? '小应用' : '脚本';
   return {
     // blockId 留着：一节里必须**整节收齐、id 一一对应**，只换类型不换 id。
     value: { ...(typeof value.blockId === 'string' ? { blockId: value.blockId } : {}), type: blob.type, props },
-    notes: [...inner, `正文里写着 doc:${blob.type}，整段换成了${label}块`],
+    notes: [...inner, `正文里写着 doc:${blob.type}${blob.id ? ` {#${blob.id}}` : ''}，整段换成了${labelOf(blob.type)}块`],
   };
 }
 
@@ -228,8 +365,8 @@ export function repairBlockList(list, originalList = []) {
 
 /**
  * 整篇 Markdown 纠正：
- *   ① 围栏块 ```` ```doc:app ```` 里字段是自造的 → 就地改成合法 props；
- *   ② 裸的 `doc:<类型>` + JSON（模型最常漏的那一步）→ 补成围栏块。
+ *   ① 围栏块 ```` ```doc:poll {#b2} ```` 里字段是自造的 → 就地改成合法 props（`{#id}` 留着）；
+ *   ② 裸的 `doc:<类型>`（可以带 `{#id}`）+ JSON（模型最常漏的那一步）→ 补成围栏块。
  * 本来就没问题的文本一个字不动（`notes` 为空时返回原文）。
  */
 export function repairMarkdown(markdown, { maxBareLines = 200 } = {}) {
@@ -237,39 +374,60 @@ export function repairMarkdown(markdown, { maxBareLines = 200 } = {}) {
   let text = typeof markdown === 'string' ? markdown : '';
   if (text === '' || !text.includes('doc:')) return { value: text, notes };
 
-  text = text.replace(/(`{3,})doc:([a-z0-9_-]+)[ \t]*\r?\n([\s\S]*?)\r?\n\1[ \t]*/g, (whole, fence, type, body) => {
-    if (!PROGRAM_TYPES.includes(type)) return whole;
+  text = text.replace(/(`{3,})([^\r\n]+)\r?\n([\s\S]*?)\r?\n\1[ \t]*/g, (whole, fence, rawInfo, body) => {
+    const info = splitInfo(rawInfo);
+    if (!info || !FIXABLE_TYPES.includes(info.type)) return whole;
     const parsed = parseJsonObject(body);
     if (!parsed) return whole;
-    const { props, notes: inner } = normalizeProgramProps(type, parsed);
+    const { props, notes: inner } = normalizeProgramProps(info.type, parsed);
     if (inner.length === 0) return whole;
     notes.push(...inner);
     const json = JSON.stringify(props, null, 2);
     const ticks = fenceFor(json);
-    return `${ticks}doc:${type}\n${json}\n${ticks}`;
+    return `${ticks}${infoOf(info.type, info.id)}\n${json}\n${ticks}`;
   });
 
   text = wrapBareBlobs(text, notes, maxBareLines);
   return { value: text, notes };
 }
 
-/** 裸的 `doc:<类型>` + JSON → 围栏块。识别不出 JSON 就原样放过（宁可不改，也不改坏）。 */
+/**
+ * 裸的 `doc:<类型>`（可带 `{#id}`）+ JSON → 围栏块。识别不出 JSON 就原样放过
+ * （宁可不改，也不改坏）。
+ *
+ * **围栏里的 `doc:` 行一个字不动**：整篇文档本身可能就是一篇「怎么写围栏块」的教程，
+ * 里面的示例正长这样。不设这道守卫，模型抄过来的教程会被我们改得面目全非。
+ */
 function wrapBareBlobs(text, notes, maxBareLines) {
   const lines = text.split('\n');
   const out = [];
+  let openFence = '';
   for (let i = 0; i < lines.length; i += 1) {
-    const head = /^[ \t]*doc:([a-z0-9_-]+)[ \t]*\r?$/.exec(lines[i]);
-    if (!head) {
-      out.push(lines[i]);
+    const line = lines[i];
+    const fence = /^[ \t]*(`{3,})[ \t]*(.*)$/.exec(line.replace(/\r$/, ''));
+    if (fence) {
+      const marks = fence[1];
+      if (openFence === '') openFence = marks;
+      else if (fence[2].trim() === '' && marks.length >= openFence.length) openFence = '';
+      out.push(line);
       continue;
     }
-    const type = head[1];
+    if (openFence !== '') {
+      out.push(line);
+      continue;
+    }
+    const head = splitInfo(line);
+    if (!head || !FENCED_TYPES.includes(head.type)) {
+      out.push(line);
+      continue;
+    }
+    const { type, id } = head;
     let body = '';
     let end = -1;
     for (let j = i + 1; j < lines.length && j <= i + maxBareLines; j += 1) {
-      const line = lines[j].replace(/\r$/, '');
-      if (body === '' && line.trim() === '') break;
-      body += (body === '' ? '' : '\n') + line;
+      const next = lines[j].replace(/\r$/, '');
+      if (body === '' && next.trim() === '') break;
+      body += (body === '' ? '' : '\n') + next;
       if (parseJsonObject(body)) {
         end = j;
         break;
@@ -277,14 +435,21 @@ function wrapBareBlobs(text, notes, maxBareLines) {
     }
     const parsed = end === -1 ? null : parseJsonObject(body);
     if (!parsed) {
-      out.push(lines[i]);
+      // 头认出来了、后面却不是 JSON：说清楚「这块没救回来」，让作者重来一次 ——
+      // 默默放过就会变成 548 那样：一整段 JSON 被当成正文打印出来。
+      if (/^\s*[{[]/.test(lines[i + 1] ?? '')) {
+        notes.push(
+          `${infoOf(type, id)} 那一段没能补上围栏（紧跟着的内容不是合法 JSON），这块${labelOf(type)}得让模型重写一次`,
+        );
+      }
+      out.push(line);
       continue;
     }
     const { props, notes: inner } = normalizeProgramProps(type, parsed);
     const json = JSON.stringify(props, null, 2);
     const ticks = fenceFor(json);
-    out.push(`${ticks}doc:${type}`, json, ticks);
-    notes.push(`裸写的 doc:${type} 补上了围栏（不补的话 P2 只会把它当成普通正文）`);
+    out.push(`${ticks}${infoOf(type, id)}`, json, ticks);
+    notes.push(`裸写的 ${infoOf(type, id)} 补上了围栏（不补的话 P2 只会把它当成普通正文）`);
     notes.push(...inner);
     i = end;
   }
