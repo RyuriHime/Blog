@@ -37,6 +37,9 @@ let pending = [];
 /** 当前挂着的那个抽屉；切页面时由 `destroyDocAi()` 收掉。 */
 let live = null;
 
+/** 最后一次发出的请求（`{ kind:'draft'|'review', instruction }`）：授权成功后拿它重跑一遍。 */
+let lastAsk = null;
+
 /** 左侧抽屉的骨架。`documentId` 只是为了在标题栏写清楚「改的是哪一篇」。 */
 export function docAiHtml(documentId) {
   return `<aside class="card doc-ai" data-doc-ai>
@@ -110,6 +113,7 @@ export function mountDocAi(options = {}) {
       return;
     }
     say(`<div class="doc-ai-said">${esc(instruction)}</div>`);
+    lastAsk = { kind: 'draft', instruction };
     const busy = (on) => {
       if (sendBtn) sendBtn.disabled = on;
       if (reviewBtn) reviewBtn.disabled = on;
@@ -141,7 +145,7 @@ export function mountDocAi(options = {}) {
       }
       hint('');
     } catch (error) {
-      say(`<div class="doc-ai-card doc-ai-error">${esc(aiFailure(error))}</div>`);
+      say(errorCard(error));
       hint('');
     } finally {
       busy(false);
@@ -156,6 +160,7 @@ export function mountDocAi(options = {}) {
       return;
     }
     say(`<div class="doc-ai-said">${esc(instruction ? `审查：${instruction}` : '学术审查')}</div>`);
+    lastAsk = { kind: 'review', instruction };
     const busy = (on) => {
       if (sendBtn) sendBtn.disabled = on;
       if (reviewBtn) reviewBtn.disabled = on;
@@ -194,10 +199,34 @@ export function mountDocAi(options = {}) {
       }
       hint('');
     } catch (error) {
-      say(`<div class="doc-ai-card doc-ai-error">${esc(aiFailure(error))}</div>`);
+      say(errorCard(error));
       hint('');
     } finally {
       busy(false);
+    }
+  }
+
+  /**
+   * 403 那颗授权按钮：就地给自己授权（`edit_content` 是高风险能力，服务端强制 confirm），
+   * 授权成了就把刚才那句话原样重跑一遍 —— 作者不该为了一道墙重打一遍指令。
+   */
+  async function grantAndRetry(capability) {
+    hint('正在授权…');
+    try {
+      const data = await api('/api/ai-edit/grants', {
+        method: 'POST',
+        body: { capability, confirm: true },
+      });
+      say(
+        `<div class="doc-ai-card"><div class="doc-ai-card-head">已授权「${esc(String(data?.capability ?? capability))}」</div>` +
+          `<div class="doc-hint">这一下是你自己点的；想收回就去「AI 编辑台」，那里也能设每日次数。</div></div>`,
+      );
+      const ask = lastAsk;
+      if (ask && ask.kind === 'review') await review(String(ask.instruction ?? ''));
+      else if (ask) await draft(String(ask.instruction ?? ''));
+      else hint('授权好了 —— 再说一句就行。');
+    } catch (error) {
+      hint(`授权失败：${aiFailure(error)}`);
     }
   }
 
@@ -243,6 +272,11 @@ export function mountDocAi(options = {}) {
     const suggestBtn = event.target?.closest?.('[data-doc-ai-suggest]');
     if (suggestBtn && root.contains(suggestBtn)) {
       void apply(Number(suggestBtn.getAttribute('data-doc-ai-suggest')));
+      return;
+    }
+    const grantBtn = event.target?.closest?.('[data-doc-ai-grant]');
+    if (grantBtn && root.contains(grantBtn)) {
+      void grantAndRetry(String(grantBtn.getAttribute('data-doc-ai-grant') ?? 'edit_content'));
       return;
     }
     const action = event.target?.closest?.('[data-doc-ai-action]');
@@ -298,9 +332,28 @@ export function destroyDocAi() {
 /** 把接口错误翻成一句人话 —— 授权/没配 key 这两条是作者真会撞上的。 */
 function aiFailure(error) {
   const status = Number(error?.status) || 0;
-  if (status === 403) return '没有「改写正文」的能力授权：去「AI 编辑台」授权之后再回来。';
+  if (status === 403) return '没有「修改内容」这项能力授权：去「AI 编辑台」授权之后再回来。';
   if (status === 503) return '这台服务器没配 AI key（AI_API_KEY），模型调不动。';
   if (status === 429) return '调用太密了（每分钟 5 次），过一会儿再说。';
   if (status === 504) return '模型这次超时了，再试一次。';
   return `AI 调用失败：${apiErrorText(error)}`;
+}
+
+/**
+ * 失败卡片。授权那条要给一颗**能点的按钮** —— 403 是作者最先撞上的墙（六项能力默认全关），
+ * 点一下就地授权、再把刚才那句话重跑一遍，别让人自己去找「AI 编辑台」再回来重打指令。
+ */
+function errorCard(error) {
+  const status = Number(error?.status) || 0;
+  if (status === 403) {
+    return (
+      '<div class="doc-ai-card doc-ai-error">没有「修改内容」这项能力授权。' +
+      '<div class="doc-actions">' +
+      '<button class="btn btn-sm btn-primary" type="button" data-doc-ai-grant="edit_content">授权「修改内容」并重试</button>' +
+      '<a class="btn btn-sm btn-ghost" href="#/ai-edit">去 AI 编辑台</a>' +
+      '</div>' +
+      '<div class="doc-hint">授权是高风险操作，按下去就算你确认；随时能在 AI 编辑台收回。</div></div>'
+    );
+  }
+  return `<div class="doc-ai-card doc-ai-error">${esc(aiFailure(error))}</div>`;
 }
