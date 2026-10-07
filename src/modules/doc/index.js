@@ -17,6 +17,7 @@ import { registerDocRoutes } from './routes.js';
 import { loadBlockTypes } from './blocks/index.js';
 import { createVisibility, detectTeams } from './visibility.js';
 import { WIKI_TEMPLATE } from './templates.js';
+import { autoImportOiwiki } from './oiwiki-autoseed.js';
 
 // 副作用：登记本模块的十四张表（必须在开库之前，见文件头注释）。
 schemas.addScript(DOC_SCHEMA, 'doc');
@@ -84,5 +85,11 @@ export default {
     }));
 
     registerDocRoutes(ctx, { store, queries });
+
+    // 起完之后的一次性后台活儿：站里有「OI Wiki」空站时，自己把它导满。
+    // 为什么必须由**代码**来干这件事：那 519 页是数据库内容，而部署只换
+    // src/ public/ scripts/ 三个目录，仓库根与 oi-wiki-src/ 都上不了服务器 ——
+    // 详见 src/modules/doc/oiwiki-autoseed.js 的文件头。
+    ctx.hooks?.afterReady?.push(() => autoImportOiwiki({ ctx, queries }));
   },
 };

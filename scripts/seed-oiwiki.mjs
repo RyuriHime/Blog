@@ -72,17 +72,30 @@ const STATION_TITLE = opt('station', 'OI Wiki');
 // 以谁的身份建站建页。默认 `admin` 是本地演示账号；线上（真实社区）通常没有这个账号，
 // 必须用 `--user <用户名>` 指一个真实存在的账号，否则 bootStore() 会明确报错退出。
 const VIEWER_USERNAME = opt('user', 'admin');
-// 上游源码优先用仓库里那份（`oi-wiki-src/OI-wiki-master`），其次才是仓库外面的老位置。
-// 认的是「这一份里有没有 docs/」，这样即使历史上只有外面那份，行为也跟以前一模一样。
+// `DB_FILE` 必须在 import core 之前定下：`src/core/paths.js` 在模块求值那一刻就把常量定死了。
+if (!process.env.DB_FILE) process.env.DB_FILE = join(ROOT, 'data', 'p2-preview.db');
+
+// 上游源码优先用仓库里那份（`oi-wiki-src/OI-wiki-master`），其次才是仓库外面的老位置；
+// 两份都没有时（服务器上就是这种情况 —— 部署只换 src/ public/ scripts/，仓库根上不去）
+// 现从 GitHub 取一份到缓存目录。细节见 scripts/fetch-oiwiki.mjs。
 const SRC_CANDIDATES = [
   join(ROOT, 'oi-wiki-src', 'OI-wiki-master'),
   join(ROOT, '..', 'oi-wiki-src', 'OI-wiki-master'),
 ];
-const SRC_ROOT = resolve(opt('src', SRC_CANDIDATES.find((dir) => existsSync(join(dir, 'docs'))) ?? SRC_CANDIDATES[0]));
+let srcRoot = opt('src', '') || SRC_CANDIDATES.find((dir) => existsSync(join(dir, 'docs'))) || '';
+if (!existsSync(join(srcRoot || SRC_CANDIDATES[0], 'docs')) && !flag('no-fetch')) {
+  const { SOURCE_DIR_NAME, defaultCacheDir, downloadSource } = await import('./fetch-oiwiki.mjs');
+  const cacheDir = resolve(opt('fetch-dir', defaultCacheDir(process.env.DB_FILE)), SOURCE_DIR_NAME);
+  console.log(`本地没有源码，现从 GitHub 取一份（缓存在 ${cacheDir}）…`);
+  try {
+    await downloadSource({ targetDir: cacheDir });
+    srcRoot = cacheDir;
+  } catch (error) {
+    console.error(error.message);
+  }
+}
+const SRC_ROOT = resolve(srcRoot || SRC_CANDIDATES[0]);
 const DOCS_DIR = resolve(opt('dir', join(SRC_ROOT, 'docs')));
-
-// `DB_FILE` 必须在 import core 之前定下：`src/core/paths.js` 在模块求值那一刻就把常量定死了。
-if (!process.env.DB_FILE) process.env.DB_FILE = join(ROOT, 'data', 'p2-preview.db');
 // 图片默认落在**数据库旁边**的 `uploads/oi-wiki/` —— 跟 `src/core/paths.js:34` 的 UPLOAD_DIR 同一条推导
 // （`DB_FILE` 在哪个目录，`uploads/` 就在哪个目录）。本地跑等于原来的 `data/uploads/oi-wiki`；
 // 线上把 DB_FILE 指到别处时，图也跟着落过去，正文里的 `/uploads/oi-wiki/…` 才不会成死链。

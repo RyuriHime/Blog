@@ -332,7 +332,8 @@ forum/
 │   ├── check-encoding.mjs       # 源码编码体检（BOM / 乱码 / 批处理换行与 ASCII）
 │   ├── check-markdown.mjs       # ★ 正文渲染回归：链接 / 表格 / 嵌套列表 / 转义 / 行内 HTML 白名单
 │   ├── sync-markdown-core.mjs   # 同步 note-agent 的兜底渲染器（--check 当漂移守卫）
-│   ├── seed-oiwiki.mjs          # ★ 把 OI-wiki 的 mkdocs 源码（读 oi-wiki-src/）导成站内 wiki 站（见 §4 末一段）
+│   ├── seed-oiwiki.mjs          # ★ 把 OI-wiki 的 mkdocs 源码导成站内 wiki 站（本地没源码时自己从 GitHub 取）
+│   ├── fetch-oiwiki.mjs         #   取一份 OI-wiki 源码快照：下 GitHub 的 tar.gz 自己解包（零依赖）
 │   ├── check-notes-ui.mjs / check-frontend.mjs / notes-smoke.mjs / smoke-ai.mjs
 │   ├── ai-smoke.mjs / ui-smoke.mjs / feed-smoke.mjs / doc-smoke.mjs / team-smoke.mjs
 │   ├── fix-cmd.mjs              # 把 .cmd 规范化为 CRLF + 去 BOM
@@ -409,23 +410,32 @@ node scripts/seed-oiwiki.mjs --tree            # 只补目录树，叶子正文�
 node scripts/seed-oiwiki.mjs --only dp/        # 只导一个子目录
 node scripts/seed-oiwiki.mjs --tree --extras   # 连没进 nav 的文件也发布
 node scripts/seed-oiwiki.mjs --src <目录>      # 换一份源码（默认就是仓库里那份）
+node scripts/seed-oiwiki.mjs --no-fetch        # 不许联网取源码（本地没有就直接报错）
 DB_FILE=/opt/app/data/forum.db node scripts/seed-oiwiki.mjs --user RyuriHime   # 线上：写正式库
 ```
 
-> **线上要手动跑一次**：这 519 页是**数据库内容**（`data/` 被 `.gitignore` 忽略），而部署只换
-> `src/ public/ scripts/` 三个目录（`docs/skeleton.md` §5）—— 所以「推上 main」不会让线上多出这个站。
-> 站里已经有同名站时就按标题**复用**它（`scripts/seed-oiwiki.mjs:637` 那句
-> `stations.find((item) => item.title === STATION_TITLE)`），把页挂进去、把站首页重写成入口列表；
-> `--user <用户名>` 指定以谁的身份建站建页（默认 `admin` 是本地演示账号，真实社区里一般没有它），
-> 图片落在 `UPLOAD_DIR`（跟着 `DB_FILE` 走，即数据库旁边的 `uploads/`）。
-> 在服务器上跑一次即可，几秒钟起步、519 页几分钟：
+> **线上不用管，它自己会导**：这 519 页是**数据库内容**（`data/` 被 `.gitignore` 忽略），而部署只换
+> `src/ public/ scripts/` 三个目录（`docs/skeleton.md` §5）—— 所以「推上 main」本身搬不动内容。
+> 于是反过来做：**让代码自己搬**。服务起来之后（`ctx.hooks.afterReady`，登记在
+> `src/modules/doc/index.js`、执行在 `src/server.js` 的 listen 回调里），`src/modules/doc/oiwiki-autoseed.js`
+> 会看一眼库里有没有一个**同名、0 页**的「OI Wiki」站；有就起个**子进程**跑导入器把 519 页填进去，
+> 日志直接进服务器日志，**不挡启动**（失败也只留一行）。几个条件：
 >
-> ```bash
-> cd <git clone 目录>                                            # oi-wiki-src/ 在这个 clone 里
-> DB_FILE=<部署目录>/data/forum.db node scripts/seed-oiwiki.mjs --user RyuriHime
-> ```
+> - 站名得正好是「OI Wiki」（标题相同才认），并且是 0 页；导完就是 519 页，所以只可能跑一次。
+>   成功后会写一个 `oi-wiki-imported.flag`（落在库旁边）—— 有它就不再自动填了，哪怕你后来把页删光。
+> - 导入器本地找不到源码时会**自己从 GitHub 取一份**（`scripts/fetch-oiwiki.mjs`：下 GitHub 打的 tar.gz,
+>   自己解包到库旁边的 `oi-wiki-src-cache/`，零依赖）—— 服务器本来就每 3 分钟连一次 GitHub 拉 main，这条路是通的。
+>   首次多花几十秒下载，之后走缓存。
+> - `--user <用户名>` 指定以谁的身份建站建页：自动导入用的是**那个站自己的作者**；
+>   `scripts/seed-oiwiki.mjs:650` 按标题复用同名站，不会另建一个。图片落在 `UPLOAD_DIR`
+>   （跟着 `DB_FILE` 走，即数据库旁边的 `uploads/`）。
+> - 不想让它自动导：`OIWIKI_AUTOIMPORT=0`。手跑也行（本地与服务器同一条）：
 >
-> 跑完不用重启（页面与目录树都是每次请求现查库）。
+>   ```bash
+>   DB_FILE=<部署目录>/data/forum.db node scripts/seed-oiwiki.mjs --user RyuriHime
+>   ```
+>
+>   跑完不用重启（页面与目录树都是每次请求现查库）。
 
 > **源码跟着仓库走**：上游那份 `docs/` + `mkdocs.yml` 就放在 **`oi-wiki-src/OI-wiki-master/`**
 > （2919 个文件 / 50.9 MB，原样拷贝，一个字没改过），所以 `git clone` 下来就能离线导入，
@@ -807,7 +817,7 @@ node scripts/capture-fixtures.mjs  # 重采前端冒烟用的假数据（改了�
 一次跑完（`npm test` 就是上面这些，15 组）：
 
 ```
-check-encoding 202 文件 / 84 断言 · check-skeleton 47 项 · check-golden 88 项 0 差异
+check-encoding 204 文件 / 84 断言 · check-skeleton 47 项 · check-golden 88 项 0 差异
 check-markdown 67 · check-frontend 39 个页面 + 34 个模块静态扫描 · smoke 231 · smoke-ai 61
 ai-smoke 422 · feed-smoke 95 · doc-smoke 597 · team-smoke 301
 check-ui-contract 316 · check-notes-ui 33 · notes-smoke 44 · ui-smoke 73
@@ -824,7 +834,7 @@ check-ui-contract 316 · check-notes-ui 33 · notes-smoke 44 · ui-smoke 73
 ```
 node note-studio/tests/run.mjs        # 学术笔记子系统
 node forum-ai/selftest.mjs            # AI 层：92 项
-npm run test:notes                    # AI 工作台抽屉：32 个文件 / 722 条断言
+npm run test:notes                    # AI 工作台抽屉：32 个文件 / 724 条断言
 ```
 
 **`check-golden.mjs` 是这套测试里最该先跑的一个**：它把 88 条固定请求的「状态码 + 响应 JSON 的键结构」

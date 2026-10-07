@@ -100,7 +100,7 @@ ctx.schema    建表登记处：.add(表名, SQL, owner) / .names() / .ownerOf(�
 ctx.http      ok / sendJson / readJsonBody / parseCookies / HttpError / ensure / field / rateLimit
 ctx.guards    requireUser / requireStaff / requireOwner / assertPostVisible / isOwner / isStaff
 ctx.shape     出参形状函数
-ctx.hooks.afterReady   服务器起来后要跑的回调
+ctx.hooks.afterReady   服务器起来后要跑的回调（src/server.js 在 listen 回调里逐个跑，失败只打日志）
 ctx.options   { dbFile, root, sessionTtlMs }
 ctx.log       日志
 ```

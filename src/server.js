@@ -87,6 +87,11 @@ server.listen(PORT, HOST, () => {
     console.log(`  → forum-ai : ${JSON.stringify(forumAiStatus())}`);
     console.log(`  → note-agent: ${JSON.stringify(noteAgentStatus())}`);
   }
+  // 各模块登记的后台活儿（一次性导入之类）在这里跑：**listen 之后**，不挡启动，
+  // 失败只打日志。契约见 src/core/context.js 的 hooks，登记处见 src/modules/doc/index.js。
+  for (const task of ctx.hooks.afterReady) {
+    Promise.resolve().then(task).catch((error) => console.log(`  → 后台任务失败: ${error?.message ?? error}`));
+  }
   console.log('');
 });
 
