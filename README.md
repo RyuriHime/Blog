@@ -328,11 +328,14 @@ forum/
 │   ├── check-encoding.mjs       # 源码编码体检（BOM / 乱码 / 批处理换行与 ASCII）
 │   ├── check-markdown.mjs       # ★ 正文渲染回归：链接 / 表格 / 嵌套列表 / 转义 / 行内 HTML 白名单
 │   ├── sync-markdown-core.mjs   # 同步 note-agent 的兜底渲染器（--check 当漂移守卫）
-│   ├── seed-oiwiki.mjs          # ★ 把 OI-wiki 的 mkdocs 源码导成站内 wiki 站（见 §4 末一段）
+│   ├── seed-oiwiki.mjs          # ★ 把 OI-wiki 的 mkdocs 源码（读 oi-wiki-src/）导成站内 wiki 站（见 §4 末一段）
 │   ├── check-notes-ui.mjs / check-frontend.mjs / notes-smoke.mjs / smoke-ai.mjs
 │   ├── ai-smoke.mjs / ui-smoke.mjs / feed-smoke.mjs / doc-smoke.mjs / team-smoke.mjs
 │   ├── fix-cmd.mjs              # 把 .cmd 规范化为 CRLF + 去 BOM
 │   └── reset-db.mjs             # 清库并重新播种（危险操作，必须加 --yes）
+├── oi-wiki-src/                 # OI Wiki 上游源码快照（原样拷贝，不是本站写的代码）
+│   ├── README.md                #   来历 / 许可 / 怎么更新（CC BY-SA 4.0）
+│   └── OI-wiki-master/          #   docs/（465 篇 md + 680 张图）+ mkdocs.yml —— seed-oiwiki.mjs 读它
 └── data/forum.db                # SQLite 数据文件（首次运行自动生成）
 ```
 
@@ -401,7 +404,14 @@ node scripts/seed-oiwiki.mjs                   # 真导入（默认写 data/p2-p
 node scripts/seed-oiwiki.mjs --tree            # 只补目录树，叶子正文不动（重跑很快）
 node scripts/seed-oiwiki.mjs --only dp/        # 只导一个子目录
 node scripts/seed-oiwiki.mjs --tree --extras   # 连没进 nav 的文件也发布
+node scripts/seed-oiwiki.mjs --src <目录>      # 换一份源码（默认就是仓库里那份）
 ```
+
+> **源码跟着仓库走**：上游那份 `docs/` + `mkdocs.yml` 就放在 **`oi-wiki-src/OI-wiki-master/`**
+> （2919 个文件 / 50.9 MB，原样拷贝，一个字没改过），所以 `git clone` 下来就能离线导入，
+> 不必再去下载 OI-wiki。来历、许可与更新办法见 [`oi-wiki-src/README.md`](oi-wiki-src/README.md)；
+> 源码放在仓库外面（`../oi-wiki-src/OI-wiki-master`）也照样认，两边都有时以仓库内那份为准。
+> 上游许可是 **CC BY-SA 4.0**（除代码部分外，详见其 README），导进来的正文保留原文与出处链接。
 
 > **不走 HTTP**：`PUT /api/docs/:id/markdown` 这类写接口每用户每 10 分钟只给 60 次
 > （`src/modules/doc/routes.js` 的 `write()` 里那个 `rateLimit`），519 页要跑一个多小时；

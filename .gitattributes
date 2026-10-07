@@ -8,12 +8,15 @@
 
 # 二进制：禁止任何换行或编码转换。
 *.png  binary
+*.apng binary
 *.jpg  binary
 *.jpeg binary
 *.gif  binary
 *.ico  binary
 *.webp binary
 *.bmp  binary
+*.ai   binary
+*.ggb  binary
 *.woff binary
 *.woff2 binary
 *.ttf  binary
@@ -32,3 +35,7 @@ note-studio/public/vendor/**     linguist-vendored
 note-studio/acceptance/output/** linguist-generated
 forum-ai/examples/demo-output.json linguist-generated
 note-studio/examples/output/**   linguist-generated
+
+# OI Wiki 的上游源码（原样拷贝，导入器读它，见 oi-wiki-src/README.md）：
+# 别把它一万多行 C++ 示例算成这个项目的代码，也别在 diff 里当正文展示。
+oi-wiki-src/** linguist-vendored

@@ -48,9 +48,15 @@ check('渲染无序列表', /<ul><li>一<\/li><li>二<\/li><\/ul>/.test(rendered
 check('渲染围栏代码块并带上语言', /<pre class="md-code"><code class="language-js">/.test(rendered), rendered);
 
 const xss = loadMarkdown().renderMarkdown('<img src=x onerror="alert(1)">\n\n<script>alert(2)</script>');
-check('先转义 HTML 再注入白名单标签（没有裸 img）', !xss.includes('<img'), xss);
+// 行内 `<img>` 从 OI-wiki 那次返工起就在白名单里了（正文里有裸 `<img>`，见 `src/markdown.js` 的
+// RAW_HTML_TAGS），所以这里不能再断言「没有 `<img>`」；要断言的是**属性只剩安全的那几个** ——
+// src / alt 与纯数字的宽高，`onerror` 一律丢掉。契约与宿主那份 `scripts/check-markdown.mjs`
+// 里的同名用例保持一致（那边还有一条 `javascript:` 被拒绝的）。
+check('先转义 HTML 再注入白名单标签（img 只留安全属性，onerror 出不来）', !xss.includes('onerror'), xss);
 check('先转义 HTML 再注入白名单标签（没有裸 script）', !xss.includes('<script'), xss);
 check('被转义的内容确实变成了实体', xss.includes('&lt;script&gt;'), xss);
+const badImg = loadMarkdown().renderMarkdown('<img src="javascript:alert(1)">');
+check('行内 <img> 的 src 也过协议白名单（javascript: 被拒绝）', badImg.includes('&lt;img') && !badImg.includes('<img'), badImg);
 check(
   'javascript: 伪协议被丢掉，不会变成链接',
   !loadMarkdown().renderMarkdown('[点我](javascript:alert(1))').includes('javascript:') &&

@@ -17,6 +17,11 @@
  *   `[字](../basic/bucket-sort.md#锚点)`       → `[[那一页的标题|字]]`（锚点丢弃：块 id 是重排的）
  *   行内 `<kbd>` / `<br>` / `<sup>` 等         → 原样留着（`src/markdown.js` 的行内白名单）
  *
+ * ── 源码放在哪 ──
+ * 上游源码**随仓库走**：`oi-wiki-src/OI-wiki-master`（`docs/` + `mkdocs.yml`，来历与许可见
+ * `oi-wiki-src/README.md`）。老习惯把源码摆在仓库外面（`../oi-wiki-src/OI-wiki-master`）也照样认，
+ * 两边都有时以仓库内那份为准；`--src <目录>` 可以指定别处。
+ *
  * 用法：
  *   node scripts/seed-oiwiki.mjs                    # 导入到 data/p2-preview.db
  *   DB_FILE=data/forum.db node scripts/seed-oiwiki.mjs
@@ -24,6 +29,7 @@
  *   node scripts/seed-oiwiki.mjs --tree             # 只补 mkdocs 目录树（叶子正文不动）
  *   node scripts/seed-oiwiki.mjs --station "OI Wiki" --only dp/
  *   node scripts/seed-oiwiki.mjs --tree --extras    # 连没进 nav 的文件一起发布
+ *   node scripts/seed-oiwiki.mjs --src /path/to/OI-wiki-master
  */
 import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { dirname, join, posix, relative, resolve, sep } from 'node:path';
@@ -51,7 +57,13 @@ let skippedExtras = [];
 const LIMIT = Number(opt('limit', '0')) || 0;
 const ONLY = opt('only', '');
 const STATION_TITLE = opt('station', 'OI Wiki');
-const SRC_ROOT = resolve(opt('src', join(ROOT, '..', 'oi-wiki-src', 'OI-wiki-master')));
+// 上游源码优先用仓库里那份（`oi-wiki-src/OI-wiki-master`），其次才是仓库外面的老位置。
+// 认的是「这一份里有没有 docs/」，这样即使历史上只有外面那份，行为也跟以前一模一样。
+const SRC_CANDIDATES = [
+  join(ROOT, 'oi-wiki-src', 'OI-wiki-master'),
+  join(ROOT, '..', 'oi-wiki-src', 'OI-wiki-master'),
+];
+const SRC_ROOT = resolve(opt('src', SRC_CANDIDATES.find((dir) => existsSync(join(dir, 'docs'))) ?? SRC_CANDIDATES[0]));
 const DOCS_DIR = resolve(opt('dir', join(SRC_ROOT, 'docs')));
 const IMAGE_ROOT = resolve(opt('images', join(ROOT, 'data', 'uploads', 'oi-wiki')));
 const UPLOAD_URL = opt('url', '/uploads/oi-wiki');
