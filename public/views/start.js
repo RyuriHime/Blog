@@ -111,7 +111,7 @@ async function viewStart() {
   ui.app.innerHTML = `
     <div class="start-page">
       <div class="page-head">
-        <h1 class="start-title">🧱 积木社区</h1>
+        <h1 class="start-title">🗣️ 格社</h1>
         <p class="hint">左边是站务公告，右边三块分别是动态、积木广场和团队 —— 点哪块进哪块。</p>
       </div>
       <div class="start-columns">
