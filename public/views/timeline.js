@@ -627,9 +627,13 @@ async function react(node) {
   const id = Number(node.dataset.id);
   const kind = node.dataset.kind;
   const item = itemCache.get(id);
-  // 再点同一个就是取消 —— 与服务端的 toggle 语义一致
-  const next = item && ((kind === 'like' && item.liked) || (kind === 'dislike' && item.disliked)) ? null : kind;
-  const result = await api(`/api/feed/${id}/reaction`, { method: 'POST', body: { kind: next } });
+  // ⚠️ 别在这儿自己判断「已经赞过了就发个 null 去取消」。
+  //
+  // 服务端 `queries.setReaction()` 的语义本来就是「再点一次同一个 = 取消，换一个 = 改判」，
+  // 但它**只认 `'like'` / `'dislike'` 两个字面量**（`src/modules/feed/routes.js` 的 bad_kind
+  // 校验）。这里递个 null 过去只会换回 400 和一句「只支持「赞」或「踩」」——
+  // 用户看到的现象是「手滑点错了取消不掉」。照原样把 kind 发过去，取不取消由服务端说了算。
+  const result = await api(`/api/feed/${id}/reaction`, { method: 'POST', body: { kind } });
 
   const likeNode = $(`[data-feed-like="${id}"]`);
   const dislikeNode = $(`[data-feed-dislike="${id}"]`);

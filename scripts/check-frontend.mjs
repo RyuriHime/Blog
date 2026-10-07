@@ -829,6 +829,16 @@ const unknownPaths = new Set();
 /** 所有请求都记下来：点按钮的那条路径里「到底发出去了什么」只有这里看得到。 */
 const REQUESTS = [];
 
+/**
+ * `/api/feed/:id/reaction` 的假服务端状态（`Map<动态 id, 'like' | 'dislike'>`）。
+ *
+ * 为什么要单独维护一份：真服务端的 `queries.setReaction()` 是「同一个再来一次 = 取消」，
+ * 而这个接口**只收 `'like'` / `'dislike'` 两个字面量**（`src/modules/feed/routes.js` 的
+ * bad_kind 校验）。前端要是自己算出「取消」再发个 null 过来，就该跟线上一样吃 400 ——
+ * 这个 400 必须能在假 DOM 里复现，否则「手滑点错了取消不掉」这种 bug 永远照不出来。
+ */
+const FEED_REACTIONS = new Map();
+
 let fetchCount = 0;
 globalThis.fetch = async (url, options = {}) => {
   fetchCount += 1;
@@ -865,6 +875,8 @@ globalThis.fetch = async (url, options = {}) => {
       createdAt: Date.now(),
     },
   };
+  // 这一轮要回失败（比如 kind 不合法）时走这个出口，见下面的 `/api/feed/:id/reaction`。
+  let failure = null;
   let data;
   if (method === 'POST' && bare === '/api/teams') data = created;
   else if (method === 'POST' && bare === '/api/teams/join-by-code') data = { team: TEAM_FIXTURE, joined: true };
@@ -954,7 +966,40 @@ globalThis.fetch = async (url, options = {}) => {
     };
   } else if (method === 'POST' && bare === '/api/teams/frontend-group/files') data = uploaded;
   else if (method === 'POST' && bare === '/api/teams/frontend-group/messages') data = sent;
-  else data = pickFixture(raw);
+  else if (method === 'POST' && /^\/api\/feed\/\d+\/reaction$/.test(bare)) {
+    // 照抄真服务端的两件事：
+    //   ① 入参校验：只认 'like' / 'dislike'（`src/modules/feed/routes.js` 的 bad_kind）。
+    //      前端自己算出来的 null 在这里就该跟线上一样吃 400，不能悄悄放过 ——
+    //      少了这一条，「手滑点错了取消不掉」这种 bug 在假 DOM 里永远照不出来。
+    //   ② `queries.setReaction()` 的语义：同一个再来一次 = 取消，换一个 = 改判。
+    const feedId = Number(bare.split('/')[3]);
+    const kind = payload?.kind;
+    if (kind !== 'like' && kind !== 'dislike') {
+      failure = { status: 400, code: 'bad_kind', message: '只支持「赞」或「踩」' };
+    } else {
+      const after = FEED_REACTIONS.get(feedId) === kind ? null : kind;
+      if (after) FEED_REACTIONS.set(feedId, after);
+      else FEED_REACTIONS.delete(feedId);
+      data = {
+        liked: after === 'like',
+        disliked: after === 'dislike',
+        likeCount: after === 'like' ? 1 : 0,
+        dislikeCount: after === 'dislike' ? 1 : 0,
+      };
+    }
+  } else data = pickFixture(raw);
+  if (failure) {
+    const body = { ok: false, error: { code: failure.code, message: failure.message } };
+    return {
+      ok: false,
+      status: failure.status,
+      headers: { getSetCookie: () => [], get: () => 'application/json' },
+      json: async () => body,
+      text: async () => JSON.stringify(body),
+      _url: url,
+      _options: options,
+    };
+  }
   if (data === undefined) unknownPaths.add(bare);
   return {
     ok: true,
@@ -1271,6 +1316,49 @@ if (!state.theme) problems.push('state.theme 没被初始化');
     problems.push(`点了「取消引用」之后 chip 里还留着 ${JSON.stringify(String(chip.innerHTML).slice(0, 40))}`);
   }
   console.log(`  ${problems.length ? '❌' : '✅'} 交互：引用确认后编号会腾空、取消引用后 chip 会清空`);
+}
+
+/* ---- 交互：动态流的「赞 / 踩」点第二次必须是**取消**，不能变成 400 ----
+ *
+ * 为什么单独测这一条：服务端 `queries.setReaction()` 本来就是「同一个再来一次 = 取消」，
+ * 但那个接口的入参校验只认 'like' / 'dislike'（见上面假 fetch 里复刻的 bad_kind）。
+ * 前端要是「贴心地」自己算出取消、发个 `{ kind: null }` 过去，换回来的就是
+ * 400 +「只支持「赞」或「踩」」—— 用户看到的现象是**手滑点错了就取消不掉**。
+ *
+ * `feed-smoke.mjs` 照不出这个：它直接发 'like'，走的不是前端那条路。
+ * 渲染类断言更照不出来：页面确实画出来了，画出来的按钮点下去发什么它不管。
+ */
+{
+  const timeline = await view('timeline.js');
+  const FEED_KEY = '/api/feed?filter=all&page=1';
+  const item = pickFixture(FEED_KEY).items[0];
+  // 把这条动态摆成「我已经赞过了」—— 「取消」要走的正是这条路
+  const saved = { liked: item.liked, likeCount: item.likeCount };
+  item.liked = true;
+  item.likeCount = 1;
+  FEED_REACTIONS.set(item.id, 'like');
+  await timeline.viewTimeline(new Map());
+
+  const before = REQUESTS.length;
+  const reactNode = { dataset: { feedAction: 'react', id: String(item.id), kind: 'like' }, matches: () => false };
+  reactNode.closest = (selector) => (selector === '[data-feed-action]' ? reactNode : null);
+  dispatch(app, 'click', reactNode);
+  await settle();
+
+  const sent = REQUESTS.slice(before).filter((entry) => entry.url.includes('/reaction'));
+  if (!sent.length) {
+    problems.push('首页动态流点「赞」之后没有请求 /api/feed/:id/reaction');
+  } else if (sent[0].body?.kind !== 'like' && sent[0].body?.kind !== 'dislike') {
+    problems.push(
+      `取消点赞发出去的 kind 是 ${JSON.stringify(sent[0].body?.kind)} —— 服务端只认 'like' / 'dislike'，` +
+        '会回 400 bad_kind，用户看到的是「手滑点错了取消不掉」；取不取消该由服务端 toggle，前端别自己算。',
+    );
+  }
+  console.log(`  ${problems.length ? '❌' : '✅'} 交互：动态流的赞点第二次 = 取消（发的是字面量，不是 null）`);
+
+  item.liked = saved.liked;
+  item.likeCount = saved.likeCount;
+  FEED_REACTIONS.delete(item.id);
 }
 
 /* ---- 交互：点「＋ 新建团队」必须真的把表单打开 ----
