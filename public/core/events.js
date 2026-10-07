@@ -425,6 +425,25 @@ document.addEventListener('click', async (event) => {
         });
         break;
       }
+      case 'ai-list-scope': {
+        const list = document.querySelector('[data-ai-list]');
+        if (!list) break;
+        list.dataset.scope = actionNode.dataset.scope || 'all';
+        for (const button of actionNode.parentElement.querySelectorAll('[data-action="ai-list-scope"]')) {
+          button.classList.toggle('is-on', button === actionNode);
+        }
+        // 换筛选条件时先把「只显示前 30 条」的截断去掉：命中「未解读」的可能只有 43 条里的几条，
+        // 留在截断区里就会被静默藏掉，看着像没有。
+        delete list.dataset.clip;
+        list.parentElement.querySelector('[data-action="ai-list-more"]')?.remove();
+        break;
+      }
+      case 'ai-list-more': {
+        const list = document.querySelector('[data-ai-list]');
+        if (list) delete list.dataset.clip;
+        actionNode.remove();
+        break;
+      }
       case 'preview': {
         event.preventDefault();
         const form = actionNode.closest('form');
@@ -471,6 +490,27 @@ async function refreshProfile() {
   const parts = path.split('/').filter(Boolean);
   if (parts[0] === 'u' && parts[1]) await User.viewUser(parts[1], query);
 }
+
+// 「逐篇分类」卡内的标题搜索。整张卡的行都已经在 DOM 里（最多 171 行），所以按 `data-ai-title`
+// 匹配、给没命中的行加 `data-hidden` 就够了，不用重新请求接口。
+// 这是全站唯一一个 input 监听，只认 `[data-action="ai-list-search"]`，其它输入框不受影响。
+document.addEventListener('input', (event) => {
+  const search = event.target.closest('[data-action="ai-list-search"]');
+  if (!search) return;
+  const list = document.querySelector('[data-ai-list]');
+  if (!list) return;
+  const keyword = search.value.trim().toLowerCase();
+  const more = list.parentElement.querySelector('[data-action="ai-list-more"]');
+  // 搜索期间取消 30 条截断；清空搜索再恢复，否则一轮搜索之后就再也回不到「只显示 30 条」的轻页面。
+  if (more) {
+    if (keyword) delete list.dataset.clip;
+    else list.dataset.clip = '1';
+  }
+  for (const row of list.children) {
+    const hit = !keyword || String(row.dataset.aiTitle ?? '').includes(keyword);
+    row.toggleAttribute('data-hidden', !hit);
+  }
+});
 
 document.addEventListener('change', async (event) => {
   const avatarInput = event.target.closest('[data-avatar-input]');

@@ -438,7 +438,44 @@ const EXTRA = {
     user: { ...FIXTURES['/api/users/admin'].user, isMe: false, username: 'not-me', displayName: '别人' },
   },
   '/api/markdown/preview': { html: '<p>ok</p>' },
-  '/api/ai/site': { configured: false, ready: false },
+  // AI 助手：这份夹具故意给「有整理结果 + 主题 + 篇数超过一屏」的真实形状，
+  // 因为线上就是这个形状（554 篇文档 / 166 篇在主题里 / 171 篇逐篇分类）。只给
+  // `configured:false` 的空壳会让整块 `<details>` 折叠、筛选与「只显示前 30 条」的
+  // 渲染路径一次都跑不到。35 篇 > AI_LIST_LIMIT(30)，正好压到 data-clip 那条分支。
+  '/api/ai/site': {
+    configured: true,
+    ready: true,
+    stale: false,
+    stats: { analyzed: 337, failed: 1, documents: 554, pending: 393, corpus: { documents: 554, replies: 3, chars: 192724, posts: 554 } },
+    report: { status: 'done', model: 'deepseek-flash', createdAt: Date.now() - 3600000, documentCount: 554, summary: '全站帖子按主题聚类后的知识地图。' },
+    topics: [
+      {
+        name: '语言基础、工具环境与竞赛入门',
+        difficulty: '入门',
+        prereq: [],
+        summary: '从 Hello, World! 到本地环境。',
+        posts: [{ id: 117, title: 'Hello, World!', board: '积木', author: 'admin', summary: '第一份代码。' }],
+      },
+      {
+        name: '算法基础：复杂度、排序、搜索与动态规划',
+        difficulty: '进阶',
+        prereq: ['语言基础'],
+        posts: [{ id: 206, title: '动态规划部分简介', board: '积木', author: 'admin' }],
+      },
+    ],
+    readingPath: [{ post: { id: 117, title: 'Hello, World!' }, level: '入门', reason: '先跑通再说。' }],
+    posts: Array.from({ length: 35 }, (_, index) => ({
+      id: 100 + index,
+      title: `帖子标题 ${index + 1}`,
+      board: '积木',
+      author: 'admin',
+      replyCount: index % 3,
+      summary: index % 2 ? '' : `第 ${index + 1} 篇的摘要。`,
+      // 前 30 篇已解读、后 5 篇未解读：三个筛选按钮与搜索都得有东西可筛。
+      category: index < 30 ? '算法基础' : null,
+      difficulty: index < 30 ? '入门' : null,
+    })),
+  },
   // 非成员视角的团队主页：详情里没有团队号、也没有公告（服务端就不给）。
   '/api/teams/outsider-group': { team: OUTSIDER_TEAM_FIXTURE, members: [], memberTotal: 0, scopes: SCOPES },
   // 列表里摆一条**别人发的**帖：`canEdit: false` 时不该画「编辑」，

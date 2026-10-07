@@ -184,15 +184,66 @@
 .ai-path a:hover { text-decoration: underline; }
 
 .ai-topics { display: flex; flex-direction: column; gap: 12px; }
+
+/* 主题分组现在是 <details>：一整块默认收起，只留标题行。
+   `display: flex` 的 summary 在 Chrome 里不再画默认三角，所以自己放一个 .ai-caret。 */
 .ai-topic {
   padding: 12px 14px;
   border-radius: var(--radius-sm);
   background: var(--bg-soft);
   border: 1px solid var(--border-soft);
 }
-.ai-topic-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 6px; }
+.ai-topic-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 6px; cursor: pointer; }
 .ai-topic-name { font-weight: 600; color: var(--text); }
 .ai-topic-count { margin-left: auto; color: var(--muted); font-size: 12.5px; }
+
+.ai-caret {
+  display: inline-block;
+  color: var(--muted);
+  font-size: 10px;
+  transition: transform 0.15s ease;
+}
+details[open] > summary .ai-caret { transform: rotate(90deg); }
+
+/* 逐篇分类：整卡默认收起 + 卡内筛选（全部 / 已解读 / 未解读）+ 标题搜索 + 默认只显示前 30 行。
+   筛选与搜索只切 class / dataset，不重新请求接口（见 core/events.js 的 ai-list-scope / ai-list-search）。 */
+.ai-all > summary { cursor: pointer; }
+.ai-all-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 10px; }
+.ai-all-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 12px 0 8px; }
+.ai-scope {
+  padding: 4px 12px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--bg-soft);
+  color: var(--text-dim);
+  font: inherit;
+  font-size: 12.5px;
+  cursor: pointer;
+}
+.ai-scope:hover { border-color: var(--accent); color: var(--text); }
+.ai-scope.is-on { background: var(--accent-soft); border-color: rgba(91, 140, 255, 0.45); color: var(--accent-fg); }
+.ai-search {
+  flex: 1;
+  min-width: 160px;
+  padding: 6px 10px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font);
+  font-size: 13px;
+}
+.ai-search:focus { outline: none; border-color: var(--accent); }
+.ai-more { margin-top: 10px; }
+.ai-posts[data-clip] .ai-post-row:nth-child(n + 31) { display: none; }
+.ai-posts[data-scope='done'] .ai-post-row[data-ai-status='pending'],
+.ai-posts[data-scope='pending'] .ai-post-row[data-ai-status='done'],
+.ai-post-row[data-hidden] { display: none; }
+
+/* 管理动作（批量解读 / 重新整理全站）平时收在折叠里，别占普通用户的第一屏。 */
+.ai-admin { margin-top: 10px; }
+.ai-admin > summary { font-size: 12.5px; color: var(--muted); cursor: pointer; }
+.ai-admin-menu { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
 
 .ai-posts { display: flex; flex-direction: column; gap: 2px; margin-top: 8px; }
 .ai-posts.wide { gap: 8px; margin-top: 0; }
