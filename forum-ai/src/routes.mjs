@@ -54,8 +54,9 @@ const errorHint = (error) => {
   const reason = String(error?.details?.finishReason ?? '');
   const prompt = Number(error?.details?.usage?.prompt ?? 0);
   const completion = Number(error?.details?.usage?.completion ?? 0);
+  const reasoning = error?.details?.hadReasoning ? '，模型只产出了思考内容' : '';
   if (!reason && !prompt && !completion) return '';
-  return `（finish_reason=${reason || '无'}，提示 ${prompt} / 生成 ${completion} tokens）`;
+  return `（finish_reason=${reason || '无'}，提示 ${prompt} / 生成 ${completion} tokens${reasoning}）`;
 };
 
 /** 把任意异常收敛成统一响应。 */

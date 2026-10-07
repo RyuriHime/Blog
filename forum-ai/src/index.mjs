@@ -25,6 +25,7 @@ export {
   rankDocuments,
   selectForQuestion,
   rawOutputHead,
+  isTruncated,
 } from './ai.mjs';
 
 export {

@@ -23,7 +23,7 @@
 ```bash
 export AI_API_KEY=sk-xxx          # Windows: set AI_API_KEY=sk-xxx
 node examples/demo.mjs            # 用假的 AI 服务跑一遍全流程，产出 examples/demo-output.json
-node selftest.mjs                 # 133 项自测
+node selftest.mjs                 # 146 项自测
 ```
 
 最小代码（不需要数据库、不需要 HTTP）：
@@ -128,6 +128,15 @@ await reviewDocument(doc, [], { chatOptions: { env: { AI_API_KEY: 'sk-x', AI_MOD
 - **chunked**：目录也超预算时按 `chunkChars`（默认 12000）分块，每块出一份分组草案（`SITE_PART_SYSTEM`），
   再用 `SITE_MERGE_SYSTEM` 把草案归并成最终地图；**某一块失败不影响整体**（记进 `failures`），
   归并没给可用分组时退回草案本身，宁可地图糙一点也别只剩一份空报告。
+
+**输出被 `max_tokens` 截断时**（`finish_reason=length`、正文为空、生成量正好等于预算；推理型模型很容易踩到）：
+
+- 截断**不重试** —— 同样的预算再问一遍还是同样的结果，`isTruncated(error)` 可以自己判断这种情况；
+- 「只发目录」被截断时自动**落到分块**；
+- 分块里某一块被截断时把它**对半切开再问**（最多切到单篇），问的篇数越少越问得完；
+- 归并那一次失败时用**各块草案**拼出主题与概述，并把 `{ "part": "merge", … }` 记进 `failures`；
+- 地图类调用（材料 / 目录 / 归并）的生成预算给到 6000，分块草案 2500（`CORPUS_MAP_MAX_TOKENS` /
+  `CORPUS_PART_MAX_TOKENS`），都能自己调。
 
 ### 3.3 问答 `answer`
 
@@ -251,7 +260,7 @@ http.createServer(async (req, res) => {
 - **批量解读的优先级**：没解读过 → 解读失败 → 内容已变化；上游整体故障时立即返回部分结果（`partial: true`），不会把剩下的都试一遍。
 - **并发安全**：同一文档重复解读是覆盖写（`ON CONFLICT DO UPDATE`）；批量为串行，避免把上游打爆。
 
-## 6. 自测覆盖（133 项，无需真实密钥）
+## 6. 自测覆盖（146 项，无需真实密钥）
 
 ```
 ▶ 配置与降级      未配置抛错、状态不含密钥、映射成 503
@@ -262,6 +271,7 @@ http.createServer(async (req, res) => {
 ▶ 上游抖动        空响应自动重试、重试上限、AI_RETRIES=0、密钥错不重试、限流会重试
 ▶ 上游错误        401/429/500 → 稳定错误码与状态码
 ▶ 分级降级        小站一次问完 / 大站只发目录（正文绝不进提示词）/ 超大站分块 + 归并 / 某块失败照样出地图
+▶ 输出截断        不重试（只打一次上游）/ 目录截断自动落分块 / 块截断对半切开 / 归并失败用草案兜底
 ▶ 检索选择        命中排序、预算控制、空问题
 ▶ SQLite 缓存     索引同步、指纹稳定与变化、缓存读写、过期判定、批量优先级、失败现场落库
 ▶ HTTP 处理器     未登录 401、非管理员 403、未配置 503 且不写脏缓存、404、
@@ -293,7 +303,7 @@ forum-ai/
 ├── examples/
 │   ├── demo.mjs          # 端到端演示（自带假 AI 服务）
 │   └── demo-output.json  # 演示产物：真实数据结构长什么样
-├── selftest.mjs          # 133 项自测
+├── selftest.mjs          # 146 项自测
 └── README.md
 ```
 
