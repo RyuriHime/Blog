@@ -24,6 +24,17 @@ export const AVATAR_DIR =
   (DB_FILE === ':memory:' ? join(ROOT, 'data', 'avatars') : join(dirname(DB_FILE), 'avatars'));
 export const AVATAR_URL_PREFIX = '/avatars/';
 export const MAX_AVATAR_BYTES = 256 * 1024;
+/**
+ * 帖子正文里的图片（`![](/uploads/xx.png)`）从哪儿读。
+ *
+ * 和头像同一套思路：默认跟数据库放一起（`data/uploads/`），这样备份 / 迁移还是「搬一个目录」；
+ * 测试可以用 `UPLOAD_DIR` 隔离。**多级子目录是允许的**（`/uploads/oi-wiki/ds/images/a.svg`），
+ * 一个几百页的 wiki 导入进来就是一棵目录树，全平铺在一个文件夹里没法看。
+ */
+export const UPLOAD_DIR =
+  process.env.UPLOAD_DIR ||
+  (DB_FILE === ':memory:' ? join(ROOT, 'data', 'uploads') : join(dirname(DB_FILE), 'uploads'));
+export const UPLOAD_URL_PREFIX = '/uploads/';
 export const PORT = Number(process.env.PORT || 3000);
 export const HOST = process.env.HOST || '127.0.0.1';
 

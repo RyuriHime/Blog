@@ -11,9 +11,9 @@
 //   4) /notes 与 /notes/*→ 笔记编辑器静态资源（必须在 serveStatic 之前拦住，见下）
 //   5) 其余              → 论坛静态资源（public/，兜底成 index.html）
 import http from 'node:http';
-import { AVATAR_URL_PREFIX } from './paths.js';
+import { AVATAR_URL_PREFIX, UPLOAD_URL_PREFIX } from './paths.js';
 import { HttpError, ensure, rateLimit, readJsonBody, sendJson } from './http.js';
-import { serveAvatar, serveStatic } from './static.js';
+import { serveAvatar, serveStatic, serveUpload } from './static.js';
 import { resolveUser } from './sessions.js';
 
 /**
@@ -92,6 +92,11 @@ export function buildServer({ db, routes, notes }) {
       }
       if (pathname.startsWith(AVATAR_URL_PREFIX)) {
         return await serveAvatar(req, res, pathname);
+      }
+      // 正文图片：`![](/uploads/xx.png)`。和头像一样必须在 serveStatic 之前 ——
+      // 它也不在 public/ 里，落到 SPA 兜底会回 index.html（图片变成一段 HTML）。
+      if (pathname.startsWith(UPLOAD_URL_PREFIX)) {
+        return await serveUpload(req, res, pathname);
       }
       // 笔记编辑器必须在 serveStatic 之前拦截：`/notes/` 没有扩展名，
       // 落到论坛的静态分发会被兜底成 SPA 的 index.html。

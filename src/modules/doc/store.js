@@ -56,6 +56,7 @@ import {
   toSource,
 } from './blocks/index.js';
 import { applyDocOps, MAX_OPS } from './blocks/ops.js';
+import { plainInline } from './blocks/text.js';
 import { hasTemplate, STATION_TEMPLATE, templateBlocks, templateList, WIKI_TEMPLATE } from './templates.js';
 import { KIND_LABELS, REASON_LABELS, SCOPE_LABELS, shapeDoc, shapeRevision, shapeSettings } from './shape.js';
 
@@ -543,7 +544,8 @@ export function createDocStore({ db, queries, now = () => Date.now() }) {
       .map((block) => ({
         blockId: String(block.block_id),
         level: Math.min(Math.max(Number(block.props?.level) || 1, 1), 6),
-        text: String(block.props?.text ?? ''),
+        // 目录显示的是**纯文字**：标题里的 `**粗体**` / 徽章图 / 链接不该抄进来（见 plainInline）。
+        text: plainInline(String(block.props?.text ?? '')),
       }));
   }
 
@@ -747,7 +749,7 @@ export function createDocStore({ db, queries, now = () => Date.now() }) {
 
   /* ---------------- 文档 ---------------- */
 
-  function listDocuments({ viewer, kind = '', scope = '', tag = '', mine = false, q = '', page = 1, limit = 20, sort = 'updated' } = {}) {
+  function listDocuments({ viewer, kind = '', scope = '', tag = '', wiki = '', mine = false, q = '', page = 1, limit = 20, sort = 'updated' } = {}) {
     const visible = visibilityConditions(viewer, hasTeams);
     const { rows, total } = queries.listDocuments({
       viewerId: viewer?.id ?? null,
@@ -755,6 +757,8 @@ export function createDocStore({ db, queries, now = () => Date.now() }) {
       kind,
       scope,
       tag: singleLineText(String(tag ?? '')).replace(/^#+/, ''),
+      // `wiki` 三态：`''`（默认）不列站里的页、`all` 都列、`only` 只要站里的页。
+      wiki: wiki === 'all' || wiki === 'only' ? wiki : '',
       mine: Boolean(mine),
       q: String(q ?? ''),
       page,
@@ -768,6 +772,7 @@ export function createDocStore({ db, queries, now = () => Date.now() }) {
       total,
       page: Math.max(Number(page) || 1, 1),
       limit: Math.min(Math.max(Number(limit) || 20, 1), 50),
+      wiki: wiki === 'all' || wiki === 'only' ? wiki : '',
     };
   }
 

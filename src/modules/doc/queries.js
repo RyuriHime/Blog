@@ -124,7 +124,7 @@ export function createDocQueries(db) {
      * 列表。`visible` 由 visibility.js 给出（null = staff，不加范围条件）。
      * `viewerId` 只用于 `mine=1`。
      */
-    listDocuments({ viewerId = null, visible = null, kind = '', scope = '', tag = '', mine = false, q = '', page = 1, limit = 20, sort = 'updated' } = {}) {
+    listDocuments({ viewerId = null, visible = null, kind = '', scope = '', tag = '', wiki = '', mine = false, q = '', page = 1, limit = 20, sort = 'updated' } = {}) {
       const conditions = ['d.deleted = 0'];
       const params = [];
       if (kind && DOC_KINDS.includes(kind)) {
@@ -140,6 +140,14 @@ export function createDocQueries(db) {
       if (tag) {
         conditions.push('EXISTS (SELECT 1 FROM doc_tags dt WHERE dt.document_id = d.id AND dt.tag = ? COLLATE NOCASE)');
         params.push(tag);
+      }
+      // 挂在 wiki 站里的页（`doc_settings.station_id` 非 0）默认不在广场列出来：
+      // 导进来的一个 OI Wiki 就是 519 页，全铺在广场上会把别人写的东西淹掉；
+      // 它们按站自己的目录树看（`#/wiki`）。`?wiki=all` 才都列，`?wiki=only` 则只要站里的页。
+      if (wiki === 'only') {
+        conditions.push('EXISTS (SELECT 1 FROM doc_settings s WHERE s.document_id = d.id AND COALESCE(s.station_id, 0) <> 0)');
+      } else if (wiki !== 'all') {
+        conditions.push('NOT EXISTS (SELECT 1 FROM doc_settings s WHERE s.document_id = d.id AND COALESCE(s.station_id, 0) <> 0)');
       }
       if (mine) {
         if (!viewerId) return { rows: [], total: 0 };

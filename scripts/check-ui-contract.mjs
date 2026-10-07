@@ -37,6 +37,10 @@ const BASE = `http://127.0.0.1:${PORT}`;
  * （路由 / 常量 / coins 表 / 形状 / site / 通知类型 / 前端 / CSS），实测 314，抬到 314。
  * 第三次**不改数字**：积木新增第 15 种内置块类型 `prose`（同一小节的正文并成一块），
  * 块类型清单断言从 14 改 15 —— 这不是新增断言，通过项数回到 314。
+ * 第四次**不改数字**：又加第 16 种 `fold`（折叠块，OI-wiki 的 `???` 导进来长这样），
+ * 同样是改一条既有断言的期望值（15 → 16）。但这次它真的抓到了东西：
+ * 新块用到的 `.doc-fold` / `.doc-fold-body` 两个类名一开始没有 CSS，
+ * 「服务端产出的类名也都有 CSS」这条立刻变红 —— 已补进 `public/css/41-doc.css`。
  * 教训：「通过项数掉了」有两个原因，一是有人撤了断言，二是**有一条断言正在失败**；
  * 抬下限把后一种一并盖住，等于把哨兵调哑，所以这里老老实实留在 314。
  */
@@ -1483,9 +1487,9 @@ try {
   );
   const docTypes = await dmA('/api/docs/meta/block-types');
   check(
-    '积木：块类型清单给出 15 种内置类型且带声明式 schema',
+    '积木：块类型清单给出 16 种内置类型且带声明式 schema',
     docTypes.status === 200 &&
-      docTypes.json.data?.types?.length === 15 &&
+      docTypes.json.data?.types?.length === 16 &&
       docTypes.json.data.types.every((type) => type.builtin === true && type.schema && typeof type.schema === 'object'),
     JSON.stringify(docTypes.json).slice(0, 200),
   );

@@ -370,6 +370,40 @@ export async function viewGuide() {
       <div class="doc-actions"><a class="btn btn-sm" href="#/dev">去开发者功能注册</a></div>
     </div>
 
+    <div class="card doc-panel doc-guide">
+      <div class="card-head"><span class="card-title">18. 应用示例：从零开始建一个 OI Wiki</span><span class="hint">全程只在站内编辑</span></div>
+      <p class="doc-hint">站里已经有现成的例子：<a href="#/wiki/OI%20Wiki">OI Wiki 站</a>
+        —— 465 篇正文、56 个目录页，全是用下面这套办法搬进来的，<strong>没有改过一行站点代码</strong>。
+        想自己搭一个同样规模的 wiki，照这个顺序做：</p>
+      <ol class="doc-guide-list">
+        <li><strong>建站</strong>：打开 <a href="#/wiki">Wiki 首页</a>，在「＋ 新建一个 wiki」里写个名字
+          （比如「我的算法笔记」）。站本身就是一个普通帖子，谁能看跟别的积木一样设。</li>
+        <li><strong>建页</strong>：进站以后点「＋ 新建页面」，建一页就得一篇独立文档，页名之后随时能改。</li>
+        <li><strong>把内容粘进来</strong>：进编辑器的 <strong>Markdown</strong> 页签，整篇贴进去点「保存」——
+          标题、列表、表格、代码、公式、图片会各自解析成块。手上只有一份现成的 Markdown 时，这条最快。</li>
+        <li><strong>长解释收进折叠块</strong>：遇到「一大段可以收起来」的内容，就在积木页签插一个
+          <strong>折叠块</strong>：填标题和正文，读者点标题才展开；「默认展开」这个开关决定初始状态。</li>
+        <li><strong>图片</strong>：插图块，或者 Markdown 里写
+          <code class="doc-code">![说明](/uploads/…)</code>。图存在站里，别人直接能看。</li>
+        <li><strong>把页连起来</strong>：正文里写 <code class="doc-code">[[另一页的标题]]</code> 就是一条内链；
+          标题写错也不会断，会显示成一条<strong>红链</strong>，点它就能当场新建那一页 —— OI Wiki 里几千条互链就是这么连的。</li>
+        <li><strong>排目录</strong>：站的首页用<strong>子页面</strong>块摆卡片（选 <code class="doc-code">card</code>），
+          或者选 <code class="doc-code">full</code> 把一整页嵌进来；页与页的父子关系、先后顺序在站页面上调，
+          几分钟就能从「一堆页」变成「一棵目录树」。</li>
+        <li><strong>代码</strong>：用代码块，语言写 <code class="doc-code">cpp</code> / <code class="doc-code">python</code> 之类就会高亮。
+          <code class="doc-code">--8&lt;--</code> 这种「从别的文件里抽一段」的写法本站没有，把片段直接贴进代码块即可。</li>
+        <li><strong>脚注</strong>：本站不认 <code class="doc-code">[^1]</code>；写成
+          <code class="doc-code">&lt;sup&gt;1&lt;/sup&gt;</code>，文末再来一节「脚注」用有序列表列出来。</li>
+      </ol>
+      <div class="doc-hint">三条经验：① <strong>每页只讲一件事</strong>，页名就是这件事的名字 —— 目录树、内链、搜索全靠它；
+        ② 先粘正文、再收折叠块、最后排目录，别一边排一边补；
+        ③ 每页的「源码」页签永远能看，改坏了随时改回来（还有修订历史兜底）。</div>
+      <div class="doc-actions">
+        <a class="btn btn-sm btn-primary" href="#/wiki">去建一个自己的 wiki</a>
+        <a class="btn btn-sm" href="#/wiki/OI%20Wiki">看现成的 OI Wiki 站</a>
+      </div>
+    </div>
+
     <div class="card doc-panel">
       <div class="card-head"><span class="card-title">看完就去试</span></div>
       <div class="doc-actions">

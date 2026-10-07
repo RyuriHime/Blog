@@ -1,4 +1,4 @@
-// 15 种内置块类型。
+// 16 种内置块类型。
 //
 // 前 7 种（heading paragraph list code table formula image）**是从 note-agent 冻结下来的契约**：
 // 名字、`b\d+` 的 id 形状、markdown 输出，全部逐字节保持一致 ——
@@ -7,10 +7,12 @@
 // `src/modules/doc/blocks/agent.js` 负责两种表示之间的搬运，
 // `scripts/doc-smoke.mjs` 里有一条对拍测试守着这个契约。
 //
-// 后 8 种（quote poll wiki embed app script subpage prose）是这个模块新增的。
+// 后 9 种（quote poll wiki embed app script subpage prose fold）是这个模块新增的。
 // 其中 `prose` 不给人手写：解析器把同一小节里连续的正文（paragraph / list / quote）
 // 并成一段 `prose`（见 blocks/markdown.js 的 `mergeProse`），
 // 免得一篇正常文章被拆成几十个一段话一块的块。
+// `fold` 是「折叠块」（mkdocs 的 `??? note "标题"`）：正文整段收在围栏里，
+// 所以体内的列表 / 表格 / 代码围栏不会被解析器切断。
 //
 // 每个类型的形状：
 //   { name, version, label, icon, editor, schema, toMarkdown, toPlain, toHtml }
@@ -19,7 +21,7 @@
 import { BLOCK_TYPE_PATTERN, MAX_APP_CODE, MAX_SCRIPT_CODE } from '../schema.js';
 import { sandboxInner } from '../sandbox.js';
 // `prose` 用站内那套 markdown 渲染器画（它没有任何 import，不会与 registry 打环）。
-import { renderMarkdown } from '../../../markdown.js';
+import { renderInline, renderMarkdown } from '../../../markdown.js';
 import {
   escapeCell,
   escapeHtml,
@@ -69,13 +71,21 @@ export const BUILTIN_TYPES = [
     },
     toMarkdown: (props) => `${'#'.repeat(Math.min(Math.max(Number(props.level) || 1, 1), 6))} ${props.text}`,
     toPlain: (props) => props.text,
-    toHtml: (props, block) => {
+    toHtml: (props, block, options) => {
       const level = Math.min(Math.max(Number(props.level) || 1, 1), 6);
       // `id="h-<blockId>"`：右栏 ToC 与「上一页 / 下一页」之外还有 `#/wiki/<站>/<页>?h=h-b12`
       // 这种站内跳转，它们都需要一个**不随标题改动而失效**的锚点 —— 稳定块 id 正好是。
       // 块 id 在服务端保证唯一（`b` 加数字），所以这里不需要 slug，也不会撞。
       const anchor = block?.block_id ? ` id="h-${escapeHtml(block.block_id)}"` : '';
-      return shell('heading', block, `<h${level}${anchor}>${escapeHtml(props.text)}</h${level}>`);
+      // 标题里的行内标记也要画出来：`## 欢迎来到 **OI Wiki**！[![徽章](图)](链接)`
+      // 这种写法（OI Wiki 首页就是这么写的）以前会连方括号一起原样吐在 `<h2>` 里。
+      // 用 `renderInline` 而不是 `renderMarkdown`：标题必须是**一行**，
+      // 不能被包成 `<p>`，也不能把 `#` 当成块级语法。
+      const inner = renderInline(String(props.text ?? ''), {
+        wikiLinks: true,
+        wikiExisting: options?.wikiTitles,
+      });
+      return shell('heading', block, `<h${level}${anchor}>${inner}</h${level}>`);
     },
   },
   {
@@ -444,6 +454,39 @@ export const BUILTIN_TYPES = [
         'prose',
         block,
         renderMarkdown(props.text, { wikiLinks: true, wikiExisting: options?.wikiTitles }),
+      ),
+  },
+  {
+    // 第 16 种：**折叠块**。mkdocs 系文档里的 `??? note "标题"` 就是它 ——
+    // 一整段带标题的可折叠正文（默认收起，`open` 可以钉成默认展开）。
+    //
+    // 为什么单列一种块、而不是塞进 `prose`：折叠块的体内可以有列表、表格、代码围栏、
+    // 甚至嵌套的折叠块，而解析器会在列表行 / 表格行 / 整行图片上切断段落 ——
+    // 只有把整段收进结构化围栏里（块体在围栏内），解析器才碰不到它、整块才不会散。
+    name: 'fold',
+    version: 1,
+    label: '折叠块',
+    icon: '▸',
+    editor: 'text',
+    schema: {
+      title: { type: 'string', singleLine: true, default: '', maxLength: 300, label: '标题' },
+      kind: { type: 'string', singleLine: true, default: '', maxLength: 40, label: '类型（note / warning…）' },
+      open: { type: 'boolean', default: false, label: '默认展开' },
+      text: { type: 'string', required: true, maxLength: 60000, label: '正文（markdown）' },
+    },
+    toMarkdown: (props) => structuredMarkdown('fold', props),
+    toPlain: (props) => props.title || props.text,
+    toHtml: (props, block, options) =>
+      shell(
+        'fold',
+        block,
+        `<details class="doc-fold"${props.open ? ' open' : ''}>` +
+          `<summary>${escapeHtml(props.title || '展开')}</summary>` +
+          `<div class="doc-fold-body">${renderMarkdown(props.text, {
+            wikiLinks: true,
+            wikiExisting: options?.wikiTitles,
+          })}</div>` +
+          '</details>',
       ),
   },
 ];

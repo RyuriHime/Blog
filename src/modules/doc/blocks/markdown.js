@@ -12,8 +12,11 @@ import { getBlockType } from './registry.js';
 import { coerceProps } from './validate.js';
 import { isSeparatorRow, splitRow } from './text.js';
 
-const FENCE_OPEN = /^(`{3,})\s*(.*)$/;
-const FENCE_CLOSE = /^`{3,}\s*$/;
+// 围栏：允许最多三个空格的行首缩进（CommonMark 允许，粘进来的一坨 Markdown 里
+// 缩进过一层的代码块很常见），反引号与波浪号都收，长度三个起、可以更长 ——
+// ````text 这种四连反引号是合法写法，只认恰好三个会把整段当正文。
+const FENCE_OPEN = /^( {0,3})(`{3,}|~{3,})\s*(.*)$/;
+const FENCE_CLOSE = /^( {0,3})(`{3,}|~{3,})\s*$/;
 const HEADING = /^(#{1,6})\s+(.*)$/;
 const IMAGE = /^!\[([\s\S]*)\]\(([^()]*)\)\s*$/;
 const WIKI = /^\[\[([^\][|]+)(?:\|([^\]]*))?\]\]$/;
@@ -176,12 +179,16 @@ export function toSource(blocks, { derivedBlocks = [] } = {}) {
 
 /** 读一段围栏，返回 `{info, body, next}`（`next` 是围栏之后的行号）。 */
 function readFence(lines, start) {
-  const ticks = FENCE_OPEN.exec(lines[start])[1];
-  const info = String(FENCE_OPEN.exec(lines[start])[2] ?? '').trim();
+  const open = FENCE_OPEN.exec(lines[start]);
+  const ticks = open[2];
+  // 信息串是第 3 组（第 1 组是缩进、第 2 组是围栏本身）。
+  const info = String(open[3] ?? '').trim();
   const body = [];
   let index = start + 1;
   while (index < lines.length) {
-    if (FENCE_CLOSE.test(lines[index]) && lines[index].trim().length >= ticks.length) break;
+    // 收尾要**同一种记号、不短于开头**：`~~~` 合不上 ```` ``` ````，反之亦然。
+    const close = FENCE_CLOSE.exec(lines[index]);
+    if (close && close[2][0] === ticks[0] && close[2].length >= ticks.length) break;
     body.push(lines[index]);
     index += 1;
   }
@@ -258,13 +265,29 @@ export function parseBlocks(markdown, { positionalIds = true, granularity = 'sec
       continue;
     }
 
-    if (line.trim() === '$$') {
+    // 块公式：**只认行首（最多三个空格）的 `$$`**。列表项里缩进的 `$$` 属于那个
+    // 列表项（`-   $$` + 缩进的公式体 + 缩进的 `$$`，上游「性质」小节大量这么写），
+    // 在这里当成顶层公式开头会一路吞到后面某个 `$$`，把中间的折叠块围栏整段吞掉。
+    if (/^ {0,3}\$\$\s*$/.test(line)) {
       flushParagraph();
       const body = [];
       let cursor = index + 1;
-      while (cursor < lines.length && lines[cursor].trim() !== '$$') {
+      let paired = false;
+      while (cursor < lines.length) {
+        // 撞到围栏就停：找不到配对收尾就不当块公式（退化成正文），
+        // 与 `src/markdown.js` 那边「`$$` 不吞到文件尾」的原则一致。
+        if (FENCE_OPEN.test(lines[cursor])) break;
+        if (lines[cursor].trim() === '$$') {
+          paired = true;
+          break;
+        }
         body.push(lines[cursor]);
         cursor += 1;
+      }
+      if (!paired) {
+        paragraph = paragraph === null ? line : `${paragraph}\n${line}`;
+        index += 1;
+        continue;
       }
       pushRaw('formula', { text: body.join('\n') });
       index = Math.min(cursor + 1, lines.length);

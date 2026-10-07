@@ -39,8 +39,9 @@ const TARGETS = ['src', 'public', 'scripts', 'forum-ai/src', 'note-agent/src', '
  * AI 编辑台教模型「积木语法」（src/modules/ai/syntax.js）之后实测 200，抬到 200：
  * 这就是那句「新文件要登记」的落地 —— 忘了登记，这里就悄悄少一个。
  * 编辑区左侧的 AI 抽屉（public/views/doc-ai.js）之后实测 201，抬到 201。
+ * OI-wiki 导入器（scripts/seed-oiwiki.mjs）之后实测 202，抬到 202。
  */
-const MIN_CHECKED = Number(process.env.MIN_CHECKED || 201);
+const MIN_CHECKED = Number(process.env.MIN_CHECKED || 202);
 
 /** 新布局里必须存在的关键文件。少一个就说明有人把文件搬走却没同步这份检查。 */
 const REQUIRED_FILES = [

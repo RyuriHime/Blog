@@ -245,15 +245,15 @@ try {
   /* ---------- 2.1 类型清单与契约对拍 ---------- */
 
   const typeNames = engine.listBlockTypes().map((type) => type.name);
-  check('内置 15 种块类型', typeNames.length === 15, typeNames.join(','));
+  check('内置 16 种块类型', typeNames.length === 16, typeNames.join(','));
   check(
     '前 7 种与 note-agent 的 BLOCK_TYPES 逐字同序（契约对拍，两边块序列可互换）',
     JSON.stringify(typeNames.slice(0, 7)) === JSON.stringify(agent.BLOCK_TYPES),
     `${JSON.stringify(typeNames.slice(0, 7))} vs ${JSON.stringify(agent.BLOCK_TYPES)}`,
   );
   check(
-    '新增 8 种是 quote / poll / wiki / embed / app / script / subpage / prose',
-    JSON.stringify(typeNames.slice(7)) === JSON.stringify(['quote', 'poll', 'wiki', 'embed', 'app', 'script', 'subpage', 'prose']),
+    '新增 9 种是 quote / poll / wiki / embed / app / script / subpage / prose / fold',
+    JSON.stringify(typeNames.slice(7)) === JSON.stringify(['quote', 'poll', 'wiki', 'embed', 'app', 'script', 'subpage', 'prose', 'fold']),
     JSON.stringify(typeNames.slice(7)),
   );
   check('每种类型都有 name / version / label / icon / schema / editor', engine.listBlockTypes().every(
@@ -284,7 +284,23 @@ try {
     [{ block_id: 'b1', type: 'paragraph', version: 1, props: { text: '<img src=x onerror=alert(1)>' } }],
     {},
   );
-  check('props 里的 HTML 被转义（不产生可执行标签）', xss.html.includes('&lt;img') && !xss.html.includes('<img'), xss.html);
+  check(
+    'props 里的 HTML 只放行白名单标签与属性（onerror 出不来）',
+    xss.html.includes('<img src="x">') && !xss.html.includes('onerror') && !xss.html.includes('<script'),
+    xss.html,
+  );
+
+  // OI-wiki 的正文里有 `<kbd>` 这类行内 HTML（白名单见 `src/markdown.js` 的 `RAW_HTML_TAGS`）；
+  // 白名单**不**等于「什么都能过」：协议白名单与属性白名单都还在，认不出就退回纯文字。
+  const badScheme = engine.renderBlocks(
+    [{ block_id: 'b1', type: 'paragraph', version: 1, props: { text: '<img src="javascript:alert(1)">' } }],
+    {},
+  );
+  check(
+    '非白名单协议的行内 HTML 退化成文字',
+    badScheme.html.includes('&lt;img') && !badScheme.html.includes('<img'),
+    badScheme.html,
+  );
 
   // 「有没有 inline 事件属性」只能在**标签内部、且引号之外**判：
   // 被转义过的正文里出现 onerror= 是一段无害的文字，而属性值里的 onerror= 也出不来。
@@ -399,6 +415,66 @@ try {
   );
 
   check('markdown 输出里没有非法的裸块标记', !roundTripMd.includes('undefined'), roundTripMd.slice(0, 200));
+
+  /* ---------- 2.4 列表项里缩进的 `$$` 不当顶层公式（不吞后面的折叠围栏） ---------- */
+
+  {
+    // 上游 OI-wiki 的「性质」小节大量这么写：条目行就是 `$$`，公式体缩进在下面。
+    // 早先块解析器用 `line.trim() === '$$'` 判断顶层公式，于是这种缩进的 `$$`
+    // 也被当成公式开头，一路吞到后面某个 `$$` —— 中间那段提示块围栏整段被吞进公式。
+    const source = [
+      '1.  由定义易得',
+      '',
+      '4.  $$',
+      '    \\left(\\frac{2}{p}\\right)=1',
+      '    $$',
+      '',
+      '```doc:fold',
+      '{"title":"证明","kind":"note","open":false,"text":"里面的公式：\\n\\n    $$\\n    a^2\\n    $$"}',
+      '```',
+      '',
+      '尾巴一段',
+    ].join('\n');
+    const blocks = engine.markdownToBlocks(source);
+    const types = blocks.map((block) => block.type);
+    check(
+      '列表项里缩进的 $$ 不当顶层公式（折叠围栏没被吞掉）',
+      types.includes('fold') && !blocks.some((block) => block.type === 'formula' && block.props.text.includes('```')),
+      JSON.stringify({ types, formulas: blocks.filter((b) => b.type === 'formula').map((b) => b.props.text.slice(0, 60)) }),
+    );
+    const back = engine.blocksToMarkdown(blocks);
+    check(
+      '列表项里的 $$ 与公式体原样留在正文里（交给正文渲染器排成公式）',
+      back.includes('4.  $$') && back.includes('\\left(\\frac{2}{p}\\right)=1'),
+      back.slice(0, 300),
+    );
+  }
+
+  /* ---------- 2.4b 标题里的行内标记：渲染出来，目录里是纯文字 ---------- */
+
+  {
+    // 上游 OI Wiki 的站首页标题是 `## 欢迎来到 **OI Wiki**！[![徽章](图)](链接)`。
+    // 两处都错过：标题块以前把整段 escape 掉，页面上就是一行方括号加 URL；
+    // 而右栏目录是**纯文字**的地方，徽章图不该整段抄进去。
+    const { plainInline } = await import('../src/modules/doc/blocks/text.js');
+    const headingMd = '# 欢迎来到 **OI Wiki**！[![徽章](https://img.shields.io/x.svg)](https://github.com/OI-wiki/OI-wiki)';
+    const heading = engine.markdownToBlocks(headingMd);
+    const headingHtml = engine.renderBlocks(heading, {}).html;
+    check(
+      '2.4b 标题里的行内标记照常渲染（粗体 / 徽章图 / 链接）',
+      heading.length === 1
+        && heading[0].type === 'heading'
+        && /<h1[^>]*>欢迎来到 <strong>OI Wiki<\/strong>！<a [^>]*><img src="https:\/\/img\.shields\.io\/x\.svg"[^>]*><\/a><\/h1>/.test(headingHtml),
+      headingHtml.slice(0, 240),
+    );
+    const plainHeading = plainInline('欢迎来到 **OI Wiki**！[![徽章](https://img.shields.io/x.svg)](https://github.com/OI-wiki/OI-wiki)');
+    check('2.4b 目录里是纯文字（不抄 ** 与图片标记）', plainHeading === '欢迎来到 OI Wiki！徽章', plainHeading);
+    check(
+      '2.4b 认不出的标记原样留着（不误伤 snake_case）',
+      plainInline('doc_wiki 与 [[目标|显示字]] 与 `代码`') === 'doc_wiki 与 显示字 与 代码',
+      plainInline('doc_wiki 与 [[目标|显示字]] 与 `代码`'),
+    );
+  }
 
   /* ---------- 2.5 属性测试：100 篇随机文档往返无损 ---------- */
 
@@ -576,7 +652,7 @@ try {
     );
 
     const types = await anon.call('/api/docs/meta/block-types');
-    check('GET /api/docs/meta/block-types 给出 15 个内置类型', types.status === 200 && types.data?.types?.length === 15, `len=${types.data?.types?.length}`);
+    check('GET /api/docs/meta/block-types 给出 16 个内置类型', types.status === 200 && types.data?.types?.length === 16, `len=${types.data?.types?.length}`);
     check(
       '内置类型都标了 builtin:true 且带声明式 schema',
       types.data?.types?.every((type) => type.builtin === true && type.schema && typeof type.schema === 'object'),
@@ -1018,8 +1094,8 @@ try {
     const types = await anon.call('/api/docs/meta/block-types');
     const timeline = types.data?.types?.find((type) => type.name === 'timeline');
     check(
-      '注册表变成 16 种，新类型 builtin=false 且带自己的 schema',
-      types.data?.types?.length === 16 && timeline?.builtin === false && timeline?.schema?.text,
+      '注册表变成 17 种，新类型 builtin=false 且带自己的 schema',
+      types.data?.types?.length === 17 && timeline?.builtin === false && timeline?.schema?.text,
       JSON.stringify(timeline),
     );
 
@@ -2255,6 +2331,26 @@ try {
     const stationAnchor = scalar('SELECT p.hidden AS hidden FROM documents d JOIN posts p ON p.id = d.anchor_post_id WHERE d.id = ?', stationId);
     check('10.2 站自己的影子帖不藏（它就该出现在积木板块）', stationAnchor?.hidden === 0, JSON.stringify(stationAnchor));
 
+    // 10.2.9 广场不乱铺 wiki 页。
+    //
+    // 一个导进来的 OI Wiki 就是 519 页，默认全铺在广场上会把别人写的积木整个淹掉；
+    // 它们该走站自己的目录树（`#/wiki`）。所以 `GET /api/docs` 默认把挂在站里的页滤掉，
+    // `?wiki=all` 才都列、`?wiki=only` 则只要站里的页。
+    const plaza = await anon.call('/api/docs?limit=50');
+    const plazaTitles = (plaza.data?.documents ?? []).map((row) => row.title);
+    check('10.2.9 广场默认不列站里的页', !plazaTitles.includes('S10 第一页') && !plazaTitles.includes('S10 子页一'), JSON.stringify(plazaTitles.slice(0, 8)));
+    check('10.2.9 站本体照旧在广场里（一个帖子一个 wiki）', plazaTitles.includes('S10 测试站'), JSON.stringify(plazaTitles.slice(0, 8)));
+    const plazaAll = await anon.call('/api/docs?limit=50&wiki=all');
+    check('10.2.9 ?wiki=all 连站里的页一起列', (plazaAll.data?.documents ?? []).some((row) => row.title === 'S10 第一页'), JSON.stringify(plazaAll.data?.wiki));
+    const plazaOnly = await anon.call('/api/docs?limit=50&wiki=only');
+    const onlyTitles = (plazaOnly.data?.documents ?? []).map((row) => row.title);
+    check('10.2.9 ?wiki=only 只要站里的页', onlyTitles.includes('S10 第一页') && !onlyTitles.includes('S10 测试站'), JSON.stringify(onlyTitles.slice(0, 8)));
+    const plazaBogus = await anon.call('/api/docs?limit=50&wiki=nope');
+    check('10.2.9 认不出的 wiki 取值当没给（默认照样过滤）', !(plazaBogus.data?.documents ?? []).some((row) => row.title === 'S10 第一页') && plazaBogus.data?.wiki === '', JSON.stringify(plazaBogus.data?.wiki));
+    // 前端那颗开关在 `views/doc.js` 里（这里现读一次，别抢后面那几个 `const docJs` 的名字）。
+    const docJsPlaza = readFileSync(join(ROOT, 'public', 'views', 'doc.js'), 'utf8');
+    check('10.2.9 前端广场有「连站里的页一起列」那颗开关', docJsPlaza.includes("toggle.set('wiki', 'all')") && docJsPlaza.includes('不含 wiki 站里的页'), '');
+
     // 10.2.1 「一个 wiki = 一篇帖子」：页的影子行**不进任何列表**。
     //
     // `hidden = 1` 只挡得住普通访客 —— 个人主页给作者本人、板块列表给 staff 时都会带
@@ -2328,6 +2424,16 @@ try {
     check('10.3 按「站 + 页」开页：正文 + wiki 上下文一次给全', opened.status === 200 && opened.data?.doc?.doc?.id === firstId && Boolean(opened.data?.doc?.wiki), `${opened.status} doc=${opened.data?.doc?.doc?.id} want=${firstId}`);
     check('10.3 页里带着上一页 / 下一页（树中线上的邻居）', opened.data?.doc?.wiki?.next?.title === 'S10 子页一' && !opened.data?.doc?.wiki?.prev, JSON.stringify([opened.data?.doc?.wiki?.prev, opened.data?.doc?.wiki?.next]));
     check('10.3 ToC 由服务端算（present 里给 toc）', Array.isArray(opened.data?.doc?.toc), JSON.stringify(opened.data?.doc?.toc));
+
+    // 10.3b 目录是**纯文字**：标题里的 `**粗体**` / 徽章图不该被抄进右栏目录（OI Wiki 首页那句就是）。
+    const tocDoc = await author.call('/api/docs', { method: 'POST', body: { title: 'S10.3b 目录纯文字', kind: 'post', scope: 'public', template: 'blank' } });
+    const tocDocId = tocDoc.data?.doc?.id;
+    await author.call(`/api/docs/${tocDocId}/markdown`, {
+      method: 'PUT',
+      body: { markdown: '# 欢迎来到 **OI Wiki**！[![徽章](https://img.shields.io/x.svg)](https://github.com/OI-wiki/OI-wiki)\n\n正文一段。\n' },
+    });
+    const tocShown = await anon.call(`/api/docs/${tocDocId}`);
+    check('10.3b 目录里是纯文字（不抄 ** 与图片标记）', tocShown.data?.toc?.[0]?.text === '欢迎来到 OI Wiki！徽章', JSON.stringify(tocShown.data?.toc));
 
     // 10.4 权限：不是这个站作者的人加不了页。
     const intruder = await other.call(`/api/docs/wiki/station/${stationId}/pages`, { method: 'POST', body: { title: 'S10 别人塞的页' } });
@@ -2416,6 +2522,41 @@ try {
     check('10.9 路由认识 #/wiki（站列表）且保住 #/wiki/<名字>', routerJs.includes("first === 'wiki' && second") && routerJs.includes('viewWikiIndex'), '');
     check('10.9 CSS 有三栏 / 树 / 目录 / 卡片 / 红链的规则', ['.doc-wiki-station', '.doc-wiki-tree-link', '.doc-wiki-toc-link', '.doc-wiki-pager-link', '.doc-subpage', '.doc-wiki-link.is-missing'].every((selector) => css.includes(selector)), '');
     check('10.9 #/wiki 上能新建站（入口 + 处理函数 + 样式都在）', docJs.includes('wiki-new-station') && docJs.includes('newStationFromInput') && css.includes('.doc-station-new'), '');
+    // 10.9b 左树的展开 / 收起：519 页的站（OI Wiki）不折叠就是十几屏。
+    check(
+      '10.9b 左树每页一行、行首有折叠开关',
+      ['.doc-wiki-tree-row', 'data-wiki-toggle', 'data-wiki-parent', 'data-wiki-tree-all', 'data-wiki-tree-none'].every((item) => docJs.includes(item)),
+      '',
+    );
+    check(
+      '10.9b 折叠状态记在本地、默认展开通向当前页的那条链',
+      ['mountWikiTree', 'dsh.wikiTree.', 'localStorage', 'readTreeOpen', 'writeTreeOpen'].every((item) => docJs.includes(item))
+        && docJs.includes('parentOf.get(id)'),
+      '',
+    );
+    check(
+      '10.9b 折叠行的样式都在 41-doc.css 里（含 [hidden] 的显示规则）',
+      ['.doc-wiki-tree-row', '.doc-wiki-tree-toggle', '.doc-wiki-tree-row[hidden]', '.doc-wiki-tree-tools'].every((selector) => css.includes(selector)),
+      '',
+    );
+    // 10.9c 左树的滚动位置：换页时整棵左栏重建，不接管就永远跳回顶上（519 页的站里没法用）。
+    check(
+      '10.9c 左树滚动位置记在本地、上来先还原',
+      ['dsh.wikiScroll.', 'readTreeScroll', 'writeTreeScroll', "closest('.doc-wiki-nav')", 'restoreScroll'].every((item) => docJs.includes(item)),
+      '',
+    );
+    check(
+      '10.9c 当前页那一行滚出视野时会被挪回来',
+      docJs.includes('row.scrollIntoView?.(') && docJs.includes("block: saved > 0 ? 'nearest' : 'center'"),
+      '',
+    );
+
+    // 前端建树靠 `parentId`：站接口不给它，折叠就只剩「一层一层猜深度」。
+    {
+      const stationTree = await author.call(`/api/docs/wiki/station?id=${stationId}`);
+      const treePages = stationTree.data?.pages ?? [];
+      check('10.9b 站接口的页带 parentId（前端据此折叠）', treePages.length > 0 && treePages.every((page) => Object.hasOwn(page, 'parentId')), JSON.stringify(treePages[0]));
+    }
 
     // 10.10 脚本块的块体是原始 JS，必须被包进 `<script>` 才会跑（不然只是把代码当文字显示）。
     {
@@ -2699,6 +2840,14 @@ try {
     // 12.14 教程与 README 都要提「打标签 = 现在的学术笔记」。
     check('12.14 教程讲了标签（怎么打、怎么按标签找）', guideJs.includes('标签') && guideJs.includes('#/docs?tag='), '');
     check('12.14 README 的接口表收录了 meta/tags 与 ?tag=', readme.includes('`/api/docs/meta/tags`') && readme.includes('?tag='), '');
+
+    // 12.15 「从零搭一个 OI Wiki」的应用示例：页面上得真能照着做（改块 / 贴 Markdown / 排目录），
+    // 不是一句「去看 OI Wiki」。要求它点出折叠块、双链、子页面三件事，并且链进现成的站。
+    check(
+      '12.15 教程带「从零搭一个 OI Wiki」的应用示例',
+      ['18. 应用示例', '折叠块', '[[另一页的标题]]', '子页面', '#/wiki/OI%20Wiki'].every((needle) => guideJs.includes(needle)),
+      '',
+    );
   }
 
   await finish(failures.length ? 1 : 0);

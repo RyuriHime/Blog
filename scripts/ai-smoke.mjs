@@ -1369,8 +1369,8 @@ try {
   // （骨架规范禁止 import 隔壁模块的文件，所以只能复制）。抄来的东西会漂：
   // P2 以后加/改块类型，我的提示词就会教模型输出错的东西，而错是静默的 ——
   // 模型照着新名字吐，落盘时才炸。这一节让漂移在测试里立刻红，而不是等线上。
-  check('从 P2 的 types.js 抓到 15 个内置块类型名', P2_BLOCK_TYPE_NAMES.length === 15, JSON.stringify(P2_BLOCK_TYPE_NAMES));
-  check('从 AI 的 schema.js 抓到 15 个类型名', AI_BLOCK_TYPE_NAMES.length === 15, JSON.stringify(AI_BLOCK_TYPE_NAMES));
+  check('从 P2 的 types.js 抓到 16 个内置块类型名', P2_BLOCK_TYPE_NAMES.length === 16, JSON.stringify(P2_BLOCK_TYPE_NAMES));
+  check('从 AI 的 schema.js 抓到 16 个类型名', AI_BLOCK_TYPE_NAMES.length === 16, JSON.stringify(AI_BLOCK_TYPE_NAMES));
   check(
     '两边的块类型清单完全一致（名字与顺序都对齐）',
     JSON.stringify(P2_BLOCK_TYPE_NAMES) === JSON.stringify(AI_BLOCK_TYPE_NAMES),
@@ -1392,13 +1392,13 @@ try {
     `运行时=${JSON.stringify(AI_RUNTIME_TYPE_NAMES)} 字面量=${JSON.stringify(AI_BLOCK_TYPE_NAMES)}`,
   );
   check(
-    '运行时导出的 AI_BLOCK_TYPE_NAMES 与 P2 的清单一致（白名单真的只放行这 15 个）',
+    '运行时导出的 AI_BLOCK_TYPE_NAMES 与 P2 的清单一致（白名单真的只放行这 16 个）',
     JSON.stringify(AI_RUNTIME_TYPE_NAMES) === JSON.stringify(P2_BLOCK_TYPE_NAMES),
     `运行时=${JSON.stringify(AI_RUNTIME_TYPE_NAMES)} P2=${JSON.stringify(P2_BLOCK_TYPE_NAMES)}`,
   );
 
   // 行为级对拍：清单的真实出口是 P2 的 `GET /api/docs/meta/block-types`。
-  // 它给的是「内置 ∪ 库里注册的」，所以只比 `builtin: true` 的那 15 个 ——
+  // 它给的是「内置 ∪ 库里注册的」，所以只比 `builtin: true` 的那 16 个 ——
   // 静默漂移的另一半是「接口加了类型、AI 的清单没跟上」。
   const metaTypes = await admin.call('/api/docs/meta/block-types');
   check('GET /api/docs/meta/block-types 返回 200', metaTypes.status === 200, `实际 ${metaTypes.status}`);

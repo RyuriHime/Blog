@@ -44,6 +44,8 @@ export const AI_BLOCK_PROP_GUIDE = Object.freeze([
   '正文 paragraph {"text":"一段文字"}；',
   '小节正文 prose {"text":"一小节的 Markdown"}\\n（**P2 现在默认的正文块**：解析器把同一小节里连续的正文并成一块，text 里可以有 "- 甲\\n- 乙" 这样的列表、"> 引用"、空行；看见 prose 就整块改写，别为了「更细」把它拆回 paragraph / list）',
   '（上面两种都是正文，区别只是粒度：一个 prose = 一个小节，一段一句话那种写法已经不用了）；',
+  '折叠块 fold {"title":"点开看细节","kind":"note","open":false,"text":"收起来的整段 Markdown"}',
+  '（**一大段可折叠的正文**：需要「先给结论、细节收起来」时用它 —— text 里可以有列表、表格、代码围栏，甚至套一层 fold；不要把 fold 拆成十个小段，也不要为了「更细」把里面的东西搬出去）；',
   '列表 list {"text":"- 甲\\n- 乙"}（Markdown 记法，一项一行）；',
   '代码 code {"text":"console.log(1)","lang":"js"}（lang 可省）；',
   '表格 table {"text":"表头 | 表头\\n--- | ---\\n甲 | 乙","rows":[["甲","乙"]]}（rows 可省，会自动从 text 解析）；',

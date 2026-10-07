@@ -15,7 +15,7 @@ export {
 } from './guards.js';
 export * from './shape.js';
 export { issueSession, sessionCookie, resolveUser, sniffImageType, saveAvatarFile, removeAvatarFile } from './sessions.js';
-export { serveAvatar, serveStatic, MIME } from './static.js';
+export { serveAvatar, serveStatic, serveUpload, MIME } from './static.js';
 export { bindStore, hasStore, store } from './store.js';
 export { schemas, tablesWithoutOwner, ownedButNotRegistered } from './schema.js';
 export { openDatabase } from './open-db.js';

@@ -244,6 +244,9 @@ export function registerDocRoutes(ctx, { store }) {
       kind: reqCtx.query.get('kind') ?? '',
       scope: reqCtx.query.get('scope') ?? '',
       tag: reqCtx.query.get('tag') ?? '',
+      // 默认不列挂在 wiki 站里的页（OI Wiki 一个站就 519 页）；
+      // `?wiki=all` 都列、`?wiki=only` 只要站里的页。
+      wiki: reqCtx.query.get('wiki') ?? '',
       mine: reqCtx.query.get('mine') === '1',
       q: reqCtx.query.get('q') ?? '',
       page: intOrNull(reqCtx.query.get('page')) ?? 1,

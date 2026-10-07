@@ -733,6 +733,40 @@
   font-style: normal;
 }
 
+/* 折叠块（`fold`）：OI-wiki 的 `???` / `!!!` 与 `=== "语言"` 标签页导进来都长这样。
+   用原生 <details>，样式只负责边框、间距与那个小三角的落点。 */
+.doc-fold {
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-sm);
+  background: var(--bg-soft, rgba(0, 0, 0, 0.02));
+  padding: 8px 12px;
+}
+
+.doc-fold > summary {
+  cursor: pointer;
+  color: var(--text-dim);
+  font-size: 14px;
+  line-height: 1.6;
+}
+
+.doc-fold[open] > summary {
+  margin-bottom: 8px;
+  color: var(--text);
+}
+
+.doc-fold-body {
+  font-size: 14px;
+  line-height: 1.75;
+}
+
+.doc-fold-body > :first-child {
+  margin-top: 0;
+}
+
+.doc-fold-body > :last-child {
+  margin-bottom: 0;
+}
+
 .doc-poll-question {
   margin: 0 0 8px;
   font-weight: 600;
@@ -988,7 +1022,8 @@ body.doc-wide .sidebar {
 }
 
 .doc-wiki-tree[hidden],
-.doc-wiki-tree-link[hidden] {
+.doc-wiki-tree-link[hidden],
+.doc-wiki-tree-row[hidden] {
   display: none;
 }
 
@@ -996,13 +1031,59 @@ body.doc-wide .sidebar {
   margin-right: 4px;
 }
 
-/* 层级缩进用 data-depth 选择器算 —— 树是服务端前序遍历铺好的一根线 */
-.doc-wiki-tree-link[data-depth="1"] { padding-left: 16px; }
-.doc-wiki-tree-link[data-depth="2"] { padding-left: 30px; }
-.doc-wiki-tree-link[data-depth="3"] { padding-left: 44px; }
-.doc-wiki-tree-link[data-depth="4"] { padding-left: 58px; }
-.doc-wiki-tree-link[data-depth="5"] { padding-left: 72px; }
-.doc-wiki-tree-link[data-depth="6"] { padding-left: 86px; }
+/* 一页一行：行首是折叠三角（没子页的页用等宽空位占住，标题才不会参差不齐） */
+.doc-wiki-tree-row {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  min-width: 0;
+}
+
+.doc-wiki-tree-toggle,
+.doc-wiki-tree-dot {
+  flex: none;
+  width: 16px;
+  text-align: center;
+}
+
+.doc-wiki-tree-toggle {
+  padding: 2px 0;
+  border: 0;
+  background: none;
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.doc-wiki-tree-toggle:hover {
+  color: var(--accent);
+}
+
+.doc-wiki-tree-row .doc-wiki-tree-link {
+  flex: 1;
+  min-width: 0;
+  padding-left: 0;
+}
+
+/* 层级缩进按行算 —— 树是服务端前序遍历铺好的一根线 */
+.doc-wiki-tree-row[data-depth="1"] { padding-left: 12px; }
+.doc-wiki-tree-row[data-depth="2"] { padding-left: 26px; }
+.doc-wiki-tree-row[data-depth="3"] { padding-left: 40px; }
+.doc-wiki-tree-row[data-depth="4"] { padding-left: 54px; }
+.doc-wiki-tree-row[data-depth="5"] { padding-left: 68px; }
+.doc-wiki-tree-row[data-depth="6"] { padding-left: 82px; }
+
+/* 全部展开 / 全部收起：519 页的站不可能一屏看完，这两颗按钮是「先看全貌」的出口 */
+.doc-wiki-tree-tools {
+  display: flex;
+  gap: 6px;
+  padding-top: 6px;
+}
+
+.doc-wiki-tree-tools .btn {
+  flex: 1;
+}
 
 .doc-wiki-search-hit {
   display: grid;

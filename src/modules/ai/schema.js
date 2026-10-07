@@ -151,6 +151,10 @@ export const AI_BLOCK_TYPES = Object.freeze([
   // 模型必须知道它，否则看到一篇正常文章里大段大段的 `prose` 会以为块类型不认识、
   // 自作主张拆回 `paragraph` / `list` —— 那正好把「块太散」这个毛病又改回来。
   { name: 'prose', label: '小节正文' },
+  // 第 16 种：折叠块（mkdocs 的 `??? note "标题"` 落成的块）。
+  // 它管的是「一大段能收起来的正文」，模型改写时**整块对待**：该收起来的收起来，
+  // 别拆成十个小段、也别把里面的列表搬出去。
+  { name: 'fold', label: '折叠块' },
 ]);
 
 export const AI_BLOCK_TYPE_NAMES = Object.freeze(AI_BLOCK_TYPES.map((item) => item.name));

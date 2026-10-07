@@ -270,6 +270,69 @@ const CASES = [
     input: '第一行\n第二行',
     contains: ['<br>'],
   },
+  {
+    // OI-wiki 的正文里到处都是 <kbd>（447 处），以前一律被转义成文字。
+    name: '行内 HTML 白名单：<kbd> 原样留着',
+    input: '按 <kbd>Ctrl</kbd> 再点 <kbd>保存</kbd>',
+    contains: ['<kbd>Ctrl</kbd>', '<kbd>保存</kbd>'],
+    notContains: ['&lt;kbd&gt;'],
+  },
+  {
+    name: '行内 HTML 白名单：<br> 与 <sup> 留着（脚注要）',
+    input: '第一行<br>第二行<sup>1</sup>',
+    contains: ['<br>', '<sup>1</sup>'],
+  },
+  {
+    name: '白名单外的标签照旧转义成文字',
+    input: '<script>alert(1)</script>',
+    contains: ['&lt;script&gt;'],
+    notContains: ['<script>'],
+  },
+  {
+    name: '白名单标签带属性就不算 HTML（<span class> 仍转义）',
+    input: '<span class="x">文字</span>',
+    contains: ['&lt;span'],
+    notContains: ['<span'],
+  },
+  {
+    name: '行内 <a> 的 href 也过协议白名单（javascript: 拒绝）',
+    input: '<a href="javascript:alert(1)">点我</a>',
+    contains: ['点我'],
+    notContains: ['<a href="javascript'],
+  },
+  {
+    name: '行内 <a> 的外链自动补 target 与 rel',
+    input: '<a href="https://a.com">站外</a>',
+    contains: ['href="https://a.com"', 'target="_blank"', 'rel="noopener nofollow"'],
+  },
+  {
+    name: '行内 <img> 的 src 同样过协议白名单',
+    input: '<img src="javascript:alert(1)">',
+    contains: ['&lt;img'],
+    notContains: ['<img'],
+  },
+  {
+    name: '行内 <img> 只留 src/alt 与纯数字的宽高',
+    input: '<img src="https://a.com/x.png" alt="图" width="20" height="30px" onerror="bad()">',
+    contains: ['src="https://a.com/x.png"', 'alt="图"', 'width="20"', 'height="30"'],
+    notContains: ['onerror'],
+  },
+  {
+    name: '列表项里的块公式照旧是公式（不是一段 $$ 文字）',
+    input: ['-   $$', '    a^2+b^2=c^2', '    $$', '', '尾巴'].join('\n'),
+    contains: ['<li><p>$$a^2+b^2=c^2$$</p></li>', '<p>尾巴</p>'],
+    notContains: ['<li>$$'],
+  },
+  {
+    name: '列表项里的 $$ 没有配对时不吞后面的正文',
+    input: ['-   $$', '    只有一行', '', '## 后面的标题'].join('\n'),
+    contains: ['<h2>后面的标题</h2>'],
+  },
+  {
+    name: '顶层 $$ 找不到配对时不吞后面的代码块',
+    input: ['$$', 'a^2', '', '```js', 'const a = 1;', '```'].join('\n'),
+    contains: ['<pre class="md-code">'],
+  },
 ];
 
 console.log('Markdown 渲染回归');

@@ -159,6 +159,66 @@ function findEmphasis(src, start, width, marker) {
 const TRAILING_PUNCT_RE = /[.,;:!?、。，；：！？）】」』’”]+$/u;
 
 /**
+ * 行内 HTML 白名单：只放行下面这些「排版用」标签，别的照旧转义成文字。
+ *
+ * 为什么需要：技术文档里 `<kbd>`（按键）、`<br>`（表格单元格里换行）、`<sup>`/`<sub>`
+ * 是家常便饭，全转义掉读起来就是一堆尖括号（OI-wiki 里 `<kbd>` 出现了 326 次）。
+ *
+ * 安全边界没有变：仍然是「原文扫描 → 白名单拼装」，`<img src>` 与 `<a href>` 的目标
+ * 照样过 `resolveUrl`（`javascript:` 一律拒绝）；白名单标签**不接受属性**（`<kbd style=…>`
+ * 只会留下 `<kbd>`），只有 `img` / `a` 有各自的属性小名单。
+ */
+const RAW_HTML_TAGS = new Set([
+  'a', 'b', 'big', 'br', 'cite', 'code', 'del', 'dfn', 'em', 'i', 'img', 'ins',
+  'kbd', 'mark', 'q', 's', 'samp', 'small', 'span', 'strong', 'sub', 'sup', 'u', 'var',
+]);
+const VOID_HTML_TAGS = new Set(['br', 'img']);
+const RAW_HTML_RE = /^<(\/?)([a-zA-Z][a-zA-Z0-9]*)((?:\s+[a-zA-Z_:][-a-zA-Z0-9_:.]*(?:\s*=\s*(?:"[^"]*"|'[^']*'|[^\s"'>]+))?)*)\s*(\/?)>/;
+const HTML_ATTR_RE = /([a-zA-Z_:][-a-zA-Z0-9_:.]*)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'>]+)))?/g;
+const SIZE_ATTR_RE = /^\d{1,4}$/;
+
+/** `img` / `a` 的属性名单。返回 null 表示「这条不算 HTML」，调用方应退化成纯文字。 */
+function rawHtmlAttrs(tag, raw) {
+  if (tag !== 'a' && tag !== 'img') return raw.trim() === '' ? '' : null;
+  const found = new Map();
+  let item;
+  HTML_ATTR_RE.lastIndex = 0;
+  while ((item = HTML_ATTR_RE.exec(raw)) !== null) {
+    found.set(item[1].toLowerCase(), item[2] ?? item[3] ?? item[4] ?? '');
+  }
+  if (tag === 'a') {
+    const target = resolveUrl(found.get('href') ?? '');
+    if (!target) return null;
+    const title = found.has('title') ? ` title="${escapeHtml(found.get('title'))}"` : '';
+    const extra = target.kind === 'external' ? ' target="_blank" rel="noopener nofollow"' : '';
+    return ` href="${escapeHtml(target.href)}"${title}${extra}`;
+  }
+  const target = resolveUrl(found.get('src') ?? '');
+  if (!target) return null;
+  let out = ` src="${escapeHtml(target.href)}"`;
+  if (found.has('alt')) out += ` alt="${escapeHtml(found.get('alt'))}"`;
+  for (const name of ['width', 'height']) {
+    const value = String(found.get(name) ?? '').replace(/px$/i, '');
+    if (SIZE_ATTR_RE.test(value)) out += ` ${name}="${value}"`;
+  }
+  return out;
+}
+
+/** 认出白名单里的行内 HTML；认不出返回 null（调用方照旧转义）。 */
+function matchRawHtml(src, start, noLinks) {
+  const match = RAW_HTML_RE.exec(src.slice(start));
+  if (!match) return null;
+  const tag = match[2].toLowerCase();
+  if (!RAW_HTML_TAGS.has(tag)) return null;
+  const end = start + match[0].length;
+  if (match[1] === '/') return VOID_HTML_TAGS.has(tag) ? null : { html: `</${tag}>`, end };
+  if (tag === 'a' && noLinks) return null;
+  const attrs = rawHtmlAttrs(tag, match[3]);
+  if (attrs === null) return null;
+  return { html: `<${tag}${attrs}>`, end };
+}
+
+/**
  * 行内渲染。输入是**原文**（不是转义过的），输出是安全的 HTML。
  * `noLinks` 用于链接标签的内部：HTML 不允许 `<a>` 套 `<a>`，
  * 浏览器会把外层强行闭合，整块排版就散了（通知列表踩过这个坑）。
@@ -275,6 +335,17 @@ export function renderInline(source, options = {}) {
       }
     }
 
+    // 行内 HTML 白名单（`<kbd>` / `<br>` / `<sup>`…，见上面 RAW_HTML_TAGS）。
+    // 排在自动链接之前：`<https://…>` 的 `https` 不在白名单里，认不出来就往下走。
+    if (ch === '<') {
+      const raw = matchRawHtml(src, i, noLinks);
+      if (raw) {
+        push(raw.html);
+        i = raw.end;
+        continue;
+      }
+    }
+
     // 自动链接 <https://…> / <mailto:…>
     if (ch === '<') {
       const auto = /^<(https?:\/\/[^\s<>]+|mailto:[^\s<>]+)>/i.exec(src.slice(i));
@@ -345,7 +416,9 @@ export function renderInline(source, options = {}) {
   return out.join('');
 }
 
-const FENCE_RE = /^\s*(```|~~~)\s*([\w+#.-]*)\s*$/;
+// 围栏长度是 3 个起、可以更长：````text 这种四连反引号是合法 Markdown（上游写
+// 「代码里还嵌着 ``` 的示例」时就得用它），只认恰好三个会把整段当成正文吐出来。
+const FENCE_RE = /^\s*(`{3,}|~{3,})\s*([\w+#.-]*)\s*$/;
 const HEADING_RE = /^\s{0,3}(#{1,6})\s+(.*?)\s*#*\s*$/;
 const HR_RE = /^\s{0,3}([-*_])(\s*\1){2,}\s*$/;
 const QUOTE_RE = /^\s{0,3}>\s?/;
@@ -458,6 +531,32 @@ function buildList(lines, start, inlineOpts) {
     const childLines = [];
     i += 1;
 
+    // 列表项里起头的块公式：`-   $$` + 缩进若干行的公式体 + 缩进的 `$$`。
+    // 上游（OI-wiki 的「性质」小节）大量这么写；不认的话定界符会被拼进正文，
+    // KaTeX 永远配不上，多行公式就整条显示成源码。
+    if (item.text === '$$') {
+      const mathBody = [];
+      let close = -1;
+      let cursor = i;
+      while (cursor < lines.length) {
+        const raw = lines[cursor];
+        const indent = raw.match(/^\s*/)[0].replace(/\t/g, '    ').length;
+        if (!/^\s*$/.test(raw) && indent <= baseIndent) break; // 已经出了这个列表项
+        if (raw.trim() === '$$') {
+          close = cursor;
+          break;
+        }
+        mathBody.push(raw.trim());
+        cursor += 1;
+      }
+      if (close >= 0) {
+        items.push(`<li><p>$$${escapeHtml(mathBody.join('\n'))}$$</p></li>`);
+        i = close + 1;
+        continue;
+      }
+      // 没有配对收尾：不当公式，落到下面按普通条目处理（照旧不吞后面的内容）。
+    }
+
     while (i < lines.length && !/^\s*$/.test(lines[i])) {
       const raw = lines[i];
       const indent = raw.match(/^\s*/)[0].replace(/\t/g, '    ').length;
@@ -525,8 +624,14 @@ export function renderMarkdown(source, { wikiLinks = false, wikiExisting = null 
       // CommonMark 规定的），但 `$$` 吞到文件尾会把用户后面写的整篇正文
       // 变成一条居中的公式 —— 只是少打一个 `$$` 而已，代价太大。
       let close = i + 1;
-      while (close < lines.length && !/^\s*\$\$\s*$/.test(lines[close])) close += 1;
-      if (close < lines.length) {
+      while (close < lines.length) {
+        // 撞到代码围栏也当没配对：`$$` 里不会有围栏，跑到围栏后面找 `$$`
+        // 只会把一整段代码（或一段提示块）吞进公式。
+        if (FENCE_RE.test(lines[close])) break;
+        if (/^\s*\$\$\s*$/.test(lines[close])) break;
+        close += 1;
+      }
+      if (close < lines.length && !FENCE_RE.test(lines[close])) {
         const buffer = lines.slice(i + 1, close);
         i = close + 1; // 跳过收尾的 $$
         html.push(`<p>$$${escapeHtml(buffer.join('\n'))}$$</p>`);

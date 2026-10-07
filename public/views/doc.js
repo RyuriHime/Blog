@@ -205,12 +205,20 @@ async function viewDocs(query = new URLSearchParams()) {
   const mine = query.get('mine') === '1';
   const q = query.get('q') ?? '';
   const tag = query.get('tag') ?? '';
+  // 挂在 wiki 站里的页默认不列（一个导进来的 OI Wiki 就 519 页，会把别人的积木淹掉）：
+  // 想看它们去 `#/wiki` 走站的目录树，或者点下面那颗「连站里的页一起列」。
+  const wiki = query.get('wiki') === 'all' || query.get('wiki') === 'only' ? query.get('wiki') : '';
   const layout = Prefs.docsLayout() === 'list' ? 'list' : 'grid';
   const params = new URLSearchParams();
   if (kind) params.set('kind', kind);
   if (mine) params.set('mine', '1');
   if (q) params.set('q', q);
   if (tag) params.set('tag', tag);
+  if (wiki) params.set('wiki', wiki);
+  const toggle = new URLSearchParams(query);
+  if (wiki === 'all') toggle.delete('wiki');
+  else toggle.set('wiki', 'all');
+  const toggleHref = `#/docs${toggle.toString() ? `?${toggle}` : ''}`;
   const data = await api(`/api/docs${params.toString() ? `?${params}` : ''}`);
   const documents = data.documents ?? [];
   const layoutTabs = DOC_LAYOUTS.map(
@@ -222,7 +230,7 @@ async function viewDocs(query = new URLSearchParams()) {
     <div class="card doc-panel">
       <div class="card-head">
         <span class="card-title">🧩 积木广场</span>
-        <span class="hint">${Fmt.fmtNum(data.total ?? documents.length)} 篇</span>
+        <span class="hint">${Fmt.fmtNum(data.total ?? documents.length)} 篇${wiki ? '' : '（不含 wiki 站里的页）'}</span>
       </div>
       ${
         tag
@@ -242,6 +250,7 @@ async function viewDocs(query = new URLSearchParams()) {
       <div class="doc-actions">
         ${state.me ? '<button class="btn btn-sm" type="button" data-doc-action="new">＋ 新建一篇</button>' : '<a class="btn btn-sm" href="#/login">登录后可以新建</a>'}
         <a class="btn btn-sm" href="#/wiki">⧉ Wiki 站</a>
+        <a class="btn btn-sm btn-ghost" href="${toggleHref}">${wiki === 'all' ? '不列站里的页' : '连站里的页一起列'}</a>
         <a class="btn btn-sm btn-ghost" href="#/dev">🛠 开发者功能</a>
         <div class="tabs tabs-sm doc-layout-tabs">${layoutTabs}</div>
       </div>
@@ -489,23 +498,210 @@ function mountWikiNav() {
 /* Wiki 站（§6：一个帖子一个 wiki）                                    */
 /* ------------------------------------------------------------------ */
 
+/** 折叠状态存本地：同一台机器下次进来还是你上次那份展开的样子。 */
+function wikiTreeKey(stationId) {
+  return `dsh.wikiTree.${Number(stationId) || 0}`;
+}
+
+function readTreeOpen(stationId) {
+  try {
+    const raw = globalThis.localStorage?.getItem(wikiTreeKey(stationId));
+    const list = raw ? JSON.parse(raw) : null;
+    return new Set(Array.isArray(list) ? list.map(Number).filter((id) => id > 0) : []);
+  } catch (error) {
+    console.warn('[doc] 目录树的展开状态读不出来：', error);
+    return new Set();
+  }
+}
+
+function writeTreeOpen(stationId, open) {
+  try {
+    globalThis.localStorage?.setItem(wikiTreeKey(stationId), JSON.stringify([...open]));
+  } catch (error) {
+    console.warn('[doc] 目录树的展开状态存不下来：', error);
+  }
+}
+
+/**
+ * 左树滚动位置也存本地。
+ *
+ * 换页 = 整棵左栏重新渲染，新节点 `scrollTop` 从 0 开始 —— 点了一页又跳回顶上，
+ * 519 页的站等于每次都从头找。存的是滚动位置（`scrollTop`），不是哪一行。
+ */
+function wikiScrollKey(stationId) {
+  return `dsh.wikiScroll.${Number(stationId) || 0}`;
+}
+
+function readTreeScroll(stationId) {
+  try {
+    const raw = globalThis.localStorage?.getItem(wikiScrollKey(stationId));
+    const value = Number(raw);
+    return Number.isFinite(value) && value > 0 ? value : 0;
+  } catch (error) {
+    console.warn('[doc] 目录树的滚动位置读不出来：', error);
+    return 0;
+  }
+}
+
+function writeTreeScroll(stationId, top) {
+  try {
+    globalThis.localStorage?.setItem(wikiScrollKey(stationId), String(Math.max(0, Math.round(Number(top) || 0))));
+  } catch (error) {
+    console.warn('[doc] 目录树的滚动位置存不下来：', error);
+  }
+}
+
+/**
+ * 目录树的展开 / 收起。
+ *
+ * 默认只把**通向当前这一页的那条链**打开：519 页的站全展开是十几屏，
+ * 全收起又让人找不到自己在哪。用户点过的状态优先，存在 `localStorage` 里。
+ *
+ * 树是一根线（前序遍历 + `parentId`），所以「某一页可不可见」=
+ * 它到根的这条链上每一环都处于展开态 —— 一行代码，不用递归。
+ */
+function mountWikiTree(wiki, tree) {
+  const stationId = Number(wiki?.station?.id) || 0;
+  const pages = Array.isArray(wiki?.pages) ? wiki.pages : [];
+  const current = Number(wiki?.current) || 0;
+  const parentOf = new Map(pages.map((page) => [Number(page.id) || 0, Number(page.parentId) || 0]));
+  const open = readTreeOpen(stationId);
+  if (open.size === 0) {
+    for (let id = current; id; id = parentOf.get(id) || 0) open.add(id);
+  }
+  const nodes = () => (typeof tree?.querySelectorAll === 'function' ? [...tree.querySelectorAll('[data-wiki-node]')] : []);
+  const apply = () => {
+    for (const row of nodes()) {
+      const id = Number(row.dataset?.wikiNode) || 0;
+      let visible = true;
+      for (let up = parentOf.get(id) || 0; up; up = parentOf.get(up) || 0) {
+        if (!open.has(up)) {
+          visible = false;
+          break;
+        }
+      }
+      if (row.hidden !== undefined) row.hidden = !visible;
+      const toggle = typeof row.querySelector === 'function' ? row.querySelector('[data-wiki-toggle]') : null;
+      if (toggle && open.has(id)) {
+        toggle.textContent = '▾';
+        if (toggle.setAttribute) toggle.setAttribute('aria-expanded', 'true');
+      } else if (toggle) {
+        toggle.textContent = '▸';
+        if (toggle.setAttribute) toggle.setAttribute('aria-expanded', 'false');
+      }
+    }
+  };
+  const bind = () => {
+    if (typeof tree?.querySelectorAll !== 'function') return;
+    for (const toggle of tree.querySelectorAll('[data-wiki-toggle]')) {
+      if (typeof toggle.addEventListener !== 'function') continue;
+      toggle.addEventListener('click', (event) => {
+        event.preventDefault?.();
+        event.stopPropagation?.();
+        const id = Number(toggle.dataset?.wikiToggle) || 0;
+        if (!id) return;
+        if (open.has(id)) open.delete(id);
+        else open.add(id);
+        writeTreeOpen(stationId, open);
+        apply();
+      });
+    }
+  };
+  bind();
+  apply();
+
+  /**
+   * 左树的滚动位置。
+   *
+   * 换页 = 整棵左栏重新渲染，新节点 `scrollTop` 从 0 开始 —— 在 519 页的站里点一页
+   * 又跳回顶上，等于每次都从头找。所以两头都做：滚动时把位置存下来，
+   * 上来先还原；要还原的位置根本看不到当前那一页时，再把当前行挪进视野（只挪最少的一截）。
+   */
+  const holder = typeof tree?.closest === 'function' ? tree.closest('.doc-wiki-nav') : null;
+  const scroller = holder ?? tree;
+  const keepScroll = () => {
+    if (!scroller || typeof scroller.addEventListener !== 'function') return;
+    let ticking = false;
+    scroller.addEventListener('scroll', () => {
+      const flush = () => {
+        ticking = false;
+        writeTreeScroll(stationId, scroller.scrollTop);
+      };
+      if (ticking) return;
+      ticking = true;
+      if (typeof globalThis.requestAnimationFrame === 'function') globalThis.requestAnimationFrame(flush);
+      else flush();
+    });
+  };
+  const restoreScroll = () => {
+    if (!scroller || scroller.scrollTop === undefined) return;
+    const saved = readTreeScroll(stationId);
+    if (saved > 0) scroller.scrollTop = saved;
+    const row = nodes().find((item) => Number(item.dataset?.wikiNode) === current);
+    if (!row || row.hidden) return;
+    const top = Number(row.offsetTop) || 0;
+    const height = Number(row.offsetHeight) || 0;
+    const view = Number(scroller.clientHeight) || 0;
+    const at = Number(scroller.scrollTop) || 0;
+    if (top < at || top + height > at + view) {
+      row.scrollIntoView?.({ block: saved > 0 ? 'nearest' : 'center' });
+    }
+  };
+  keepScroll();
+  restoreScroll();
+
+  return {
+    // 站内搜索清空时会把 `innerHTML` 换回旧的那份字符串：行是**新节点**，得重新接管。
+    restore() {
+      bind();
+      apply();
+      restoreScroll();
+    },
+    expandAll() {
+      for (const page of pages) open.add(Number(page.id) || 0);
+      writeTreeOpen(stationId, open);
+      apply();
+    },
+    collapseAll() {
+      open.clear();
+      writeTreeOpen(stationId, open);
+      apply();
+    },
+  };
+}
+
 /**
  * 左栏：站名 + 站内搜索 + 页面树。
  *
- * 树是**服务端铺好的一根线**（`wiki.pages`，前序遍历 + `depth`），前端只画缩进 ——
- * 谁是谁的子页是数据，不是样式，前端再算一遍就会有两份真相。
+ * 树是**服务端铺好的一根线**（`wiki.pages`，前序遍历 + `depth` + `parentId`），
+ * 前端只画缩进与折叠开关 —— 谁是谁的子页是数据，不是样式，前端再算一遍就会有两份真相。
+ *
+ * 每一页一行（`.doc-wiki-tree-row`），行首那个三角是**折叠开关**：
+ * OI Wiki 那种 519 页的站全铺出来能拉出十几屏，全收起又让人找不到自己在哪，
+ * 所以默认只把「通向当前这一页」的那条链打开（见 `mountWikiTree`）。
  */
 function stationTreeHtml(wiki) {
   const station = wiki?.station ?? {};
   const pages = wiki?.pages ?? [];
   const current = Number(wiki?.current) || 0;
+  // 前序遍历里「下一页比我深」就等于「我有子页」——不用再建第二棵树。
+  const branches = new Set();
+  for (let i = 0; i + 1 < pages.length; i += 1) {
+    if ((Number(pages[i + 1]?.depth) || 0) > (Number(pages[i]?.depth) || 0)) branches.add(Number(pages[i]?.id) || 0);
+  }
   const items = pages
     .map((page) => {
       const depth = Math.min(Math.max(Number(page.depth) || 0, 0), 6);
       const icon = page.icon ? `<span class="doc-wiki-tree-icon">${esc(page.icon)}</span>` : '';
-      return `<a class="doc-wiki-nav-link doc-wiki-tree-link${page.id === current ? ' is-current' : ''}"`
+      const toggle = branches.has(Number(page.id) || 0)
+        ? `<button class="doc-wiki-tree-toggle" type="button" data-wiki-toggle="${page.id}"`
+          + ` aria-expanded="false" title="展开 / 收起子页" aria-label="展开或收起子页">▸</button>`
+        : '<span class="doc-wiki-tree-dot" aria-hidden="true"></span>';
+      const link = `<a class="doc-wiki-nav-link doc-wiki-tree-link${page.id === current ? ' is-current' : ''}"`
         + ` data-depth="${depth}" data-wiki-title="${esc(page.title)}" data-wiki-page="${page.id}"`
         + ` href="#/wiki/${encodeURIComponent(station.title ?? '')}/${encodeURIComponent(page.title)}">${icon}${esc(page.title)}</a>`;
+      return `<div class="doc-wiki-tree-row" data-wiki-node="${page.id}"`
+        + ` data-wiki-parent="${Number(page.parentId) || 0}" data-depth="${depth}">${toggle}${link}</div>`;
     })
     .join('');
   const tools = [];
@@ -515,6 +711,10 @@ function stationTreeHtml(wiki) {
       `<button class="btn btn-sm" type="button" data-doc-action="wiki-new">＋ 新建页面</button>`,
     );
   }
+  const treeTools = pages.length > 1
+    ? '<button class="btn btn-sm btn-ghost" type="button" data-wiki-tree-all>全部展开</button>'
+      + '<button class="btn btn-sm btn-ghost" type="button" data-wiki-tree-none>全部收起</button>'
+    : '';
   return `<aside class="doc-wiki-nav doc-wiki-side">
     <div class="doc-wiki-nav-head"><a href="#/wiki" class="doc-wiki-nav-back">⧉ Wiki 站</a><span class="hint">${pages.length} 页</span></div>
     <div class="doc-wiki-station-name">${esc(station.title ?? '')}</div>
@@ -523,6 +723,7 @@ function stationTreeHtml(wiki) {
       items || '<div class="doc-wiki-nav-empty">这个站还没有页。</div>'
     }</div>
     <div class="doc-wiki-nav-hidden" data-wiki-nothing hidden>没有匹配的页面。</div>
+    ${treeTools ? `<div class="doc-wiki-tree-tools">${treeTools}</div>` : ''}
     ${tools.length ? `<div class="doc-wiki-nav-tools">${tools.join('')}</div>` : ''}
   </aside>`;
 }
@@ -575,6 +776,16 @@ function mountStationTools(wiki) {
   docState.stationId = stationId;
   const tree = $('[data-wiki-tree]');
   const original = tree ? tree.innerHTML : '';
+  // 树的折叠开关：默认只展开通向当前页的那条链（见 mountWikiTree）。
+  const treeState = tree ? mountWikiTree(wiki, tree) : null;
+  const expandAll = $('[data-wiki-tree-all]');
+  if (expandAll && typeof expandAll.addEventListener === 'function') {
+    expandAll.addEventListener('click', () => treeState?.expandAll());
+  }
+  const collapseAll = $('[data-wiki-tree-none]');
+  if (collapseAll && typeof collapseAll.addEventListener === 'function') {
+    collapseAll.addEventListener('click', () => treeState?.collapseAll());
+  }
   // 目录：点一下滚到那个标题。**不能**用 `href="#h-b3"` —— hash 是路由，
   // 改 hash 会触发一次路由跳转（`#h-b3` 会被当成一个页面名）。
   const tocLinks = typeof ui.app.querySelectorAll === 'function' ? ui.app.querySelectorAll('[data-toc-anchor]') : [];
@@ -595,6 +806,8 @@ function mountStationTools(wiki) {
     if (timer) clearTimeout(timer);
     if (q === '') {
       tree.innerHTML = original;
+      // 换回来的是新节点：折叠开关要重新接管，展开状态还按用户点过的那份。
+      treeState?.restore();
       return;
     }
     timer = setTimeout(async () => {

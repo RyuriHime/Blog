@@ -1874,6 +1874,10 @@ if (!state.theme) problems.push('state.theme 没被初始化');
       if (m[3]) known.add(m[3]);
     }
     for (const m of source.matchAll(/\b(?:function|class|const|let|var)\s+([\w$]+)/g)) known.add(m[1]);
+    // 对象字面量 / 类体里的**简写方法**（`restore() { … }`）也是定义。
+    // 下面按行扫「名字后面跟括号」的启发式分不清定义与调用，会把这类方法当成裸调用，
+    // 所以先把这些名字登记成「本文件声明过」。
+    for (const m of source.matchAll(/([\w$]+)\s*\([^()]*\)\s*\{/g)) known.add(m[1]);
     for (const m of source.matchAll(/\b(?:const|let|var)\s*\{([^}]*)\}/g)) {
       for (const part of m[1].split(',')) {
         const name = part.trim().split(':').pop().split('=')[0].trim();

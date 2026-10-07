@@ -326,8 +326,9 @@ forum/
 │   ├── check-skeleton.mjs       # ★ 骨架自检：模块解耦证明 + 薄入口行数
 │   ├── check-ui-contract.mjs    # 前端契约检查：CSS 类名 + API 字段 + 主题/头像/角色/私信结构
 │   ├── check-encoding.mjs       # 源码编码体检（BOM / 乱码 / 批处理换行与 ASCII）
-│   ├── check-markdown.mjs       # ★ 正文渲染回归：链接 / 表格 / 嵌套列表 / 转义
+│   ├── check-markdown.mjs       # ★ 正文渲染回归：链接 / 表格 / 嵌套列表 / 转义 / 行内 HTML 白名单
 │   ├── sync-markdown-core.mjs   # 同步 note-agent 的兜底渲染器（--check 当漂移守卫）
+│   ├── seed-oiwiki.mjs          # ★ 把 OI-wiki 的 mkdocs 源码导成站内 wiki 站（见 §4 末一段）
 │   ├── check-notes-ui.mjs / check-frontend.mjs / notes-smoke.mjs / smoke-ai.mjs
 │   ├── ai-smoke.mjs / ui-smoke.mjs / feed-smoke.mjs / doc-smoke.mjs / team-smoke.mjs
 │   ├── fix-cmd.mjs              # 把 .cmd 规范化为 CRLF + 去 BOM
@@ -371,13 +372,42 @@ forum/
 | `#/doc/:id/blocks` | 同一个编辑器的高级入口（默认落在积木模式）：块列表 + 当前块的 props 表单 |
 | `#/blocks` | 块类型表的老地址：进的是同一页 `#/dev`（页面没下线，收藏夹里的链接照样能开） |
 | `#/dev` | 开发者功能：块类型表（内置/自定义类型的 schema 速查 + 注册自己的块类型）+「我的脚本模板」（把自己常写的沙箱代码存下来，一键新建一篇只带这一块的积木） |
-| `#/guide` | 积木教程：写给用积木的人 —— 新建一篇、编辑器三档怎么用、一次「保存」都存什么、谁可以看、怎么分享、**标签（怎么打、怎么按标签找）**、读者能做什么，后半截是进阶（让积木跑代码的两种块、能申请的六项能力、超时与失败怎么接、七个能直接抄的样例、存脚本模板、给全站加新块类型） |
+| `#/guide` | 积木教程：写给用积木的人 —— 新建一篇、编辑器三档怎么用、一次「保存」都存什么、谁可以看、怎么分享、**标签（怎么打、怎么按标签找）**、读者能做什么，后半截是进阶（让积木跑代码的两种块、能申请的六项能力、超时与失败怎么接、七个能直接抄的样例、存脚本模板、给全站加新块类型）；末节是 **18. 应用示例：从零开始建一个 OI Wiki** |
 | `#/ai-edit` | **AI 编辑台**：给模型授权（六项能力，默认全关）→ 草拟（**只预览**）→ 确认才落盘 → 每一步都留审计、可回滚。也能**审查**一篇（原「AI 学术审查」的接班人：按块给意见、引用不到原文的意见会被丢掉）与让模型整篇**套站内模板**。入口在 AI 页面里的「🎛 AI 编辑台」 |
 | `#/notes` | **（已下线，入口不再出现）** 老的学术笔记宿主页：路由与页面都留着，直接输地址还能看以前写的笔记，顶上写着「已经并进积木了 —— 给积木打 `#学术笔记` 标签」。代码没删（`public/views/notes.js`、`src/notes.js`、`note-studio/`），只是界面上不再提它 |
 | `#/wiki/:name` | Wiki 多页面：`[[双链]]` 的落点；左侧是分类边栏（页内筛选 + 新建页，作者多一个「改分类」），有这一页就渲染它，没有就给「建这一页」（`?create=1` 一步进编辑器） |
 | `#/teams` | 团队列表：公开团队广场（**被创建者藏起来的团队不出现**），`?mine=1` 只看我加入的，`?page=` 翻页；未登录也能看。顶上是「🔑 用团队号加入」，填 6 位号直接进队（登录后才显示） |
 | `#/team/:slug` | 团队主页：最上面是**团队公告**（只有成员看得见）与团队号（点「复制」发给要拉的人）、团队简介与成员、发帖框、帖子列表（按四档可见范围过滤，标题点进详情页，右侧显示「💬 N 条回复」）；成员在这里**只能编辑自己发的帖**（别人发的帖右边只有「💬 回复」，编辑 / 删除按钮只画在团队主页列表上）。三个页签 `?tab=discuss`（默认）/ `?tab=files`（文件柜）/ `?tab=chat`（群聊）；`?page=` 翻帖子、`?fpage=` 翻文件。没加入的人看到的是「加入团队」（`open`）或「申请加入」（`apply`，被拒过就是「再申请一次」），递过申请是「⏳ 申请审核中 + 撤回申请」；团长 / 管理员多一个「📨 加入申请」抽屉（待审 / 已批准 / 已拒绝 / 全部；批准 / 拒绝 / 撤销），创建者的团队设置（同一个抽屉位）里多一个「出现在团队广场」开关。每篇帖右边都有「💬 回复」：列表上点它落进详情页的回复框（`?reply=1`），在详情页点它就是原地把光标送进去 |
 | `#/team/:slug/post/:postId` | **团队帖详情页**：面包屑 + 帖子正文（Markdown + LaTeX）与回复数，下面是一串回复（时间正序，`?rpage=` 翻页）与回复框（未登录给「去登录」、非成员给加入提示）。管理员的删除按钮只画在自己能删的那条上 |
+
+### 站里那个 519 页的 OI Wiki 是怎么来的
+
+`#/wiki/OI%20Wiki` 这个站（463 篇正文 + 56 个目录页，按 OI-wiki 原本的 mkdocs 目录树排三层）不是手点的 —— **`scripts/seed-oiwiki.mjs`** 把 [OI-wiki](https://github.com/OI-wiki/OI-wiki) 的 `docs/**.md` 整仓导进来的：
+
+| 上游的写法 | 导入之后 |
+| --- | --- |
+| mkdocs `nav:` 里的**目录**节点（14 个顶层 / 40 个二级 / 5 个三级） | 各自是一页「目录页」，正文 = 一级标题 + 直接子页的 `subpage` 卡片（所以点进去就是下一层的地图） |
+| `??? "标题"` / `???+ "标题"` / `!!!` 折叠块（2940 个） | `fold` 折叠块（`???` 收起、`???+`/`!!!` 展开；嵌在折叠块里的折叠块降级成加粗小标题） |
+| `=== "C++"` / `=== "Python"` 标签页 | 一个 `fold`（同一段代码的多种语言收在一起） |
+| `--8<-- "path/to/file:section"`（667 处，带 `[start:x]` / `[end:x]` 标记） | 现场把片段展开进正文（原文件在 `oi-wiki-src/` 里，和 md 一起存着） |
+| `[^1]` / `[^name]` 脚注（387 条） | `<sup>N</sup>` + 文末「### 脚注」有序列表（按引用顺序重新编号，上游的脚注 id 大多是名字不是数字） |
+| 正文里的本地图片（641 张，含中文文件名） | 拷进 `UPLOAD_DIR` 并改写成 `/uploads/oi-wiki/…`（走 `src/core/static.js` 的 `serveUpload`） |
+| `[文字](another.md)` 本地互链 | `[[那一页的标题]]` 行内双链（标题写错就是红链，点一下当场建页） |
+| `<kbd>` / `<br>` / `<sup>` 这些行内 HTML | 原样留着（`src/markdown.js` 的行内白名单，别的标签照旧转义） |
+
+```bash
+node scripts/seed-oiwiki.mjs --dry --limit 8   # 只转 8 页，打印每页大小与块数
+node scripts/seed-oiwiki.mjs                   # 真导入（默认写 data/p2-preview.db）
+node scripts/seed-oiwiki.mjs --tree            # 只补目录树，叶子正文不动（重跑很快）
+node scripts/seed-oiwiki.mjs --only dp/        # 只导一个子目录
+node scripts/seed-oiwiki.mjs --tree --extras   # 连没进 nav 的文件也发布
+```
+
+> **不走 HTTP**：`PUT /api/docs/:id/markdown` 这类写接口每用户每 10 分钟只给 60 次
+> （`src/modules/doc/routes.js` 的 `write()` 里那个 `rateLimit`），519 页要跑一个多小时；
+> 脚本改成在进程里 `openDatabase` + `createDocStore` 直接拿 store 写库，几分钟跑完。
+> 也因此它跟着 `DB_FILE` 走 —— 指向哪个库就写哪个库，**默认写的是预览库**，别对着正式库随手跑。
+> 同一件事用人手做一遍的过程写在积木教程的末节（`#/guide` 的「18. 应用示例」）。
 
 ---
 
@@ -395,6 +425,7 @@ forum/
 | POST | `/api/me/profile` | 修改昵称 / 个性签名 | 登录 |
 | POST | `/api/me/avatar` | 设置头像：`{type:'emoji'\|'upload'\|'reset'}` | 登录 |
 | GET | `/avatars/:file` | 读取上传的头像文件（长缓存 + nosniff） | 公开 |
+| GET | `/uploads/:path` | 读取站内上传的图片 / 视频（积木正文里的图就落在这儿，如 `/uploads/oi-wiki/dp/images/x.png`）；按 `/` 分段校验路径（允许中文名，但拒掉 `.` / `..` 与空白、反斜杠、冒号这类怪字符），扩展名白名单 svg/png/jpg/jpeg/gif/apng/webp/avif/bmp/ico/mp4/webm，命中就回 `Cache-Control: public, max-age=86400`；落盘目录由 `UPLOAD_DIR` 决定（默认跟 `DB_FILE` 同级） | 公开 |
 | GET | `/api/me/categories` | 我的主页分类（含文章数） | 登录 |
 | POST | `/api/me/categories` | 新建分类（≤8 个） | 登录 |
 | PUT | `/api/me/categories/:id` | 重命名分类 | 登录 |
@@ -719,13 +750,13 @@ team_messages(id, team_id, user_id, content, deleted, created_at)
 ```bash
 node scripts/check-golden.mjs      # ★ 行为金标准：88 条请求的状态码 + 响应结构，一条都不能变
 node scripts/check-skeleton.mjs    # ★ 骨架自检：模块能不能独立拆掉、薄入口有没有变胖
-node scripts/check-markdown.mjs    # ★ 正文渲染回归：56 项（站内链接 / 带括号 URL / 表格 / 嵌套列表 / 转义 / 危险协议 / 兜底拷贝同步）
+node scripts/check-markdown.mjs    # ★ 正文渲染回归：67 项（站内链接 / 带括号 URL / 表格 / 嵌套列表 / 转义 / 危险协议 / 行内 HTML 白名单 / 列表里的块公式 / 兜底拷贝同步）
 node scripts/check-frontend.mjs    # ★ 前端渲染冒烟：39 个页面全部渲染一遍 + 关注列表 / 团队的文件柜/群聊/成员名单/团队号/公告/加入申请与审核/隐藏开关/设置与申请改右侧抽屉/帖子预览与详情回复（「💬 回复」按钮、编辑权只归作者）交互 + 裸调用未定义名字的静态扫描
 node scripts/smoke.mjs             # 后端端到端：227 项（临时独立库+端口，跑完自动清理）
 node scripts/smoke-ai.mjs          # AI 接口端到端：61 项
 node scripts/ai-smoke.mjs          # AI 接口端到端（更细的一套：校验 / 限流 / 额度 / 审查 / 模板与提示词漂移哨兵）：422 项
 node scripts/feed-smoke.mjs        # 动态流端到端：95 项
-node scripts/doc-smoke.mjs         # 积木（可编程帖子）端到端：572 项
+node scripts/doc-smoke.mjs         # 积木（可编程帖子）端到端：592 项
 node scripts/team-smoke.mjs        # 团队端到端：301 项（可见范围 / 越权 / 版本冲突 / 编辑权只归作者 / 文件柜 / 群聊 / 团队号 / 公告通知 / Markdown 与公式 / 帖子回复 / 加入申请与审核 / 隐藏团队 / 老库升级与坏库自愈）
 node scripts/check-ui-contract.mjs # 前端契约：CSS 类名 + API 字段 + 主题/头像/角色/私信/团队号/公告/剪贴板/公式/关注列表/详情与回复/申请与隐藏结构/编辑权与侧边抽屉/表重建与自愈/币已下线（通过项数不下降哨兵：314）
 node scripts/ui-smoke.mjs          # 首页外壳轻量化 + 右侧栏抽屉 + 起始页与动态流地址（m05506 契约）：73 项
@@ -746,9 +777,9 @@ node scripts/capture-fixtures.mjs  # 重采前端冒烟用的假数据（改了�
 一次跑完（`npm test` 就是上面这些，15 组）：
 
 ```
-check-encoding 201 文件 / 84 断言 · check-skeleton 47 项 · check-golden 88 项 0 差异
-check-markdown 56 · check-frontend 39 个页面 + 34 个模块静态扫描 · smoke 227 · smoke-ai 61
-ai-smoke 422 · feed-smoke 95 · doc-smoke 572 · team-smoke 301
+check-encoding 202 文件 / 84 断言 · check-skeleton 47 项 · check-golden 88 项 0 差异
+check-markdown 67 · check-frontend 39 个页面 + 34 个模块静态扫描 · smoke 227 · smoke-ai 61
+ai-smoke 422 · feed-smoke 95 · doc-smoke 592 · team-smoke 301
 check-ui-contract 314 · check-notes-ui 33 · notes-smoke 44 · ui-smoke 73
 ```
 

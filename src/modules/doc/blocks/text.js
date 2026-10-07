@@ -174,3 +174,29 @@ export function rowsToMarkdown(rows) {
 export function singleLine(value) {
   return String(value ?? '').replace(/\s*\n\s*/g, ' ').trim();
 }
+
+/**
+ * 行内 markdown 的**纯文字投影**（右栏目录用）。
+ *
+ * 标题里可以带行内标记：OI Wiki 首页那句
+ * `## 欢迎来到 **OI Wiki**！[![徽章](图)](链接)` 会渲染成粗体加两张徽章图，
+ * 但目录要是把这段标记原样抄进去，读者看到的就是一行方括号和 URL。
+ *
+ * 只做**显示用**的减法：不参与存取，也不改块里的 props，所以宁可保守 ——
+ * 认得出的标记剥掉，认不出的原样留着（`snake_case` 里的下划线就不动）。
+ */
+export function plainInline(value) {
+  return String(value ?? '')
+    .replace(/!\[([^\]]*)\]\([^)\s]*(?:\s+"[^"]*")?\)/g, '$1')
+    .replace(/\[([^\]]*)\]\([^)\s]*(?:\s+"[^"]*")?\)/g, '$1')
+    .replace(/\[\[([^\]|]+)\|([^\]]+)\]\]/g, '$2')
+    .replace(/\[\[([^\]]+)\]\]/g, '$1')
+    .replace(/`+([^`]*)`+/g, '$1')
+    .replace(/\*\*([^*]+)\*\*/g, '$1')
+    .replace(/__([^_]+)__/g, '$1')
+    .replace(/(^|[^*])\*([^*]+)\*/g, '$1$2')
+    .replace(/~~([^~]+)~~/g, '$1')
+    .replace(/<\/?[a-zA-Z][^>]*>/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
