@@ -192,7 +192,10 @@ document.addEventListener('click', async (event) => {
       }
       case 'profile-layout': {
         event.preventDefault();
-        Prefs.writePreference('forum:Prefs.profileLayout', actionNode.dataset.layout);
+        // key 必须和 preferences.js 里 Prefs.profileLayout() 读的**逐字一致**：
+        // 这里曾经写作 'forum:Prefs.profileLayout'（多一个 `Prefs.`），于是选了也记不住、
+        // 重渲染又回到列表 —— 三个排版按钮等于没反应。check-ui-contract 现在有静态守卫。
+        Prefs.writePreference('forum:profileLayout', actionNode.dataset.layout);
         await refreshProfile();
         break;
       }

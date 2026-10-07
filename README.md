@@ -111,7 +111,7 @@ HOST=0.0.0.0 node src/server.js       # 允许局域网内其它设备访问
 
 - **分类**：作者可以自建分类（最多 8 个），在发帖或编辑时归入，也可以在自己主页的文章下方用下拉框随手调整；删除分类不会删文章，文章会回到「未分类」；
 - **筛选**：主页顶部有 `全部 / 各分类 / 未分类` 标签，带每类文章数；
-- **排版**：右上角可切换 `☰ 列表 / ▦ 卡片 / ≡ 紧凑` 三种排版，选择记在浏览器本地（`localStorage`）；
+- **排版**：右上角可切换 `☰ 列表 / ▦ 卡片 / ≡ 紧凑` 三种排版，选择记在浏览器本地（`localStorage`）。⚠️ 改这套排版时，读写的 `localStorage` 键必须**逐字一致**：这里曾经写成 `forum:Prefs.profileLayout`（读取端用的是 `forum:profileLayout`），按钮点了等于没点、选中的排法永远记不住 —— 现在 `check-ui-contract` 有一条静态守卫查「读到的键必须有人按同一个字面量写」，`check-frontend` 还会把三种排法各渲染一遍；
 - **置顶推荐**：作者可以把最多 **3 篇**文章置顶到主页顶部（单独的「📌 置顶推荐」区块），与管理员的全站置顶互不影响。
 
 ### 关注 👥
@@ -798,7 +798,7 @@ node scripts/ai-smoke.mjs          # AI 接口端到端（更细的一套：校�
 node scripts/feed-smoke.mjs        # 动态流端到端：95 项
 node scripts/doc-smoke.mjs         # 积木（可编程帖子）端到端：597 项
 node scripts/team-smoke.mjs        # 团队端到端：301 项（可见范围 / 越权 / 版本冲突 / 编辑权只归作者 / 文件柜 / 群聊 / 团队号 / 公告通知 / Markdown 与公式 / 帖子回复 / 加入申请与审核 / 隐藏团队 / 老库升级与坏库自愈）
-node scripts/check-ui-contract.mjs # 前端契约：CSS 类名 + API 字段 + 主题/头像/角色/私信/团队号/公告/剪贴板/公式/关注列表（已关注按钮）/详情与回复/申请与隐藏结构/编辑权与侧边抽屉/表重建与自愈/币已下线（通过项数不下降哨兵：316）
+node scripts/check-ui-contract.mjs # 前端契约：CSS 类名 + API 字段 + 主题/头像/角色/私信/团队号/公告/剪贴板/公式/关注列表（已关注按钮）/详情与回复/申请与隐藏结构/编辑权与侧边抽屉/表重建与自愈/币已下线/本地偏好键读写一致（通过项数不下降哨兵：317）
 node scripts/ui-smoke.mjs          # 首页外壳轻量化 + 右侧栏抽屉 + 起始页与动态流地址（m05506 契约）：73 项
 node scripts/check-encoding.mjs    # 源码编码体检：BOM / 乱码 / 关键中文内容
 node scripts/check-notes-ui.mjs    # 笔记 UI
@@ -820,7 +820,7 @@ node scripts/capture-fixtures.mjs  # 重采前端冒烟用的假数据（改了�
 check-encoding 204 文件 / 84 断言 · check-skeleton 47 项 · check-golden 88 项 0 差异
 check-markdown 67 · check-frontend 39 个页面 + 34 个模块静态扫描 · smoke 231 · smoke-ai 61
 ai-smoke 422 · feed-smoke 95 · doc-smoke 597 · team-smoke 301
-check-ui-contract 316 · check-notes-ui 33 · notes-smoke 44 · ui-smoke 73
+check-ui-contract 317 · check-notes-ui 33 · notes-smoke 44 · ui-smoke 73
 ```
 
 > 知识网络图（`knowledge-pack/` + `#/graph` + `/api/knowledge/*`）已在 2026-10 整条链路删除：

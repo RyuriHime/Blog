@@ -17,8 +17,10 @@ function writePreference(key, value) {
 }
 const profileLayout = () => readPreference('forum:profileLayout', 'list');
 // 积木广场的排法：grid（一行多个）还是 list（从上往下列下来）。
-// 读和写必须用同一个 key —— events.js 里那个 'forum:Prefs.profileLayout'
-// 就是写错 key 的反例（个人主页布局因此从来没被记住）。
+// 读和写必须用**同一个 key**：这里读 'forum:profileLayout'，events.js 就得写
+// 'forum:profileLayout'。曾经写的是 'forum:Prefs.profileLayout'（多一个 `Prefs.`），
+// 于是三个排版按钮点了没反应、选择永远记不住 —— 现在 check-ui-contract 会查
+// 「被 readPreference 读到的键，必须有人按同一个字面量写」。
 const docsLayout = () => readPreference('forum:docsLayout', 'grid');
 
 /* ------------------------------------------------------------------ */

@@ -47,8 +47,12 @@ const BASE = `http://127.0.0.1:${PORT}`;
  * 现在都要求下发 viewerFollows（按钮据此显示「✓ 已关注」，再点一次取消关注），
  * 断言从 1 条字段检查扩成 3 条（两张卡都要 viewerFollows + 名单字段 + 名单成员与关注结果一致），
  * 这一轮是**真的加断言**（不是改期望值），实测 316，抬到 316。
+ * 第六次**加上去**：个人主页的排版按钮写偏好时键名写错（`'forum:Prefs.profileLayout'`
+ * 而读取端是 `'forum:profileLayout'`），于是「☰ 列表 / ▦ 卡片 / ≡ 紧凑」点了没反应、
+ * 选择永远记不住 —— 新加一条静态守卫「被 readPreference 读到的字面量键必须有人按同一个
+ * 字面量写」，实测 317，抬到 317。
  */
-const MIN_CHECKS = Number(process.env.MIN_UI_CHECKS || 316);
+const MIN_CHECKS = Number(process.env.MIN_UI_CHECKS || 317);
 
 /**
  * 前端源码入口清单。搬家前这三份文件在 public/ 根目录；骨架会把它们拆进
@@ -115,6 +119,24 @@ check(
 );
 const missing = [...used].filter((name) => !defined.has(name));
 check('所有模板类名都在 style.css 中有定义', missing.length === 0, missing.join(', '));
+
+/* ---------- 1b. localStorage 偏好键：读到的键必须有人按同一个字面量写 ---------- */
+
+// 为什么单列这一条：个人主页的排版按钮（`☰ 列表 / ▦ 卡片 / ≡ 紧凑`）把选择写进
+// `'forum:Prefs.profileLayout'`，而读取端 `Prefs.profileLayout()` 读的是
+// `'forum:profileLayout'` —— 写进去的值永远读不回来，按钮点了等于没点、选择也记不住。
+// 这种错字静态就能查：把 `readPreference('…')` 的字面量全收起来，逐个要求
+// `writePreference('…')` 里出现过同一个字面量。（用常量传键的地方不进这个集合。）
+const literalPrefKeys = (source, fnName) =>
+  [...source.matchAll(new RegExp(`${fnName}\\(\\s*'([^']+)'`, 'g'))].map((match) => match[1]);
+const readPrefKeys = [...new Set(literalPrefKeys(appJs + indexHtml, 'readPreference'))];
+const writtenPrefKeys = new Set(literalPrefKeys(appJs + indexHtml, 'writePreference'));
+const unwrittenPrefKeys = readPrefKeys.filter((key) => !writtenPrefKeys.has(key));
+check(
+  `本地偏好的键读写逐字一致（读到 ${readPrefKeys.length} 个：${readPrefKeys.join(' / ')}）`,
+  readPrefKeys.length >= 2 && unwrittenPrefKeys.length === 0,
+  `读了却没有人按同一个键写：${unwrittenPrefKeys.join(', ') || '无'}`,
+);
 
 // 前端拼的是**字符串 HTML**，Markdown 的强调语法在这里不会被渲染 ——
 // 写进 innerHTML 的 `**加粗**` 会原样显示成两个星号（真机验收前踩到过：`#/blocks`

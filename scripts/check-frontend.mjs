@@ -189,11 +189,24 @@ const root = {
   title: '',
 };
 
+// 假 localStorage 要能**真的存取**：个人主页三种排版（列表 / 卡片 / 紧凑）就靠它记住选择，
+// 恒返回 null 的桩会让「排版切了却没换」这类问题在测试里完全看不见。
+const prefStore = new Map();
+
 globalThis.document = root;
 globalThis.window = {
   document: root,
   location: { hash: '', href: 'http://localhost/', pathname: '/', search: '' },
-  localStorage: { getItem: () => null, setItem() {}, removeItem() {} },
+  localStorage: {
+    getItem: (key) => (prefStore.has(key) ? prefStore.get(key) : null),
+    setItem: (key, value) => {
+      prefStore.set(key, String(value));
+    },
+    removeItem: (key) => {
+      prefStore.delete(key);
+    },
+    clear: () => prefStore.clear(),
+  },
   sessionStorage: { getItem: () => null, setItem() {}, removeItem() {} },
   history: { replaceState() {}, pushState() {} },
   addEventListener: (type) => listeners.set(type, (listeners.get(type) ?? 0) + 1),
@@ -1145,6 +1158,35 @@ console.log(`  ${problems.length ? '❌' : '✅'} 渲染 ${rendered}/${CASES.len
     problems.push(`个人主页（别人视角）渲染失败：${error.message}`);
   }
   if (!outsiderOk) problems.push('个人主页（别人视角）那条检查没跑起来');
+}
+
+/* ---- 个人主页三种排法：`☰ 列表`（默认）/ `▦ 卡片` / `≡ 紧凑` ----
+ *
+ * 为什么单独跑一遍：这三个按钮把选择写进 localStorage，读取端要是读的是另一个键
+ * （events.js 曾经写成 'forum:Prefs.profileLayout'），点按钮就会「看着有反应、
+ * 重渲染又回列表」—— `check-ui-contract` 只查键名字面量，这里查**渲染真的换了**。
+ */
+{
+  let layoutOk = false;
+  try {
+    const userView = await view('user.js');
+    const layouts = [
+      ['list', 'class="post-list"'],
+      ['cards', 'class="post-cards"'],
+      ['compact', 'class="post-compact"'],
+    ];
+    for (const [value, marker] of layouts) {
+      globalThis.localStorage.setItem('forum:profileLayout', value);
+      await userView.viewUser('admin', new Map());
+      const html = String(app.innerHTML);
+      if (!html.includes(marker)) problems.push(`个人主页排版「${value}」没有渲染出 ${marker}`);
+    }
+    globalThis.localStorage.removeItem('forum:profileLayout');
+    layoutOk = true;
+  } catch (error) {
+    problems.push(`个人主页三种排版渲染失败：${error.message}`);
+  }
+  if (!layoutOk) problems.push('个人主页三种排版那条检查没跑起来');
 }
 
 /* 守卫的自检与覆盖哨兵。一个「什么都不报」的检测器跟没有检测器一样糟：
