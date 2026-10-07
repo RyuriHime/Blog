@@ -23,6 +23,18 @@
 .start-title {
   font-size: 20px;
   margin: 0 0 6px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* 首页大标题前面那个标，和顶栏 .brand-mark 同一张图（见 public/index.html）。
+   一行标题里的行内 SVG 默认会跟着 baseline 往下沉，靠 flex 对齐最稳。 */
+.start-mark {
+  width: 28px;
+  height: 28px;
+  color: var(--accent);
+  flex: none;
 }
 
 /* 左公告 / 右三块，各占一半；窄屏见 70-responsive.css 的 ≤900px 那档 */

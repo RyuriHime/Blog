@@ -38,8 +38,14 @@
   text-decoration: none;
 }
 
+/* 标是内联 SVG（见 public/index.html 的 .brand）。
+   用 currentColor 上色 + 这里指定强调色，绿/紫/暖黄那些主题才不用各配一张图。
+   flex: none 是必需的：.brand 是 flex 容器，不加的话窄屏会被压扁。 */
 .brand-mark {
-  font-size: 21px;
+  width: 26px;
+  height: 26px;
+  color: var(--accent);
+  flex: none;
 }
 
 .search {

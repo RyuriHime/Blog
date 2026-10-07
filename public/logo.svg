@@ -1,0 +1,36 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 120" width="120" height="120" role="img" aria-label="格社">
+  <!-- 格社的标：一个圆角方块，中间掏出一个由格子拼成的 G。
+       方块保证它在 16px 的标签页上永远是个规整的轮廓，掏空的 G 负责说出名字。 -->
+  <defs>
+    <linearGradient id="brand-fill" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#5b8cff" />
+      <stop offset="1" stop-color="#7c5bff" />
+    </linearGradient>
+    <mask id="brand-g">
+      <rect width="120" height="120" fill="#ffffff" />
+      <g fill="#000000">
+        <rect x="36" y="18" width="12" height="12" />
+        <rect x="48" y="18" width="12" height="12" />
+        <rect x="60" y="18" width="12" height="12" />
+        <rect x="72" y="18" width="12" height="12" />
+        <rect x="84" y="18" width="12" height="12" />
+        <rect x="24" y="30" width="12" height="12" />
+        <rect x="24" y="42" width="12" height="12" />
+        <rect x="24" y="54" width="12" height="12" />
+        <rect x="60" y="54" width="12" height="12" />
+        <rect x="72" y="54" width="12" height="12" />
+        <rect x="84" y="54" width="12" height="12" />
+        <rect x="24" y="66" width="12" height="12" />
+        <rect x="84" y="66" width="12" height="12" />
+        <rect x="24" y="78" width="12" height="12" />
+        <rect x="84" y="78" width="12" height="12" />
+        <rect x="36" y="90" width="12" height="12" />
+        <rect x="48" y="90" width="12" height="12" />
+        <rect x="60" y="90" width="12" height="12" />
+        <rect x="72" y="90" width="12" height="12" />
+        <rect x="84" y="90" width="12" height="12" />
+      </g>
+    </mask>
+  </defs>
+  <rect x="6" y="6" width="108" height="108" rx="26" fill="url(#brand-fill)" mask="url(#brand-g)" />
+</svg>

@@ -112,7 +112,7 @@ async function viewStart() {
   ui.app.innerHTML = `
     <div class="start-page">
       <div class="page-head">
-        <h1 class="start-title">🗣️ 格社</h1>
+        <h1 class="start-title"><svg class="start-mark" viewBox="0 0 120 120" role="img" aria-label="格社" focusable="false"><mask id="start-brand-g"><rect width="120" height="120" fill="#fff" /><g fill="#000"><rect x="36" y="18" width="12" height="12" /><rect x="48" y="18" width="12" height="12" /><rect x="60" y="18" width="12" height="12" /><rect x="72" y="18" width="12" height="12" /><rect x="84" y="18" width="12" height="12" /><rect x="24" y="30" width="12" height="12" /><rect x="24" y="42" width="12" height="12" /><rect x="24" y="54" width="12" height="12" /><rect x="60" y="54" width="12" height="12" /><rect x="72" y="54" width="12" height="12" /><rect x="84" y="54" width="12" height="12" /><rect x="24" y="66" width="12" height="12" /><rect x="84" y="66" width="12" height="12" /><rect x="24" y="78" width="12" height="12" /><rect x="84" y="78" width="12" height="12" /><rect x="36" y="90" width="12" height="12" /><rect x="48" y="90" width="12" height="12" /><rect x="60" y="90" width="12" height="12" /><rect x="72" y="90" width="12" height="12" /><rect x="84" y="90" width="12" height="12" /></g></mask><rect x="6" y="6" width="108" height="108" rx="26" fill="currentColor" mask="url(#start-brand-g)" /></svg>格社</h1>
         <p class="hint">左边是站务公告，右边三块分别是动态、积木广场和团队 —— 点哪块进哪块。</p>
       </div>
       <div class="start-columns">

@@ -8,10 +8,11 @@
     <!-- 样式入口只有一个：/style.css 里是 20 条 @import，按文件名前缀顺序拼回原来的级联顺序。
          静态分发从磁盘按路径读，所以 public/css/ 下的分片不需要在这里单独列出。 -->
     <link rel="stylesheet" href="/style.css" />
-    <link
-      rel="icon"
-      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%F0%9F%97%A3%EF%B8%8F%3C/text%3E%3C/svg%3E"
-    />
+    <!-- 标就是 public/logo.svg 那个：圆角方块里掏出一个格子拼的 G。
+         这里内联一份是为了用 currentColor 跟着主题走（绿/紫/暖黄那些主题各有各的强调色，
+         写死蓝紫会打架）；标签页图标是浏览器自己的 chrome，用不了 currentColor，
+         所以那边引用 /logo.svg，颜色写死。两处形状必须一致，改一个记得改另一个。 -->
+    <link rel="icon" type="image/svg+xml" href="/logo.svg" />
     <script>
       // 首屏前应用背景主题，避免刷新时闪一下默认配色。
       // 取值与 public/core/preferences.js 的 THEME_STORAGE_KEY 保持一致。
@@ -35,7 +36,34 @@
     <header class="topbar">
       <div class="topbar-inner">
         <a class="brand" href="#/">
-          <span class="brand-mark">🗣️</span>
+          <svg class="brand-mark" viewBox="0 0 120 120" role="img" aria-label="格社" focusable="false">
+            <mask id="brand-g">
+              <rect width="120" height="120" fill="#fff" />
+              <g fill="#000">
+                <rect x="36" y="18" width="12" height="12" />
+                <rect x="48" y="18" width="12" height="12" />
+                <rect x="60" y="18" width="12" height="12" />
+                <rect x="72" y="18" width="12" height="12" />
+                <rect x="84" y="18" width="12" height="12" />
+                <rect x="24" y="30" width="12" height="12" />
+                <rect x="24" y="42" width="12" height="12" />
+                <rect x="24" y="54" width="12" height="12" />
+                <rect x="60" y="54" width="12" height="12" />
+                <rect x="72" y="54" width="12" height="12" />
+                <rect x="84" y="54" width="12" height="12" />
+                <rect x="24" y="66" width="12" height="12" />
+                <rect x="84" y="66" width="12" height="12" />
+                <rect x="24" y="78" width="12" height="12" />
+                <rect x="84" y="78" width="12" height="12" />
+                <rect x="36" y="90" width="12" height="12" />
+                <rect x="48" y="90" width="12" height="12" />
+                <rect x="60" y="90" width="12" height="12" />
+                <rect x="72" y="90" width="12" height="12" />
+                <rect x="84" y="90" width="12" height="12" />
+              </g>
+            </mask>
+            <rect x="6" y="6" width="108" height="108" rx="26" fill="currentColor" mask="url(#brand-g)" />
+          </svg>
           <span class="brand-text">格社</span>
         </a>
 
