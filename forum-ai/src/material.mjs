@@ -67,3 +67,55 @@ export function buildMaterial(
 
 /** buildMaterial 的别名，便于从论坛代码平滑迁移。 */
 export const buildContext = buildMaterial;
+
+/**
+ * 一行式文档目录：只留「编号 + 标题 + 归类信息」，不带正文。
+ *
+ * 全库整理（主题地图）靠的是「有哪些文档、各自属于什么方向」，
+ * 不需要正文；因此大库可以改用目录，让同样的字符预算覆盖更多文档。
+ * @param {Array<object>} docs
+ * @param {{ withSummary?: boolean, summaryChars?: number }} [options]
+ * @returns {string[]} 与 docs 一一对应的行
+ */
+export function buildIndexLines(docs, { withSummary = false, summaryChars = 60 } = {}) {
+  return (docs ?? []).map((doc) => {
+    const meta = [
+      doc.category ? `分类=${clampText(doc.category, 20)}` : '',
+      doc.difficulty ? `难度=${clampText(doc.difficulty, 6)}` : '',
+      doc.board ? `板块=${clampText(doc.board, 20)}` : '',
+      doc.replyCount ? `回复=${Number(doc.replyCount) || 0}` : '',
+      withSummary && doc.summary ? `摘要=${clampText(doc.summary, summaryChars)}` : '',
+    ]
+      .filter(Boolean)
+      .join(' ');
+    const head = `[#${doc.id}] 《${clampText(doc.title, 80)}》`;
+    return meta ? `${head} ${meta}` : head;
+  });
+}
+
+/**
+ * 按字符预算把一组条目切成若干块（每块至少一条，超长条目自成一块）。
+ * @template T
+ * @param {T[]} items
+ * @param {number} charLimit 每块预算
+ * @param {(item: T, index: number) => string} [sizeOf] 取条目文本（默认把条目当字符串）
+ * @returns {T[][]}
+ */
+export function splitByBudget(items, charLimit, sizeOf = (item) => String(item ?? '')) {
+  const budget = Math.max(1, Number(charLimit) || 1);
+  const chunks = [];
+  let current = [];
+  let used = 0;
+  for (const [index, item] of (items ?? []).entries()) {
+    const size = sizeOf(item, index).length + 1;
+    if (current.length && used + size > budget) {
+      chunks.push(current);
+      current = [];
+      used = 0;
+    }
+    current.push(item);
+    used += size;
+  }
+  if (current.length) chunks.push(current);
+  return chunks;
+}

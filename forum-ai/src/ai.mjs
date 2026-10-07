@@ -13,32 +13,46 @@
  *   AI_MODEL      默认 deepseek-chat
  *   AI_TIMEOUT_MS 默认 60000
  *   AI_MAX_TOKENS 默认 2000
+ *   AI_RETRIES    默认 2：上游「200 但没内容」「5xx」「连不上」「超时」时重试几次
+ *   AI_RETRY_DELAY_MS 默认 600：重试间隔（第 n 次重试等 n × 该值）
  */
 import {
   ANALYZE_SYSTEM,
   SITE_SYSTEM,
+  SITE_PART_SYSTEM,
+  SITE_MERGE_SYSTEM,
   ASK_SYSTEM,
   NOT_CONFIGURED_MESSAGE,
   renderAnalyzeUser,
   renderSiteUser,
+  renderSitePartUser,
+  renderSiteMergeUser,
   renderAskUser,
   renderSiblingList,
   renderWikiList,
 } from './prompts.mjs';
 import { extractJson, normalizeReview, normalizeSiteReport, normalizeAnswer } from './parse.mjs';
-import { buildMaterial, clampText } from './material.mjs';
+import { buildIndexLines, buildMaterial, clampText, splitByBudget } from './material.mjs';
 
 export { extractJson } from './parse.mjs';
-export { buildMaterial, buildContext, clampText } from './material.mjs';
+export { buildIndexLines, buildMaterial, buildContext, clampText, splitByBudget } from './material.mjs';
 export {
   ANALYZE_SYSTEM,
   SITE_SYSTEM,
+  SITE_PART_SYSTEM,
+  SITE_MERGE_SYSTEM,
   ASK_SYSTEM,
   NOT_CONFIGURED_MESSAGE,
 } from './prompts.mjs';
 
 const DEFAULT_BASE_URL = 'https://api.deepseek.com/v1';
 const DEFAULT_MODEL = 'deepseek-chat';
+const DEFAULT_RETRIES = 2;
+const DEFAULT_RETRY_DELAY_MS = 600;
+/** 单次「全库整理」给模型的材料上限（字符）；超了就改走目录 / 分块。 */
+const CORPUS_CHAR_LIMIT = 24000;
+/** 分块整理时每块的字符上限。 */
+const CORPUS_CHUNK_CHARS = 12000;
 
 /** 统一的错误类型：带稳定的 code，便于宿主映射成自己的 HTTP 状态码。 */
 export class AiError extends Error {
@@ -73,18 +87,29 @@ export function aiConfig(env = process.env) {
     model: env.AI_MODEL || DEFAULT_MODEL,
     timeoutMs: Number(env.AI_TIMEOUT_MS || 60000),
     maxTokens: Number(env.AI_MAX_TOKENS || 2000),
+    retries: Math.max(0, Number(env.AI_RETRIES ?? DEFAULT_RETRIES) || 0),
+    retryDelayMs: Math.max(0, Number(env.AI_RETRY_DELAY_MS ?? DEFAULT_RETRY_DELAY_MS) || 0),
     configured: Boolean(apiKey),
   };
 }
 
 /** 对外暴露的状态：永远不回传密钥本身。 */
 export function aiStatus(env = process.env) {
-  const { configured, model, baseUrl } = aiConfig(env);
+  const { configured, model, baseUrl, retries } = aiConfig(env);
   return {
     configured,
     model: configured ? model : null,
     baseUrl: configured ? baseUrl : null,
-    envKeys: ['AI_BASE_URL', 'AI_API_KEY', 'AI_MODEL', 'AI_TIMEOUT_MS', 'AI_MAX_TOKENS'],
+    retries,
+    envKeys: [
+      'AI_BASE_URL',
+      'AI_API_KEY',
+      'AI_MODEL',
+      'AI_TIMEOUT_MS',
+      'AI_MAX_TOKENS',
+      'AI_RETRIES',
+      'AI_RETRY_DELAY_MS',
+    ],
   };
 }
 
@@ -95,13 +120,13 @@ function ensureConfigured(env) {
 }
 
 /**
- * 调用一次 OpenAI 兼容的 chat completion。
+ * 调用一次 OpenAI 兼容的 chat completion（不带重试，重试逻辑在 chat 里）。
  * @param {Array<{role:string,content:string}>} messages
  * @param {{ temperature?: number, maxTokens?: number, json?: boolean, fetchImpl?: Function,
  *           signal?: AbortSignal, env?: object }} [options]
  * @returns {Promise<{ text:string, model:string, usage:{prompt:number,completion:number}, raw:any }>}
  */
-export async function chat(messages, options = {}) {
+async function chatOnce(messages, options = {}) {
   const { temperature = 0.2, maxTokens, json = true, fetchImpl = fetch, signal, env = process.env } = options;
   const config = ensureConfigured(env);
   const controller = new AbortController();
@@ -161,7 +186,15 @@ export async function chat(messages, options = {}) {
 
   const content = payload?.choices?.[0]?.message?.content;
   if (typeof content !== 'string' || !content.trim()) {
-    throw new AiError('ai_empty_response', 'AI 接口没有返回内容');
+    // 上游偶尔会返回 200 但内容为空（大提示词更容易触发）；把现场带上，便于排查与重试
+    throw new AiError('ai_empty_response', 'AI 接口没有返回内容', {
+      finishReason: String(payload?.choices?.[0]?.finish_reason ?? ''),
+      usage: {
+        prompt: Number(payload?.usage?.prompt_tokens ?? 0),
+        completion: Number(payload?.usage?.completion_tokens ?? 0),
+      },
+      rawHead: raw.replace(/\s+/g, ' ').slice(0, 200),
+    });
   }
 
   return {
@@ -173,6 +206,74 @@ export async function chat(messages, options = {}) {
     },
     raw: payload,
   };
+}
+
+/** 这些错误重试有意义：上游抖动，而不是请求本身有问题。 */
+function isTransient(error) {
+  if (!(error instanceof AiError)) return false;
+  if (error.code === 'ai_empty_response' || error.code === 'ai_unreachable' || error.code === 'ai_timeout') return true;
+  // 429（限流）是「等一会儿再来」，不是请求错了
+  if (error.code === 'ai_rate_limited') return true;
+  if (error.code === 'ai_upstream_error') {
+    const status = Number(error.details?.status ?? 0);
+    return status === 408 || status === 409 || status === 429 || status >= 500;
+  }
+  return false;
+}
+
+const sleep = (ms) => (ms > 0 ? new Promise((resolve) => setTimeout(resolve, ms)) : Promise.resolve());
+
+/**
+ * 调用模型，并对**上游抖动**自动重试。
+ *
+ * 触发重试的情况：200 但内容为空、连接失败、超时、429/5xx。
+ * 次数由 AI_RETRIES 控制（默认 2 次重试，即最多 3 次请求），间隔 AI_RETRY_DELAY_MS。
+ *
+ * @param {Array<{role:string,content:string}>} messages
+ * @param {{ attempts?: number, onRetry?: Function }} [options] 其余选项透传给单次请求
+ */
+export async function chat(messages, options = {}) {
+  const { attempts, onRetry, env = process.env, ...rest } = options;
+  const { retries, retryDelayMs } = aiConfig(env);
+  const maxAttempts = Math.max(1, Number(attempts ?? retries + 1) || 1);
+  let lastError = null;
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    try {
+      return await chatOnce(messages, { ...rest, env });
+    } catch (error) {
+      lastError = error;
+      if (!isTransient(error) || attempt === maxAttempts) break;
+      if (typeof onRetry === 'function') onRetry({ attempt, maxAttempts, error });
+      await sleep(retryDelayMs * attempt);
+    }
+  }
+  throw lastError;
+}
+
+/**
+ * 调一次模型并要求它给出可解析的 JSON。
+ *
+ * 模型偶尔会返回半截 JSON（尤其是长输出），这种也重试：jsonAttempts 默认 2 次。
+ * @returns {Promise<{ parsed: object, text: string, model: string, usage: object }>}
+ */
+async function chatJson(messages, options = {}) {
+  const {
+    badJsonMessage = 'AI 返回的结果不是合法 JSON',
+    jsonAttempts = 2,
+    onRetry,
+    ...chatOptions
+  } = options;
+  let lastError = null;
+
+  for (let attempt = 1; attempt <= Math.max(1, jsonAttempts); attempt += 1) {
+    const { text, model, usage } = await chat(messages, chatOptions);
+    const parsed = extractJson(text);
+    if (parsed && typeof parsed === 'object') return { parsed, text, model, usage };
+    lastError = new AiError('ai_bad_json', badJsonMessage, { rawOutput: rawOutputHead(text) });
+    if (attempt < jsonAttempts && typeof onRetry === 'function') onRetry({ attempt, lastError });
+  }
+  throw lastError;
 }
 
 /**
@@ -194,7 +295,7 @@ export async function chat(messages, options = {}) {
 export async function reviewDocument(doc, siblings = [], options = {}) {
   const { charLimit = 12000, chatOptions = {}, wikiPages = [] } = options;
   const material = buildMaterial([doc], { charLimit, withReplies: true, withContent: true });
-  const { text, model, usage } = await chat(
+  const { parsed, model, usage } = await chatJson(
     [
       { role: 'system', content: ANALYZE_SYSTEM },
       {
@@ -206,13 +307,8 @@ export async function reviewDocument(doc, siblings = [], options = {}) {
         }),
       },
     ],
-    { temperature: 0.2, ...chatOptions },
+    { temperature: 0.2, badJsonMessage: 'AI 返回的解读结果不是合法 JSON', ...chatOptions },
   );
-
-  const parsed = extractJson(text);
-  if (!parsed || typeof parsed !== 'object') {
-    throw new AiError('ai_bad_json', 'AI 返回的解读结果不是合法 JSON', { rawOutput: rawOutputHead(text) });
-  }
 
   const knownIds = new Set([doc.id, ...siblings.map((item) => item.id)].map(String));
   const knownWikiIds = new Set(wikiPages.map((item) => item.id).map(String));
@@ -222,26 +318,141 @@ export async function reviewDocument(doc, siblings = [], options = {}) {
 
 /**
  * 全库整理：主题分组 + 阅读路线。
+ *
+ * 站点一大，「把全库正文塞进一次请求」就会超出上游能稳定处理的长度
+ * （表现为 200 但没有内容）。所以这里按三级降级：
+ *   1) 材料（含正文）在 charLimit 内 → 一次问完（小站，保持原行为）；
+ *   2) 改用**目录**（编号+标题+归类，不带正文）仍超预算 → 只发目录；
+ *   3) 目录也超预算 → 按 chunkChars 分块整理，再把各块的分组草案归并成最终地图。
+ *
  * @param {Array<object>} docs
- * @param {{ charLimit?: number, chatOptions?: object }} [options]
+ * @param {{ charLimit?: number, chunkChars?: number, chatOptions?: object, onProgress?: Function }} [options]
+ * @returns {Promise<{ report: object, model: string, usage: object, mode: string, included: number,
+ *                     truncated: boolean, chunks?: number, failures?: Array<object> }>}
  */
 export async function reviewCorpus(docs, options = {}) {
-  const { charLimit = 60000, chatOptions = {} } = options;
-  const material = buildMaterial(docs, { charLimit, withReplies: true, withContent: true });
-  const { text, model, usage } = await chat(
-    [
-      { role: 'system', content: SITE_SYSTEM },
-      { role: 'user', content: renderSiteUser({ count: docs.length, material: material.text }) },
-    ],
-    { temperature: 0.2, maxTokens: 3000, ...chatOptions },
-  );
+  const {
+    charLimit = CORPUS_CHAR_LIMIT,
+    chunkChars = CORPUS_CHUNK_CHARS,
+    chatOptions = {},
+    onProgress,
+  } = options;
+  const list = Array.isArray(docs) ? docs : [];
+  const badJsonMessage = 'AI 返回的整理结果不是合法 JSON';
 
-  const parsed = extractJson(text);
-  if (!parsed || typeof parsed !== 'object') {
-    throw new AiError('ai_bad_json', 'AI 返回的整理结果不是合法 JSON', { rawOutput: rawOutputHead(text) });
+  // 1) 小站：材料含正文也塞得下
+  const full = buildMaterial(list, { charLimit, withReplies: true, withContent: true });
+  if (!full.truncated) {
+    const { parsed, model, usage } = await chatJson(
+      [
+        { role: 'system', content: SITE_SYSTEM },
+        { role: 'user', content: renderSiteUser({ count: list.length, material: full.text }) },
+      ],
+      { temperature: 0.2, maxTokens: 3000, badJsonMessage, ...chatOptions },
+    );
+    return { report: normalizeSiteReport(parsed, list), model, usage, mode: 'material', included: full.included, truncated: false };
   }
-  const report = normalizeSiteReport(parsed, docs);
-  return { report, model, usage, truncated: material.truncated };
+
+  // 2) 大站：只发目录（全库整理要的是「有哪些文档、各属于什么方向」）
+  const lines = buildIndexLines(list);
+  const entries = list.map((doc, index) => ({ doc, line: lines[index] }));
+  const indexText = lines.join('\n');
+  if (indexText.length <= charLimit) {
+    const { parsed, model, usage } = await chatJson(
+      [
+        { role: 'system', content: SITE_SYSTEM },
+        { role: 'user', content: renderSiteUser({ count: list.length, material: indexText }) },
+      ],
+      { temperature: 0.2, maxTokens: 3000, badJsonMessage, ...chatOptions },
+    );
+    return { report: normalizeSiteReport(parsed, list), model, usage, mode: 'index', included: list.length, truncated: false };
+  }
+
+  // 3) 目录也塞不下：分块整理 → 归并
+  const chunks = splitByBudget(entries, chunkChars, (entry) => entry.line);
+  const parts = [];
+  const failures = [];
+  let prompt = 0;
+  let completion = 0;
+  let model = '';
+  let lastError = null;
+
+  for (const [index, chunk] of chunks.entries()) {
+    const chunkDocs = chunk.map((entry) => entry.doc);
+    try {
+      const { parsed, model: chunkModel, usage } = await chatJson(
+        [
+          { role: 'system', content: SITE_PART_SYSTEM },
+          {
+            role: 'user',
+            content: renderSitePartUser({
+              index: index + 1,
+              total: chunks.length,
+              count: chunk.length,
+              material: chunk.map((entry) => entry.line).join('\n'),
+            }),
+          },
+        ],
+        { temperature: 0.2, maxTokens: 1500, badJsonMessage: 'AI 返回的分组草案不是合法 JSON', ...chatOptions },
+      );
+      prompt += usage.prompt;
+      completion += usage.completion;
+      model = chunkModel || model;
+      const part = normalizeSiteReport(parsed, chunkDocs);
+      parts.push({ index: index + 1, count: chunk.length, summary: part.summary, topics: part.topics });
+    } catch (error) {
+      lastError = error;
+      failures.push({ part: index + 1, count: chunk.length, error: String(error?.message ?? error).slice(0, 120) });
+    }
+    if (typeof onProgress === 'function') onProgress({ index: index + 1, total: chunks.length, failures: failures.length });
+  }
+
+  if (!parts.length) throw lastError ?? new AiError('ai_empty_response', 'AI 接口没有返回内容');
+
+  const digest = parts
+    .map((part) =>
+      [`【第 ${part.index} 部分】${part.count} 篇${part.summary ? `：${part.summary}` : ''}`]
+        .concat(
+          part.topics.map(
+            (topic) =>
+              `- ${topic.name}（${topic.difficulty}）：${topic.summary} 编号：${topic.documentIds.map((id) => `[#${id}]`).join(' ')}`,
+          ),
+        )
+        .join('\n'),
+    )
+    .join('\n\n');
+
+  const merged = await chatJson(
+    [
+      { role: 'system', content: SITE_MERGE_SYSTEM },
+      { role: 'user', content: renderSiteMergeUser({ count: list.length, parts: digest }) },
+    ],
+    { temperature: 0.2, maxTokens: 3000, badJsonMessage, ...chatOptions },
+  );
+  prompt += merged.usage.prompt;
+  completion += merged.usage.completion;
+  model = merged.model || model;
+
+  const report = normalizeSiteReport(merged.parsed, list);
+  if (!report.topics.length) {
+    // 归并没给出可用分组时，退回草案本身 —— 页面上有分组，总比存一份空地图强
+    report.topics = parts
+      .flatMap((part) => part.topics)
+      .map((topic, index) => ({ ...topic, order: index + 1 }))
+      .slice(0, 6);
+    report.dropped = { ...report.dropped, topics: 0 };
+  }
+
+  return {
+    report,
+    model,
+    usage: { prompt, completion },
+    mode: 'chunked',
+    included: list.length,
+    truncated: false,
+    chunks: chunks.length,
+    failures,
+  };
 }
 
 /**
@@ -253,22 +464,18 @@ export async function reviewCorpus(docs, options = {}) {
 export async function answerQuestion(question, docs, options = {}) {
   const { scope = 'corpus', charLimit, chatOptions = {} } = options;
   const material = buildMaterial(docs, {
-    charLimit: charLimit ?? (scope === 'document' ? 16000 : 48000),
+    charLimit: charLimit ?? (scope === 'document' ? 16000 : 24000),
     withReplies: true,
     withContent: true,
   });
-  const { text, model, usage } = await chat(
+  const { parsed, model, usage } = await chatJson(
     [
       { role: 'system', content: ASK_SYSTEM },
       { role: 'user', content: renderAskUser({ scope, material: material.text, question: clampText(question, 500) }) },
     ],
-    { temperature: 0.3, maxTokens: 1200, ...chatOptions },
+    { temperature: 0.3, maxTokens: 1200, badJsonMessage: 'AI 返回的问答结果不是合法 JSON', ...chatOptions },
   );
 
-  const parsed = extractJson(text);
-  if (!parsed || typeof parsed !== 'object') {
-    throw new AiError('ai_bad_json', 'AI 返回的问答结果不是合法 JSON', { rawOutput: rawOutputHead(text) });
-  }
   const answer = normalizeAnswer(parsed, docs);
   return { answer, model, usage, truncated: material.truncated, included: material.included };
 }
@@ -315,7 +522,7 @@ export function rankDocuments(question, docs) {
  * @param {Array<object>} docs
  * @param {{ charBudget?: number, maxDocuments?: number, forceAll?: boolean }} [options]
  */
-export function selectForQuestion(question, docs, { charBudget = 40000, maxDocuments = 14, forceAll = false } = {}) {
+export function selectForQuestion(question, docs, { charBudget = 24000, maxDocuments = 14, forceAll = false } = {}) {
   const ranked = rankDocuments(question, docs);
   const picked = [];
   let used = 0;

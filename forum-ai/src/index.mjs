@@ -30,12 +30,16 @@ export {
 export {
   ANALYZE_SYSTEM,
   SITE_SYSTEM,
+  SITE_PART_SYSTEM,
+  SITE_MERGE_SYSTEM,
   ASK_SYSTEM,
   NOT_CONFIGURED_MESSAGE,
   CATEGORY_HINT,
   DIFFICULTIES,
   renderAnalyzeUser,
   renderSiteUser,
+  renderSitePartUser,
+  renderSiteMergeUser,
   renderAskUser,
   renderSiblingList,
   renderWikiList,
@@ -48,7 +52,7 @@ export {
   normalizeAnswer,
 } from './parse.mjs';
 
-export { buildMaterial, buildContext, clampText } from './material.mjs';
+export { buildIndexLines, buildMaterial, buildContext, clampText, splitByBudget } from './material.mjs';
 
 export { createAiStore } from './store-sqlite.mjs';
 
