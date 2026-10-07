@@ -788,6 +788,7 @@ function feedRepostHtml(item) {
   return `<form class="feed-repost-form" data-feed-repost-form data-id="${item.id}">
     <textarea class="input" name="comment" rows="2" maxlength="${MAX_REPOST_COMMENT}"
       placeholder="说点什么…（可以留空，直接转发）"></textarea>
+    <div class="hint">转发出去就是一条新动态，会出现在你的动态流（「全部」/「我的」）里；原动态底下会多一个转发数。</div>
     <div class="feed-repost-actions">
       <button class="btn btn-sm btn-primary" type="submit">转发</button>
     </div>
@@ -855,7 +856,18 @@ async function submitRepost(form) {
   const comment = String(textarea?.value ?? '').trim();
   await withButtonBusy(form.querySelector('button[type="submit"]'), async () => {
     const result = await api(`/api/feed/${id}/repost`, { method: 'POST', body: { comment } });
-    toast(result.updated ? '转发语已更新' : '转发成功，已经出现在你的动态流里 🔁', 'success');
+    // 「我关注的」那一栏按服务端规则不收自己转发的（我不关注我自己），`prependRepost`
+    // 在那里故意不插卡片 —— 那就得把「去哪儿看」说清楚，否则用户看到一句
+    // 「转发成功」而页面上什么都没变，只会以为转发失败了。
+    const inserted = feedFilter === 'all' || feedFilter === 'mine';
+    toast(
+      result.updated
+        ? '转发语已更新'
+        : inserted
+          ? '转发成功：它就是动态流里最上面那条 🔁'
+          : '转发成功：切到「全部」就能看到它 🔁',
+      'success',
+    );
     item.reposted = true;
     item.repostCount = result.repostCount;
     paintRepostState(item);

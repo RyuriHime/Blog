@@ -122,7 +122,7 @@ function repostSectionHtml(post, reposters, opts = {}) {
            <div class="field">
              <textarea name="comment" maxlength="300" rows="2"
                        placeholder="${mine ? '修改你的转发语…' : '说点什么再转发（可留空直接转发）'}">${esc(mine?.comment ?? '')}</textarea>
-             <span class="hint">转发会出现在你的主页「🔁 转发」里，并通知作者；同一篇只能转发一次，可随时撤销。</span>
+             <span class="hint">转发会出现在你的主页「🔁 转发」分类里（点主页那颗「🔁 转发」标签就能看到），并通知作者；同一篇只能转发一次，可随时撤销。</span>
            </div>
            <div class="form-error" data-error hidden></div>
            <div class="form-actions">

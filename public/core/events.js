@@ -629,7 +629,7 @@ document.addEventListener('submit', async (event) => {
       const result = await withButtonBusy(submitButton, () =>
         api(`/api/posts/${repostPostId}/repost`, { method: 'POST', body: { comment: data.comment ?? '' } }),
       );
-      toast(result.updated ? '转发语已更新' : '转发成功，已出现在你的主页 🔁', 'success');
+      toast(result.updated ? '转发语已更新' : '转发成功：你主页的「🔁 转发」分类里能看到它', 'success');
       await Post.viewPost(repostPostId);
       return;
     }
