@@ -24,6 +24,7 @@ export {
   answerQuestion,
   rankDocuments,
   selectForQuestion,
+  rawOutputHead,
 } from './ai.mjs';
 
 export {
@@ -37,6 +38,7 @@ export {
   renderSiteUser,
   renderAskUser,
   renderSiblingList,
+  renderWikiList,
 } from './prompts.mjs';
 
 export {
@@ -53,6 +55,7 @@ export { createAiStore } from './store-sqlite.mjs';
 export {
   mountForumAi,
   createForumDocumentSource,
+  createWikiPageSource,
   readJsonBody,
   forumAiStatus,
 } from './mount.mjs';

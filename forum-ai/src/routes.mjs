@@ -37,6 +37,13 @@ export const fail = (status, code, message) => ({ status, body: { ok: false, err
 
 const errorText = (error) => String(error?.message ?? error).slice(0, 300);
 
+/**
+ * 失败时模型原始输出的开头一段（`ai.mjs` 在 `ai_bad_json` 上挂在 `details.rawOutput`）。
+ * 存进缓存的 `errorDetail` 列：下次再出现「不是合法 JSON」，能直接看出是截断还是格式错，
+ * 不用再去猜（失败记录里只有一句错误文案是查不出原因的）。
+ */
+const errorDetailText = (error) => String(error?.details?.rawOutput ?? '').slice(0, 600);
+
 /** 把任意异常收敛成统一响应。 */
 export function toResponse(error) {
   if (error instanceof AiError) {
@@ -213,7 +220,10 @@ export function createAiHandlers(deps = {}) {
     } catch (error) {
       // 「没配密钥」是环境问题，不该污染这篇文档的缓存
       if (!(error instanceof AiError && error.code === 'ai_not_configured')) {
-        store.saveReview({ documentId: id, status: 'failed', error: errorText(error) }, { contentHash });
+        store.saveReview(
+          { documentId: id, status: 'failed', error: errorText(error), errorDetail: errorDetailText(error) },
+          { contentHash },
+        );
       }
       throw error;
     }
@@ -287,7 +297,7 @@ export function createAiHandlers(deps = {}) {
           const done = await runReview(documentId);
           results.push({ documentId, title: done.title, status: 'done', category: done.review.category });
         } catch (error) {
-          results.push({ documentId, status: 'failed', error: errorText(error) });
+          results.push({ documentId, status: 'failed', error: errorText(error), errorDetail: errorDetailText(error) });
           // 上游整体故障（超时/鉴权/不可达）时没必要把剩下的都试一遍
           if (error instanceof AiError && error.code !== 'ai_bad_json') {
             const response = toResponse(error);

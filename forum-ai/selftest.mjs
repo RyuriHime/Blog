@@ -28,6 +28,7 @@ import {
   createAiHandlers,
   createAiRouter,
   toResponse,
+  rawOutputHead,
 } from './src/index.mjs';
 
 let passed = 0;
@@ -278,6 +279,15 @@ try {
     badJson = error;
   }
   check('模型返回非 JSON → ai_bad_json', badJson?.code === 'ai_bad_json', badJson?.code);
+  check('失败时把模型原文挂进 details.rawOutput', badJson?.details?.rawOutput === '抱歉，我无法回答。', badJson?.details?.rawOutput);
+  check('rawOutputHead 短的照原样、折成一行', rawOutputHead('a\n\n b ') === 'a b', JSON.stringify(rawOutputHead('a\n\n b ')));
+  const rawLong = rawOutputHead('x'.repeat(900));
+  check(
+    'rawOutputHead 长的截到 500 字并标全文长度',
+    rawLong.startsWith('x'.repeat(500)) && rawLong.endsWith('（全文 900 字）') && rawLong.length < 540,
+    String(rawLong.length),
+  );
+  check('rawOutputHead 容得下 null', rawOutputHead(null) === '');
   mock.mode = 'fenced';
   const fenced = await reviewDocument(DOCS[0], [], { chatOptions: { env } });
   check('```json 包裹也能解析', fenced.review.category === '前端', fenced.review.category);
@@ -315,10 +325,19 @@ try {
   check('已解读的不在待整理里', store.pendingDocuments({ limit: 10 }).includes('1') === false);
   check('统计已解读数量', store.reviewStats().analyzed === 1 && store.reviewStats().failed === 0);
 
+  const failedReview = store.saveReview(
+    { documentId: '2', status: 'failed', error: 'AI 返回的解读结果不是合法 JSON', errorDetail: '{"category": "数据' },
+    { contentHash: hashBefore },
+  );
+  check('失败也把模型原文存进 errorDetail', failedReview.errorDetail === '{"category": "数据' && store.reviewOf('2').errorDetail === '{"category": "数据', JSON.stringify(failedReview));
+  check('失败的篇目排在从未解读的前面', store.pendingDocuments({ limit: 2 }).join(',') === '2,3', JSON.stringify(store.pendingDocuments({ limit: 10 })));
+  check('统计里失败与已解读分开记', store.reviewStats().analyzed === 1 && store.reviewStats().failed === 1);
+
   source = [...DOCS, { id: '4', title: '新文档', content: '新增内容' }];
   store.syncCorpus();
   check('内容变化后指纹改变', store.corpusHash() !== hashBefore);
   check('内容变化后旧解读算过期', store.pendingDocuments({ limit: 10 }).includes('1') === true);
+  check('待整理顺序：失败 → 从未解读 → 内容已变', store.pendingDocuments({ limit: 10 }).join(',') === '2,3,4,1', JSON.stringify(store.pendingDocuments({ limit: 10 })));
   check('reportIsStale 对空报告返回 true', store.reportIsStale() === true);
 
   const savedReport = store.saveReport(
@@ -332,7 +351,7 @@ try {
   check('hash 一致时报告不过期', store.reportIsStale() === false);
 
   const cleared = store.clearAll();
-  check('clearAll 清掉解读与报告', cleared.reviews === 1 && cleared.reports === 2, JSON.stringify(cleared));
+  check('clearAll 清掉解读与报告', cleared.reviews === 2 && cleared.reports === 2, JSON.stringify(cleared));
   check('清理后索引还在', store.corpusStats().documents === 4);
 
   /* ---------------- HTTP 处理器 ---------------- */
@@ -406,6 +425,14 @@ try {
 
   const cleared2 = await call(handlers.clearCache, { user: { id: 'u1', role: 'admin' } });
   check('清空缓存 → 200', cleared2.status === 200 && cleared2.body.data.cleared === true);
+
+  // 失败时留下现场：错误码进 error，模型原文进 errorDetail
+  mock.mode = 'bad-json';
+  const badOne = await call(handlers.analyzeDocument, { params: { id: '3' }, user: { id: 'u1' }, body: {} });
+  check('解读失败 → 502 ai_bad_json', badOne.status === 502 && badOne.body.error.code === 'ai_bad_json', JSON.stringify(badOne.body).slice(0, 160));
+  check('失败现场落库：模型原文进 errorDetail', store.reviewOf('3')?.errorDetail === '抱歉，我无法回答。', JSON.stringify(store.reviewOf('3')));
+  check('失败的篇目回到待整理队首（下次优先重试）', store.pendingDocuments({ limit: 1 }).join(',') === '3', JSON.stringify(store.pendingDocuments({ limit: 5 })));
+  mock.mode = 'ok';
 
   // 上游整体故障时的部分失败语义
   mock.mode = 'http-500';

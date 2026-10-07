@@ -147,7 +147,7 @@ const store = createAiStore({
 
 store.syncCorpus();                    // 业务数据变化后调用一次
 store.corpusHash();                    // 语料指纹：变了说明缓存过期
-store.pendingDocuments({ limit: 10 }); // 待整理：没解读过 → 失败 → 内容已变化
+store.pendingDocuments({ limit: 10 }); // 待整理：失败过 → 没解读过 → 内容已变化
 store.saveReview({ documentId: 1, status: 'done', category: '数据库', /* … */ }, { contentHash: store.corpusHash() });
 store.reviewOf(1);
 store.latestReport();
@@ -155,6 +155,9 @@ store.clearAll();
 ```
 
 建表由 `createAiStore` 自动完成（`ai_document_reviews` / `ai_corpus_reports` / `ai_corpus_index`）。
+`ai_document_reviews` 里除了 `error`（一句错误文案），还有 `error_detail`（**模型原始输出的开头 500 字**）——
+解读失败时两栏都会写上，重新解读成功时清空。有了它，事后能直接看出失败是 `max_tokens` 截断、
+还是字符串里带了非法转义，不用靠猜（`ai_bad_json` 的 `AiError.details.rawOutput` 就是往这里落的）。
 
 ### 4.3 直接用 HTTP 处理器（框架无关）
 

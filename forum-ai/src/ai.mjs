@@ -50,6 +50,20 @@ export class AiError extends Error {
   }
 }
 
+/**
+ * 失败时留给排查用的「现场」：模型原始输出的开头一段。
+ *
+ * 光有一句「AI 返回的解读结果不是合法 JSON」是查不出原因的 —— 到底是 `max_tokens` 截断、
+ * 还是字符串里带了非法转义，只有看了原文才知道。所以把开头 500 字（折成一行）挂进
+ * `AiError.details.rawOutput`，宿主存进缓存的 `errorDetail` 列。
+ */
+const RAW_OUTPUT_LIMIT = 500;
+export function rawOutputHead(text) {
+  const flat = String(text ?? '').replace(/\s+/g, ' ').trim();
+  if (flat.length <= RAW_OUTPUT_LIMIT) return flat;
+  return `${flat.slice(0, RAW_OUTPUT_LIMIT)}…（全文 ${flat.length} 字）`;
+}
+
 export function aiConfig(env = process.env) {
   const apiKey = env.AI_API_KEY || '';
   const baseUrl = (env.AI_BASE_URL || DEFAULT_BASE_URL).replace(/\/+$/, '');
@@ -196,7 +210,9 @@ export async function reviewDocument(doc, siblings = [], options = {}) {
   );
 
   const parsed = extractJson(text);
-  if (!parsed || typeof parsed !== 'object') throw new AiError('ai_bad_json', 'AI 返回的解读结果不是合法 JSON');
+  if (!parsed || typeof parsed !== 'object') {
+    throw new AiError('ai_bad_json', 'AI 返回的解读结果不是合法 JSON', { rawOutput: rawOutputHead(text) });
+  }
 
   const knownIds = new Set([doc.id, ...siblings.map((item) => item.id)].map(String));
   const knownWikiIds = new Set(wikiPages.map((item) => item.id).map(String));
@@ -221,7 +237,9 @@ export async function reviewCorpus(docs, options = {}) {
   );
 
   const parsed = extractJson(text);
-  if (!parsed || typeof parsed !== 'object') throw new AiError('ai_bad_json', 'AI 返回的整理结果不是合法 JSON');
+  if (!parsed || typeof parsed !== 'object') {
+    throw new AiError('ai_bad_json', 'AI 返回的整理结果不是合法 JSON', { rawOutput: rawOutputHead(text) });
+  }
   const report = normalizeSiteReport(parsed, docs);
   return { report, model, usage, truncated: material.truncated };
 }
@@ -248,7 +266,9 @@ export async function answerQuestion(question, docs, options = {}) {
   );
 
   const parsed = extractJson(text);
-  if (!parsed || typeof parsed !== 'object') throw new AiError('ai_bad_json', 'AI 返回的问答结果不是合法 JSON');
+  if (!parsed || typeof parsed !== 'object') {
+    throw new AiError('ai_bad_json', 'AI 返回的问答结果不是合法 JSON', { rawOutput: rawOutputHead(text) });
+  }
   const answer = normalizeAnswer(parsed, docs);
   return { answer, model, usage, truncated: material.truncated, included: material.included };
 }

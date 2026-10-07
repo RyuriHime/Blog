@@ -140,6 +140,37 @@ ai: forumAiStatus(),                                                       // GE
 
 ---
 
+## G. 失败篇目的重试优先级 + 失败现场（甲类，本轮新增）
+
+线上 `GET /api/ai/site` 停在 `stats.failed = 3`，点多少次「⚡ 解读未整理的帖子」都修不好。查下来是两个独立的毛病。
+
+### G1（甲类）失败的篇目永远轮不到重试
+
+**现象**：全站 508 篇「从未解读」，那 3 篇失败的排在队尾，批量解读的 `limit` 根本够不到它们 —— 只能手动一篇篇点。
+
+**原因**：`src/store-sqlite.mjs` 的 `pendingDocuments()` 顺序是 `[...never, ...failed, ...stale].slice(0, limit)`，而挂载层 `batchLimit = 10`。
+
+**我们的修法**：顺序改成 `[...failed, ...never, ...stale]` —— 失败的最该优先重试；`stale`（内容变了）仍排最后，不值得抢在「从没解读过」前面。README 里的注释一并改。
+
+### G2（甲类）失败不留现场，事后只能靠猜
+
+**现象**：缓存里只有一句「AI 返回的解读结果不是合法 JSON」。到底是 `max_tokens` 截断、还是正文里的非法转义，无从判断。
+
+**原因**：`src/routes.mjs` 的失败分支只写 `saveReview({ status: 'failed', error: errorText(error) })`；`src/ai.mjs` 抛 `ai_bad_json` 时也没把模型原文带出来。
+
+**我们的修法**：
+
+| 位置 | 改动 |
+|---|---|
+| `src/ai.mjs` | 新增导出 `rawOutputHead(text)`（折成一行、留前 500 字、附「（全文 N 字）」）；`ai_bad_json` 的三个抛出点（解读 / 整理 / 问答）都挂上 `details.rawOutput` |
+| `src/store-sqlite.mjs` | `ai_document_reviews` 新增 `error_detail` 列：`CREATE TABLE` 里加一栏，并对旧库做一次 `PRAGMA table_info` + `ALTER TABLE` 迁移（`CREATE TABLE IF NOT EXISTS` 不会补列）。`shapeReviewRow` 里 `done` 的 `errorDetail` 一律读成空串（重新解读成功即清空现场） |
+| `src/routes.mjs` | 新增 `errorDetailText(error)`：取 `error.details.rawOutput`、裁到 600 字；`analyzeDocument` 与 `analyzePending` 的失败分支都把它和 `error` 一起写进缓存/结果 |
+| `README.md` | 说明 `error`（一句文案）与 `error_detail`（模型原文前 500 字）的分工 |
+
+**同步改过的作者文件**：`selftest.mjs`（新增「失败也把模型原文存进 errorDetail」「失败的篇目排在从未解读的前面」「待整理顺序：失败 → 从未解读 → 内容已变」「rawOutputHead 截断与折行」「失败现场落库」等断言）、`selftest-mount.mjs`、`scripts/smoke-ai.mjs` 的相应断言。
+
+---
+
 ## 附：作者包的其它小问题（不影响功能，仅记录）
 
 1. `forum-ai/src/mount.mjs` 顶部的用法注释写的是 `mountForumAi({ db, resolveUser, baseDir: ROOT, aiDir: join(ROOT,'forum-ai') })`，但**实际函数签名没有 `baseDir` / `aiDir` 这两个参数**（注释与实现不一致）。
@@ -156,10 +187,10 @@ ai: forumAiStatus(),                                                       // GE
 | 测试 | 期望 |
 |---|---|
 | `node forum-ai/selftest-mount.mjs` | 通过 35 项，失败 0 项 |
-| `node forum-ai/selftest.mjs` | 通过 95 项，失败 0 项 |
-| `node scripts/smoke-ai.mjs` | 通过 61 项，失败 0 项 |
+| `node forum-ai/selftest.mjs` | 通过 106 项，失败 0 项 |
+| `node scripts/smoke-ai.mjs` | 通过 65 项，失败 0 项 |
 | `node scripts/smoke.mjs` | 通过 231 项，失败 0 项 |
 | `node scripts/check-ui-contract.mjs` | 通过 317 项（下限 317），问题 0 项 |
 | `node scripts/check-encoding.mjs` | 已检查 205 个文件（下限 205），中文片段断言 84 条 |
 
-合计 **739 项**（2026-10 复跑实测；数量随轮次增删会变，以各脚本自己打印的下限为准）。另外 `node scripts/check-encoding.mjs` 在 Linux 上会报 `ENOENT ... start.cmd` —— 它硬编码要检查 `start.cmd`（Windows 专用文件、故意不上传），**这个失败是预期的，不是问题**。
+合计 **754 项**（2026-10 复跑实测；数量随轮次增删会变，以各脚本自己打印的下限为准）。另外 `node scripts/check-encoding.mjs` 在 Linux 上会报 `ENOENT ... start.cmd` —— 它硬编码要检查 `start.cmd`（Windows 专用文件、故意不上传），**这个失败是预期的，不是问题**。

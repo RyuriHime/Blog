@@ -382,6 +382,22 @@ try {
   const siteAfter = await member2.call('/api/ai/site');
   check('内容变化后全站整理也标记过期', siteAfter.data?.stale === true, `stale=${siteAfter.data?.stale}`);
 
+  console.log('\n▶ 失败现场与重试');
+  mock.failWith = '抱歉，我暂时没法给出结构化结果。';
+  const badJson = await member2.call('/api/ai/posts/3/analyze', { method: 'POST' });
+  check('模型返回非 JSON → 502 ai_bad_json', badJson.status === 502 && badJson.error?.code === 'ai_bad_json', `status=${badJson.status} code=${badJson.error?.code}`);
+  const badCache = await member2.call('/api/ai/posts/3');
+  check(
+    '失败现场留了模型原文（errorDetail）',
+    badCache.data?.cached?.status === 'failed' && String(badCache.data.cached.errorDetail).includes('抱歉，我暂时没法给出结构化结果'),
+    JSON.stringify(badCache.data?.cached).slice(0, 200),
+  );
+  mock.failWith = null;
+  const retry = await member2.call('/api/ai/posts/3/analyze', { method: 'POST' });
+  check('失败后重试即修好', retry.status === 200 && retry.data?.review?.status === 'done', JSON.stringify(retry.data?.review).slice(0, 140));
+  const retryCache = await member2.call('/api/ai/posts/3');
+  check('成功后清掉失败现场', retryCache.data?.cached?.status === 'done' && retryCache.data.cached.errorDetail === '', JSON.stringify(retryCache.data?.cached?.errorDetail));
+
   console.log('\n▶ AI 上游故障的处理');
   mock.failWith = null;
   const badModel = await member2.call('/api/ai/posts/5', { method: 'GET' });
