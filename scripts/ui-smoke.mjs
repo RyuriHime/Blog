@@ -177,7 +177,44 @@ const styleEntryCss = read('style.css');
 const startJs = read('views/start.js');
 const startCss = read('css/25-start.css');
 
-check('新页面文件存在并导出 viewStart', /async function viewStart\s*\(/.test(startJs) && /export \{ viewStart \}/.test(startJs));
+// 只要求「导出里有 viewStart」，不写死整份导出清单 —— 起始页后来又多了
+// `viewAnnouncements` 与 `ANNOUNCE_BOARD`，写死的话每加一个导出都要来改这条。
+check(
+  '新页面文件存在并导出 viewStart',
+  /async function viewStart\s*\(/.test(startJs) && /export \{[^}]*\bviewStart\b[^}]*\}/.test(startJs),
+  'views/start.js 里找不到 viewStart 或它没被导出',
+);
+check(
+  '站务公告列表页：路由 #/announcements 指向 Start.viewAnnouncements',
+  /first === 'announcements'[\s\S]{0,60}?Start\.viewAnnouncements\(query\)/.test(routerJs),
+  'router.js 里没有 #/announcements 分支',
+);
+check(
+  '公告页复用现成接口（/api/posts?board=meta + page/perPage），没为新页面加后端',
+  /\/api\/posts\?board=\$\{ANNOUNCE_BOARD\}&perPage=\$\{ANNOUNCE_PER_PAGE\}&page=\$\{page\}/.test(startJs),
+);
+check(
+  '公告页会翻页，页码走 paginationHtml（团队页同一套零件）',
+  /paginationHtml\(page, totalPages/.test(startJs) && /#\/announcements\?page=/.test(startJs),
+);
+check(
+  '首页那块仍然只放 5 条（取接口时就只要 5 条，取回来再截一道）',
+  /ANNOUNCE_COUNT = 5/.test(startJs)
+    && /FETCH_PER_PAGE = 5/.test(startJs)
+    && /slice\(0, ANNOUNCE_COUNT\)/.test(startJs),
+  '首页公告要么要多了、要么没截 —— 用户明确要求主页只显示 5 条',
+);
+check(
+  '首页公告卡上有去#/announcements 的「查看全部」入口',
+  /class="announce-more" href="#\/announcements"/.test(startJs),
+  '首页那块没有入口，用户看不到全部公告',
+);
+check(
+  '公告页的新类名都有样式（否则 check-ui-contract 会红）',
+  ['.announce-more', '.announce-head', '.announce-page', '.announce-list', '.announce-row', '.announce-link', '.announce-pin', '.announce-excerpt', '.announce-row-meta', '.announce-pager'].every(
+    (sel) => new RegExp(`\\${sel}\\b`).test(startCss),
+  ),
+);
 check(
   '`#/` 直接渲染起始页 —— 无论登录与否（不再有 state.me 那半条件）',
   /if \(!first\) return await Start\.viewStart\(\)/.test(routerJs)

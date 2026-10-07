@@ -17,6 +17,7 @@
 
 import { emptyHtml, esc, loadingHtml, ui } from '../core/dom.js';
 import { api } from '../core/api.js';
+import { paginationHtml } from '../core/widgets.js';
 import * as Fmt from '../core/format.js';
 
 /** 公告板块的 slug：种子数据里那条「📢 站务公告」。 */
@@ -27,6 +28,18 @@ const ANNOUNCE_COUNT = 5;
 const PREVIEW_COUNT = 3;
 /** 接口 perPage 的下限就是 5，写死免得以为能要 3 条。 */
 const FETCH_PER_PAGE = 5;
+/** 公告**列表页**每页几条。接口那边 perPage 的上限是 30，20 条一页翻起来正好。 */
+const ANNOUNCE_PER_PAGE = 20;
+
+/**
+ * 读页码。口径跟服务端 `pageParam`（`src/core/http.js`）一致：
+ * 不是安全的正整数就退回第 1 页 —— `?page=1e999` / `2.5` / `abc` / `-3` 都会
+ * 让那边的 LIMIT 绑不上，与其把 500 摆给用户看，不如当他没翻页。
+ */
+function readPage(value) {
+  const num = Number(value);
+  return Number.isSafeInteger(num) && num > 0 ? num : 1;
+}
 
 /** 单个接口失败不该把整页拖垮：拿不到就给个空壳，页面照常渲染。 */
 async function safeApi(path, fallback) {
@@ -43,6 +56,79 @@ function announceItemHtml(post) {
     <span class="start-announce-title">${esc(post.title)}</span>
     <span class="start-announce-meta">${esc(post.author?.displayName ?? post.author?.username ?? '')} · ${esc(Fmt.timeAgo(post.createdAt))}</span>
   </a>`;
+}
+
+/**
+ * 列表页的一行。比首页那版多两样：一句摘要和一行数字 ——
+ * 首页那块是「扫一眼最近发生了什么」，这一页是「我要找某一条公告」，
+ * 光有标题不够认。
+ */
+function announceRowHtml(post) {
+  const author = post.author?.displayName ?? post.author?.username ?? '';
+  const meta = [author, Fmt.timeAgo(post.createdAt), `${Fmt.fmtNum(post.replyCount ?? 0)} 回复`, `${Fmt.fmtNum(post.views ?? 0)} 浏览`]
+    .filter(Boolean)
+    .join(' · ');
+  return `<li class="announce-row">
+    <a class="announce-link" href="#/post/${encodeURIComponent(post.id)}">
+      <span class="announce-row-head">
+        ${post.pinned ? '<span class="announce-pin">📌 置顶</span>' : ''}
+        <span class="announce-row-title">${esc(post.title)}</span>
+      </span>
+      ${post.excerpt ? `<span class="announce-excerpt">${esc(post.excerpt)}</span>` : ''}
+      <span class="announce-row-meta">${esc(meta)}</span>
+    </a>
+  </li>`;
+}
+
+/**
+ * `#/announcements` —— 站务公告的全部列表。
+ *
+ * 首页那块只放最近 5 条（`ANNOUNCE_COUNT`），这一页放全部、分页翻。
+ * 数据还是那条 `/api/posts?board=meta`，只是换了个 perPage、加上了 page ——
+ * 没有为新页面加任何后端接口。
+ */
+async function viewAnnouncements(query) {
+  ui.app.innerHTML = loadingHtml();
+  const page = readPage(query?.get('page'));
+  const path = `/api/posts?board=${ANNOUNCE_BOARD}&perPage=${ANNOUNCE_PER_PAGE}&page=${page}`;
+
+  let data;
+  try {
+    data = await api(path);
+  } catch (error) {
+    if (error?.aborted) return; // 页面已经被换走了
+    throw error;
+  }
+
+  const items = data.items ?? [];
+  const total = Number(data.total) || 0;
+  const totalPages = Math.max(1, Number(data.totalPages) || 1);
+  const listHtml = items.length
+    ? `<ul class="announce-list">${items.map(announceRowHtml).join('')}</ul>`
+    : emptyHtml(
+        '📢',
+        page > 1
+          ? '这一页没有公告了 —— 翻回第一页看看。'
+          : '还没有公告。站长在「站务公告」板块发一篇，这里就会显示出来。',
+      );
+  // 页码用不着 `routeQuery`：这一页只有 `page` 一个参数，第 1 页就干净地不带查询串。
+  const pagerHtml = paginationHtml(page, totalPages, (target) =>
+    target === 1 ? '#/announcements' : `#/announcements?page=${target}`,
+  );
+
+  ui.app.innerHTML = `
+    <div class="start-page">
+      <div class="page-head">
+        <h1 class="announce-head">📢 站务公告</h1>
+        <p class="hint">站长发的公告都在这儿，从新到旧。共 ${Fmt.fmtNum(total)} 条${
+          totalPages > 1 ? `，第 ${page} / ${totalPages} 页` : ''
+        }。</p>
+      </div>
+      <section class="card announce-page">
+        ${listHtml}
+        ${pagerHtml ? `<div class="announce-pager">${pagerHtml}</div>` : ''}
+      </section>
+    </div>`;
 }
 
 /**
@@ -81,7 +167,7 @@ async function viewStart() {
   let teams;
   try {
     [announcements, feed, docs, teams] = await Promise.all([
-      safeApi(`/api/posts?board=${ANNOUNCE_BOARD}&perPage=${FETCH_PER_PAGE}`, { items: [] }),
+      safeApi(`/api/posts?board=${ANNOUNCE_BOARD}&perPage=${FETCH_PER_PAGE}`, { items: [], total: 0 }),
       safeApi(`/api/posts?perPage=${FETCH_PER_PAGE}`, { items: [] }),
       safeApi('/api/docs', { documents: [] }),
       safeApi('/api/teams?page=1', { items: [] }),
@@ -95,6 +181,12 @@ async function viewStart() {
   const announceHtml = announceList.length
     ? announceList.map(announceItemHtml).join('')
     : emptyHtml('📢', '还没有公告。站长在「站务公告」板块发一篇，这里就会显示出来。');
+  // 这块只放最近 5 条，其余的都在 `#/announcements`。有多的时候把条数也写出来，
+  // 免得用户以为「就这五条」。
+  const announceTotal = Number(announcements.total) || announceList.length;
+  const announceMoreHtml = `<a class="announce-more" href="#/announcements">查看全部${
+    announceTotal > announceList.length ? ` ${Fmt.fmtNum(announceTotal)} 条` : ''
+  } →</a>`;
 
   const feedItems = (feed.items ?? []).slice(0, PREVIEW_COUNT).map((post) => ({
     text: post.title,
@@ -117,7 +209,7 @@ async function viewStart() {
       </div>
       <div class="start-columns">
         <section class="card start-announce">
-          <div class="card-head"><span class="card-title">📢 站务公告</span></div>
+          <div class="card-head"><span class="card-title">📢 站务公告</span>${announceMoreHtml}</div>
           <div class="start-announce-list">${announceHtml}</div>
         </section>
         <div class="start-entries">
@@ -151,6 +243,6 @@ async function viewStart() {
 }
 
 // ── 导出 ──────────────────────────────────────────────────────────────
-export { viewStart };
+export { viewStart, viewAnnouncements, ANNOUNCE_BOARD };
 
 /* @hand-written */

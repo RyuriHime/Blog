@@ -101,9 +101,20 @@ async function route() {
     if (!first) return await Start.viewStart();
     if (first === 'start') return await Start.viewStart();
     if (first === 'feed') return await Timeline.viewTimeline(query);
+    // 站务公告的**全部**列表（`#/announcements`）。首页那块只显示最近 5 条，
+    // 想看全的就点它标题右边的「查看全部」。
+    if (first === 'announcements') return await Start.viewAnnouncements(query);
     // 论坛形态下线（FR-FEED-12）：板块页没有替代页面，但**也不能变成死链**，
     // 统一回动态流。`replace` 而不是赋值，免得用户按返回又弹回来。
+    //
+    // 唯一的例外是站务公告板块：它的内容现在有一张专门的列表页，而 `#/board/meta`
+    // 这种老地址可能还躺在谁的收藏夹里 —— 与其弹一句「板块已经下线了」再把人甩到
+    // 动态流，不如直接给他要的那一页。
     if (first === 'board') {
+      if (second === Start.ANNOUNCE_BOARD) {
+        location.replace('#/announcements');
+        return await Start.viewAnnouncements(query);
+      }
       toast('板块已经下线了，这里是新的动态页', 'info');
       location.replace('#/feed');
       return await Timeline.viewTimeline(query);

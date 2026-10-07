@@ -78,6 +78,96 @@
   color: var(--muted);
 }
 
+/* 「查看全部 →」。首页那块只放最近 5 条，点它去 `#/announcements`。
+   `.card-head` 本来就是 `space-between`，所以它会自己贴到右上角。 */
+.announce-more {
+  flex: none;
+  font-size: 12.5px;
+  color: var(--accent-fg);
+}
+
+/* ---------------- 公告列表页（#/announcements） ---------------- */
+
+.announce-head {
+  font-size: 20px;
+  margin: 0 0 6px;
+}
+
+.announce-page {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.announce-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.announce-row + .announce-row {
+  border-top: 1px solid var(--border-soft);
+}
+
+.announce-link {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding: 13px 12px;
+  border-radius: 10px;
+  color: var(--text-dim);
+}
+
+.announce-link:hover {
+  background: var(--panel-2);
+  text-decoration: none;
+}
+
+.announce-row-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+/* 置顶那枚小标：`flex: none` 免得窄屏被标题挤扁 */
+.announce-pin {
+  flex: none;
+  font-size: 11.5px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: var(--accent-soft);
+  color: var(--accent-fg);
+}
+
+.announce-row-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text);
+  line-height: 1.6;
+}
+
+/* 摘要只给一行 —— 这一页是用来找的，不是用来读的 */
+.announce-excerpt {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13.2px;
+  color: var(--text-dim);
+}
+
+.announce-row-meta {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.announce-pager {
+  display: flex;
+  justify-content: center;
+}
+
 /* ---------------- 右边：三块入口 ---------------- */
 
 .start-entries {
