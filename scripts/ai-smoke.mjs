@@ -49,6 +49,20 @@ import {
 } from '../src/modules/ai/programs.js';
 import { parseSourceBlocks } from '../src/modules/doc/blocks/markdown.js';
 import { fenceFor as p2FenceFor } from '../src/modules/doc/blocks/text.js';
+// 第 21 节（金额）：计价器是纯函数，直接 import 来钉 —— 官方价目表、高峰/空闲换算、
+// 上游 usage 的畸形值都只能在这一层精确断言（HTTP 那侧只看得到「汇总后的一个数」）。
+import {
+  AI_PRICE_TABLE,
+  AI_PRICE_ALIASES,
+  AI_OFF_PEAK_FACTOR,
+  AI_TOKENS_PER_PRICE_UNIT,
+  isPeakHour,
+  shapeTokenUsage,
+  costOfUsage,
+  summarizeCost,
+  priceFor,
+  priceNote,
+} from '../src/modules/ai/pricing.js';
 
 const ROOT = resolve(fileURLToPath(new URL('.', import.meta.url)), '..');
 const SERVER = join(ROOT, 'src', 'server.js');
@@ -903,8 +917,23 @@ try {
         lastRequestBody = null;
       }
       const send = (status, payload) => {
+        // 所有 200 都补一份上游 usage：真实 DeepSeek 的应答一定带 `usage`，而
+        // 「token 用量 → 金额」这条链全靠它。假模型不补的话，第 21 节的金额断言
+        // 会在「上游没报用量」那条路上空转（汇总出来是 0，写错了也看不出来）。
+        // `usage: null` 是留给「上游真的没报用量」那条用例的显式口子（`in` 判断，
+        // 不能用 `??`，否则 null 会被默认值顶掉）。
+        const body =
+          status === 200 && payload && typeof payload === 'object'
+            ? {
+                ...payload,
+                usage:
+                  'usage' in payload
+                    ? payload.usage
+                    : { prompt_tokens: 1000, completion_tokens: 200, prompt_cache_hit_tokens: 400, prompt_cache_miss_tokens: 600, total_tokens: 1200 },
+              }
+            : payload;
         res.writeHead(status, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify(payload));
+        res.end(JSON.stringify(body));
       };
       if (modelMode === 'hang') return; // 故意不回，用来触发 504
       if (modelMode === 'unauthorized') return send(401, { error: { message: 'bad key' } });
@@ -1102,6 +1131,12 @@ try {
       AI_BASE_URL: MODEL_BASE,
       AI_MODEL: 'stub-model',
       AI_TIMEOUT_MS: '1500', // 「hang」那条不用干等 180 秒
+      // 第 21 节（金额）：`stub-model` 不在官方价目表里，所以**必须**用这三个环境变量
+      // 登记单价 —— 正好把「没登记价格的模型怎么算钱」这条备用法也真的走一遍。
+      // 数就是 Flash 的高峰价，好让期望值一眼能算：0.002816 元 / 次调用。
+      AI_PRICE_INPUT_PER_M: '2',
+      AI_PRICE_CACHE_HIT_PER_M: '0.04',
+      AI_PRICE_OUTPUT_PER_M: '8',
     },
     stdio: ['ignore', keyedLogFd, keyedLogFd],
   });
@@ -1620,9 +1655,205 @@ try {
     JSON.stringify(usageToday.topUsers),
   );
   check(
-    'note 说清了「只有次数、没有金额」',
-    typeof usage.data?.note === 'string' && usage.data.note.includes('token'),
+    'note 说清了「金额 = token × 单价」，而不是只有次数',
+    typeof usage.data?.note === 'string' && usage.data.note.includes('token') && usage.data.note.includes('金额'),
     String(usage.data?.note),
+  );
+
+  /* ---------- 21b. 金额：真的记下了 token 与钱（在跑过真模型的 keyed 服务器上） ---------- */
+  //
+  // 为什么挂 keyed 那台：只有它配了 key，前面的第 18 / 23 节在它上面真的调过模型，
+  // `ai_token_usage` 里才有行。假模型每个 200 都报同一份 usage（输入 1000，其中
+  // 缓存命中 400，输出 200），登记的单价又是 Flash 高峰价，所以每次调用该是
+  //   (600×2 + 400×0.04 + 200×8) / 1000000 = 0.002816 元
+  // —— 期望值能一眼算出来，这条断言才算真的钉住了算术。
+  const keyedUsage = await keyedAdmin.call('/api/ai-edit/usage');
+  const kTokens = keyedUsage.data?.today?.tokens ?? {};
+  const kCost = keyedUsage.data?.today?.cost ?? {};
+  const kAll = keyedUsage.data?.allTime ?? {};
+  const kPricing = keyedUsage.data?.pricing ?? {};
+  check('金额：keyed 服务器上记下了 token 用量', kTokens.total > 0 && kTokens.calls > 0, JSON.stringify(kTokens));
+  check('金额：每次调用的用量都记全了（missing 为 0）', kTokens.missing === 0, JSON.stringify(kTokens));
+  check(
+    '金额：输入 = 命中 + 未命中，且每次调用一行（1000 / 400 / 200 × 次数）',
+    kTokens.prompt === 1000 * kTokens.calls &&
+      kTokens.cached === 400 * kTokens.calls &&
+      kTokens.completion === 200 * kTokens.calls,
+    JSON.stringify(kTokens),
+  );
+  check('金额：算出了钱（不是 0）', kCost.yuan > 0, JSON.stringify(kCost));
+  check(
+    '金额：高峰档的钱 + 空闲档的钱 = 总额（两档分开算，没有混着乘一个价）',
+    Math.abs(kCost.peakYuan + kCost.offPeakYuan - kCost.yuan) < 1e-9,
+    JSON.stringify(kCost),
+  );
+  const perPeakCall = (600 * 2 + 400 * 0.04 + 200 * 8) / AI_TOKENS_PER_PRICE_UNIT;
+  const perOffPeakCall = perPeakCall * AI_OFF_PEAK_FACTOR;
+  if (kCost.offPeakYuan === 0) {
+    check(
+      '金额：整段都在高峰档时，钱精确等于「每次单价 × 次数」',
+      Math.abs(kCost.yuan - perPeakCall * kTokens.calls) < 1e-9,
+      `${kCost.yuan} vs ${perPeakCall * kTokens.calls}`,
+    );
+  } else if (kCost.peakYuan === 0) {
+    check(
+      '金额：整段都在空闲档时，钱精确等于「半价 × 次数」',
+      Math.abs(kCost.yuan - perOffPeakCall * kTokens.calls) < 1e-9,
+      `${kCost.yuan} vs ${perOffPeakCall * kTokens.calls}`,
+    );
+  } else {
+    // 测试窗口正好跨过档位切换点（北京时间 9 / 12 / 14 / 18 点）才会走到这里。
+    check(
+      '金额：跨了档位（窗口跨过切换点），钱落在两档之间',
+      kCost.yuan > perOffPeakCall * kTokens.calls - 1e-9 && kCost.yuan < perPeakCall * kTokens.calls + 1e-9,
+      JSON.stringify(kCost),
+    );
+  }
+  check(
+    '金额：历史累计不少于今日（今日是它的子集）',
+    (kAll.tokens?.total ?? 0) >= kTokens.total && (kAll.cost?.yuan ?? 0) >= kCost.yuan,
+    JSON.stringify(kAll),
+  );
+  check(
+    '金额：没登记价格的模型如实说「没登记」，并给出登记用的环境变量名',
+    kPricing.known === false &&
+      kPricing.envKeys?.inputMiss === 'AI_PRICE_INPUT_PER_M' &&
+      String(kPricing.note ?? '').includes('AI_PRICE_INPUT_PER_M'),
+    JSON.stringify(kPricing),
+  );
+  check(
+    '金额：计价口径（单位 / 币种 / 出处 URL / 此刻档位）都在响应里',
+    kPricing.unit === '元/百万 tokens' &&
+      kPricing.currency === 'CNY' &&
+      /^https:\/\//.test(String(kPricing.source)) &&
+      typeof kPricing.peakNow === 'boolean',
+    JSON.stringify(kPricing),
+  );
+  check(
+    '金额：没配 key 的那台服务器（没调过模型）显示 0，且不谎报 missing',
+    (usage.data?.today?.tokens?.total ?? -1) === 0 &&
+      (usage.data?.today?.cost?.yuan ?? -1) === 0 &&
+      (usage.data?.today?.tokens?.missing ?? -1) === 0,
+    JSON.stringify(usage.data?.today?.tokens ?? null),
+  );
+
+  /* ---------- 21c. 计价器（src/modules/ai/pricing.js）的纯函数 ---------- */
+  //
+  // 上面那节只证明「汇总后的数对得上」；价目表数值、别名、高峰时段的边界
+  // （含时区换算）、上游 usage 的畸形值都只有在这一层才看得到。
+  const flash = priceFor('deepseek-flash');
+  check(
+    '计价器：官方表里 deepseek-flash 是 2 / 0.04 / 8（未命中 / 命中 / 输出）',
+    flash.known === true && flash.inputMiss === 2 && flash.inputHit === 0.04 && flash.output === 8,
+    JSON.stringify(flash),
+  );
+  check(
+    '计价器：官方表里 deepseek-v4-pro 是 9 / 0.3 / 27',
+    AI_PRICE_TABLE['deepseek-v4-pro']?.inputMiss === 9 &&
+      AI_PRICE_TABLE['deepseek-v4-pro']?.inputHit === 0.3 &&
+      AI_PRICE_TABLE['deepseek-v4-pro']?.output === 27,
+    JSON.stringify(AI_PRICE_TABLE['deepseek-v4-pro']),
+  );
+  check(
+    '计价器：旧模型名（deepseek-v4-flash / -vision-exp）按 Flash 价算（官方脚注）',
+    priceFor('deepseek-v4-flash').known === true &&
+      priceFor('deepseek-v4-flash').inputMiss === 2 &&
+      priceFor('deepseek-v4-flash-vision-exp').inputHit === 0.04 &&
+      Object.values(AI_PRICE_ALIASES).every((target) => Boolean(AI_PRICE_TABLE[target])),
+    JSON.stringify({ aliases: AI_PRICE_ALIASES, flash: priceFor('deepseek-v4-flash') }),
+  );
+  const unknownPrice = priceFor('some-other-model', {});
+  check(
+    '计价器：没登记的模型不猜价（三个价都是 0 且 known=false）',
+    unknownPrice.known === false && unknownPrice.inputMiss === 0 && unknownPrice.inputHit === 0 && unknownPrice.output === 0,
+    JSON.stringify(unknownPrice),
+  );
+  // 高峰 = 北京时间工作日 9:00–12:00、14:00–18:00；下面这些时刻的期望值是**手算**的：
+  // 2026-10-05 是周一、10-09 是周五、10-10 是周六；UTC = 北京时间 − 8 小时。
+  const PEAK_CASES = [
+    ['2026-10-05T01:30:00Z', true, '周一 09:30（高峰）'],
+    ['2026-10-05T00:59:00Z', false, '周一 08:59（还没到）'],
+    ['2026-10-05T04:00:00Z', false, '周一 12:00（午休，不算高峰）'],
+    ['2026-10-05T05:00:00Z', false, '周一 13:00（午休）'],
+    ['2026-10-05T06:00:00Z', true, '周一 14:00（下午高峰起点）'],
+    ['2026-10-05T09:59:00Z', true, '周一 17:59（高峰末尾）'],
+    ['2026-10-05T10:00:00Z', false, '周一 18:00（已下班）'],
+    ['2026-10-09T02:00:00Z', true, '周五 10:00（工作日高峰）'],
+    ['2026-10-10T02:00:00Z', false, '周六 10:00（周末全天空闲）'],
+  ];
+  const peakWrong = PEAK_CASES.filter(([iso, want]) => isPeakHour(Date.parse(iso)) !== want);
+  check(
+    '计价器：高峰时段按北京时间算（工作日两段，周末不算），换算不看本机时区',
+    peakWrong.length === 0,
+    peakWrong.map(([iso, want, label]) => `${label} 期望 ${want} 实际 ${isPeakHour(Date.parse(iso))}`).join('；'),
+  );
+  check(
+    '计价器：高峰价与空闲价正好差一半',
+    AI_OFF_PEAK_FACTOR === 0.5 &&
+      costOfUsage({ promptTokens: 1_000_000 }, { model: 'deepseek-flash', peak: true }).yuan === 2 &&
+      costOfUsage({ promptTokens: 1_000_000 }, { model: 'deepseek-flash', peak: false }).yuan === 1,
+    JSON.stringify([
+      costOfUsage({ promptTokens: 1_000_000 }, { model: 'deepseek-flash', peak: true }),
+      costOfUsage({ promptTokens: 1_000_000 }, { model: 'deepseek-flash', peak: false }),
+    ]),
+  );
+  check(
+    '计价器：命中与未命中分开计费（100 万全命中 = 0.04，全未命中 = 2）',
+    costOfUsage({ promptTokens: 1_000_000, cachedTokens: 1_000_000 }, { model: 'deepseek-flash', peak: true }).yuan ===
+      0.04 &&
+      costOfUsage({ promptTokens: 1_000_000, cachedTokens: 0 }, { model: 'deepseek-flash', peak: true }).yuan === 2,
+    JSON.stringify(costOfUsage({ promptTokens: 1_000_000, cachedTokens: 1_000_000 }, { model: 'deepseek-flash', peak: true })),
+  );
+  check(
+    '计价器：输出按输出价（100 万 = 8 元），一次调用的完整算式 = 0.002816',
+    costOfUsage({ completionTokens: 1_000_000 }, { model: 'deepseek-flash', peak: true }).yuan === 8 &&
+      costOfUsage({ promptTokens: 1000, cachedTokens: 400, completionTokens: 200 }, { model: 'deepseek-flash', peak: true })
+        .yuan === 0.002816,
+    JSON.stringify(costOfUsage({ promptTokens: 1000, cachedTokens: 400, completionTokens: 200 }, { model: 'deepseek-flash', peak: true })),
+  );
+  check(
+    '计价器：畸形 usage（负数 / 字符串 / 缺失）按 0 算，且绝不出现负钱',
+    costOfUsage({ promptTokens: -100, cachedTokens: -1, completionTokens: 'abc' }, { model: 'deepseek-flash' }).yuan === 0 &&
+      costOfUsage({}, { model: 'deepseek-flash' }).yuan === 0 &&
+      costOfUsage({ promptTokens: 1000, cachedTokens: 999999 }, { model: 'deepseek-flash', peak: true }).yuan === 0.00004,
+    JSON.stringify([
+      costOfUsage({ promptTokens: -100, cachedTokens: -1, completionTokens: 'abc' }, { model: 'deepseek-flash' }),
+      costOfUsage({ promptTokens: 1000, cachedTokens: 999999 }, { model: 'deepseek-flash', peak: true }),
+    ]),
+  );
+  const shaped = shapeTokenUsage({ prompt_tokens: 1000, prompt_cache_hit_tokens: 400, completion_tokens: 200 });
+  check(
+    '计价器：上游 usage → 三个数（命中数超不过输入总数）',
+    shaped.promptTokens === 1000 &&
+      shaped.cachedTokens === 400 &&
+      shaped.completionTokens === 200 &&
+      shapeTokenUsage({ prompt_tokens: 100, prompt_cache_hit_tokens: 500 }).cachedTokens === 100 &&
+      shapeTokenUsage({ prompt_tokens_details: { cached_tokens: 250 }, prompt_tokens: 1000 }).cachedTokens === 250 &&
+      shapeTokenUsage(null).promptTokens === 0,
+    JSON.stringify([shaped, shapeTokenUsage({ prompt_tokens: 100, prompt_cache_hit_tokens: 500 }), shapeTokenUsage(null)]),
+  );
+  const mixedSum = summarizeCost(
+    [
+      { peak: true, model: 'deepseek-flash', promptTokens: 1_000_000, cachedTokens: 0, completionTokens: 0, calls: 1, missing: 0 },
+      { peak: false, model: 'deepseek-flash', promptTokens: 1_000_000, cachedTokens: 0, completionTokens: 0, calls: 1, missing: 1 },
+      { peak: true, model: 'deepseek-v4-pro', promptTokens: 1_000_000, cachedTokens: 0, completionTokens: 0, calls: 1, missing: 0 },
+    ],
+    {},
+  );
+  check(
+    '计价器：汇总按每行自己的模型与档位算（同表混模型也不会串价）',
+    mixedSum.yuan === 12 && mixedSum.peakYuan === 11 && mixedSum.offPeakYuan === 1 && mixedSum.calls === 3 && mixedSum.missing === 1,
+    JSON.stringify(mixedSum),
+  );
+  check(
+    '计价器：面板上那句话在「有价 / 没价」两种情况下都说得清',
+    priceNote(priceFor('deepseek-flash'), { peak: true }).includes('官方') &&
+      priceNote(priceFor('deepseek-flash'), { peak: true }).includes('高峰') &&
+      priceNote(priceFor('some-other-model', {}), { peak: false }).includes('AI_PRICE_OUTPUT_PER_M'),
+    [
+      priceNote(priceFor('deepseek-flash'), { peak: true }),
+      priceNote(priceFor('some-other-model', {}), { peak: false }),
+    ].join(' | '),
   );
 
   /* ---------- 22. 落盘契约：writeTo 与审计里的干净块 ---------- */

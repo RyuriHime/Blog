@@ -392,6 +392,31 @@ function aeHeadHtml() {
 
 /* ---------- 全站用量（管理员专属） ---------- */
 
+/** 千分位。`Fmt.fmtNum` 会把 12345 缩成「1.2w」—— 账单上要的是准数，不是概数。 */
+function aeTokens(value) {
+  const num = Math.round(Number(value) || 0);
+  let rest = String(Math.abs(num));
+  let grouped = '';
+  while (rest.length > 3) {
+    grouped = `,${rest.slice(-3)}${grouped}`;
+    rest = rest.slice(0, -3);
+  }
+  return `${num < 0 ? '-' : ''}${rest}${grouped}`;
+}
+
+/**
+ * 钱：单次调用常常只有几厘，所以小数位数按量级给。
+ * 0 一律显示 `¥0`（不是 `¥0.0000`）——「今天没花钱」和「花了 0.0000 元」看着该是一个意思。
+ */
+function aeYuan(value) {
+  const num = Number(value) || 0;
+  if (num === 0) return '¥0';
+  if (num < 0.01) return `¥${num.toFixed(4)}`;
+  if (num < 1) return `¥${num.toFixed(3)}`;
+  if (num < 1000) return `¥${num.toFixed(2)}`;
+  return `¥${aeTokens(Math.ceil(num))}`;
+}
+
 function aeUsageTopListHtml(today) {
   const rows = (today.topUsers ?? []).slice(0, 5);
   if (!rows.length) return '<div class="ae-usage-line">今天还没有人用过。</div>';
@@ -405,20 +430,34 @@ function aeUsageTopListHtml(today) {
 
 function aeUsageHtml() {
   if (!aeState.usage) return '';
-  const today = aeState.usage.today ?? {};
-  const budget = aeState.usage.budget ?? {};
-  const allTime = aeState.usage.allTime ?? {};
+  const usage = aeState.usage;
+  const today = usage.today ?? {};
+  const budget = usage.budget ?? {};
+  const allTime = usage.allTime ?? {};
+  const todayTokens = today.tokens ?? {};
+  const allTimeTokens = allTime.tokens ?? {};
+  const todayMoney = today.cost ?? {};
+  const allTimeMoney = allTime.cost ?? {};
+  const pricing = usage.pricing ?? {};
   const byAction = (today.byAction ?? []).map((row) => `${row.action} ${row.count}`).join(' · ');
   const budgetText = budget.unlimited
     ? '未设全站上限'
     : `${budget.used ?? 0}/${budget.limit ?? 0}${budget.remaining === null || budget.remaining === undefined ? '' : `（还剩 ${budget.remaining}）`}`;
+  // 上游没报 usage 的那几次按 ¥0 计 —— 必须说出来，不然「0 元」看着像白送。
+  const missing = Number(todayTokens.missing) || 0;
+  const missingHtml = missing
+    ? `<div class="ae-note">今天有 ${missing} 次调用没拿到 token 用量（上游没返回 usage），这几次按 ¥0 计 —— 真实花费会比上面显示的更高。</div>`
+    : '';
+  const priceNote = typeof pricing.note === 'string' ? pricing.note : '';
+  // 单价出处要能点回去：金额是估算，来路不明的数字管理员没法判断该不该信。
+  const priceSource = typeof pricing.source === 'string' && pricing.source ? pricing.source : '';
   return `
     <section class="card">
       <div class="card-head">
         <h2>全站用量</h2>
         <span class="ae-target-state">仅管理员可见</span>
       </div>
-      <div class="page-sub">按调用次数统计（这张表没存 token 用量，所以没有金额）。</div>
+      <div class="page-sub">次数是配额闸门的口径；金额是「token × 单价」的估算，按每次调用当时的时段档位算。</div>
       <div class="ae-usage">
         <div class="ae-usage-grid">
           <div class="ae-stat">
@@ -437,9 +476,24 @@ function aeUsageHtml() {
             <div class="ae-stat-num">${today.users ?? 0}</div>
             <div class="ae-stat-label">涉及用户</div>
           </div>
+          <div class="ae-stat">
+            <div class="ae-stat-num">${esc(aeYuan(todayMoney.yuan))}</div>
+            <div class="ae-stat-label">今日花费（估算）</div>
+          </div>
+          <div class="ae-stat">
+            <div class="ae-stat-num">${esc(Fmt.fmtNum(todayTokens.total ?? 0))}</div>
+            <div class="ae-stat-label">今日 tokens</div>
+          </div>
         </div>
+        <div class="ae-usage-line">今日 token：输入 ${aeTokens(todayTokens.prompt)}（其中缓存命中 ${aeTokens(todayTokens.cached)}）· 输出 ${aeTokens(todayTokens.completion)} · 共 ${aeTokens(todayTokens.total)}${todayTokens.calls ? ` · 记账调用 ${todayTokens.calls} 次` : ''}</div>
+        ${missingHtml}
         <div class="ae-usage-line">全站上限（${esc(budget.envKey || 'AI_DAILY_TOTAL_LIMIT')}）：<strong>${esc(budgetText)}</strong></div>
-        <div class="ae-usage-line">历史累计：${allTime.total ?? 0} 次${byAction ? ` · 今日动作：${esc(byAction)}` : ''}</div>
+        <div class="ae-usage-line">历史累计：${allTime.total ?? 0} 次${allTimeTokens.total ? ` · ${esc(aeYuan(allTimeMoney.yuan))}（${aeTokens(allTimeTokens.total)} tokens）` : ''}${byAction ? ` · 今日动作：${esc(byAction)}` : ''}</div>
+        ${
+          priceNote
+            ? `<div class="ae-usage-line">${esc(priceNote)}${priceSource ? ` <a href="${esc(priceSource)}" target="_blank" rel="noopener">单价出处</a>` : ''}</div>`
+            : ''
+        }
         ${aeUsageTopListHtml(today)}
       </div>
       ${aeState.usageError ? `<div class="ae-note">用量面板读不到：${esc(aeState.usageError)}</div>` : ''}
