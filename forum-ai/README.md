@@ -23,7 +23,7 @@
 ```bash
 export AI_API_KEY=sk-xxx          # Windows: set AI_API_KEY=sk-xxx
 node examples/demo.mjs            # 用假的 AI 服务跑一遍全流程，产出 examples/demo-output.json
-node selftest.mjs                 # 131 项自测
+node selftest.mjs                 # 133 项自测
 ```
 
 最小代码（不需要数据库、不需要 HTTP）：
@@ -251,7 +251,7 @@ http.createServer(async (req, res) => {
 - **批量解读的优先级**：没解读过 → 解读失败 → 内容已变化；上游整体故障时立即返回部分结果（`partial: true`），不会把剩下的都试一遍。
 - **并发安全**：同一文档重复解读是覆盖写（`ON CONFLICT DO UPDATE`）；批量为串行，避免把上游打爆。
 
-## 6. 自测覆盖（131 项，无需真实密钥）
+## 6. 自测覆盖（133 项，无需真实密钥）
 
 ```
 ▶ 配置与降级      未配置抛错、状态不含密钥、映射成 503
@@ -293,7 +293,7 @@ forum-ai/
 ├── examples/
 │   ├── demo.mjs          # 端到端演示（自带假 AI 服务）
 │   └── demo-output.json  # 演示产物：真实数据结构长什么样
-├── selftest.mjs          # 131 项自测
+├── selftest.mjs          # 133 项自测
 └── README.md
 ```
 
