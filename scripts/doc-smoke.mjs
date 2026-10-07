@@ -2550,6 +2550,60 @@ try {
       docJs.includes('row.scrollIntoView?.(') && docJs.includes("block: saved > 0 ? 'nearest' : 'center'"),
       '',
     );
+    // 10.9d 三栏的宽度纪律：正文必须待在左树与右目录**之间**。
+    //   上游 OI-wiki 的行内图（`<p>` 里一颗裸 `<img>`，导进来 16 页是这种）不加限制
+    //   就会顶穿中栏、盖住右目录；中栏自己也不能跟着 1560px 的大壳一起被拉到一千多像素。
+    check(
+      '10.9d 正文里的行内媒体不许超过栏宽（块图片之外也要拦）',
+      ['.doc-body img,', '.doc-body video,', '.doc-body iframe,', '.doc-md-preview img,'].every((selector) => css.includes(selector))
+        && /\.doc-body img,[\s\S]{0,400}?max-width: 100%;/.test(css),
+      '',
+    );
+    check(
+      '10.9d 拦的是 img/video/iframe，不碰 svg（KaTeX 的伸缩括号就是 svg）',
+      !css.includes('.doc-body svg'),
+      '',
+    );
+    check(
+      '10.9d 三栏中栏有阅读宽度上限、整组居中，窄屏仍然收成两栏',
+      css.includes('grid-template-columns: 208px minmax(0, 860px) 176px')
+        && /\.doc-wiki-station \{[\s\S]{0,300}?justify-content: center;/.test(css)
+        && css.includes('grid-template-columns: 208px minmax(0, 1fr)'),
+      '',
+    );
+
+    // 10.9e 装正文的 grid 容器必须有**显式列模板**。
+    //   `.doc-page` 原先只有 `display: grid; gap: 14px` → 一条隐式 `auto` 轨道；轨道按内容的
+    //   最小内容宽撑开，正文里一张 2558px 宽的截图就能把它顶到 967px（中栏只有 860px），
+    //   `.doc-body` 于是压到右侧「本页目录」底下、窄窗口还多出横向滚动条 —— 带图页面
+    //   「不适配」的真因就在这，不是图片自己没限宽。
+    //   实测量化（headless Edge + CDP 打 #/wiki/OI%20Wiki/Xcode @1440）：
+    //     修前 pageCols=967.219px、.doc-body 右边界 1266、.doc-wiki-toc 占 1173–1349（被压住）、
+    //          整页 scrollWidth 1209 > 视口；
+    //     把轨道钉成 minmax(0, 1fr) 后 pageCols=860px、.doc-body=860px、图片 921px → 814px。
+    {
+      const ruleOf = (selector) => {
+        const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        const hit = css.match(new RegExp(`${escaped}\\s*\\{([^{}]*)\\}`));
+        return hit ? hit[1] : null;
+      };
+      const contentGrids = ['.doc-page', '.doc-editor', '.doc-md-grid', '.doc-wiki-layout', '.doc-wiki-station', '.doc-wiki-pager'];
+      const untemplated = contentGrids.filter((selector) => {
+        const rule = ruleOf(selector);
+        return rule && !/grid-(?:template|auto)-columns/.test(rule);
+      });
+      check(
+        '10.9e 装正文的 grid 容器都有显式列模板（隐式 auto 轨道会被大图顶宽）',
+        untemplated.length === 0,
+        JSON.stringify(untemplated),
+      );
+      check(
+        '10.9e .doc-page / .doc-editor 的单列钉成 minmax(0, 1fr)',
+        /\.doc-page \{[\s\S]{0,240}?grid-template-columns: minmax\(0, 1fr\);/.test(css)
+          && /\.doc-editor \{[\s\S]{0,240}?grid-template-columns: minmax\(0, 1fr\);/.test(css),
+        '',
+      );
+    }
 
     // 前端建树靠 `parentId`：站接口不给它，折叠就只剩「一层一层猜深度」。
     {

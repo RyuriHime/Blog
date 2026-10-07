@@ -376,8 +376,19 @@
 
 /* ── 阅读页：正文与块 ──────────────────────────────────────────────────── */
 
+/*
+ * `grid-template-columns` 是必须的，不是装饰：`display: grid` 不写模板时只有一条
+ * 隐式的 `auto` 轨道，而 `auto` 轨道会被内容的**最小内容宽度**撑开。
+ *
+ * 正文里一张 2558px 宽的截图（`max-width: 100%` 的百分比在轨道尺寸待定时按 `none`
+ * 参与固有尺寸计算）就能把这条轨道顶到 967px，于是 `.doc-body` 宽过 `.doc-wiki-main`
+ * 的 860px，直接压到右侧「本页目录」底下，窄窗口还会多出横向滚动条。
+ * 钉成 `minmax(0, 1fr)` 后轨道恒等于容器宽度，宽内容（图片 / 表格 / 代码）由块容器
+ * 自己的 `overflow-x: auto` 内部消化。实测量化见 `scripts/doc-smoke.mjs` 的 10.9e。
+ */
 .doc-page {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 14px;
 }
 
@@ -475,6 +486,7 @@
 
 .doc-editor {
   display: grid;
+  grid-template-columns: minmax(0, 1fr); /* 同 `.doc-page`：别让一张大图把隐式轨道顶宽 */
   gap: 12px;
   margin-bottom: 14px;
 }
@@ -717,6 +729,25 @@
   display: block;
 }
 
+/*
+ * 正文里**任何**媒体都不许超过栏宽 —— 不是所有图都长在 `.doc-block-image` 里。
+ *
+ * 行内的 `![…](…)` 是 `<p>` 里的一颗裸 `<img>`（`markdown.js` 的行内白名单放它过去），
+ * OI Wiki 导进来有 16 页是这种写法（Getting Started、Treap、插头 DP、卡特兰数…），
+ * 上游给的又是原始截图、动辄一两千像素宽：只拦块图片，这些就会顶穿中栏、
+ * 盖在右栏「本页目录」上。`svg` 不在这里 —— KaTeX 的伸缩括号就是 svg，
+ * 给它 `height: auto` 会把公式排版弄坏。
+ */
+.doc-body img,
+.doc-body video,
+.doc-body iframe,
+.doc-md-preview img,
+.doc-md-preview video,
+.doc-md-preview iframe {
+  max-width: 100%;
+  height: auto;
+}
+
 .doc-block-quote blockquote {
   margin: 0;
   padding: 4px 0 4px 14px;
@@ -883,6 +914,7 @@
 
 .doc-wiki-main {
   min-width: 0;
+  max-width: 100%;
 }
 
 .doc-wiki-nav {
@@ -985,8 +1017,18 @@ body.doc-wide .sidebar {
   display: none;
 }
 
+/*
+ * 三栏：左树 / 中正文 / 右目录。
+ *
+ * 中栏**给一个阅读宽度上限、三栏整体居中**，别让它跟着 1560px 的大壳一起被拉宽 ——
+ * OI Wiki 一页动辄几千字，一行铺到一千一百像素是在考验脖子；而左边那棵树
+ * （208px）和右边的本页目录（176px）始终贴着正文两侧，中间那道正文永远是
+ * 「目录和目录之间」的那一栏。宽度不够时 `minmax(0, …)` 会自己收，
+ * 收到 1100px 就转两栏（右目录收进正文里，见文末媒体查询）。
+ */
 .doc-wiki-station {
-  grid-template-columns: 208px minmax(0, 1fr) 176px;
+  grid-template-columns: 208px minmax(0, 860px) 176px;
+  justify-content: center;
   gap: 14px;
 }
 

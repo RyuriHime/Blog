@@ -756,7 +756,7 @@ node scripts/smoke.mjs             # 后端端到端：227 项（临时独立库
 node scripts/smoke-ai.mjs          # AI 接口端到端：61 项
 node scripts/ai-smoke.mjs          # AI 接口端到端（更细的一套：校验 / 限流 / 额度 / 审查 / 模板与提示词漂移哨兵）：422 项
 node scripts/feed-smoke.mjs        # 动态流端到端：95 项
-node scripts/doc-smoke.mjs         # 积木（可编程帖子）端到端：592 项
+node scripts/doc-smoke.mjs         # 积木（可编程帖子）端到端：597 项
 node scripts/team-smoke.mjs        # 团队端到端：301 项（可见范围 / 越权 / 版本冲突 / 编辑权只归作者 / 文件柜 / 群聊 / 团队号 / 公告通知 / Markdown 与公式 / 帖子回复 / 加入申请与审核 / 隐藏团队 / 老库升级与坏库自愈）
 node scripts/check-ui-contract.mjs # 前端契约：CSS 类名 + API 字段 + 主题/头像/角色/私信/团队号/公告/剪贴板/公式/关注列表/详情与回复/申请与隐藏结构/编辑权与侧边抽屉/表重建与自愈/币已下线（通过项数不下降哨兵：314）
 node scripts/ui-smoke.mjs          # 首页外壳轻量化 + 右侧栏抽屉 + 起始页与动态流地址（m05506 契约）：73 项
@@ -779,7 +779,7 @@ node scripts/capture-fixtures.mjs  # 重采前端冒烟用的假数据（改了�
 ```
 check-encoding 202 文件 / 84 断言 · check-skeleton 47 项 · check-golden 88 项 0 差异
 check-markdown 67 · check-frontend 39 个页面 + 34 个模块静态扫描 · smoke 227 · smoke-ai 61
-ai-smoke 422 · feed-smoke 95 · doc-smoke 592 · team-smoke 301
+ai-smoke 422 · feed-smoke 95 · doc-smoke 597 · team-smoke 301
 check-ui-contract 314 · check-notes-ui 33 · notes-smoke 44 · ui-smoke 73
 ```
 
