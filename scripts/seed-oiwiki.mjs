@@ -22,9 +22,21 @@
  * `oi-wiki-src/README.md`）。老习惯把源码摆在仓库外面（`../oi-wiki-src/OI-wiki-master`）也照样认，
  * 两边都有时以仓库内那份为准；`--src <目录>` 可以指定别处。
  *
+ * ── 在线上跑（内容在库里，不在 git 里）──
+ * 服务器上的定时部署**只换 `src/ public/ scripts/`**（见 `docs/skeleton.md` §5），数据库从来不参与，
+ * 所以「推上 main」不会让线上多出这个站 —— 要在服务器上手动跑一次这条命令，它会**复用同名站**
+ * （线上已经有站长手建的空站就叫「OI Wiki」，见 `:607` 那段按标题查站的逻辑），把 519 页填进去：
+ *
+ *   cd <git clone 目录>                                  # oi-wiki-src/ 在这个 clone 里
+ *   DB_FILE=/opt/.../data/forum.db node scripts/seed-oiwiki.mjs --user RyuriHime
+ *
+ * `--user` 是**以谁的身份**建站建页（默认 `admin`，那是本地演示账号；线上通常没有它）。
+ * 图片按 `UPLOAD_DIR`（即数据库旁边的 `uploads/`）落盘，所以 DB_FILE 指对了图就跟着对。
+ *
  * 用法：
  *   node scripts/seed-oiwiki.mjs                    # 导入到 data/p2-preview.db
  *   DB_FILE=data/forum.db node scripts/seed-oiwiki.mjs
+ *   node scripts/seed-oiwiki.mjs --user RyuriHime    # 线上：以站长账号导入
  *   node scripts/seed-oiwiki.mjs --dry --limit 8    # 只转换不落库，打印每页大小 / 块数
  *   node scripts/seed-oiwiki.mjs --tree             # 只补 mkdocs 目录树（叶子正文不动）
  *   node scripts/seed-oiwiki.mjs --station "OI Wiki" --only dp/
@@ -57,6 +69,9 @@ let skippedExtras = [];
 const LIMIT = Number(opt('limit', '0')) || 0;
 const ONLY = opt('only', '');
 const STATION_TITLE = opt('station', 'OI Wiki');
+// 以谁的身份建站建页。默认 `admin` 是本地演示账号；线上（真实社区）通常没有这个账号，
+// 必须用 `--user <用户名>` 指一个真实存在的账号，否则 bootStore() 会明确报错退出。
+const VIEWER_USERNAME = opt('user', 'admin');
 // 上游源码优先用仓库里那份（`oi-wiki-src/OI-wiki-master`），其次才是仓库外面的老位置。
 // 认的是「这一份里有没有 docs/」，这样即使历史上只有外面那份，行为也跟以前一模一样。
 const SRC_CANDIDATES = [
@@ -65,11 +80,15 @@ const SRC_CANDIDATES = [
 ];
 const SRC_ROOT = resolve(opt('src', SRC_CANDIDATES.find((dir) => existsSync(join(dir, 'docs'))) ?? SRC_CANDIDATES[0]));
 const DOCS_DIR = resolve(opt('dir', join(SRC_ROOT, 'docs')));
-const IMAGE_ROOT = resolve(opt('images', join(ROOT, 'data', 'uploads', 'oi-wiki')));
-const UPLOAD_URL = opt('url', '/uploads/oi-wiki');
 
 // `DB_FILE` 必须在 import core 之前定下：`src/core/paths.js` 在模块求值那一刻就把常量定死了。
 if (!process.env.DB_FILE) process.env.DB_FILE = join(ROOT, 'data', 'p2-preview.db');
+// 图片默认落在**数据库旁边**的 `uploads/oi-wiki/` —— 跟 `src/core/paths.js:34` 的 UPLOAD_DIR 同一条推导
+// （`DB_FILE` 在哪个目录，`uploads/` 就在哪个目录）。本地跑等于原来的 `data/uploads/oi-wiki`；
+// 线上把 DB_FILE 指到别处时，图也跟着落过去，正文里的 `/uploads/oi-wiki/…` 才不会成死链。
+const { UPLOAD_DIR } = await import('../src/core/paths.js');
+const IMAGE_ROOT = resolve(opt('images', join(UPLOAD_DIR, 'oi-wiki')));
+const UPLOAD_URL = opt('url', '/uploads/oi-wiki');
 
 /* ---------------- 转换器 ---------------- */
 
@@ -535,13 +554,24 @@ async function bootStore() {
   loadBlockTypes(db);
   const store = createDocStore({ db, queries: createDocQueries(db) });
 
-  const row = db.prepare('SELECT id FROM users WHERE username = ?').get('admin');
-  if (!row) throw new Error('库里没有 admin 这个账号，先用 scripts/seed.mjs 建一个');
+  const row = db.prepare('SELECT id FROM users WHERE username = ?').get(VIEWER_USERNAME);
+  if (!row) {
+    throw new Error(
+      `库里没有「${VIEWER_USERNAME}」这个账号（默认找的是本地演示账号 admin，线上通常没有它）。\n` +
+        '用 `--user <用户名>` 指定以谁的身份导入，例如线上：`--user RyuriHime`。',
+    );
+  }
   const viewer = coreStore.userById(row.id);
   return { db, coreStore, store, viewer };
 }
 
 async function main() {
+  if (!existsSync(DOCS_DIR)) {
+    throw new Error(
+      `找不到 OI-wiki 源码目录：${DOCS_DIR}\n` +
+        '仓库里的 `oi-wiki-src/` 一起 clone 下来就有；别处那份用 `--src <OI-wiki-master 目录>` 指过去。',
+    );
+  }
   const pages = buildPages();
   const sectionPages = pages.filter((page) => page.section);
   const leafPages = pages.filter((page) => !page.section);

@@ -407,7 +407,23 @@ node scripts/seed-oiwiki.mjs --tree            # 只补目录树，叶子正文�
 node scripts/seed-oiwiki.mjs --only dp/        # 只导一个子目录
 node scripts/seed-oiwiki.mjs --tree --extras   # 连没进 nav 的文件也发布
 node scripts/seed-oiwiki.mjs --src <目录>      # 换一份源码（默认就是仓库里那份）
+DB_FILE=/opt/app/data/forum.db node scripts/seed-oiwiki.mjs --user RyuriHime   # 线上：写正式库
 ```
+
+> **线上要手动跑一次**：这 519 页是**数据库内容**（`data/` 被 `.gitignore` 忽略），而部署只换
+> `src/ public/ scripts/` 三个目录（`docs/skeleton.md` §5）—— 所以「推上 main」不会让线上多出这个站。
+> 站里已经有同名站时就按标题**复用**它（`scripts/seed-oiwiki.mjs:637` 那句
+> `stations.find((item) => item.title === STATION_TITLE)`），把页挂进去、把站首页重写成入口列表；
+> `--user <用户名>` 指定以谁的身份建站建页（默认 `admin` 是本地演示账号，真实社区里一般没有它），
+> 图片落在 `UPLOAD_DIR`（跟着 `DB_FILE` 走，即数据库旁边的 `uploads/`）。
+> 在服务器上跑一次即可，几秒钟起步、519 页几分钟：
+>
+> ```bash
+> cd <git clone 目录>                                            # oi-wiki-src/ 在这个 clone 里
+> DB_FILE=<部署目录>/data/forum.db node scripts/seed-oiwiki.mjs --user RyuriHime
+> ```
+>
+> 跑完不用重启（页面与目录树都是每次请求现查库）。
 
 > **源码跟着仓库走**：上游那份 `docs/` + `mkdocs.yml` 就放在 **`oi-wiki-src/OI-wiki-master/`**
 > （2919 个文件 / 50.9 MB，原样拷贝，一个字没改过），所以 `git clone` 下来就能离线导入，
