@@ -559,6 +559,9 @@ function draftMetaText(draft) {
     const total = draftSectionTotal(draft);
     bits.push(total ? `改了 ${draftChangedCount(draft)} 块 / 这一节共 ${total} 块` : `改了 ${draftChangedCount(draft)} 块`);
   }
+  // 服务端会把模型写歪的形状就地摆正（`src/modules/ai/programs.js`：自造字段、
+  // 裸写的 `doc:app` 之类）。静悄悄替模型收拾干净最难查，所以这里明说。
+  if (typeof draft.repairs === 'string' && draft.repairs !== '') bits.push(`已摆正形状：${draft.repairs}`);
   if (!draftHasChange(draft)) bits.push('模型这次没改动任何内容');
   return bits.join(' · ');
 }
