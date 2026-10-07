@@ -53,7 +53,10 @@ export function registerRoutesC(route) {
     const post = store.postById(id, user.id);
     ensure(post, 404, 'post_not_found', '帖子不存在');
     assertPostVisible(post, ctx);
-    ensure(post.author_id !== user.id, 400, 'self_repost', '这是你自己的文章，不用转发啦');
+    // 自己的文章也能转发。转发不是「分享给别人」，而是「把它放进我主页的『🔁 转发』分类」——
+    // 对作者来说那是个自己给自己置顶的位置，没有理由拦住。通知那边本来就不给自己发
+    //（见 `src/store.js` 的 `createNotification`：`actorId === userId` 直接返回 null），
+    // 所以不会出现「你转发了你自己的文章」这种通知。
     ensure(!post.locked || isStaff(user), 403, 'locked', '该帖子已锁定，暂时不能转发');
 
     const comment = ctx.body.comment === undefined || ctx.body.comment === null

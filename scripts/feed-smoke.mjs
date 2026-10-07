@@ -622,8 +622,18 @@ try {
     const anonTry = await anon.call(`/api/feed/${originId}/repost`, { method: 'POST', body: { comment: '' } });
     check('未登录不能转发（401）', anonTry.status === 401, JSON.stringify(anonTry.body));
 
-    const selfTry = await admin.call(`/api/feed/${originId}/repost`, { method: 'POST', body: { comment: '' } });
-    check('自己的动态不让转发（400 self_repost）', selfTry.status === 400 && selfTry.error?.code === 'self_repost', JSON.stringify(selfTry.body));
+    // 自己的动态也能转：转出去是「引用自己的新动态」，等于自己给自己带一句评语。
+    const selfTry = await admin.call(`/api/feed/${originId}/repost`, { method: 'POST', body: { comment: '自问自答' } });
+    check(
+      '自己的公开动态也转得出去（不再 400 self_repost）',
+      selfTry.status === 200 && selfTry.data.reposted === true && selfTry.data.repostCount === 1,
+      JSON.stringify(selfTry.body),
+    );
+    check('自己转出来的也是一条带 refFeed 的新动态', selfTry.data.item?.refFeed?.id === originId && selfTry.data.item?.author?.username === 'admin', JSON.stringify(selfTry.data.item?.refFeed));
+    const selfInbox = (await admin.call('/api/notifications?filter=unread')).data;
+    check('转发自己不会给自己发通知', !(selfInbox?.items ?? []).some((item) => item.type === 'feed_repost' && item.feedItemId === originId), JSON.stringify((selfInbox?.items ?? []).map((item) => item.type)));
+    const selfUndo = await admin.call(`/api/feed/${originId}/repost`, { method: 'DELETE' });
+    check('自己转的也撤得掉（撤完计数归零）', selfUndo.status === 200 && selfUndo.data.reposted === false && selfUndo.data.repostCount === 0, JSON.stringify(selfUndo.body));
 
     const done = await alice.call(`/api/feed/${originId}/repost`, { method: 'POST', body: { comment: '这条我要转' } });
     check('别人的公开动态转得出去', done.status === 200 && done.data.reposted === true, JSON.stringify(done.body));

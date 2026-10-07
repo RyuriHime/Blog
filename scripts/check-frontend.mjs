@@ -1616,9 +1616,10 @@ if (!state.theme) problems.push('state.theme 没被初始化');
  *
  * 两件事只有在这里才照得到：
  *  ① 「转发」那一块是**点开才画**的（一页 20 条动态不该预渲染 20 个 textarea）；
- *  ② 转不了的时候（自己的动态 / 不是公开的）画的是**静态计数而不是一颗按钮** ——
- *     `feed-smoke.mjs` 只能证明服务端会回 400 self_repost / 403 repost_scope，
+ *  ② 转不了的时候（不是公开的动态）画的是**静态计数而不是一颗按钮** ——
+ *     `feed-smoke.mjs` 只能证明服务端会回 403 repost_scope，
  *     证明不了前端没画那颗「点了只会弹红条」的按钮。前面几轮修的正是这类毛病。
+ *  ③ 反过来，**自己的动态必须有按钮** —— 自己的也能转，别再退回静态计数。
  */
 {
   const timeline = await view('timeline.js');
@@ -1633,7 +1634,7 @@ if (!state.theme) problems.push('state.theme 没被初始化');
   item.scope = 'public';
   item.repostCount = 0;
   item.reposted = false;
-  // 保证不是「我的动态」——按设计自己的动态不给转发按钮。
+  // 保证是「公开的」——只有可见范围会影响能不能转，作者是不是自己不影响。
   item.author.id = (state.me?.id ?? 1) + 999;
   FEED_REPOSTS.delete(item.id);
   await timeline.viewTimeline(new Map());
@@ -1698,15 +1699,15 @@ if (!state.theme) problems.push('state.theme 没被初始化');
     problems.push(`转完计数还是 ${JSON.stringify(countNode.textContent)} —— 按钮上的数字没跟着走`);
   }
 
-  // ④ 自己的动态：不该画出那颗会弹 400 的按钮
+  // ④ 自己的动态：也该有那颗按钮 —— 自己的也能转（转出去是一条引用自己的新动态）
   const second = pickFixture(FEED_KEY).items[1] ?? null;
   const mine = second ?? item;
   const savedMine = { authorId: mine.author.id, scope: mine.scope };
   mine.author.id = state.me?.id ?? 1;
   mine.scope = 'public';
   await timeline.viewTimeline(new Map());
-  if (hasRepostButton(mine.id)) {
-    problems.push('自己的动态也画了「🔁 转发」按钮 —— 点下去服务端只会回 400 self_repost');
+  if (!hasRepostButton(mine.id)) {
+    problems.push('自己的动态上没有「🔁 转发」按钮 —— 自己的动态也能转，不该画成静态计数');
   }
 
   // ⑤ 不是公开的动态：同样不该画按钮（服务端会回 403 repost_scope）
@@ -1742,9 +1743,10 @@ if (!state.theme) problems.push('state.theme 没被初始化');
   const anchorId = Number(FIXTURE_POST_ID);
   const anchor = pickFixture('/api/docs/1/anchor');
   const savedAuthorId = anchor.post.author.id;
-  // 夹具里这篇的作者就是当前登录用户（都是 id 1），而自己的文章不给转发 ——
-  // 转发区会换成一句「自己的文章不用转发」，表单压根不出现。改成别人写的。
-  anchor.post.author.id = 2;
+  // 夹具里这篇的作者就是当前登录用户（都是 id 1）——**这正好是想要的**：
+  // 自己的积木帖子以前在转发区只显示一句「自己的文章不用转发」，表单压根不出现，
+  // 于是作者在自己帖子上点 🔁 什么都看不到。现在自己的也能转，表单必须照画。
+  anchor.post.author.id = state.me?.id ?? 1;
   POST_REPOSTS.delete(anchorId);
   await doc.viewDoc(1);
   // `mountInteraction(doc)` 在 `public/views/doc.js:1130` 是**不 await 的**
@@ -1757,6 +1759,9 @@ if (!state.theme) problems.push('state.theme 没被初始化');
   const bar = registered('[data-doc-interact-bar]');
   if (!host.innerHTML.includes('data-doc-form="repost"')) {
     problems.push('积木页的转发区没画出来 —— 影子行在，那颗「🔁 转发」点了也没地方去');
+  }
+  if (anchor.post.author.id === (state.me?.id ?? 1) && !host.innerHTML.includes('确认转发')) {
+    problems.push('自己的积木帖子上转发区没有「确认转发」按钮 —— 自己的文章也能转，别再显示「不用转发」');
   }
 
   // ① 提交

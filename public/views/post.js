@@ -116,13 +116,14 @@ function repostSectionHtml(post, reposters, opts = {}) {
         .join('')}</div>`
     : '<div class="hint">还没有人转发，你可以抢第一个。</div>';
 
-  const form =
-    state.me && state.me.id !== post.author.id
-      ? `<form class="form repost-form" ${formAttr} data-id="${post.id}">
+  // 自己的文章也能转发（服务端不再拦 self_repost）：对自己来说「转发」就是把它放进
+  // 主页的「🔁 转发」分类，等于给自己置顶，没有理由只给自己看一句「不用转发」。
+  const form = state.me
+    ? `<form class="form repost-form" ${formAttr} data-id="${post.id}">
            <div class="field">
              <textarea name="comment" maxlength="300" rows="2"
                        placeholder="${mine ? '修改你的转发语…' : '说点什么再转发（可留空直接转发）'}">${esc(mine?.comment ?? '')}</textarea>
-             <span class="hint">转发会出现在你的主页「🔁 转发」分类里（点主页那颗「🔁 转发」标签就能看到），并通知作者；同一篇只能转发一次，可随时撤销。</span>
+             <span class="hint">转发会出现在你的主页「🔁 转发」分类里（点主页那颗「🔁 转发」标签就能看到）${state.me.id === post.author.id ? '' : '，并通知作者'}；同一篇只能转发一次，可随时撤销。</span>
            </div>
            <div class="form-error" data-error hidden></div>
            <div class="form-actions">
@@ -130,9 +131,7 @@ function repostSectionHtml(post, reposters, opts = {}) {
              ${mine ? `<button class="btn" type="button" ${cancelAttr} data-id="${post.id}">撤销转发</button>` : ''}
            </div>
          </form>`
-      : state.me
-        ? '<div class="hint">自己的文章不用转发，直接分享链接给朋友就好。</div>'
-        : '<div class="hint">登录后可以转发这篇文章。</div>';
+    : '<div class="hint">登录后可以转发这篇文章。</div>';
 
   return `
     <section class="${wrapperClass}" id="repost-section">

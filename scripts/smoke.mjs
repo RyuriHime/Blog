@@ -599,9 +599,19 @@ try {
     JSON.stringify(repost.data),
   );
   check('未登录不能转发（401）', (await anon.call(`/api/posts/${adminPost.id}/repost`, { method: 'POST', body: {} })).status === 401);
+  // 自己的文章也能转（转发 = 把它放进自己主页的「🔁 转发」分类）。转完立刻撤掉，
+  // 免得把后面的计数用例算歪 —— 下面那些断言都按「只有 member 转过这篇」起算。
+  const selfRepost = await admin.call(`/api/posts/${adminPost.id}/repost`, { method: 'POST', body: { comment: '自己转自己' } });
   check(
-    '不能转发自己的文章（400）',
-    (await admin.call(`/api/posts/${adminPost.id}/repost`, { method: 'POST', body: {} })).status === 400,
+    '自己的文章也能转发（不再 400 self_repost）',
+    selfRepost.status === 200 && selfRepost.data.reposted === true,
+    `${selfRepost.status} ${JSON.stringify(selfRepost.data ?? selfRepost.error)}`,
+  );
+  const selfCancel = await admin.call(`/api/posts/${adminPost.id}/repost`, { method: 'DELETE' });
+  check(
+    '自己转的也撤得掉（撤完计数回到只剩 member 那一条）',
+    selfCancel.status === 200 && selfCancel.data.reposted === false && selfCancel.data.repostCount === beforeRepostCount + 1,
+    JSON.stringify(selfCancel.data),
   );
 
   const detailAfterRepost = (await anon.call(`/api/posts/${adminPost.id}`)).data;

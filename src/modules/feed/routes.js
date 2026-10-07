@@ -269,7 +269,7 @@ export function registerFeedRoutes(ctx, { queries }) {
    * 别人在原动态上看得见转发数」。转发本体就是普通动态 ⇒ 可见范围、回复、互动、
    * 「我的」筛选全是现成的，不用再写第二套。
    *
-   * 口径对齐 core 的帖子转发（`src/modules/core/routes-c.js`）：不能转自己的、
+   * 口径对齐 core 的帖子转发（`src/modules/core/routes-c.js`）：自己的也能转、
    * 同一条只留一条（再转 = 改转发语）。
    *
    * 多出来一条帖子那边没有的规矩：**只有 `public` 的动态能转发**。
@@ -284,7 +284,8 @@ export function registerFeedRoutes(ctx, { queries }) {
 
     const row = queries.byId({ id, viewerId: user.id });
     ensure(row, 404, 'feed_not_found', '这条动态不存在');
-    ensure(row.user_id !== user.id, 400, 'self_repost', '这是你自己的动态，不用转发啦');
+    // 自己的动态也能转发（转发出去就是一条引用自己的新动态，等于自己给自己带一句评语）。
+    // 只有「可见范围」这一条拦得住：转发出去的那条是公开的。
     ensure(row.scope === 'public', 403, 'repost_scope', '只有公开的动态能转发 —— 转发会让更多人看到它');
 
     const comment = reqCtx.body.comment === undefined || reqCtx.body.comment === null

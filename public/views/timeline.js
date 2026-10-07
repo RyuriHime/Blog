@@ -265,21 +265,19 @@ function feedItemHtml(item) {
     : '';
 
   /*
-   * 只有「别人的 + 公开的」动态能转发：
-   *   - 自己的转出去没意义（服务端会回 400 self_repost）；
-   *   - 非公开的转出去等于泄露（服务端会回 403 repost_scope）。
+   * 只有「公开的」动态能转发（服务端会回 403 repost_scope）。
+   * 自己的动态**也**能转 —— 转出去就是一条引用自己的新动态，等于自己给自己带一句评语。
    * 不能转的时候画成一个静态计数，**不画一颗点了会报错的按钮** ——
    * 「点了没反应 / 点了弹错误」正是前面几轮一直在修的那类毛病。
    */
-  const canRepost = !mine && item.scope === 'public';
+  const canRepost = item.scope === 'public';
   const repostBlock = canRepost
     ? `<button class="react-btn ${item.reposted ? 'is-on' : ''}" type="button"
         data-feed-action="repost" data-id="${item.id}"
         title="${item.reposted ? '撤销我的转发' : '转发到我的动态流'}">
         🔁 <span data-feed-reposts="${item.id}">${Fmt.fmtNum(item.repostCount)}</span>
       </button>`
-    : `<span class="react-btn is-static"
-        title="${mine ? '自己的动态不用转发' : '只有公开的动态能转发'}">
+    : `<span class="react-btn is-static" title="只有公开的动态能转发">
         🔁 <span data-feed-reposts="${item.id}">${Fmt.fmtNum(item.repostCount)}</span>
       </span>`;
 

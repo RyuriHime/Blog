@@ -1064,8 +1064,36 @@ try {
       beforeView.data?.post?.reposted === false && beforeView.data?.post?.repostCount === 0,
       JSON.stringify({ reposted: beforeView.data?.post?.reposted, count: beforeView.data?.post?.repostCount }),
     );
-    const selfRepost = await author.call(`/api/posts/${anchorId}/repost`, { method: 'POST', body: { comment: '自转' } });
-    check('自己的文章不让转发（400 self_repost，转发区里给提示不给表单）', selfRepost.error?.code === 'self_repost', `${selfRepost.status} ${JSON.stringify(selfRepost.error)}`);
+    // 自己的积木帖子也能转发：转发区里必须有表单（以前这里是一句「自己的文章不用转发」，
+    // 于是作者在自己的积木帖子上点 🔁 什么都不显示）。
+    const selfRepost = await author.call(`/api/posts/${anchorId}/repost`, { method: 'POST', body: { comment: '自己转自己' } });
+    check(
+      '自己的文章也能转发（作者也能把它放进主页的「🔁 转发」）',
+      selfRepost.status === 200 && selfRepost.data?.reposted === true && selfRepost.data?.repostCount === 1,
+      `${selfRepost.status} ${JSON.stringify(selfRepost.error ?? selfRepost.data)}`,
+    );
+    const selfView = await author.call(`/api/docs/${docId}/anchor`);
+    check(
+      '作者看自己的积木帖子：按钮显示「已转发」，名单里就是自己',
+      selfView.data?.post?.reposted === true &&
+        selfView.data?.post?.repostCount === 1 &&
+        (selfView.data?.reposters ?? []).length === 1,
+      JSON.stringify({ reposted: selfView.data?.post?.reposted, who: selfView.data?.reposters?.[0]?.user?.username }),
+    );
+    // 不自造通知：`createNotification` 里 `actorId === userId` 直接返回 null。
+    const selfInbox = await author.call('/api/notifications?filter=unread');
+    check(
+      '转发自己不会给自己发通知',
+      !(selfInbox.data?.items ?? []).some((item) => item.type === 'post_repost' && item.post?.id === anchorId),
+      JSON.stringify((selfInbox.data?.items ?? []).map((item) => item.type)),
+    );
+    // 撤掉，后面的用例要按「一条转发都没有」起算。
+    const selfUndo = await author.call(`/api/posts/${anchorId}/repost`, { method: 'DELETE' });
+    check(
+      '自己转的也撤得掉（撤完计数归零）',
+      selfUndo.status === 200 && selfUndo.data?.reposted === false && selfUndo.data?.repostCount === 0,
+      `${selfUndo.status} ${JSON.stringify(selfUndo.body)}`,
+    );
     const anonRepost = await anon.call(`/api/posts/${anchorId}/repost`, { method: 'POST', body: { comment: '路人转' } });
     check('没登录不能转发（401）', anonRepost.status === 401, `${anonRepost.status}`);
 
