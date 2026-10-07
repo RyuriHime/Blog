@@ -7,9 +7,20 @@ import * as Ai from './ai.js';
 import * as Avatar from '../core/avatar.js';
 import * as Fmt from '../core/format.js';
 
-function replyHtml(reply, post) {
+/**
+ * 一条回复。
+ *
+ * `opts.deleteAction`：删除按钮的接线。默认走 `core/events.js` 的
+ * `data-action="delete-reply"` —— 它删完会 `Post.viewPost()` 回到帖子页。
+ * 积木页复用同一张卡片，但删完要**留在积木页**（那里没有帖子路由可回），
+ * 所以那边传 `'reply-delete'`，改由 `views/doc.js` 自己的 `data-doc-action` 接。
+ */
+function replyHtml(reply, post, opts = {}) {
   const canDelete =
     state.me && (state.me.id === reply.author.id || state.me.id === post.author.id || Fmt.isStaffUser(state.me));
+  const deleteAttr = opts.deleteAction
+    ? `data-doc-action="${esc(opts.deleteAction)}"`
+    : 'data-action="delete-reply"';
   return `
     <div class="reply" id="reply-${reply.id}">
       ${Avatar.avatarHtml(reply.author)}
@@ -20,11 +31,7 @@ function replyHtml(reply, post) {
           ${reply.author.id === post.author.id ? '<span class="tag tag-soft">楼主</span>' : ''}
           <span title="${Fmt.fullTime(reply.createdAt)}">${Fmt.timeAgo(reply.createdAt)}</span>
           <span class="reply-actions">
-            ${
-              canDelete
-                ? `<button class="link-btn" data-action="delete-reply" data-id="${reply.id}" data-post="${post.id}">删除</button>`
-                : ''
-            }
+            ${canDelete ? `<button class="link-btn" ${deleteAttr} data-id="${reply.id}" data-post="${post.id}">删除</button>` : ''}
           </span>
         </div>
         <div class="md">${reply.contentHtml}</div>

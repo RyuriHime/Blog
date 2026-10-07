@@ -12,6 +12,10 @@
 // 错误一律抛 `HttpError`：`src/core/handler.js:100-114` 会把它转成
 // `{ok:false,error:{code,message}}` 的信封，非 HttpError 才会打日志 + 500。
 import { ensure, field } from '../../core/http.js';
+// 匿名访客的 id。`store.listReplies` 的「拉黑互查」拿它当哨兵：传 `ANON` 就跳过那一段
+//（SQL 里是 `... OR ? = -1`）。别自己写 0 —— `users` 表里没有 id = 0 的行，
+// 但哨兵值是 -1，写错了就是「谁都当拉黑处理」，回复会全空。
+import { ANON } from '../../core/paths.js';
 
 /** `:id` 只接受正整数；不合法就当"不存在"（不要泄露它其实是个字符串）。 */
 function readId(reqCtx) {
@@ -301,15 +305,29 @@ export function registerDocRoutes(ctx, { store }) {
    */
   add('GET', '/api/docs/:id/anchor', async (reqCtx) => {
     const viewer = reqCtx.user;
+    const viewerId = viewer?.id ?? ANON;
     const anchorId = store.anchorPostIdOf({ id: readId(reqCtx), viewer });
-    const row = anchorId ? ctx.store.postById(anchorId, viewer?.id ?? 0) : null;
+    const row = anchorId ? ctx.store.postById(anchorId, viewerId) : null;
     // 没有锚点（还没同步）或影子行被删了：给空条子，别把阅读页搞成报错页。
     if (!row) {
-      ok(reqCtx.res, { post: null });
+      ok(reqCtx.res, { post: null, replies: [], replyCount: 0, canReply: false });
       return;
     }
     // 用列表形状而不是详情形状：互动条只读得到这些字段，不带 content 省一半流量。
-    ok(reqCtx.res, { post: ctx.shape.shapePostListRow(row) });
+    ok(reqCtx.res, {
+      post: ctx.shape.shapePostListRow(row),
+      // 回复跟互动条一趟回去，不另开一条 `/replies`：
+      //   1. 两者都长在影子行上，能看见影子行就一定能看见它的回复，可见性不用再判一遍；
+      //      真在 core 里判反而会漏 —— 影子行是 `hidden = 1` 的，`assertPostVisible`
+      //      只认 `addPostVisibility` 里 doc 自己登记的那条判定。
+      //   2. 「拉黑我的不出现」这条规则在 `store.listReplies` 的 SQL 里，传访客 id 就生效。
+      // 回复本身能不能发、能不能删，仍旧由 core 那两条接口说了算（见 canReply 的注释）。
+      replies: ctx.store.listReplies(anchorId, viewerId).map(ctx.shape.shapeReply),
+      replyCount: ctx.store.countReplies(anchorId),
+      // 只用来决定「画不画输入框」。真发得出去吗由 `POST /api/posts/:id/replies` 判：
+      // 它认影子行的 `locked`，也认登录状态 —— 前端这里放宽一点没有安全含义。
+      canReply: Boolean(viewer) && (!row.locked || ctx.guards.isStaff(viewer)),
+    });
   });
 
   add('DELETE', '/api/docs/:id', async (reqCtx) => {

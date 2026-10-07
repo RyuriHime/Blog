@@ -995,6 +995,57 @@ try {
     check('作者自己的 followers 文档 canReact=true（core 的 assertPostVisible 放行作者）', authorView.data?.abilities?.canReact === true, JSON.stringify(authorView.data?.abilities));
   }
 
+  /* ---------- 3.9b 积木页的讨论区：回复挂影子行，接口原样复用 core ---------- */
+
+  {
+    // 为什么回复要跟互动条挤在同一趟 `/anchor` 里回：两者都长在影子行上，
+    // 能看见影子行就一定能看见它的回复，分成两条接口只会让阅读页多一次
+    // 「先出互动条、后出回复」的跳动，可见性还得再判一遍。
+    const before = (await anon.call(`/api/docs/${docId}/anchor`)).data?.replyCount ?? 0;
+    const anonView = await anon.call(`/api/docs/${docId}/anchor`);
+    check(
+      'anchor 接口顺带把回复给回来（replies 数组 + replyCount 数字）',
+      Array.isArray(anonView.data?.replies) && typeof anonView.data?.replyCount === 'number',
+      JSON.stringify(anonView.data && Object.keys(anonView.data)),
+    );
+    check('匿名访客 canReply=false（前端据此不画输入框）', anonView.data?.canReply === false, String(anonView.data?.canReply));
+    const loggedInView = await other.call(`/api/docs/${docId}/anchor`);
+    check('登录用户 canReply=true', loggedInView.data?.canReply === true, String(loggedInView.data?.canReply));
+
+    const posted = await other.call(`/api/posts/${anchorId}/replies`, {
+      method: 'POST',
+      body: { content: '**积木页**也能回复了' },
+    });
+    check(
+      '积木页复用 core 的回复接口发得出去（没有另造 /api/docs/:id/replies）',
+      posted.status === 200 && posted.data?.reply?.id > 0,
+      `${posted.status} ${JSON.stringify(posted.error)}`,
+    );
+
+    const afterPost = await anon.call(`/api/docs/${docId}/anchor`);
+    check(
+      '发完再从 anchor 读，回复和计数都在（讨论区就靠这一条重画）',
+      afterPost.data?.replyCount === before + 1 && afterPost.data?.replies?.at(-1)?.id === posted.data.reply.id,
+      JSON.stringify({ count: afterPost.data?.replyCount, ids: (afterPost.data?.replies ?? []).map((r) => r.id) }),
+    );
+    check(
+      '回复正文走的是同一个渲染器（Markdown 已经变成 HTML）',
+      /<strong>积木页<\/strong>/.test(afterPost.data?.replies?.at(-1)?.contentHtml ?? ''),
+      afterPost.data?.replies?.at(-1)?.contentHtml,
+    );
+
+    const foreignDelete = await anon.call(`/api/replies/${posted.data.reply.id}`, { method: 'DELETE' });
+    check('匿名删不了别人发的回复', foreignDelete.status === 401, `${foreignDelete.status}`);
+    const ownDelete = await other.call(`/api/replies/${posted.data.reply.id}`, { method: 'DELETE' });
+    check('发帖人删得掉自己的回复', ownDelete.status === 200 && ownDelete.data?.deleted === true, `${ownDelete.status}`);
+    const afterDelete = await anon.call(`/api/docs/${docId}/anchor`);
+    check(
+      '删完计数回到原来的数',
+      afterDelete.data?.replyCount === before && afterDelete.data?.replies?.length === before,
+      JSON.stringify({ count: afterDelete.data?.replyCount, want: before }),
+    );
+  }
+
   /* ---------- 3.10 既有互动链路零改动复用（FR-KEEP 的正面证据） ---------- */
 
   {

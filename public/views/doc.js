@@ -29,7 +29,7 @@ import * as Fmt from '../core/format.js';
 import * as Prefs from '../core/preferences.js';
 import * as Blocks from './doc-blocks.js';
 import * as Ai from './ai.js';
-import { reactionBarHtml } from './post.js';
+import { reactionBarHtml, replyHtml } from './post.js';
 import { attachSandbox, unmountSandboxes } from '../core/sandbox.js';
 import { ntRenderMath } from './notes.js';
 import * as DocAi from './doc-ai.js';
@@ -295,38 +295,91 @@ function interactHtml(doc, abilities) {
     // 看不见这篇的人也看不见这条 —— 前端只负责不画按钮，能不能动在后端。
     return `<div class="card doc-interact">
       <div class="doc-hint">这篇对「${esc(doc.scopeLabel ?? '不公开')}」可见。赞 / 踩 / 收藏记在它的互动锚点上，只有看得见这篇的人给得上。</div>
+      <div class="doc-interact-replies" data-doc-replies></div>
     </div>`;
   }
   return `<div class="card doc-interact">
     <div class="doc-interact-bar" data-doc-interact-bar><div class="doc-hint">互动条加载中…</div></div>
+    <div class="doc-interact-replies" data-doc-replies></div>
     <div class="doc-interact-ai" data-doc-interact-ai></div>
   </div>`;
 }
 
 /**
- * 阅读页的互动条 + AI 解读面板：正文挂好之后再异步填。
+ * 讨论区：回复列表 + 发表框。
+ *
+ * 回复和互动条长在同一行影子帖子上（`GET /api/docs/:id/anchor` 一趟都给了），
+ * 所以这里只是把 `views/post.js` 那份回复卡片原样铺开 —— 同一份实现、同一套样式，
+ * 积木页和帖子页看到的回复不会两边不一样。
+ *
+ * 唯一的差别是删除按钮：帖子页删完回帖子页，积木页删完要留在积木页，
+ * 所以传 `deleteAction: 'reply-delete'` 改由本文件自己的 `data-doc-action` 接。
+ */
+function docRepliesHtml(post, data) {
+  const replies = data?.replies ?? [];
+  const total = data?.replyCount ?? replies.length;
+  const list = replies.length
+    ? replies.map((reply) => replyHtml(reply, post, { deleteAction: 'reply-delete' })).join('')
+    : emptyHtml('💭', '还没有人回复', '有疑问就在下面问一句，作者会收到通知');
+
+  // 「能不能发」只决定画不画输入框；真发得出去吗由后端那条
+  // `POST /api/posts/:id/replies` 判（它认影子行的 locked，也认登录状态）。
+  let compose;
+  if (data?.canReply) {
+    compose = `<form class="form doc-reply-form" data-doc-form="reply" data-id="${post.id}">
+      <div class="field">
+        <textarea name="content" placeholder="写下你的回复…（支持 Markdown，@某人 可以提醒 TA）" required maxlength="5000"></textarea>
+      </div>
+      <div class="form-error" data-error hidden></div>
+      <div class="form-actions">
+        <button class="btn btn-sm btn-primary" type="submit">发表回复</button>
+        <button class="btn btn-sm btn-ghost" type="button" data-action="preview" data-target="reply">预览</button>
+      </div>
+      <div class="preview-box" data-preview hidden></div>
+    </form>`;
+  } else if (post.locked && state.me) {
+    compose = '<div class="hint">这篇的讨论已经锁定，暂时无法回复。</div>';
+  } else {
+    compose = `<div class="hint" style="margin-bottom:10px">登录后即可参与讨论。</div>
+      <div class="form-actions">
+        <a class="btn btn-sm btn-primary" href="#/login">登录</a>
+        <a class="btn btn-sm" href="#/register">注册新账号</a>
+      </div>`;
+  }
+
+  return `<div class="doc-replies-head"><span class="card-title">💬 讨论（${total}）</span></div>
+    ${list}
+    ${compose}`;
+}
+
+/**
+ * 阅读页的互动条 + 讨论区 + AI 解读面板：正文挂好之后再异步填。
  *
  * 为什么分开取：正文是「谁都能看的那部分」，互动状态是「按访客算的那部分」——
  * 后者慢、还依赖登录，不该拖着文章不让显示。
  */
 async function mountInteraction(doc) {
-  const anchorHost = $('[data-doc-interact-bar]');
-  if (!anchorHost || !doc.anchorPostId) return;
+  const bar = $('[data-doc-interact-bar]');
+  const repliesHost = $('[data-doc-replies]');
+  if (!doc.anchorPostId || (!bar && !repliesHost)) return;
   const anchorId = Number(doc.anchorPostId);
-  const bar = anchorHost;
-  let post = null;
+  let data = null;
   try {
-    const data = await api(`/api/docs/${doc.id}/anchor`);
-    post = data?.post ?? null;
+    data = await api(`/api/docs/${doc.id}/anchor`);
   } catch (error) {
-    bar.innerHTML = `<div class="doc-hint">互动条没读出来：${esc(error.message)}</div>`;
+    const note = `<div class="doc-hint">互动信息没读出来：${esc(error.message)}</div>`;
+    if (bar) bar.innerHTML = note;
+    if (repliesHost) repliesHost.innerHTML = note;
     return;
   }
+  const post = data?.post ?? null;
   if (!post) {
-    bar.innerHTML = '<div class="doc-hint">这篇还没有互动锚点（刚建出来或还在同步），刷新一下就有了。</div>';
+    if (bar) bar.innerHTML = '<div class="doc-hint">这篇还没有互动锚点（刚建出来或还在同步），刷新一下就有了。</div>';
+    if (repliesHost) repliesHost.innerHTML = '<div class="doc-hint">还没有互动锚点，暂时不能回复。</div>';
     return;
   }
-  bar.innerHTML = reactionBarHtml(post);
+  if (bar) bar.innerHTML = reactionBarHtml(post);
+  if (repliesHost) repliesHost.innerHTML = docRepliesHtml(post, data);
   const aiHost = $('[data-doc-interact-ai]');
   if (!aiHost) return;
   // AI 面板按 postId 工作（它读的是帖子表），影子行 id 就是它的 postId。
@@ -337,6 +390,21 @@ async function mountInteraction(doc) {
     aiInfo = { cached: null, stale: false };
   }
   aiHost.innerHTML = Ai.aiPostPanelHtml(post, aiInfo);
+}
+
+/**
+ * 回复发出去 / 删掉之后，只重画讨论区那一块，不整页刷新。
+ *
+ * 只认文档 id：帖子和回复都由 `GET /api/docs/:id/anchor` 一趟给回来，
+ * 所以重画不需要手头留着上一次的 post。
+ */
+async function refreshDocReplies(docId) {
+  const host = $('[data-doc-replies]');
+  const id = Number(docId);
+  if (!host || !Number.isInteger(id) || id <= 0) return;
+  const data = await api(`/api/docs/${id}/anchor`);
+  const post = data?.post ?? null;
+  host.innerHTML = post ? docRepliesHtml(post, data) : '<div class="doc-hint">还没有互动锚点，暂时不能回复。</div>';
 }
 
 function docActionsHtml(doc, abilities) {
@@ -2235,6 +2303,16 @@ async function onAppClick(event) {
   const withBusy = (task) => withButtonBusy(node, task).catch((error) => toastError(error));
 
   if (action === 'new') return withBusy(newDocAndEdit);
+  if (action === 'reply-delete') {
+    if (!confirm('确定删除这条回复吗？')) return undefined;
+    const replyId = Number(node.dataset.id);
+    return withBusy(async () => {
+      await api(`/api/replies/${replyId}`, { method: 'DELETE' });
+      toast('回复已删除');
+      // 重画讨论区而不是 `navigate` —— 删完要留在积木页（帖子页那边是 `Post.viewPost`）。
+      await refreshDocReplies(currentId);
+    });
+  }
   if (action === 'layout') {
     // 只记一个偏好，然后整页重画 —— 列表的排法不是文档的一部分。
     // 重画要用「当前这份筛选条件」，否则切一下排法就把搜的关键词丢了。
@@ -2388,6 +2466,20 @@ async function onAppSubmit(event) {
         });
         toast('注册好了，去编辑器里就能用了');
         return viewDev();
+      }
+      if (form.dataset.docForm === 'reply') {
+        const anchorId = Number(form.dataset.id);
+        const content = String(values.content ?? '').trim();
+        if (!content) return toast('回复不能是空的', 'error');
+        // 发到 core 那条 `POST /api/posts/:id/replies` 上：回复存在**影子行**那条帖子上
+        //（见 `src/modules/doc/routes.js` 里互动锚点的注释），所以积木页不需要另开一套
+        // `/api/docs/:id/replies`。能不能发由后端判（它认锁定与登录状态），前端只管画。
+        const result = await api(`/api/posts/${anchorId}/replies`, { method: 'POST', body: { content } });
+        toast('回复成功');
+        await refreshDocReplies(docState.editor ? docState.editor.id : docState.viewing);
+        const node = document.getElementById(`reply-${result.reply.id}`);
+        if (node) node.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        return undefined;
       }
       if (form.dataset.docForm === 'script-template') {
         const id = Number(values.id) || 0;

@@ -456,6 +456,45 @@
   display: none;
 }
 
+/* 阅读页的讨论区。回复卡片本身还是 `post.js` 那套 `.reply`（样式在 40-post.css），
+   这里只管三件事：它在互动卡里独占一行、别继承互动条的暗色小字、别在卡片里叠一层内边距。
+
+   `.doc-interact` 是 `display:flex; flex-wrap:wrap`，不给 `flex-basis:100%`
+   讨论区会被挤成和互动条同一行的一小条。 */
+.doc-interact-replies {
+  flex-basis: 100%;
+  width: 100%;
+  margin-top: 14px;
+  border-top: 1px solid var(--border-soft);
+  padding-top: 6px;
+  color: var(--text);
+  font-size: 14px;
+}
+
+.doc-interact-replies:empty {
+  display: none;
+}
+
+/* `.reply` 原本是给「`padding:0` 的整卡」用的，一条 16px 18px；
+   这里是塞在已经带内边距的卡片里，横向的内边距要收掉，不然缩进两层。 */
+.doc-interact-replies .reply {
+  padding: 12px 0;
+}
+
+.doc-replies-head {
+  margin: 8px 0 2px;
+}
+
+.doc-reply-form {
+  margin-top: 14px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border-soft);
+}
+
+.doc-reply-form textarea {
+  min-height: 84px;
+}
+
 /* 帖子页顶上的「已经搬进积木」横幅（`public/views/post.js` 的 movedNoteHtml）。 */
 .doc-moved-banner {
   display: flex;
