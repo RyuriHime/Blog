@@ -1438,7 +1438,9 @@ if (!state.theme) problems.push('state.theme 没被初始化');
  *      （装错了 = 预览的和发出去的永远不是一回事）；
  *   ② 回来的 HTML 有没有塞进预览盒、盒子有没有从 hidden 里放出来
  *      （漏了任何一步 = 用户点了按钮什么都没发生）；
- *   ③ 再点一次和空内容时**不该**再发请求（收起是纯本地动作，空内容本地就能判断）。
+ *   ③ 再点一次和空内容时**不该**再发请求（收起是纯本地动作，空内容本地就能判断）；
+ *   ④ 预览**开着**时改内容要重新渲染（这是补的：以前只有开关、没有跟随，
+ *      表现是「改完字预览还是老的」）；收起来时改内容则一个请求都不该发。
  *
  * 公式排版（`ntRenderMath`）在这一层测不到：它要等 KaTeX 脚本 onload，
  * 而假 DOM 的 `head.appendChild()` 是空实现，那个 promise 永远不会 settle ——
@@ -1453,6 +1455,9 @@ if (!state.theme) problems.push('state.theme 没被初始化');
     const composerBox = registered('[data-team-composer]');
     const textarea = registered('[data-team-field="content"]');
     const previewBox = registered('[data-team-preview]');
+    // 委托读的是 `dataset.teamField`（不是选择器）——假 DOM 不会从选择器里反推，
+    // 后面的 ④⑤ 要往这个输入框里打字，就得先把字段名补上，否则监听第一个 `if` 就 return 了。
+    textarea.dataset.teamField = 'content';
 
     await team.viewTeam('frontend-group', new Map());
     await settle();
@@ -1513,10 +1518,42 @@ if (!state.theme) problems.push('state.theme 没被初始化');
       problems.push('内容为空还是去问了服务端（本地就能判断）');
     }
 
-    console.log(`  ${problems.length ? '❌' : '✅'} 交互：团队帖预览会问服务端、会摆结果、收起与空内容不再发请求`);
+    /* ④ 预览**开着**的时候接着打字：防抖一到就拿新原文重画
+     *
+     * 这一条是补的：以前 `togglePreview` 只管开关，输入框上没有任何监听，
+     * 表现是「改完字预览还是老的，得先收起再点开一次才更新」——渲染断言看不出来。
+     * 防抖 400ms 是跟积木页（`views/doc.js` 的 `mdPreviewTimer`）对齐的，
+     * 所以这里必须等过它，`settle()` 那 30ms 不够。
+     */
+    textarea.closest = (selector) =>
+      selector === '[data-team-field]' ? textarea : selector === '[data-team-editor]' ? registered('[data-team-editor]') : null;
+    textarea.value = '改过的内容';
+    previewBox.innerHTML = '';
+    REQUESTS.length = 0;
+    dispatch(app, 'input', textarea);
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    const live = REQUESTS.find((item) => item.method === 'POST' && item.url.split('?')[0] === '/api/markdown/preview');
+    if (!live) problems.push('预览开着时改内容，没有重新请求 /api/markdown/preview（预览是死的）');
+    else if (live.body?.content !== '改过的内容') {
+      problems.push(`预览重画时装的不是当前原文：${JSON.stringify(live.body?.content)}`);
+    }
+    if (!String(previewBox.innerHTML).includes('<p>ok</p>')) problems.push('预览重画之后盒子里的 HTML 没有换');
+
+    /* ⑤ 预览**收起来**时打字：一个请求都不该发 */
+    REQUESTS.length = 0;
+    dispatch(app, 'click', previewNode);
+    await settle();
+    textarea.value = '收起来之后又改了';
+    dispatch(app, 'input', textarea);
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    if (REQUESTS.some((item) => item.url.includes('/api/markdown/preview'))) {
+      problems.push('预览收起来之后改内容还在发预览请求（没展开就不该问服务端）');
+    }
+
+    console.log(`  ${problems.length ? '❌' : '✅'} 交互：团队帖预览会问服务端、会摆结果、收起与空内容不再发请求、开着时跟着打字走`);
   } catch (error) {
     problems.push(`团队帖预览交互测试自身崩了：${error?.stack || error}`);
-    console.log('  ❌ 交互：团队帖预览会问服务端、会摆结果、收起与空内容不再发请求');
+    console.log('  ❌ 交互：团队帖预览会问服务端、会摆结果、收起与空内容不再发请求、开着时跟着打字走');
   }
 }
 

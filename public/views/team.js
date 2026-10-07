@@ -1325,19 +1325,57 @@ const PREVIEW_OPEN = '👁 预览';
 const PREVIEW_CLOSE = '👁 收起预览';
 
 /**
- * 团队帖输入框（发帖 / 编辑）的 Markdown 预览。
+ * 打字时重画预览的防抖计时器。
+ *
+ * 积木页（`views/doc.js` 的 `mdPreviewTimer`）用的是同一个套路、同一个 400ms。
+ * 预览按钮只管「开 / 关」，开着的时候内容由输入框自己推着走 ——
+ * 这里原来缺的就是这条线，表现是「改完字预览还是老的，得先收起再点开一次」。
+ */
+let previewTimer = null;
+
+/**
+ * 把输入框里的原文渲染进预览盒。
  *
  * 走站点既有那条路：`POST /api/markdown/preview` —— 发帖框、积木页的预览也是它，
  * 前端不自己拼一份 Markdown（那样两边迟早长得不一样）。
  *
  * 排版公式这一步**不能省**：那个接口只吐 `$…$` / `$$…$$` 原文，
  * 排版权一直归客户端的 `ntRenderMath`（见文件头 import 那段注释）。
+ *
+ * 返回 `false` 表示这次结果已经过期。加这一层是因为 `api()` 是异步的：
+ * 连着敲两下键盘会有两个请求同时在飞，先发的后回来就会把新内容盖成旧的。
+ */
+async function paintPreview(editor) {
+  const textarea = editor?.querySelector('[data-team-field="content"]');
+  const box = editor?.querySelector('[data-team-preview]');
+  if (!textarea || !box) return false;
+
+  const text = textarea.value ?? '';
+  if (text.trim() === '') {
+    box.innerHTML = '<span class="hint">还没写内容。</span>';
+    return true;
+  }
+
+  const { html } = await api('/api/markdown/preview', { method: 'POST', body: { content: text } });
+  // 请求飞在路上时用户又敲了字：丢掉这份结果，新的那次会画。
+  if ((textarea.value ?? '') !== text) return false;
+
+  box.innerHTML = html || '<span class="hint">（空内容）</span>';
+  // LaTeX 必须在 innerHTML **之后**才排得出来（与 views/doc.js、views/timeline.js 同一做法）。
+  ntRenderMath(box);
+  return true;
+}
+
+/**
+ * 「👁 预览 / 收起预览」按钮。发帖框与「编辑帖子」框共用这一个。
+ *
+ * 只管开关：内容进来之后由 `bindTeamOnce()` 里那个 `input` 监听推着更新，
+ * 所以展开状态下接着打字，预览是活的。
  */
 async function togglePreview(node) {
   const editor = node.closest('[data-team-editor]');
-  const textarea = editor?.querySelector('[data-team-field="content"]');
   const box = editor?.querySelector('[data-team-preview]');
-  if (!editor || !textarea || !box) return;
+  if (!editor || !box) return;
 
   if (!box.hidden) {
     box.hidden = true;
@@ -1345,14 +1383,7 @@ async function togglePreview(node) {
     return;
   }
 
-  const text = textarea.value ?? '';
-  if (text.trim() === '') {
-    box.innerHTML = '<span class="hint">还没写内容。</span>';
-  } else {
-    const { html } = await api('/api/markdown/preview', { method: 'POST', body: { content: text } });
-    box.innerHTML = html || '<span class="hint">（空内容）</span>';
-    ntRenderMath(box);
-  }
+  await paintPreview(editor);
   box.hidden = false;
   node.textContent = PREVIEW_CLOSE;
 }
@@ -1763,6 +1794,18 @@ function bindTeamOnce() {
     if (!node) return;
     const field = node.dataset.teamField;
     if (field in teamState.draft) teamState.draft[field] = node.value;
+
+    // 预览开着的时候跟着打字走（发帖框与「编辑帖子」框共用这段）。
+    // 只认 `content`：改标题不用重画预览；预览没展开更是连请求都不该发。
+    if (field !== 'content') return;
+    const editor = node.closest('[data-team-editor]');
+    const box = editor?.querySelector('[data-team-preview]');
+    if (!box || box.hidden) return;
+    if (previewTimer) clearTimeout(previewTimer);
+    previewTimer = setTimeout(() => {
+      previewTimer = null;
+      paintPreview(editor).catch((error) => toastError(error));
+    }, 400);
   });
   ui.app.addEventListener('change', (event) => {
     const node = event.target.closest('[data-team-field]');
