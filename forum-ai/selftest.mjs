@@ -12,6 +12,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { setTimeout as sleep } from 'node:timers/promises';
 import {
   AiError,
+  aiConfig,
   aiStatus,
   chat,
   extractJson,
@@ -278,9 +279,11 @@ try {
   /* ---------------- 上游抖动：空响应与重试 ---------------- */
   console.log('\n▶ 上游抖动与重试');
   const retryEnv = { ...env, AI_RETRY_DELAY_MS: '0' };
-  check('默认重试 2 次（共 3 次请求）', aiStatus(env).retries === 2, String(aiStatus(env).retries));
-  check('重试次数可以由环境变量改', aiStatus({ ...env, AI_RETRIES: '0' }).retries === 0);
+  check('默认重试 2 次（共 3 次请求）', aiConfig(env).retries === 2, String(aiConfig(env).retries));
+  check('重试次数可以由环境变量改', aiConfig({ ...env, AI_RETRIES: '0' }).retries === 0);
+  check('重试间隔默认 600ms，也能改', aiConfig(env).retryDelayMs === 600 && aiConfig({ ...env, AI_RETRY_DELAY_MS: '50' }).retryDelayMs === 50);
   check('状态里列出重试相关的环境变量', aiStatus(env).envKeys.includes('AI_RETRIES') && aiStatus(env).envKeys.includes('AI_RETRY_DELAY_MS'));
+  check('状态里不新增顶层字段（/api/site 的形状是冻的）', JSON.stringify(Object.keys(aiStatus(env))) === JSON.stringify(['configured', 'model', 'baseUrl', 'envKeys']), JSON.stringify(Object.keys(aiStatus(env))));
 
   mock.calls.length = 0;
   mock.emptyTimes = 2;

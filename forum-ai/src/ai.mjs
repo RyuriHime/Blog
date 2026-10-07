@@ -93,14 +93,19 @@ export function aiConfig(env = process.env) {
   };
 }
 
-/** 对外暴露的状态：永远不回传密钥本身。 */
+/**
+ * 对外暴露的状态：永远不回传密钥本身。
+ *
+ * 这里**只加环境变量名，不加新的顶层字段** —— `/api/site` 的 `ai` 对象形状被
+ * `scripts/check-golden.mjs` 冻着（它是「用户能感知到的行为一个字都没变」的硬证据）；
+ * 重试次数这类配置项请用 `aiConfig()` 读，别塞进 HTTP 响应。
+ */
 export function aiStatus(env = process.env) {
-  const { configured, model, baseUrl, retries } = aiConfig(env);
+  const { configured, model, baseUrl } = aiConfig(env);
   return {
     configured,
     model: configured ? model : null,
     baseUrl: configured ? baseUrl : null,
-    retries,
     envKeys: [
       'AI_BASE_URL',
       'AI_API_KEY',
