@@ -77,7 +77,8 @@ function mockReply(messages) {
       prereq: [{ name: 'JavaScript 基础', why: '读懂示例代码', level: '入门' }],
       recommend: [
         { postId: ids[1] ?? null, title: '相关帖子', reason: '同一主题延伸', relation: '延伸' },
-        { postId: 999999, title: '不存在的帖子', reason: '编号是假的，前端仍应展示标题', relation: '对比' },
+        // 只有标题、没有任何真实落点 —— 这就是线上出现过的那类鬼篇目，必须整条丢掉
+        { postId: null, title: '不存在的指南', reason: '编号是编的，应被丢弃', relation: '对比' },
       ],
     };
   }
@@ -291,7 +292,7 @@ try {
   check('解读包含摘要', typeof review?.summary === 'string' && review.summary.length > 10, review?.summary);
   check('解读包含标签数组', Array.isArray(review?.tags) && review.tags.includes('SQLite'), JSON.stringify(review?.tags));
   check('解读包含前置知识', Array.isArray(review?.prereq) && review.prereq[0]?.name === 'JavaScript 基础', JSON.stringify(review?.prereq));
-  check('推荐阅读被解析成 2 条', Array.isArray(review?.recommend) && review.recommend.length === 2, JSON.stringify(review?.recommend));
+  check('推荐阅读只留有真实落点的条目（编造的整条丢弃）', Array.isArray(review?.recommend) && review.recommend.length === 1 && (review.recommend[0].postId ?? review.recommend[0].documentId) === 1, JSON.stringify(review?.recommend));
   check('记录 token 用量', review?.tokens?.prompt === 123 && review?.tokens?.completion === 45, JSON.stringify(review?.tokens));
 
   const sentAuth = mock.calls[0]?.headers?.authorization;
@@ -380,6 +381,22 @@ try {
   check('内容变化后缓存标记为过期', afterChange.data?.stale === true, `stale=${afterChange.data?.stale}`);
   const siteAfter = await member2.call('/api/ai/site');
   check('内容变化后全站整理也标记过期', siteAfter.data?.stale === true, `stale=${siteAfter.data?.stale}`);
+
+  console.log('\n▶ 失败现场与重试');
+  mock.failWith = '抱歉，我暂时没法给出结构化结果。';
+  const badJson = await member2.call('/api/ai/posts/3/analyze', { method: 'POST' });
+  check('模型返回非 JSON → 502 ai_bad_json', badJson.status === 502 && badJson.error?.code === 'ai_bad_json', `status=${badJson.status} code=${badJson.error?.code}`);
+  const badCache = await member2.call('/api/ai/posts/3');
+  check(
+    '失败现场留了模型原文（errorDetail）',
+    badCache.data?.cached?.status === 'failed' && String(badCache.data.cached.errorDetail).includes('抱歉，我暂时没法给出结构化结果'),
+    JSON.stringify(badCache.data?.cached).slice(0, 200),
+  );
+  mock.failWith = null;
+  const retry = await member2.call('/api/ai/posts/3/analyze', { method: 'POST' });
+  check('失败后重试即修好', retry.status === 200 && retry.data?.review?.status === 'done', JSON.stringify(retry.data?.review).slice(0, 140));
+  const retryCache = await member2.call('/api/ai/posts/3');
+  check('成功后清掉失败现场', retryCache.data?.cached?.status === 'done' && retryCache.data.cached.errorDetail === '', JSON.stringify(retryCache.data?.cached?.errorDetail));
 
   console.log('\n▶ AI 上游故障的处理');
   mock.failWith = null;

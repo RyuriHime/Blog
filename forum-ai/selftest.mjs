@@ -28,6 +28,7 @@ import {
   createAiHandlers,
   createAiRouter,
   toResponse,
+  rawOutputHead,
 } from './src/index.mjs';
 
 let passed = 0;
@@ -50,6 +51,7 @@ const mock = { calls: [], mode: 'ok' };
 
 function mockReply(userText) {
   const ids = [...userText.matchAll(/\[#([\w.-]+)\]/g)].map((m) => m[1]);
+  const wikiIds = [...userText.matchAll(/\[W#([\w.-]+)\]/g)].map((m) => m[1]);
   if (mock.mode === 'bad-json') return '抱歉，我无法回答。';
   if (mock.mode === 'fenced') {
     return null; // 由调用方包成 ```json
@@ -77,6 +79,10 @@ function mockReply(userText) {
       recommend: [
         { documentId: ids[1], title: '相关文档', reason: '延伸', relation: '延伸' },
         { documentId: '999999', title: '不存在的文档', reason: '假的', relation: '对比' },
+        // 真正的鬼篇目：连编号都没有，纯标题（2026-10 线上解读里出现过《XX 手册》这类）
+        { documentId: null, title: '不存在的指南', reason: '编的', relation: '延伸' },
+        { wikiId: wikiIds[0], title: '线段树', reason: 'OI 词条', relation: '先读' },
+        { wikiId: '999999', title: '不存在的词条', reason: '假的', relation: '延伸' },
       ],
     };
   }
@@ -210,15 +216,34 @@ try {
 
   /* ---------------- 三个能力 ---------------- */
   console.log('\n▶ 单篇解读 / 全库整理 / 问答');
-  const single = await reviewDocument(DOCS[0], DOCS.slice(1), { chatOptions: { env } });
+  const WIKI = [
+    { id: 501, title: '线段树', station: 'OI Wiki', category: '数据结构' },
+    { id: 502, title: 'string', station: 'OI Wiki', category: 'STL' },
+  ];
+  const single = await reviewDocument(DOCS[0], DOCS.slice(1), { chatOptions: { env }, wikiPages: WIKI });
   check('解读返回分类', single.review.category === '后端', single.review.category);
   check('解读返回 token 用量', single.usage.prompt === 11 && single.usage.completion === 7);
   check('解读带上模型名', single.model === 'mock-model');
   check('推荐里的真实编号保留', single.review.recommend.some((item) => item.documentId === 2), JSON.stringify(single.review.recommend));
-  check('推荐里的假编号被标成外部而非内链', single.review.recommend.some((item) => item.documentId === 999999) === false && single.review.recommend.some((item) => item.external === true), JSON.stringify(single.review.recommend));
-  check('外部推荐仍然保留标题供 UI 展示', single.review.recommend.find((item) => item.external)?.title === '不存在的文档');
-  const strictReview = normalizeReview({ recommend: [{ documentId: 999999, title: 'x' }] }, {}, { knownIds: [1, 2] });
-  check('传 knownIds 时未知编号被清成 null', strictReview.recommend[0].documentId === null && strictReview.recommend[0].external === true);
+  check('推荐里的站内 Wiki 词条保留 wikiId', single.review.recommend.some((item) => item.wikiId === 501), JSON.stringify(single.review.recommend));
+  check(
+    '每条推荐都有真实落点（没有只剩标题的鬼篇目）',
+    single.review.recommend.length > 0 && single.review.recommend.every((item) => item.documentId || item.wikiId),
+    JSON.stringify(single.review.recommend),
+  );
+  check(
+    '编造的篇目（假编号 / 无编号）整条丢掉',
+    ['不存在的文档', '不存在的指南', '不存在的词条'].every((title) => !single.review.recommend.some((item) => item.title === title)),
+    JSON.stringify(single.review.recommend),
+  );
+  const strictReview = normalizeReview(
+    { recommend: [{ documentId: 999999, title: 'x' }, { wikiId: 999, title: 'y' }, { documentId: 2, wikiId: 501, title: '两边都对得上' }] },
+    {},
+    { knownIds: [1, 2], knownWikiIds: [501] },
+  );
+  check('未知帖子编号被整条丢弃', strictReview.recommend.every((item) => item.title !== 'x'), JSON.stringify(strictReview.recommend));
+  check('未知 wiki 编号被整条丢弃', strictReview.recommend.every((item) => item.title !== 'y'), JSON.stringify(strictReview.recommend));
+  check('同时给两个编号时两个都保留', strictReview.recommend[0]?.documentId === 2 && strictReview.recommend[0]?.wikiId === 501, JSON.stringify(strictReview.recommend));
 
   const corpus = await reviewCorpus(DOCS, { chatOptions: { env } });
   check('全库整理返回主题', corpus.report.topics.length === 1 && corpus.report.topics[0].documentIds.length >= 1, JSON.stringify(corpus.report.topics));
@@ -254,6 +279,15 @@ try {
     badJson = error;
   }
   check('模型返回非 JSON → ai_bad_json', badJson?.code === 'ai_bad_json', badJson?.code);
+  check('失败时把模型原文挂进 details.rawOutput', badJson?.details?.rawOutput === '抱歉，我无法回答。', badJson?.details?.rawOutput);
+  check('rawOutputHead 短的照原样、折成一行', rawOutputHead('a\n\n b ') === 'a b', JSON.stringify(rawOutputHead('a\n\n b ')));
+  const rawLong = rawOutputHead('x'.repeat(900));
+  check(
+    'rawOutputHead 长的截到 500 字并标全文长度',
+    rawLong.startsWith('x'.repeat(500)) && rawLong.endsWith('（全文 900 字）') && rawLong.length < 540,
+    String(rawLong.length),
+  );
+  check('rawOutputHead 容得下 null', rawOutputHead(null) === '');
   mock.mode = 'fenced';
   const fenced = await reviewDocument(DOCS[0], [], { chatOptions: { env } });
   check('```json 包裹也能解析', fenced.review.category === '前端', fenced.review.category);
@@ -291,10 +325,19 @@ try {
   check('已解读的不在待整理里', store.pendingDocuments({ limit: 10 }).includes('1') === false);
   check('统计已解读数量', store.reviewStats().analyzed === 1 && store.reviewStats().failed === 0);
 
+  const failedReview = store.saveReview(
+    { documentId: '2', status: 'failed', error: 'AI 返回的解读结果不是合法 JSON', errorDetail: '{"category": "数据' },
+    { contentHash: hashBefore },
+  );
+  check('失败也把模型原文存进 errorDetail', failedReview.errorDetail === '{"category": "数据' && store.reviewOf('2').errorDetail === '{"category": "数据', JSON.stringify(failedReview));
+  check('失败的篇目排在从未解读的前面', store.pendingDocuments({ limit: 2 }).join(',') === '2,3', JSON.stringify(store.pendingDocuments({ limit: 10 })));
+  check('统计里失败与已解读分开记', store.reviewStats().analyzed === 1 && store.reviewStats().failed === 1);
+
   source = [...DOCS, { id: '4', title: '新文档', content: '新增内容' }];
   store.syncCorpus();
   check('内容变化后指纹改变', store.corpusHash() !== hashBefore);
   check('内容变化后旧解读算过期', store.pendingDocuments({ limit: 10 }).includes('1') === true);
+  check('待整理顺序：失败 → 从未解读 → 内容已变', store.pendingDocuments({ limit: 10 }).join(',') === '2,3,4,1', JSON.stringify(store.pendingDocuments({ limit: 10 })));
   check('reportIsStale 对空报告返回 true', store.reportIsStale() === true);
 
   const savedReport = store.saveReport(
@@ -308,7 +351,7 @@ try {
   check('hash 一致时报告不过期', store.reportIsStale() === false);
 
   const cleared = store.clearAll();
-  check('clearAll 清掉解读与报告', cleared.reviews === 1 && cleared.reports === 2, JSON.stringify(cleared));
+  check('clearAll 清掉解读与报告', cleared.reviews === 2 && cleared.reports === 2, JSON.stringify(cleared));
   check('清理后索引还在', store.corpusStats().documents === 4);
 
   /* ---------------- HTTP 处理器 ---------------- */
@@ -382,6 +425,14 @@ try {
 
   const cleared2 = await call(handlers.clearCache, { user: { id: 'u1', role: 'admin' } });
   check('清空缓存 → 200', cleared2.status === 200 && cleared2.body.data.cleared === true);
+
+  // 失败时留下现场：错误码进 error，模型原文进 errorDetail
+  mock.mode = 'bad-json';
+  const badOne = await call(handlers.analyzeDocument, { params: { id: '3' }, user: { id: 'u1' }, body: {} });
+  check('解读失败 → 502 ai_bad_json', badOne.status === 502 && badOne.body.error.code === 'ai_bad_json', JSON.stringify(badOne.body).slice(0, 160));
+  check('失败现场落库：模型原文进 errorDetail', store.reviewOf('3')?.errorDetail === '抱歉，我无法回答。', JSON.stringify(store.reviewOf('3')));
+  check('失败的篇目回到待整理队首（下次优先重试）', store.pendingDocuments({ limit: 1 }).join(',') === '3', JSON.stringify(store.pendingDocuments({ limit: 5 })));
+  mock.mode = 'ok';
 
   // 上游整体故障时的部分失败语义
   mock.mode = 'http-500';

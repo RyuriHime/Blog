@@ -56,6 +56,7 @@ export function createAiStore({ db, documentSource, tablePrefix = DEFAULT_PREFIX
       prompt_tokens     INTEGER NOT NULL DEFAULT 0,
       completion_tokens INTEGER NOT NULL DEFAULT 0,
       error             TEXT    NOT NULL DEFAULT '',
+      error_detail      TEXT    NOT NULL DEFAULT '',
       created_at        INTEGER NOT NULL,
       updated_at        INTEGER NOT NULL
     );
@@ -90,20 +91,29 @@ export function createAiStore({ db, documentSource, tablePrefix = DEFAULT_PREFIX
     );
   `);
 
+  // 旧库升级：`error_detail` 是后来加的列，`CREATE TABLE IF NOT EXISTS` 不会补，得自己 ALTER。
+  // （存的是模型原始输出的开头一段 —— 失败时只有一句「不是合法 JSON」根本判断不出是截断还是格式错。）
+  const reviewColumns = new Set(
+    db.prepare(`PRAGMA table_info(${P}document_reviews)`).all().map((row) => row.name),
+  );
+  if (!reviewColumns.has('error_detail')) {
+    db.exec(`ALTER TABLE ${P}document_reviews ADD COLUMN error_detail TEXT NOT NULL DEFAULT ''`);
+  }
+
   const statements = {
     reviewByDoc: db.prepare(`SELECT * FROM ${P}document_reviews WHERE document_id = ?`),
     reviewsByIds: db.prepare(`SELECT * FROM ${P}document_reviews`),
     upsertReview: db.prepare(`
       INSERT INTO ${P}document_reviews
         (document_id, status, category, difficulty, summary, tags_json, prereq_json, recommend_json,
-         model, content_hash, prompt_tokens, completion_tokens, error, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         model, content_hash, prompt_tokens, completion_tokens, error, error_detail, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(document_id) DO UPDATE SET
         status = excluded.status, category = excluded.category, difficulty = excluded.difficulty,
         summary = excluded.summary, tags_json = excluded.tags_json, prereq_json = excluded.prereq_json,
         recommend_json = excluded.recommend_json, model = excluded.model, content_hash = excluded.content_hash,
         prompt_tokens = excluded.prompt_tokens, completion_tokens = excluded.completion_tokens,
-        error = excluded.error, updated_at = excluded.updated_at`),
+        error = excluded.error, error_detail = excluded.error_detail, updated_at = excluded.updated_at`),
     deleteReview: db.prepare(`DELETE FROM ${P}document_reviews WHERE document_id = ?`),
     countDone: db.prepare(`SELECT COUNT(*) AS count FROM ${P}document_reviews WHERE status = 'done'`),
     countFailed: db.prepare(`SELECT COUNT(*) AS count FROM ${P}document_reviews WHERE status <> 'done'`),
@@ -150,6 +160,7 @@ export function createAiStore({ db, documentSource, tablePrefix = DEFAULT_PREFIX
       contentHash: row.content_hash,
       tokens: { prompt: row.prompt_tokens, completion: row.completion_tokens },
       error: row.status === 'done' ? '' : row.error,
+      errorDetail: row.status === 'done' ? '' : (row.error_detail ?? ''),
       updatedAt: row.updated_at,
     };
 
@@ -268,6 +279,7 @@ export function createAiStore({ db, documentSource, tablePrefix = DEFAULT_PREFIX
         Number(review.tokens?.prompt ?? 0),
         Number(review.tokens?.completion ?? 0),
         review.error ?? '',
+        review.errorDetail ?? '',
         now,
         now,
       );
@@ -286,7 +298,13 @@ export function createAiStore({ db, documentSource, tablePrefix = DEFAULT_PREFIX
       };
     },
 
-    /** 待整理的文档：没解读过 → 解读失败 → 内容已变化。 */
+    /**
+     * 待整理的文档：解读失败 → 没解读过 → 内容已变化。
+     *
+     * 失败必须排在最前面：批量接口一次只取 `limit` 条（默认 10），大站动辄几百篇「没解读过」，
+     * 排在它们后面的失败篇目**永远轮不到重试** —— 页面上那句「解读失败」就再也消不掉了。
+     * 「内容已变化」留在最后是有意的：它已经有解读可看，先把没解读过的补上更划算。
+     */
     pendingDocuments({ limit = 10 } = {}) {
       const hash = api.corpusHash();
       const reviews = new Map(
@@ -301,7 +319,7 @@ export function createAiStore({ db, documentSource, tablePrefix = DEFAULT_PREFIX
         else if (review.status !== 'done') failed.push(row.document_id);
         else if (review.content_hash && review.content_hash !== hash) stale.push(row.document_id);
       }
-      return [...never, ...failed, ...stale].slice(0, Math.max(1, limit));
+      return [...failed, ...never, ...stale].slice(0, Math.max(1, limit));
     },
 
     countPending() {

@@ -129,7 +129,7 @@ const aiServer = http.createServer((req, res) => {
             prereq: [{ name: 'JavaScript', why: '读代码', level: '入门' }],
             recommend: [
               { documentId: ids.find((id) => id !== '1') ?? null, title: '同主题延伸', reason: '性能侧', relation: '延伸' },
-              { documentId: '999999', title: '编造的编号', reason: '应被标外部', relation: '对比' },
+              { documentId: null, title: '编造的手册', reason: '没有编号', relation: '对比' },
             ],
           }
         : {
@@ -185,8 +185,15 @@ try {
   const review = analyze.body.data?.review;
   check('解读字段完整', review?.category === '数据库' && review.difficulty === '进阶' && review.tags.includes('SQLite'), JSON.stringify(review).slice(0, 200));
   check('前置知识解析正确', review.prereq[0].name === 'JavaScript');
-  check('真实编号保留、编造编号标成外部', review.recommend.some((item) => item.documentId === 2) && review.recommend.find((item) => item.external)?.documentId === null, JSON.stringify(review.recommend));
-  check('推荐池在冷启动时不再为空（未解读的帖子也能被推荐）', /可推荐的其它文档[\s\S]*\[#2\]/.test(String(mock.prompts.at(-1))), String(mock.prompts.at(-1)).slice(-160).replace(/\n/g, ' | '));
+  check(
+    '编号真实的推荐保留、只剩标题的编造条目被丢掉',
+    review.recommend.some((item) => item.documentId === 2) &&
+      review.recommend.every((item) => item.documentId || item.wikiId) &&
+      !review.recommend.some((item) => item.title === '编造的手册'),
+    JSON.stringify(review.recommend),
+  );
+  check('推荐池在冷启动时不再为空（未解读的帖子也能被推荐）', /可推荐的站内帖子[\s\S]*\[#2\]/.test(String(mock.prompts.at(-1))), String(mock.prompts.at(-1)).slice(-160).replace(/\n/g, ' | '));
+  check('宿主没有积木表时，Wiki 词条清单退化成空', /【站内 Wiki 词条】\n（这篇没有匹配到站内 Wiki 词条）/.test(String(mock.prompts.at(-1))), String(mock.prompts.at(-1)).slice(-120).replace(/\n/g, ' | '));
 
   const cached = await call('/api/ai/posts/1');
   check('缓存可读回且未过期', cached.status === 200 && cached.body.data.cached.category === '数据库' && cached.body.data.stale === false, JSON.stringify(cached.body).slice(0, 160));

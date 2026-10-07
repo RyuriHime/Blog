@@ -23,6 +23,7 @@ import {
   renderSiteUser,
   renderAskUser,
   renderSiblingList,
+  renderWikiList,
 } from './prompts.mjs';
 import { extractJson, normalizeReview, normalizeSiteReport, normalizeAnswer } from './parse.mjs';
 import { buildMaterial, clampText } from './material.mjs';
@@ -47,6 +48,20 @@ export class AiError extends Error {
     this.code = code;
     this.details = details;
   }
+}
+
+/**
+ * 失败时留给排查用的「现场」：模型原始输出的开头一段。
+ *
+ * 光有一句「AI 返回的解读结果不是合法 JSON」是查不出原因的 —— 到底是 `max_tokens` 截断、
+ * 还是字符串里带了非法转义，只有看了原文才知道。所以把开头 500 字（折成一行）挂进
+ * `AiError.details.rawOutput`，宿主存进缓存的 `errorDetail` 列。
+ */
+const RAW_OUTPUT_LIMIT = 500;
+export function rawOutputHead(text) {
+  const flat = String(text ?? '').replace(/\s+/g, ' ').trim();
+  if (flat.length <= RAW_OUTPUT_LIMIT) return flat;
+  return `${flat.slice(0, RAW_OUTPUT_LIMIT)}…（全文 ${flat.length} 字）`;
 }
 
 export function aiConfig(env = process.env) {
@@ -163,31 +178,45 @@ export async function chat(messages, options = {}) {
 /**
  * 单篇解读。
  *
- * recommend 里的编号会按「本次材料里真实存在的文档」校验：
- * 存在的保留编号（宿主可渲染成内链），不存在的清成 null 并标 `external: true`
- * （宿主只显示标题，避免把编造的编号当成站内链接）。
+ * recommend 里的编号会按「本次给出的清单」校验：
+ *   - 站内帖子编号必须在 `siblings` 里（保留 documentId，宿主渲染成 `#/post/<id>`）；
+ *   - 站内 Wiki 词条编号必须在 `options.wikiPages` 里（保留 wikiId，
+ *     宿主渲染成 `#/doc/<id>`，因为 wiki 页的影子帖是隐藏的）；
+ *   - 两个都不成立的条目直接丢掉 —— 不允许「没有落点的推荐」进结果。
  *
  * @param {object} doc 文档：{ id, title, content, board?, author?, tags?, replies? }
  * @param {Array<object>} [siblings] 可推荐的其它文档（只要 id/title/summary 即可）
- * @param {{ charLimit?: number, chatOptions?: object }} [options]
+ * @param {{ charLimit?: number, chatOptions?: object, wikiPages?: Array<object> }} [options]
+ *        `wikiPages`：站内 Wiki 词条候选，每项 `{ id, title, category?, station? }`，
+ *        其中 `id` 是**文档编号**。
  * @returns {Promise<{ review: object, model: string, usage: object }>}
  */
 export async function reviewDocument(doc, siblings = [], options = {}) {
-  const { charLimit = 12000, chatOptions = {} } = options;
+  const { charLimit = 12000, chatOptions = {}, wikiPages = [] } = options;
   const material = buildMaterial([doc], { charLimit, withReplies: true, withContent: true });
   const { text, model, usage } = await chat(
     [
       { role: 'system', content: ANALYZE_SYSTEM },
-      { role: 'user', content: renderAnalyzeUser({ material: material.text, siblings: renderSiblingList(siblings, doc.id) }) },
+      {
+        role: 'user',
+        content: renderAnalyzeUser({
+          material: material.text,
+          siblings: renderSiblingList(siblings, doc.id),
+          wiki: renderWikiList(wikiPages),
+        }),
+      },
     ],
     { temperature: 0.2, ...chatOptions },
   );
 
   const parsed = extractJson(text);
-  if (!parsed || typeof parsed !== 'object') throw new AiError('ai_bad_json', 'AI 返回的解读结果不是合法 JSON');
+  if (!parsed || typeof parsed !== 'object') {
+    throw new AiError('ai_bad_json', 'AI 返回的解读结果不是合法 JSON', { rawOutput: rawOutputHead(text) });
+  }
 
   const knownIds = new Set([doc.id, ...siblings.map((item) => item.id)].map(String));
-  const review = normalizeReview(parsed, doc, { knownIds });
+  const knownWikiIds = new Set(wikiPages.map((item) => item.id).map(String));
+  const review = normalizeReview(parsed, doc, { knownIds, knownWikiIds });
   return { review, model, usage, truncated: material.truncated };
 }
 
@@ -208,7 +237,9 @@ export async function reviewCorpus(docs, options = {}) {
   );
 
   const parsed = extractJson(text);
-  if (!parsed || typeof parsed !== 'object') throw new AiError('ai_bad_json', 'AI 返回的整理结果不是合法 JSON');
+  if (!parsed || typeof parsed !== 'object') {
+    throw new AiError('ai_bad_json', 'AI 返回的整理结果不是合法 JSON', { rawOutput: rawOutputHead(text) });
+  }
   const report = normalizeSiteReport(parsed, docs);
   return { report, model, usage, truncated: material.truncated };
 }
@@ -235,7 +266,9 @@ export async function answerQuestion(question, docs, options = {}) {
   );
 
   const parsed = extractJson(text);
-  if (!parsed || typeof parsed !== 'object') throw new AiError('ai_bad_json', 'AI 返回的问答结果不是合法 JSON');
+  if (!parsed || typeof parsed !== 'object') {
+    throw new AiError('ai_bad_json', 'AI 返回的问答结果不是合法 JSON', { rawOutput: rawOutputHead(text) });
+  }
   const answer = normalizeAnswer(parsed, docs);
   return { answer, model, usage, truncated: material.truncated, included: material.included };
 }

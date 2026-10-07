@@ -37,6 +37,13 @@ export const fail = (status, code, message) => ({ status, body: { ok: false, err
 
 const errorText = (error) => String(error?.message ?? error).slice(0, 300);
 
+/**
+ * 失败时模型原始输出的开头一段（`ai.mjs` 在 `ai_bad_json` 上挂在 `details.rawOutput`）。
+ * 存进缓存的 `errorDetail` 列：下次再出现「不是合法 JSON」，能直接看出是截断还是格式错，
+ * 不用再去猜（失败记录里只有一句错误文案是查不出原因的）。
+ */
+const errorDetailText = (error) => String(error?.details?.rawOutput ?? '').slice(0, 600);
+
 /** 把任意异常收敛成统一响应。 */
 export function toResponse(error) {
   if (error instanceof AiError) {
@@ -69,6 +76,7 @@ function requireContext(deps, names) {
  * @param {(ctx:object) => (void|Promise<void>)} [deps.beforeWrite]  写操作前的钩子（限流、审计）
  * @param {(id:string) => string} [deps.normalizeId]                 文档 id 归一化
  * @param {number} [deps.batchLimit]                                 批量解读单次上限，默认 10
+ * @param {() => Array<object>} [deps.wikiPages]                     站内 Wiki 词条（`{ id, title, anchorPostId? }`，id 是文档编号）
  * @param {object} [deps.env]                                        AI 配置来源，默认 process.env
  * @returns {object} 处理器集合
  */
@@ -81,6 +89,7 @@ export function createAiHandlers(deps = {}) {
     beforeWrite = async () => {},
     normalizeId = (id) => String(id),
     batchLimit = 10,
+    wikiPages = () => [],
     env = process.env,
   } = deps;
 
@@ -117,11 +126,15 @@ export function createAiHandlers(deps = {}) {
    * 数量不够时用还没解读的文档补位（只有标题）。
    *
    * 冷启动时库里的文档都没解读过 —— 如果只认「已解读」，新站点的推荐阅读会全部是空的。
+   *
+   * 排除 wiki 页的影子帖：它们的阅读地址在 `#/doc/<编号>` 那边，
+   * 走「站内 Wiki 词条」清单推荐（见 wikiPool），否则会被推荐成隐藏帖子。
    */
   function recommendPool(selfId, { limit = 12, minReviewed = 6 } = {}) {
-    const all = store.corpusDocuments({ withContent: false, withReplies: false }).filter(
-      (item) => String(item.id) !== String(selfId),
-    );
+    const wikiAnchors = new Set(wikiPageList().map((page) => String(page.anchorPostId ?? '')).filter(Boolean));
+    const all = store
+      .corpusDocuments({ withContent: false, withReplies: false })
+      .filter((item) => String(item.id) !== String(selfId) && !wikiAnchors.has(String(item.id)));
     const reviewed = [];
     const unreviewed = [];
     for (const item of all) {
@@ -132,6 +145,58 @@ export function createAiHandlers(deps = {}) {
     const pool = [...reviewed];
     if (pool.length < minReviewed) pool.push(...unreviewed.slice(0, limit - pool.length));
     return pool.slice(0, limit);
+  }
+
+  /** 宿主给的站内 Wiki 词条清单（读库失败不该让解读整体失败）。 */
+  function wikiPageList() {
+    try {
+      const list = typeof wikiPages === 'function' ? wikiPages() : [];
+      return Array.isArray(list) ? list : [];
+    } catch (error) {
+      console.error('[ai] 读取站内 Wiki 词条失败:', error?.message ?? error);
+      return [];
+    }
+  }
+
+  /** 字符二元组重合数：中文没有空格，按二字窗口比对是最省事的相关度近似。 */
+  function bigramOverlap(left, right) {
+    if (!left || !right) return 0;
+    const grams = (text) => {
+      const out = new Set();
+      for (let i = 0; i + 1 < text.length; i += 1) out.add(text.slice(i, i + 2));
+      return out;
+    };
+    const a = grams(left);
+    const b = grams(right);
+    let hit = 0;
+    for (const gram of a) if (b.has(gram)) hit += 1;
+    return hit;
+  }
+
+  /**
+   * 站内检索：从全部 Wiki 词条里挑出与本篇相关的若干条（不是「先从库里抓一批再让模型挑」，
+   * 而是先按关键词命中排一遍序，模型的候选清单只放这些）。
+   *
+   * 打分口径：词条标题直接出现在本篇标题/正文里 +6；与本篇标题的二字重合 ×2。
+   * 标题里没露出一丝痕迹的词条不进候选 —— 宁缺毋滥，反正提示词里也说了可以给空数组。
+   */
+  function wikiPool(doc, { limit = 24 } = {}) {
+    const pages = wikiPageList();
+    if (!pages.length) return [];
+    const hay = `${doc?.title ?? ''}\n${doc?.content ?? ''}`.toLowerCase();
+    const selfTitle = String(doc?.title ?? '').toLowerCase();
+    const scored = [];
+    for (const page of pages) {
+      const title = String(page.title ?? '').trim();
+      if (!title) continue;
+      const key = title.toLowerCase();
+      let score = 0;
+      if (key.length >= 2 && hay.includes(key)) score += 6;
+      score += bigramOverlap(key, selfTitle) * 2;
+      if (score > 0) scored.push({ ...page, score });
+    }
+    scored.sort((a, b) => b.score - a.score || String(a.id).localeCompare(String(b.id)));
+    return scored.slice(0, limit);
   }
 
   /** 单篇解读（逐篇接口与批量接口共用）。 */
@@ -147,14 +212,18 @@ export function createAiHandlers(deps = {}) {
 
     const contentHash = store.corpusHash();
     const siblings = recommendPool(id);
+    const wiki = wikiPool(doc);
 
     let analyzed;
     try {
-      analyzed = await reviewDocument(doc, siblings, { chatOptions: { env } });
+      analyzed = await reviewDocument(doc, siblings, { chatOptions: { env }, wikiPages: wiki });
     } catch (error) {
       // 「没配密钥」是环境问题，不该污染这篇文档的缓存
       if (!(error instanceof AiError && error.code === 'ai_not_configured')) {
-        store.saveReview({ documentId: id, status: 'failed', error: errorText(error) }, { contentHash });
+        store.saveReview(
+          { documentId: id, status: 'failed', error: errorText(error), errorDetail: errorDetailText(error) },
+          { contentHash },
+        );
       }
       throw error;
     }
@@ -228,7 +297,7 @@ export function createAiHandlers(deps = {}) {
           const done = await runReview(documentId);
           results.push({ documentId, title: done.title, status: 'done', category: done.review.category });
         } catch (error) {
-          results.push({ documentId, status: 'failed', error: errorText(error) });
+          results.push({ documentId, status: 'failed', error: errorText(error), errorDetail: errorDetailText(error) });
           // 上游整体故障（超时/鉴权/不可达）时没必要把剩下的都试一遍
           if (error instanceof AiError && error.code !== 'ai_bad_json') {
             const response = toResponse(error);

@@ -77,10 +77,17 @@ function aiReviewCardHtml(review) {
     .join('');
   const recommend = (review.recommend ?? [])
     .map((item) => {
+      // 站内 Wiki 词条走文档阅读页（#/doc/<编号>）；影子帖是隐藏的，不能拿帖子地址糊弄。
+      const wikiId = Number(item?.wikiId) > 0 ? Number(item.wikiId) : null;
       const id = aiIdOf(item);
+      const link = wikiId
+        ? `<a href="#/doc/${wikiId}">${esc(item.title)}</a>${aiChip('站内 Wiki', 'soft')}`
+        : id
+          ? `<a href="#/post/${id}">${esc(item.title)}</a>`
+          : `<span>${esc(item.title)}</span>`;
       return `
       <li>
-        ${id ? `<a href="#/post/${id}">${esc(item.title)}</a>` : `<span>${esc(item.title)}</span>`}
+        ${link}
         ${item.relation ? aiChip(item.relation, 'soft') : ''}
         ${item.reason ? `<div class="hint">${esc(item.reason)}</div>` : ''}
       </li>`;

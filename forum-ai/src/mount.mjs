@@ -161,6 +161,60 @@ export function createForumDocumentSource(db, { contentLimit = 20000 } = {}) {
 }
 
 /**
+ * 站内 Wiki 词条（Blog「积木」模块的 documents / doc_settings / doc_wiki_pages）。
+ *
+ * LOCAL PATCH (see LOCAL-PATCHES.md): 上游的语料只有 posts，模型因此只能推荐帖子；
+ * 本站的 OI Wiki 有 519 页，它们**真正的阅读地址是 `#/doc/<文档编号>`**（影子帖是隐藏的，
+ * 而且文档编号与帖子编号是两套序列），所以这里额外读一张表，把
+ * 「文档编号 / 标题 / 影子帖编号 / 站名 / 分类」交给提示词层。
+ *
+ * 宿主没有积木模块（表不存在）时返回空数组，推荐自动退化成「只推荐站内帖子」。
+ *
+ * @param {object} db node:sqlite 的 DatabaseSync
+ * @returns {() => Array<{ id: number, title: string, anchorPostId: number, station: string, category: string }>}
+ */
+export function createWikiPageSource(db) {
+  const documents = pickTable(db, ['documents']);
+  const settings = pickTable(db, ['doc_settings']);
+  if (!documents || !settings) return () => [];
+  const docCols = columnsOf(db, documents);
+  const setCols = columnsOf(db, settings);
+  if (!docCols.has('template') || !docCols.has('title') || !setCols.has('station_id')) return () => [];
+  const pageMeta = pickTable(db, ['doc_wiki_pages']);
+  const pageCols = pageMeta ? columnsOf(db, pageMeta) : new Set();
+
+  const sql = `SELECT d.id AS id, d.title AS title, ${
+    docCols.has('anchor_post_id') ? 'd.anchor_post_id' : '0'
+  } AS anchor_post_id, s.station_id AS station_id, st.title AS station_title${
+    pageMeta && pageCols.has('category') ? ', w.category AS category' : ''
+  }
+    FROM ${documents} d
+    JOIN ${settings} s ON s.document_id = d.id
+    LEFT JOIN ${documents} st ON st.id = s.station_id
+    ${pageMeta && pageCols.has('category') ? `LEFT JOIN ${pageMeta} w ON w.document_id = d.id` : ''}
+    WHERE d.template = 'page' AND s.station_id > 0${docCols.has('deleted') ? ' AND d.deleted = 0' : ''}`;
+
+  return function wikiPageSource() {
+    try {
+      return db
+        .prepare(sql)
+        .all()
+        .map((row) => ({
+          id: Number(row.id),
+          title: String(row.title ?? ''),
+          anchorPostId: Number(row.anchor_post_id ?? 0),
+          station: String(row.station_title ?? ''),
+          category: String(row.category ?? ''),
+        }))
+        .filter((row) => Number.isInteger(row.id) && row.id > 0 && row.title);
+    } catch (error) {
+      console.error('[ai] 读取站内 Wiki 词条失败:', error?.message ?? error);
+      return [];
+    }
+  };
+}
+
+/**
  * 挂载 AI 助手。
  *
  * @param {object} options
@@ -209,6 +263,8 @@ export function mountForumAi({
     isAdmin: (ctx) => String(ctx.user?.role ?? '') === 'admin' || String(ctx.user?.role ?? '') === 'owner',
     batchLimit,
     normalizeId: (id) => String(id),
+    // LOCAL PATCH (see LOCAL-PATCHES.md): 站内 Wiki 词条也进推荐候选。
+    wikiPages: createWikiPageSource(db),
   });
 
   // 路由表（顺序敏感：静态段要排在 :id 之前）

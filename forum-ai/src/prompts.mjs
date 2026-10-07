@@ -19,11 +19,16 @@ JSON 结构：
   "summary": "40-80 字中文摘要，说清这篇讲什么、解决什么问题",
   "tags": ["3-6 个中文或英文关键词"],
   "prereq": [{"name": "前置知识名称", "why": "为什么需要，20 字内", "level": "入门|进阶|深入"}],
-  "recommend": [{"documentId": 数字或 null, "title": "推荐阅读的标题", "reason": "推荐理由，20 字内", "relation": "先读|延伸|对比|实战"}]
+  "recommend": [{"documentId": 数字或 null, "wikiId": 数字或 null, "title": "照抄清单里的标题", "reason": "推荐理由，20 字内", "relation": "先读|延伸|对比|实战"}]
 }
 要求：
 - prereq 给 1-4 条，站在「想读懂这篇需要先会什么」的角度；
-- recommend 给 2-4 条：材料里列出的其它文档，documentId 必须填真实存在的编号；没有合适的就填 null 并给出标题建议；
+- recommend 给 0-4 条，**只能从下面两份清单里挑**，一份都没有合适的就少给几条、甚至给空数组 []：
+  · 从【可推荐的站内帖子】里挑 → 填 documentId（照抄方括号里 # 后面的编号），wikiId 留 null；
+  · 从【站内 Wiki 词条】里挑 → 填 wikiId（照抄方括号里 W# 后面的编号），documentId 留 null；本篇涉及算法竞赛 / OI 时优先在这里挑；
+  · title 必须照抄清单里的标题，不许改写、缩写或另起名字；
+- **严禁编造**：清单里没有的篇目一律不许出现 —— 没写过的《XX 指南》《XX 手册》《XX 实战》《XX 参考》、站外链接、书籍、视频都算编造，宁可 recommend 是空数组；
+- 想推荐「还没写、但值得先学的知识点」，放进 prereq，不要塞进 recommend。
 - 不要编造材料里不存在的文档编号。`;
 
 export const SITE_SYSTEM = `你是技术社区的知识库整理助手，负责把一批文档整理成一张可导航的知识地图。
@@ -73,11 +78,24 @@ export function renderSiblingList(siblings = [], selfId = null) {
     .filter((item) => String(item.id) !== String(selfId))
     .slice(0, 12)
     .map((item) => `[#${item.id}] 《${item.title}》${item.summary ? ` 摘要：${item.summary}` : ''}`);
-  return list.length ? list.join('\n') : '（暂无其它文档，recommend 的 documentId 一律填 null）';
+  return list.length ? list.join('\n') : '（暂无其它站内帖子：这一段没有合适的就少给几条，别编造）';
 }
 
-export function renderAnalyzeUser({ material, siblings }) {
-  return `【本篇材料】\n${material}\n\n【可推荐的其它文档】\n${siblings}`;
+/**
+ * 站内 Wiki 词条清单。
+ *
+ * 编号是**文档编号**（`#/doc/<编号>`），不是帖子编号：wiki 页的影子帖是隐藏的，
+ * 阅读地址在文档那边，所以给模型的编号也必须填在 `wikiId` 上。
+ */
+export function renderWikiList(pages = []) {
+  const list = pages
+    .slice(0, 30)
+    .map((page) => `[W#${page.id}] 《${page.title}》${page.category ? ` 分类：${page.category}` : ''}${page.station ? `（${page.station}）` : ''}`);
+  return list.length ? list.join('\n') : '（这篇没有匹配到站内 Wiki 词条）';
+}
+
+export function renderAnalyzeUser({ material, siblings, wiki }) {
+  return `【本篇材料】\n${material}\n\n【可推荐的站内帖子】\n${siblings}\n\n【站内 Wiki 词条】\n${wiki ?? '（暂无）'}`;
 }
 
 export function renderSiteUser({ count, material }) {
