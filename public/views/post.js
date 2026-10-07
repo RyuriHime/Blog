@@ -80,9 +80,23 @@ function reactionBarHtml(post) {
     </div>`;
 }
 
-/** 转发区块：转发表单 + 转发列表 */
-function repostSectionHtml(post, reposters) {
+/**
+ * 转发区块：转发表单 + 转发列表。
+ *
+ * `opts.docMode` 是给积木页（`#/doc/:id`）用的，两个差别：
+ *   1. core 的转发提交 / 撤销处理完都会 `Post.viewPost()` 把人甩回帖子页，
+ *      而积木页必须留在积木页 —— 所以改挂 `data-doc-form` / `data-doc-action`，
+ *      由 `views/doc.js` 自己的委托接。
+ *   2. 外壳从 `section.card` 换成 `section.repost-block`：积木页那块本来就长在
+ *      `.doc-interact` 这张卡片里，再套一层卡片会出双边框。
+ * `id="repost-section"` 两边都留着 —— `core/events.js` 那颗互动条上的「🔁 转发」
+ * 就是靠它找输入框的（一次只渲染一个路由，页面上不会有两个）。
+ */
+function repostSectionHtml(post, reposters, opts = {}) {
   const mine = reposters.find((item) => item.user.id === state.me?.id) ?? null;
+  const formAttr = opts.docMode ? 'data-doc-form="repost"' : 'data-action="repost"';
+  const cancelAttr = opts.docMode ? 'data-doc-action="repost-cancel"' : 'data-action="repost-cancel"';
+  const wrapperClass = opts.docMode ? 'repost-block' : 'card';
   const list = reposters.length
     ? `<div class="repost-list">${reposters
         .map(
@@ -104,7 +118,7 @@ function repostSectionHtml(post, reposters) {
 
   const form =
     state.me && state.me.id !== post.author.id
-      ? `<form class="form repost-form" data-action="repost" data-id="${post.id}">
+      ? `<form class="form repost-form" ${formAttr} data-id="${post.id}">
            <div class="field">
              <textarea name="comment" maxlength="300" rows="2"
                        placeholder="${mine ? '修改你的转发语…' : '说点什么再转发（可留空直接转发）'}">${esc(mine?.comment ?? '')}</textarea>
@@ -113,7 +127,7 @@ function repostSectionHtml(post, reposters) {
            <div class="form-error" data-error hidden></div>
            <div class="form-actions">
              <button class="btn btn-primary" type="submit">${mine ? '更新转发语' : '确认转发'}</button>
-             ${mine ? `<button class="btn" type="button" data-action="repost-cancel" data-id="${post.id}">撤销转发</button>` : ''}
+             ${mine ? `<button class="btn" type="button" ${cancelAttr} data-id="${post.id}">撤销转发</button>` : ''}
            </div>
          </form>`
       : state.me
@@ -121,7 +135,7 @@ function repostSectionHtml(post, reposters) {
         : '<div class="hint">登录后可以转发这篇文章。</div>';
 
   return `
-    <section class="card" id="repost-section">
+    <section class="${wrapperClass}" id="repost-section">
       <div class="card-head">
         <span class="card-title">🔁 转发（${reposters.length}）</span>
         <button class="btn btn-sm btn-ghost" type="button" data-action="copy-link" data-id="${post.id}">🔗 复制链接</button>

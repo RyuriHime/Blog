@@ -426,6 +426,70 @@ body.feed-fullscreen {
   color: var(--accent-fg);
 }
 
+/*
+ * 转不了的时候（自己的动态 / 不是公开的）那颗「🔁」是 `<span class="react-btn is-static">`。
+ * 它跟按钮长得一样，但**不能有手型和 hover** —— 让人点了没反应，比一开始就不画更糟。
+ */
+.react-btn.is-static {
+  cursor: default;
+  opacity: 0.55;
+}
+
+.react-btn.is-static:hover {
+  background: transparent;
+}
+
+/* ---------------- 转发 ---------------- */
+
+/*
+ * 「🔁 转发了动态」的引用卡片。跟上面的 `.feed-ref`（引用了帖子）共用底子，
+ * 但**它不是链接**（动态没有详情页），所以鼠标移上去不该有「能点」的反馈。
+ */
+.feed-ref-feed:hover {
+  border-color: var(--border);
+}
+
+.feed-ref-body {
+  margin-top: 4px;
+  font-size: 14px;
+  color: var(--text);
+}
+
+/* 正文按 `.md` 渲染，最后一段的下边距会把卡片撑出个空档 */
+.feed-ref-body > :last-child {
+  margin-bottom: 0;
+}
+
+/*
+ * 转发那一块挂在 `.feed-item` 卡片内部（footer 之后），默认 `hidden`。
+ * 和回复区一样：点开之前不占位置，也不预先渲染输入框。
+ */
+.feed-repost {
+  margin-top: 12px;
+  padding-top: 4px;
+  border-top: 1px dashed var(--border-soft);
+}
+
+.feed-repost-inner {
+  padding-top: 8px;
+}
+
+.feed-repost-form {
+  padding-top: 8px;
+}
+
+.feed-repost-form textarea {
+  min-height: 62px;
+  resize: vertical;
+}
+
+.feed-repost-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 8px;
+}
+
 /* ---------------- 动态底下的回复 ---------------- */
 
 /*

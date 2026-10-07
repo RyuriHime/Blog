@@ -11,7 +11,7 @@ import { HttpError, ensure, field } from '../../core/http.js';
 // `ANON` 是「没登录」的哨兵 id。**不要在这里写 0**：0 会被当成一个真实用户
 // 去查 blocks 表，拉黑过滤就整个失效（`src/core/paths.js:43`）。
 import { ANON } from '../../core/paths.js';
-import { MAX_FEED_CONTENT, MAX_FEED_IMAGE_BYTES, MAX_FEED_IMAGES, MAX_FEED_REPLY_CONTENT } from './schema.js';
+import { MAX_FEED_CONTENT, MAX_FEED_IMAGE_BYTES, MAX_FEED_IMAGES, MAX_FEED_REPLY_CONTENT, MAX_FEED_REPOST_COMMENT } from './schema.js';
 import { shapeFeedItem, shapeFeedItems, shapeFeedReplies, shapeFeedReply } from './shape.js';
 
 /** 图片只认这三种，和头像同一口径（换成 `data:image/svg+xml` 就等于允许注入脚本）。 */
@@ -257,6 +257,83 @@ export function registerFeedRoutes(ctx, { queries }) {
       likeCount: result.likeCount,
       dislikeCount: result.dislikeCount,
     });
+  });
+
+  /* ---------------- 转发 ---------------- */
+
+  /*
+   * 转发 = 一条新的动态，`ref_feed_id` 指着原动态。
+   *
+   * 为什么不写成「只记一个转发计数 + 一张转发人名单」：那样被转发的内容不会出现在
+   * 任何时间线里，转发就退化成了一个点赞；而用户要的是「这条动态出现在我的动态流里，
+   * 别人在原动态上看得见转发数」。转发本体就是普通动态 ⇒ 可见范围、回复、互动、
+   * 「我的」筛选全是现成的，不用再写第二套。
+   *
+   * 口径对齐 core 的帖子转发（`src/modules/core/routes-c.js`）：不能转自己的、
+   * 同一条只留一条（再转 = 改转发语）。
+   *
+   * 多出来一条帖子那边没有的规矩：**只有 `public` 的动态能转发**。
+   * 动态是有可见范围的（`followers` / `team` / `private`），而转发出去的这条是公开的 ——
+   * 允许转发就等于让「只给我关注者看」的内容被搬到别人的关注者面前去。
+   * 帖子没有这个问题（帖子本身没有 feed 那套 scope），所以这条规矩只属于动态。
+   */
+  add('POST', '/api/feed/:id/repost', async (reqCtx) => {
+    const user = requireUser(reqCtx);
+    const id = Number(reqCtx.params.id);
+    ensure(Number.isInteger(id) && id > 0, 404, 'feed_not_found', '这条动态不存在');
+
+    const row = queries.byId({ id, viewerId: user.id });
+    ensure(row, 404, 'feed_not_found', '这条动态不存在');
+    ensure(row.user_id !== user.id, 400, 'self_repost', '这是你自己的动态，不用转发啦');
+    ensure(row.scope === 'public', 403, 'repost_scope', '只有公开的动态能转发 —— 转发会让更多人看到它');
+
+    const comment = reqCtx.body.comment === undefined || reqCtx.body.comment === null
+      ? ''
+      : field(reqCtx.body.comment, { name: 'comment', min: 0, max: MAX_FEED_REPOST_COMMENT, label: '转发语' });
+
+    const existing = queries.repostByUser({ userId: user.id, itemId: id });
+    let itemId;
+    if (existing) {
+      queries.updateRepostComment({ id: existing.id, content: comment });
+      itemId = existing.id;
+    } else {
+      itemId = queries.insert({
+        userId: user.id,
+        content: comment,
+        scope: 'public',
+        teamId: null,
+        images: [],
+        refPostId: null,
+        refFeedId: id,
+      });
+      ctx.store.createNotification({
+        userId: row.user_id,
+        actorId: user.id,
+        type: 'feed_repost',
+        feedItemId: id,
+        excerpt: comment || String(row.content ?? '').slice(0, 60),
+      });
+    }
+
+    ok(reqCtx.res, {
+      reposted: true,
+      updated: Boolean(existing),
+      itemId,
+      repostCount: queries.repostCount(id),
+      item: shapeFeedItem(queries.byId({ id: itemId, viewerId: user.id })),
+    });
+  });
+
+  add('DELETE', '/api/feed/:id/repost', async (reqCtx) => {
+    const user = requireUser(reqCtx);
+    const id = Number(reqCtx.params.id);
+    ensure(Number.isInteger(id) && id > 0, 404, 'feed_not_found', '这条动态不存在');
+
+    const existing = queries.repostByUser({ userId: user.id, itemId: id });
+    ensure(existing, 400, 'not_reposted', '你还没有转发过这条');
+
+    queries.softDelete(existing.id);
+    ok(reqCtx.res, { reposted: false, repostCount: queries.repostCount(id) });
   });
 
   /* ---------------- 回复 ---------------- */

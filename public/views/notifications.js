@@ -27,6 +27,7 @@ const NOTIF_META = {
   message: { icon: '✉️', text: '给你发了私信' },
   system: { icon: '📢', text: '系统消息' },
   feed_reply: { icon: '💬', text: '回复了你的动态' },
+  feed_repost: { icon: '🔁', text: '转发了你的动态' },
 };
 function notifTarget(item) {
   // 私信直接跳到会话
@@ -44,9 +45,9 @@ function notifTarget(item) {
   ) {
     return `#/team/${encodeURIComponent(item.team.slug)}`;
   }
-  // 动态回复：动态没有自己的详情页（`#/feed` 就是列表），所以跳到列表。
+  // 动态回复 / 动态转发：动态没有自己的详情页（`#/feed` 就是列表），所以跳到列表。
   // 不跳 `#/u/<actor>` 是因为那是「谁回复的」，而用户想看的往往是「我那条动态底下说了什么」。
-  if (item.type === 'feed_reply' && item.actor) return '#/feed';
+  if ((item.type === 'feed_reply' || item.type === 'feed_repost') && item.actor) return '#/feed';
   if (item.post && !item.post.deleted) return `#/post/${item.post.id}`;
   if (item.actor) return `#/u/${encodeURIComponent(item.actor.username)}`;
   return null;
@@ -72,7 +73,7 @@ function notifHtml(item) {
       ${
         item.type === 'moderation' || item.type === 'system' || item.type === 'message' || item.type === 'team_announcement'
           || item.type === 'team_join_request' || item.type === 'team_join_approved' || item.type === 'team_join_rejected'
-          || item.type === 'feed_reply'
+          || item.type === 'feed_reply' || item.type === 'feed_repost'
           ? item.excerpt
             ? `<div class="notif-excerpt">${esc(item.excerpt)}</div>`
             : ''

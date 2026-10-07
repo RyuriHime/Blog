@@ -214,7 +214,9 @@ const selectors = [
   ...[...appJs.matchAll(/\$\('#([A-Za-z][\w-]*)'\)/g)].map((match) => `#${match[1]}`),
 ];
 // 排除运行时才创建的元素（它们不在 index.html 里，由 JS 自己 insertAdjacentHTML 出来）。
-const DYNAMIC_IDS = new Set(['user-menu', 'theme-menu', 'username']);
+// `repost-section` 属于这一类：它由 `public/views/post.js` 的 `repostSectionHtml` 渲染，
+// 帖子页和积木页各有一块（`core/events.js` 那颗「🔁 转发」按钮就是滚到它那儿去的）。
+const DYNAMIC_IDS = new Set(['user-menu', 'theme-menu', 'username', 'repost-section']);
 const idSelectors = selectors.filter(
   (item) => item.startsWith('#') && !item.includes(' ') && !DYNAMIC_IDS.has(item.slice(1)),
 );

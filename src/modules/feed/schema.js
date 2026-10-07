@@ -31,6 +31,14 @@ export const MAX_FEED_CONTENT = 4000;
 /** 动态回复的长度上限。与前端 `public/views/timeline.js` 的 `MAX_REPLY` 必须一致。 */
 export const MAX_FEED_REPLY_CONTENT = 2000;
 
+/**
+ * 转发语的篇幅上限。和帖子那条转发接口（`src/modules/core/routes-c.js` 的
+ * `field(ctx.body.comment, { label: '转发语', min: 0, max: 300 })`）取同一个数，
+ * 免得同一件事在两个地方有两套规矩。
+ * 与前端 `public/views/timeline.js` 的 `MAX_REPOST_COMMENT` 必须一致。
+ */
+export const MAX_FEED_REPOST_COMMENT = 300;
+
 export const FEED_SCHEMA = `
 -- 动态（一条时间线就是这张表倒着读）
 CREATE TABLE IF NOT EXISTS feed_items (
@@ -45,6 +53,11 @@ CREATE TABLE IF NOT EXISTS feed_items (
   images_json TEXT    NOT NULL DEFAULT '[]',
   -- 引用的站内帖子（渲染成卡片）。引用的帖子删了不影响这条动态还在。
   ref_post_id INTEGER,
+  -- 被转发的原动态（同样渲染成卡片）。**转发不是另一张表**：转发出去的就是一条
+  -- 普通动态，只是这个字段指着原动态 —— 这样它自动拥有动态的全部能力
+  --（可见范围、回复、互动、出现在「我的」里），不用再写第二套。
+  -- 同样不加外键：原动态被删只该让卡片显示「原动态已删除」，不该连带删掉转发语。
+  ref_feed_id INTEGER,
   deleted     INTEGER NOT NULL DEFAULT 0,
   created_at  INTEGER NOT NULL,
   updated_at  INTEGER NOT NULL

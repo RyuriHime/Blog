@@ -80,5 +80,38 @@
   font-size: 13.5px;
 }
 
+/* ---------------- 积木页里的转发区 ---------------- */
+/* 这块住在 `.doc-interact` 那张卡片里（和讨论区做邻居）。`.doc-interact` 是
+   `display:flex; flex-wrap:wrap`，所以必须靠 `flex-basis:100%` 独占一整行，
+   否则会被挤到互动条右边去。 */
+.doc-interact-repost {
+  flex-basis: 100%;
+  width: 100%;
+  margin-top: 14px;
+  border-top: 1px solid var(--border-soft);
+  padding-top: 6px;
+  color: var(--text);
+  font-size: 14px;
+}
+
+/* 没内容时不留一条空分隔线（比如“还没有互动锚点”那一支）。 */
+.doc-interact-repost:empty {
+  display: none;
+}
+
+/* 积木页里转发区**不再是一张独立卡片** —— 外面 `views/doc.js` 已经给了一层
+   `.doc-interact` 卡片，再套一层 `.card` 会出双边框。这里只负责占满一行。 */
+.repost-block {
+  width: 100%;
+}
+
+.repost-block .card-head {
+  margin-top: 6px;
+}
+
+/* 卡片里那块表单原本靠 `.card` 的左右内边距留白，这里自己补上。 */
+.repost-block .repost-form {
+  padding: 12px 0 0;
+}
 
 /* @hand-written */

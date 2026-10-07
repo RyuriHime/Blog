@@ -310,7 +310,7 @@ export function registerDocRoutes(ctx, { store }) {
     const row = anchorId ? ctx.store.postById(anchorId, viewerId) : null;
     // 没有锚点（还没同步）或影子行被删了：给空条子，别把阅读页搞成报错页。
     if (!row) {
-      ok(reqCtx.res, { post: null, replies: [], replyCount: 0, canReply: false });
+      ok(reqCtx.res, { post: null, replies: [], replyCount: 0, canReply: false, reposters: [] });
       return;
     }
     // 用列表形状而不是详情形状：互动条只读得到这些字段，不带 content 省一半流量。
@@ -327,6 +327,10 @@ export function registerDocRoutes(ctx, { store }) {
       // 只用来决定「画不画输入框」。真发得出去吗由 `POST /api/posts/:id/replies` 判：
       // 它认影子行的 `locked`，也认登录状态 —— 前端这里放宽一点没有安全含义。
       canReply: Boolean(viewer) && (!row.locked || ctx.guards.isStaff(viewer)),
+      // 转发者名单（谁转过、各自写了什么转发语）。转发本来就是「把人送到我主页」，
+      // 所以这份名单里点谁都是跳 `#/u/:username`，不需要再问一次可见性 ——
+      // 能看见这篇的人，才看得见转过它的人。
+      reposters: ctx.store.listReposters(anchorId).map(ctx.shape.shapeReposter),
     });
   });
 

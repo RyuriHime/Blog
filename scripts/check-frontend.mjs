@@ -845,6 +845,23 @@ const FEED_REACTIONS = new Map();
  */
 const FEED_REPLIES = new Map();
 
+/**
+ * `/api/feed/:id/repost` 的假服务端状态（`Map<原动态 id, { repostId, comment }>`）。
+ * 语义照抄 `src/modules/feed/routes.js` 的那两条：同一条只留一条转发
+ * （再转是更新转发语，`updated=true`），撤销是软删。
+ */
+const FEED_REPOSTS = new Map();
+
+/**
+ * `POST /api/posts/:id/repost` 的假服务端状态（`Map<帖子 id, 转发语>`）。
+ *
+ * 积木页用的就是这条接口 —— 转发记在**影子行**上（见 `src/modules/doc/routes.js`
+ * 里互动锚点那段注释），所以积木页的转发区测试吃的也是这份状态：
+ * 转完它会重读 `/api/docs/:id/anchor` 来重画互动条，夹具要是死的，
+ * 「转完按钮还写着『🔁 转发 0』」这种半截状态就照不出来了。
+ */
+const POST_REPOSTS = new Map();
+
 let fetchCount = 0;
 globalThis.fetch = async (url, options = {}) => {
   fetchCount += 1;
@@ -1027,6 +1044,91 @@ globalThis.fetch = async (url, options = {}) => {
     const replies = (FEED_REPLIES.get(feedId) ?? []).filter((entry) => entry.id !== replyId);
     FEED_REPLIES.set(feedId, replies);
     data = { deleted: true, id: replyId, replyCount: replies.length };
+  } else if (method === 'GET' && /^\/api\/docs\/\d+\/anchor$/.test(bare)) {
+    // 影子行的转发状态**必须跟着 POST_REPOSTS 走**。夹具是采样时冻住的死对象，
+    // 积木页转完再读这条接口只会拿回 `repostCount: 0` —— 而「转完互动条还写着
+    // 『🔁 转发 0』、下面却已经列出你」正是这段 UI 最想抓的半截状态。
+    const fixture = pickFixture('/api/docs/1/anchor');
+    const reposted = POST_REPOSTS.has(Number(FIXTURE_POST_ID));
+    // 名单也要跟着走：真服务端这条接口回 `reposters`，前端靠它认出「名单里有我」
+    // 才画得出「撤销转发」。夹具只给一个空数组的话，转完只会看到一句
+    // 「还没有人转发」—— 用户找不到撤销入口，正是要抓的那种半截状态。
+    const reposters = reposted
+      ? [
+          {
+            repostId: 1,
+            comment: POST_REPOSTS.get(Number(FIXTURE_POST_ID)),
+            createdAt: Date.now(),
+            user: { id: 1, username: FIXTURE_USERNAME, displayName: '站长', role: 'owner', avatar: null },
+          },
+        ]
+      : [];
+    data = { ...fixture, post: { ...fixture.post, reposted, repostCount: reposters.length }, reposters };
+  } else if (method === 'POST' && /^\/api\/posts\/\d+\/repost$/.test(bare)) {
+    // 照抄 `src/modules/core/routes-c.js`：同一人同一篇只留一条，
+    // 再转是改转发语（`updated=true`，计数不会变成 2）。
+    const postId = Number(bare.split('/')[3]);
+    const previous = POST_REPOSTS.has(postId);
+    const comment = String(payload?.comment ?? '').replace(/\r\n?/g, '\n').trim();
+    if (comment.length > 300) failure = { status: 400, code: 'invalid_field', message: '转发语不能超过 300 个字符' };
+    else {
+      POST_REPOSTS.set(postId, comment);
+      data = { reposted: true, updated: previous, repostCount: 1, comment };
+    }
+  } else if (method === 'DELETE' && /^\/api\/posts\/\d+\/repost$/.test(bare)) {
+    const postId = Number(bare.split('/')[3]);
+    if (!POST_REPOSTS.has(postId)) failure = { status: 400, code: 'not_reposted', message: '你还没有转发过这篇' };
+    else {
+      POST_REPOSTS.delete(postId);
+      data = { reposted: false, repostCount: 0 };
+    }
+  } else if (method === 'POST' && /^\/api\/feed\/\d+\/repost$/.test(bare)) {
+    // 照抄 `src/modules/feed/routes.js`：转发 = 一条新动态，`refFeed` 指回原动态；
+    // 同一人同一条只留一条，再转是改转发语（`updated=true`，计数不变）。
+    const feedId = Number(bare.split('/')[3]);
+    const previous = FEED_REPOSTS.get(feedId) ?? null;
+    const comment = String(payload?.comment ?? '').replace(/\r\n?/g, '\n').trim();
+    const repostId = previous?.repostId ?? 9500 + FEED_REPOSTS.size + 1;
+    FEED_REPOSTS.set(feedId, { repostId, comment });
+    data = {
+      reposted: true,
+      updated: Boolean(previous),
+      itemId: repostId,
+      repostCount: 1,
+      item: {
+        id: repostId,
+        content: comment,
+        contentHtml: comment ? `<p>${comment}</p>` : '',
+        scope: 'public',
+        scopeLabel: '公开',
+        teamId: null,
+        images: [],
+        ref: null,
+        refFeed: {
+          id: feedId,
+          content: '原动态的正文',
+          contentHtml: '<p>原动态的正文</p>',
+          deleted: false,
+          createdAt: Date.now(),
+          author: { id: 1, username: 'frontend-origin', displayName: '原动态作者', avatar: null, role: 'member' },
+        },
+        author: { id: 2, username: 'frontend-user', displayName: '前端测试', avatar: null, role: 'member' },
+        likeCount: 0,
+        dislikeCount: 0,
+        replyCount: 0,
+        liked: false,
+        disliked: false,
+        repostCount: 0,
+        reposted: false,
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+        edited: false,
+      },
+    };
+  } else if (method === 'DELETE' && /^\/api\/feed\/\d+\/repost$/.test(bare)) {
+    const feedId = Number(bare.split('/')[3]);
+    FEED_REPOSTS.delete(feedId);
+    data = { reposted: false, repostCount: 0 };
   } else data = pickFixture(raw);
   if (failure) {
     const body = { ok: false, error: { code: failure.code, message: failure.message } };
@@ -1490,6 +1592,201 @@ if (!state.theme) problems.push('state.theme 没被初始化');
 
   item.replyCount = savedCount;
   FEED_REPLIES.delete(item.id);
+}
+
+/* ---- 交互：动态的转发 —— 点开才画输入框、发得出去、转不了的画静态计数 ----
+ *
+ * 两件事只有在这里才照得到：
+ *  ① 「转发」那一块是**点开才画**的（一页 20 条动态不该预渲染 20 个 textarea）；
+ *  ② 转不了的时候（自己的动态 / 不是公开的）画的是**静态计数而不是一颗按钮** ——
+ *     `feed-smoke.mjs` 只能证明服务端会回 400 self_repost / 403 repost_scope，
+ *     证明不了前端没画那颗「点了只会弹红条」的按钮。前面几轮修的正是这类毛病。
+ */
+{
+  const timeline = await view('timeline.js');
+  const FEED_KEY = '/api/feed?filter=all&page=1';
+  const item = pickFixture(FEED_KEY).items[0];
+  const saved = {
+    scope: item.scope,
+    repostCount: item.repostCount,
+    reposted: item.reposted,
+    authorId: item.author.id,
+  };
+  item.scope = 'public';
+  item.repostCount = 0;
+  item.reposted = false;
+  // 保证不是「我的动态」——按设计自己的动态不给转发按钮。
+  item.author.id = (state.me?.id ?? 1) + 999;
+  FEED_REPOSTS.delete(item.id);
+  await timeline.viewTimeline(new Map());
+
+  const box = registered(`[data-feed-repost-box="${item.id}"]`);
+  box.hidden = true;
+  box.innerHTML = '';
+
+  const repostPosts = () => REQUESTS.filter((entry) => /\/repost$/.test(entry.url) && entry.method === 'POST');
+  // 卡片是 `list.innerHTML = data.items.map(feedItemHtml).join('')` 画出来的，
+  // 而假 DOM 的 `innerHTML` 只是一段字符串（不解析），所以「画没画那颗按钮」
+  // 要直接查**列表那一层**的字符串 —— 查 `app.innerHTML` 只有外壳，查不到卡片。
+  // 也**不能**用 `registered('[data-feed-action="repost"]')` 判空：那个注册表查不到就现建一个，永远非空。
+  const rendered = () => String(registered('[data-feed-list]').innerHTML);
+  const hasRepostButton = (id) => rendered().includes(`data-feed-action="repost" data-id="${id}"`);
+
+  // ① 只是渲染，不该已经画出输入框，也不该有任何转发请求
+  if (repostPosts().length) problems.push('只是渲染一遍动态流就发了转发请求 —— 转发要点开才做');
+  if (rendered().includes('data-feed-repost-form')) {
+    problems.push('还没点开「🔁」就已经把转发表单画出来了 —— 一页 20 条就是 20 个 textarea');
+  }
+  if (!hasRepostButton(item.id)) {
+    problems.push('公开的、别人的动态上没有「🔁 转发」按钮 —— 用户没有转发的入口');
+  }
+
+  // ② 点开。按钮得自己造：卡片是一段字符串，注册表里没有那个节点。
+  const btn = makeElement('button');
+  btn.dataset = { feedAction: 'repost', id: String(item.id) };
+  // 假 DOM 的 `closest` 默认恒返回 null，而点击委托第一句就是
+  // `event.target.closest('[data-feed-action]')` —— 不接这根线，点下去什么都不会发生。
+  btn.closest = (selector) => (selector === '[data-feed-action]' ? btn : null);
+  dispatch(app, 'click', btn);
+  await settle();
+  if (box.hidden) problems.push('点「🔁」之后转发盒子还是 hidden —— 用户点了等于没点');
+  if (!box.innerHTML.includes('data-feed-repost-form')) {
+    problems.push('点开了却没有画出转发输入框');
+  }
+
+  // ③ 发出去：请求体要是**当前**输入框里的原文，计数与输入框都要跟着变
+  const form = registered('[data-feed-repost-form]');
+  const textarea = registered('textarea[name="comment"]');
+  // 注册表查不到就现建一个**空**元素，`dataset.id` 是 undefined ——
+  // 不补上的话 `submitRepost` 里 `Number(form.dataset.id)` 得到 NaN，
+  // `itemCache.get(NaN)` 取不到东西，函数在第一行就 return 了（一个请求都不发）。
+  form.dataset = { id: String(item.id) };
+  textarea.value = ' 这条我要转 ';
+  form.querySelector = (selector) => (selector === 'textarea[name="content"]' || selector === 'textarea[name="comment"]' ? textarea : null);
+  form.querySelectorAll = () => [];
+  // 提交委托里是 `event.target.closest('[data-feed-repost-form]')` —— 假 DOM 的
+  // `closest` 默认恒返回 null，不接这根线表单根本走不到 submitRepost。
+  form.closest = (selector) => (selector === '[data-feed-repost-form]' ? form : null);
+  const before = repostPosts().length;
+  dispatch(app, 'submit', form);
+  await settle();
+  const sent = repostPosts().slice(before);
+  if (!sent.length) problems.push('提交转发表单之后没有发 POST /api/feed/:id/repost');
+  else if (sent[0].body?.comment !== '这条我要转') {
+    problems.push(`转发语发出去是 ${JSON.stringify(sent[0].body?.comment)} —— 应该发用户当前输入的原文（trim 过）`);
+  }
+  const countNode = registered(`[data-feed-reposts="${item.id}"]`);
+  if (countNode.textContent !== '1') {
+    problems.push(`转完计数还是 ${JSON.stringify(countNode.textContent)} —— 按钮上的数字没跟着走`);
+  }
+
+  // ④ 自己的动态：不该画出那颗会弹 400 的按钮
+  const second = pickFixture(FEED_KEY).items[1] ?? null;
+  const mine = second ?? item;
+  const savedMine = { authorId: mine.author.id, scope: mine.scope };
+  mine.author.id = state.me?.id ?? 1;
+  mine.scope = 'public';
+  await timeline.viewTimeline(new Map());
+  if (hasRepostButton(mine.id)) {
+    problems.push('自己的动态也画了「🔁 转发」按钮 —— 点下去服务端只会回 400 self_repost');
+  }
+
+  // ⑤ 不是公开的动态：同样不该画按钮（服务端会回 403 repost_scope）
+  mine.author.id = (state.me?.id ?? 1) + 999;
+  mine.scope = 'followers';
+  await timeline.viewTimeline(new Map());
+  if (hasRepostButton(mine.id)) {
+    problems.push('非公开的动态也画了「🔁 转发」按钮 —— 点下去服务端只会回 403 repost_scope');
+  }
+
+  console.log(`  ${problems.length ? '❌' : '✅'} 交互：转发点开才画框、发得出当前原文、计数跟着走、转不了的画静态计数`);
+
+  item.scope = saved.scope;
+  item.repostCount = saved.repostCount;
+  item.reposted = saved.reposted;
+  item.author.id = saved.authorId;
+  mine.author.id = savedMine.authorId;
+  mine.scope = savedMine.scope;
+  FEED_REPOSTS.delete(item.id);
+  await timeline.viewTimeline(new Map());
+}
+
+/* ---- 交互：积木页的转发区 —— 转得出、发完留在原地、撤销得掉 ----
+ *
+ * 为什么单独测：积木页的转发**故意没走 core 那条路**。`public/core/events.js` 里
+ * 处理完转发/撤销都会 `Post.viewPost()` 把人甩回帖子页 —— 那是帖子页该有的行为，
+ * 积木页得留在原地（见 `public/views/post.js` 里 `repostSectionHtml` 上面那段 JSDoc，
+ * 以及 `public/views/doc.js` 的 `refreshDocRepost`）。`doc-smoke.mjs` 只打接口，
+ * 「点了到底跳没跳页、互动条有没有跟着重画」只有这里照得到。
+ */
+{
+  const doc = await view('doc.js');
+  const anchorId = Number(FIXTURE_POST_ID);
+  const anchor = pickFixture('/api/docs/1/anchor');
+  const savedAuthorId = anchor.post.author.id;
+  // 夹具里这篇的作者就是当前登录用户（都是 id 1），而自己的文章不给转发 ——
+  // 转发区会换成一句「自己的文章不用转发」，表单压根不出现。改成别人写的。
+  anchor.post.author.id = 2;
+  POST_REPOSTS.delete(anchorId);
+  await doc.viewDoc(1);
+  // `mountInteraction(doc)` 在 `public/views/doc.js:1130` 是**不 await 的**
+  // （`mountInteraction(doc).catch(...)`，互动条加载失败不该拖垮整页）。
+  // 所以 `viewDoc` 返回时 anchor 那一趟还没回来，这里必须自己等一拍。
+  await settle();
+  await settle();
+
+  const host = registered('[data-doc-repost]');
+  const bar = registered('[data-doc-interact-bar]');
+  if (!host.innerHTML.includes('data-doc-form="repost"')) {
+    problems.push('积木页的转发区没画出来 —— 影子行在，那颗「🔁 转发」点了也没地方去');
+  }
+
+  // ① 提交
+  const form = registered('[data-doc-form="repost"]');
+  form.dataset = { docForm: 'repost', id: String(anchorId) };
+  // `public/views/doc.js` 的 `formValues()` 走 `form.querySelectorAll('[name]')`，
+  // 而假 DOM 的 `querySelectorAll` 恒返回空数组 —— 不接这根线，发出去的转发语永远是空串，
+  // 「转发语到底有没有跟着表单走」就成了测不到的空话。
+  form.querySelectorAll = (selector) =>
+    selector === '[name]' ? [{ name: 'comment', type: 'textarea', value: ' 这块值得一转 ' }] : [];
+  const beforePost = REQUESTS.length;
+  dispatch(app, 'submit', form);
+  await settle();
+
+  const posted = REQUESTS.slice(beforePost).filter((entry) => entry.url === `/api/posts/${anchorId}/repost` && entry.method === 'POST');
+  if (!posted.length) problems.push('在积木页点「确认转发」之后没有 POST /api/posts/:id/repost');
+  else if (posted[0].body?.comment !== '这块值得一转') {
+    problems.push(`积木页发出去的转发语是 ${JSON.stringify(posted[0].body?.comment)}，不是输入框里的原文（该 trim 的也没 trim）`);
+  }
+  // 互动条上的那颗按钮文案与计数，是**单独**从 anchor 接口重画的：
+  // 只重画下面转发区的话，页面上会同时出现「🔁 转发 0」和「名单里有你」。
+  if (!bar.innerHTML.includes('已转发')) {
+    problems.push('转完之后互动条没有重画 —— 按钮还写着「🔁 转发」，下面却已经列出你了');
+  }
+  if (!host.innerHTML.includes('撤销转发')) {
+    problems.push('转完之后转发区没有重画 —— 看不到自己转过了，也找不到撤销入口');
+  }
+
+  // ② 撤销：先确认再删，删完还要回到积木页（不是帖子页）
+  const cancel = makeElement('button');
+  cancel.dataset = { docAction: 'repost-cancel', id: String(anchorId) };
+  cancel.closest = (selector) => (selector === '[data-doc-action]' ? cancel : null);
+  const realConfirm = globalThis.confirm;
+  globalThis.confirm = () => true;
+  const beforeDelete = REQUESTS.length;
+  dispatch(app, 'click', cancel);
+  await settle();
+  globalThis.confirm = realConfirm;
+
+  const deleted = REQUESTS.slice(beforeDelete).filter((entry) => entry.url === `/api/posts/${anchorId}/repost` && entry.method === 'DELETE');
+  if (!deleted.length) problems.push('在积木页点「撤销转发」之后没有 DELETE /api/posts/:id/repost');
+  if (host.innerHTML.includes('撤销转发')) {
+    problems.push('撤销之后转发区没有回到「确认转发」—— 用户以为还转着，再点一次只会吃 400 not_reposted');
+  }
+  console.log(`  ${problems.length ? '❌' : '✅'} 交互：积木页转得出、发完留在原地、撤销得掉、互动条跟着重画`);
+
+  anchor.post.author.id = savedAuthorId;
+  POST_REPOSTS.delete(anchorId);
 }
 
 /* ---- 交互：点「＋ 新建团队」必须真的把表单打开 ----

@@ -29,7 +29,7 @@ import * as Fmt from '../core/format.js';
 import * as Prefs from '../core/preferences.js';
 import * as Blocks from './doc-blocks.js';
 import * as Ai from './ai.js';
-import { reactionBarHtml, replyHtml } from './post.js';
+import { reactionBarHtml, replyHtml, repostSectionHtml } from './post.js';
 import { attachSandbox, unmountSandboxes } from '../core/sandbox.js';
 import { ntRenderMath } from './notes.js';
 import * as DocAi from './doc-ai.js';
@@ -301,6 +301,7 @@ function interactHtml(doc, abilities) {
   return `<div class="card doc-interact">
     <div class="doc-interact-bar" data-doc-interact-bar><div class="doc-hint">互动条加载中…</div></div>
     <div class="doc-interact-replies" data-doc-replies></div>
+    <div class="doc-interact-repost" data-doc-repost></div>
     <div class="doc-interact-ai" data-doc-interact-ai></div>
   </div>`;
 }
@@ -361,7 +362,8 @@ function docRepliesHtml(post, data) {
 async function mountInteraction(doc) {
   const bar = $('[data-doc-interact-bar]');
   const repliesHost = $('[data-doc-replies]');
-  if (!doc.anchorPostId || (!bar && !repliesHost)) return;
+  const repostHost = $('[data-doc-repost]');
+  if (!doc.anchorPostId || (!bar && !repliesHost && !repostHost)) return;
   const anchorId = Number(doc.anchorPostId);
   let data = null;
   try {
@@ -370,16 +372,19 @@ async function mountInteraction(doc) {
     const note = `<div class="doc-hint">互动信息没读出来：${esc(error.message)}</div>`;
     if (bar) bar.innerHTML = note;
     if (repliesHost) repliesHost.innerHTML = note;
+    if (repostHost) repostHost.innerHTML = note;
     return;
   }
   const post = data?.post ?? null;
   if (!post) {
     if (bar) bar.innerHTML = '<div class="doc-hint">这篇还没有互动锚点（刚建出来或还在同步），刷新一下就有了。</div>';
     if (repliesHost) repliesHost.innerHTML = '<div class="doc-hint">还没有互动锚点，暂时不能回复。</div>';
+    if (repostHost) repostHost.innerHTML = '';
     return;
   }
   if (bar) bar.innerHTML = reactionBarHtml(post);
   if (repliesHost) repliesHost.innerHTML = docRepliesHtml(post, data);
+  if (repostHost) repostHost.innerHTML = repostSectionHtml(post, data.reposters ?? [], { docMode: true });
   const aiHost = $('[data-doc-interact-ai]');
   if (!aiHost) return;
   // AI 面板按 postId 工作（它读的是帖子表），影子行 id 就是它的 postId。
@@ -405,6 +410,25 @@ async function refreshDocReplies(docId) {
   const data = await api(`/api/docs/${id}/anchor`);
   const post = data?.post ?? null;
   host.innerHTML = post ? docRepliesHtml(post, data) : '<div class="doc-hint">还没有互动锚点，暂时不能回复。</div>';
+}
+
+/**
+ * 转发成功 / 撤销之后：重画互动条与转发区，不整页刷新。
+ *
+ * 为什么连互动条一起重画：那颗「🔁 转发 / 已转发」按钮的文案和计数就长在互动条上
+ * （`views/post.js` 的 `reactionBarHtml`）。只重画转发区的话，按钮会停在「🔁 转发 0」
+ * 而下面已经把你列进去了 —— 一眼就是坏的。
+ */
+async function refreshDocRepost(docId) {
+  const bar = $('[data-doc-interact-bar]');
+  const host = $('[data-doc-repost]');
+  const id = Number(docId);
+  if ((!bar && !host) || !Number.isInteger(id) || id <= 0) return;
+  const data = await api(`/api/docs/${id}/anchor`);
+  const post = data?.post ?? null;
+  if (!post) return;
+  if (bar) bar.innerHTML = reactionBarHtml(post);
+  if (host) host.innerHTML = repostSectionHtml(post, data.reposters ?? [], { docMode: true });
 }
 
 function docActionsHtml(doc, abilities) {
@@ -2313,6 +2337,17 @@ async function onAppClick(event) {
       await refreshDocReplies(currentId);
     });
   }
+  if (action === 'repost-cancel') {
+    const anchorId = Number(node.dataset.id);
+    if (!confirm('撤销转发？你主页上的这条转发会消失。')) return undefined;
+    // 走 core 那条 `DELETE /api/posts/:id/repost` —— 转发本来就记在影子行上，
+    // 积木页不需要另开一套接口。重画而不是 `navigate`：撤销完要留在积木页。
+    return withBusy(async () => {
+      await api(`/api/posts/${anchorId}/repost`, { method: 'DELETE' });
+      toast('已撤销转发', 'success');
+      await refreshDocRepost(currentId);
+    });
+  }
   if (action === 'layout') {
     // 只记一个偏好，然后整页重画 —— 列表的排法不是文档的一部分。
     // 重画要用「当前这份筛选条件」，否则切一下排法就把搜的关键词丢了。
@@ -2479,6 +2514,16 @@ async function onAppSubmit(event) {
         await refreshDocReplies(docState.editor ? docState.editor.id : docState.viewing);
         const node = document.getElementById(`reply-${result.reply.id}`);
         if (node) node.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        return undefined;
+      }
+      if (form.dataset.docForm === 'repost') {
+        const anchorId = Number(form.dataset.id);
+        const comment = String(values.comment ?? '').trim();
+        // 复用 core 的转发接口（转发记在影子行上），只是发完不跳页。
+        // 转发语可以留空 —— 「直接转发」是一种正常用法，别在这里拦。
+        const result = await api(`/api/posts/${anchorId}/repost`, { method: 'POST', body: { comment } });
+        toast(result.updated ? '转发语已更新' : '转发成功，已出现在你的主页 🔁', 'success');
+        await refreshDocRepost(docState.editor ? docState.editor.id : docState.viewing);
         return undefined;
       }
       if (form.dataset.docForm === 'script-template') {

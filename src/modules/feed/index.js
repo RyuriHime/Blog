@@ -46,6 +46,20 @@ export default {
       ctx.db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'team_members'").get(),
     );
 
+    /**
+     * 给**已经存在**的 `feed_items` 补 `ref_feed_id`。
+     *
+     * `CREATE TABLE IF NOT EXISTS` 只保证表在，不会给老表加列 —— 线上那张
+     * `feed_items` 是最早一版建的，光改建表语句它一辈子也长不出这一列。
+     * 所以这里照 `team_members` 那个探测的思路补一次 ALTER：先看 `PRAGMA table_info`
+     * 有没有，没有才加（重复 ALTER 会直接报错，不能闭着眼睛跑）。
+     * 新库上这一列建表时就带着，这里什么也不做。
+     */
+    const columns = ctx.db.prepare('PRAGMA table_info(feed_items)').all().map((row) => row.name);
+    if (!columns.includes('ref_feed_id')) {
+      ctx.db.exec('ALTER TABLE feed_items ADD COLUMN ref_feed_id INTEGER');
+    }
+
     const queries = createFeedQueries(ctx.db, { hasTeams });
     registerFeedRoutes(ctx, { queries });
   },

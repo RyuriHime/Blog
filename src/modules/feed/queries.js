@@ -34,25 +34,32 @@ const BLOCKED_AUTHOR_SQL = `f.user_id NOT IN (
  * 「选择列参数」与「WHERE 参数」拆成两个常量再拼接，不靠人肉排列。
  */
 const ITEM_COLUMNS = `
-      f.id, f.user_id, f.content, f.scope, f.team_id, f.images_json, f.ref_post_id,
+      f.id, f.user_id, f.content, f.scope, f.team_id, f.images_json, f.ref_post_id, f.ref_feed_id,
       f.created_at, f.updated_at,
       u.username, u.display_name, u.avatar, u.role,
       (SELECT COUNT(*) FROM feed_reactions fr WHERE fr.feed_item_id = f.id AND fr.kind = 'like')    AS like_count,
       (SELECT COUNT(*) FROM feed_reactions fr WHERE fr.feed_item_id = f.id AND fr.kind = 'dislike') AS dislike_count,
       (SELECT COUNT(*) FROM feed_replies frp WHERE frp.feed_item_id = f.id AND frp.deleted = 0)      AS reply_count,
+      (SELECT COUNT(*) FROM feed_items frep WHERE frep.ref_feed_id = f.id AND frep.deleted = 0)      AS repost_count,
       EXISTS (SELECT 1 FROM feed_reactions fr WHERE fr.feed_item_id = f.id AND fr.kind = 'like'    AND fr.user_id = ?) AS liked,
       EXISTS (SELECT 1 FROM feed_reactions fr WHERE fr.feed_item_id = f.id AND fr.kind = 'dislike' AND fr.user_id = ?) AS disliked,
+      EXISTS (SELECT 1 FROM feed_items frep2 WHERE frep2.ref_feed_id = f.id AND frep2.user_id = ? AND frep2.deleted = 0) AS reposted,
       p.title AS ref_title, p.deleted AS ref_deleted,
-      pu.username AS ref_username, pu.display_name AS ref_display, pu.avatar AS ref_avatar`;
+      pu.username AS ref_username, pu.display_name AS ref_display, pu.avatar AS ref_avatar,
+      rf.content AS ref_feed_content, rf.deleted AS ref_feed_deleted, rf.created_at AS ref_feed_created,
+      rfu.id AS ref_feed_user_id, rfu.username AS ref_feed_username,
+      rfu.display_name AS ref_feed_display, rfu.avatar AS ref_feed_avatar, rfu.role AS ref_feed_role`;
 
-/** `ITEM_COLUMNS` 里那两个 `?` 的实参（总是同一个浏览者 id，放两次）。 */
-const columnParams = (viewerId) => [viewerId, viewerId];
+/** `ITEM_COLUMNS` 里那三个 `?` 的实参（总是同一个浏览者 id，放三次）。 */
+const columnParams = (viewerId) => [viewerId, viewerId, viewerId];
 
 const ITEM_FROM = `
     FROM feed_items f
     JOIN users u ON u.id = f.user_id
     LEFT JOIN posts p ON p.id = f.ref_post_id
-    LEFT JOIN users pu ON pu.id = p.user_id`;
+    LEFT JOIN users pu ON pu.id = p.user_id
+    LEFT JOIN feed_items rf ON rf.id = f.ref_feed_id
+    LEFT JOIN users rfu ON rfu.id = rf.user_id`;
 
 /**
  * 回复的列与来源。与 `ITEM_COLUMNS` 同一个道理：列名一律写全（`u.` / `r.` 前缀不省），
@@ -206,14 +213,50 @@ export function createFeedQueries(db, { hasTeams = false } = {}) {
       return row ? { id: row.id, userId: row.user_id, deleted: Boolean(row.deleted) } : null;
     },
 
-    insert({ userId, content, scope, teamId, images, refPostId }) {
+    insert({ userId, content, scope, teamId, images, refPostId, refFeedId = null }) {
       const now = Date.now();
       const result = bind(
-        `INSERT INTO feed_items (user_id, content, scope, team_id, images_json, ref_post_id, deleted, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?)`,
-        [userId, content, scope, teamId, JSON.stringify(images), refPostId, now, now],
+        `INSERT INTO feed_items (user_id, content, scope, team_id, images_json, ref_post_id, ref_feed_id, deleted, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?)`,
+        [userId, content, scope, teamId, JSON.stringify(images), refPostId, refFeedId, now, now],
       ).run();
       return Number(result.lastInsertRowid);
+    },
+
+    /**
+     * 我对某条动态发过的那条转发（没删的那条）。
+     *
+     * 转发的本体就是一条 `feed_items`，只是 `ref_feed_id` 指着原动态 ——
+     * 所以「撤销转发」= 把我那条软删掉，不需要第二张表、也不会跟动态的可见范围打架。
+     */
+    repostByUser({ userId, itemId }) {
+      const row = bind(
+        `SELECT id, user_id, ref_feed_id FROM feed_items
+        WHERE ref_feed_id = ? AND user_id = ? AND deleted = 0
+        ORDER BY id DESC LIMIT 1`,
+        [itemId, userId],
+      ).get();
+      return row ? { id: row.id, userId: row.user_id, refFeedId: row.ref_feed_id } : null;
+    },
+
+    /** 转发计数（`ITEM_COLUMNS` 那份是给列表用的，这里是单查）。 */
+    repostCount(itemId) {
+      const row = bind(
+        'SELECT COUNT(*) AS count FROM feed_items WHERE ref_feed_id = ? AND deleted = 0',
+        [itemId],
+      ).get();
+      return Number(row?.count) || 0;
+    },
+
+    /**
+     * 只改转发语。
+     *
+     * 不能图省事走上面的 `update()`：那个函数会把 `ref_post_id` 一起写回去，
+     * 而转发的 `ref_feed_id` 根本不在它的字段表里 —— 一改转发语就把「转的是哪条」
+     * 抹掉了，卡片变成一条普通动态。转发能改的只有正文。
+     */
+    updateRepostComment({ id, content }) {
+      bind('UPDATE feed_items SET content = ?, updated_at = ? WHERE id = ?', [content, Date.now(), id]).run();
     },
 
     update({ id, content, scope, teamId, images, refPostId }) {

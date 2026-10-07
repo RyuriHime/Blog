@@ -154,13 +154,19 @@ document.addEventListener('click', async (event) => {
       }
       case 'repost-toggle': {
         if (!Session.requireLogin('登录后才能转发')) break;
-        const box = document.querySelector('#repost-section textarea[name="comment"]');
-        if (!box) {
-          toast('这篇文章暂时不能转发', 'error');
+        // 找的是**当前这一页**的转发区。帖子页和积木页各有一块（`views/post.js` 的
+        // `repostSectionHtml`，两边都留着 `id="repost-section"`），一次只渲染一个路由，
+        // 所以这里不会撞车。以前只认「有没有输入框」，积木页整块都没有，于是
+        // 点下去只会弹一句「这篇文章暂时不能转发」—— 按钮看着是活的，其实是死的。
+        const section = document.querySelector('#repost-section');
+        if (!section) {
+          toast('这篇暂时不能转发', 'error');
           break;
         }
-        box.scrollIntoView({ behavior: 'smooth', block: 'center' });
-        box.focus();
+        // 自己的文章、或者没登录时，这一块里放的是一句提示而不是输入框 ——
+        // 那也该滚过去让人看见原因，而不是弹一句话让人以为功能坏了。
+        section.scrollIntoView?.({ behavior: 'smooth', block: 'center' });
+        section.querySelector('textarea[name="comment"]')?.focus();
         break;
       }
       case 'repost-cancel': {

@@ -41,6 +41,12 @@ const MAX_IMAGES = 9;
  */
 const MAX_REPLY = 2000;
 
+/**
+ * 转发语上限，同样**必须与服务端一致**（`MAX_FEED_REPOST_COMMENT`）。
+ * 这个 300 跟帖子那条转发接口是同一个数 —— 同一件事不该有两个规矩。
+ */
+const MAX_REPOST_COMMENT = 300;
+
 /** 兜底的范围选项：正常应该用服务端 `GET /api/feed` 返回的 `scopes`。 */
 const FALLBACK_SCOPES = [
   { value: 'public', label: '公开' },
@@ -239,6 +245,44 @@ function feedItemHtml(item) {
        </a>`
     : '';
 
+  /*
+   * 被转发的原动态。和 `ref`（引用了帖子）长得像，但**不是链接** ——
+   * 动态没有自己的详情页，点进去无处可去。原动态被删了就只留一句话：
+   * 转发语是转发的人当时说的话，不该跟着原动态一起消失。
+   */
+  const refFeed = item.refFeed
+    ? `<div class="feed-ref feed-ref-feed">
+         <span class="feed-ref-label">🔁 转发了动态</span>
+         ${
+           item.refFeed.deleted
+             ? '<span class="feed-ref-title">原动态已删除</span>'
+             : `<span class="feed-ref-author">${esc(
+                 item.refFeed.author?.displayName || item.refFeed.author?.username || '（作者已注销）',
+               )}</span>
+                <div class="feed-ref-body md">${item.refFeed.contentHtml}</div>`
+         }
+       </div>`
+    : '';
+
+  /*
+   * 只有「别人的 + 公开的」动态能转发：
+   *   - 自己的转出去没意义（服务端会回 400 self_repost）；
+   *   - 非公开的转出去等于泄露（服务端会回 403 repost_scope）。
+   * 不能转的时候画成一个静态计数，**不画一颗点了会报错的按钮** ——
+   * 「点了没反应 / 点了弹错误」正是前面几轮一直在修的那类毛病。
+   */
+  const canRepost = !mine && item.scope === 'public';
+  const repostBlock = canRepost
+    ? `<button class="react-btn ${item.reposted ? 'is-on' : ''}" type="button"
+        data-feed-action="repost" data-id="${item.id}"
+        title="${item.reposted ? '撤销我的转发' : '转发到我的动态流'}">
+        🔁 <span data-feed-reposts="${item.id}">${Fmt.fmtNum(item.repostCount)}</span>
+      </button>`
+    : `<span class="react-btn is-static"
+        title="${mine ? '自己的动态不用转发' : '只有公开的动态能转发'}">
+        🔁 <span data-feed-reposts="${item.id}">${Fmt.fmtNum(item.repostCount)}</span>
+      </span>`;
+
   const tools = mine
     ? `<span class="feed-own">
          <button class="icon-btn" type="button" data-feed-action="edit" data-id="${item.id}" title="编辑">✏️</button>
@@ -262,6 +306,7 @@ function feedItemHtml(item) {
     <div class="feed-body md" data-feed-body>${item.contentHtml}</div>
     ${images}
     ${ref}
+    ${refFeed}
     <footer class="feed-foot">
       <button class="react-btn ${item.liked ? 'is-on' : ''}" type="button"
         data-feed-action="react" data-id="${item.id}" data-kind="like">
@@ -275,7 +320,9 @@ function feedItemHtml(item) {
         data-feed-action="replies" data-id="${item.id}" title="展开回复">
         💬 <span data-feed-replies="${item.id}">${Fmt.fmtNum(item.replyCount)}</span>
       </button>
+      ${repostBlock}
     </footer>
+    <div class="feed-repost" data-feed-repost-box="${item.id}" hidden></div>
     <div class="feed-replies" data-feed-replies-box="${item.id}" hidden></div>
   </article>`;
 }
@@ -484,9 +531,15 @@ function bindTimelineOnce() {
       return;
     }
     const replyForm = event.target.closest('[data-feed-reply-form]');
-    if (!replyForm) return;
+    if (replyForm) {
+      event.preventDefault();
+      submitReply(replyForm).catch((error) => toastError(error));
+      return;
+    }
+    const repostForm = event.target.closest('[data-feed-repost-form]');
+    if (!repostForm) return;
     event.preventDefault();
-    submitReply(replyForm).catch((error) => toastError(error));
+    submitRepost(repostForm).catch((error) => toastError(error));
   });
 
   // 引用帖子：回车确认
@@ -538,6 +591,10 @@ async function handleAction(action, node) {
       return await toggleReplies(node);
     case 'reply-delete':
       return await removeReply(node);
+    case 'repost':
+      return await toggleRepost(node);
+    case 'repost-cancel':
+      return await removeRepost(node);
     case 'edit':
       return startEdit(Number(node.dataset.id));
     case 'cancel-edit':
@@ -710,6 +767,114 @@ async function react(node) {
     other.classList.toggle('is-on', otherKind === 'like' ? result.liked : result.disliked);
   });
   if (item) Object.assign(item, result);
+}
+
+/**
+ * 「转发」那一小块的内容。
+ *
+ * 已经转过就只给一个「撤销转发」——再点一次是改转发语，而改转发语的入口应该是
+ * 「打开就看见原来的话」，不是让用户对着空框重打一遍。
+ * （服务端 `POST /api/feed/:id/repost` 遇到已转过的情况就是更新，不新增第二条。）
+ */
+function feedRepostHtml(item) {
+  if (item.reposted) {
+    return `<div class="feed-repost-inner">
+      <div class="hint">你已经转发了这条。</div>
+      <div class="feed-repost-actions">
+        <button class="btn btn-sm" type="button" data-feed-action="repost-cancel" data-id="${item.id}">撤销转发</button>
+      </div>
+    </div>`;
+  }
+  return `<form class="feed-repost-form" data-feed-repost-form data-id="${item.id}">
+    <textarea class="input" name="comment" rows="2" maxlength="${MAX_REPOST_COMMENT}"
+      placeholder="说点什么…（可以留空，直接转发）"></textarea>
+    <div class="feed-repost-actions">
+      <button class="btn btn-sm btn-primary" type="submit">转发</button>
+    </div>
+  </form>`;
+}
+
+/**
+ * 展开 / 收起转发那一块。
+ *
+ * 不预先把输入框塞进每张卡片：一页 20 条动态就是 20 个 textarea，
+ * 既拖慢首屏，也会让页面上出现 20 个同名输入框。
+ */
+function toggleRepost(node) {
+  const id = Number(node.dataset.id);
+  const item = itemCache.get(id);
+  const box = $(`[data-feed-repost-box="${id}"]`);
+  if (!item || !box) return;
+  if (!box.hidden) {
+    box.hidden = true;
+    return;
+  }
+  box.hidden = false;
+  box.innerHTML = feedRepostHtml(item);
+}
+
+/**
+ * 只重画「🔁 计数 + 那颗按钮 + 转发盒子」这三处，**不动整张卡片** ——
+ * 卡片里可能正开着回复框、正列着别人的回复，整卡重画会把它们收掉。
+ */
+function paintRepostState(item) {
+  const count = $(`[data-feed-reposts="${item.id}"]`);
+  if (count) count.textContent = Fmt.fmtNum(item.repostCount);
+  const button = $(`[data-feed-action="repost"][data-id="${item.id}"]`);
+  if (button) {
+    button.classList.toggle('is-on', Boolean(item.reposted));
+    button.title = item.reposted ? '撤销我的转发' : '转发到我的动态流';
+  }
+  const box = $(`[data-feed-repost-box="${item.id}"]`);
+  if (box && !box.hidden) box.innerHTML = feedRepostHtml(item);
+}
+
+/**
+ * 把刚转发出去的那条插到列表最前面。
+ *
+ * 不插的话，用户会看到一句「转发成功」然后**页面上什么都没变** ——
+ * 得自己想到「大概要去我的动态里看」。这类「说了成功却看不见」正是前面几轮
+ * 一直在修的那种体验。
+ * 只在「全部 / 我的」两个筛选下插：转发出去的是公开动态，这两个列表里一定有它；
+ * 「我关注的」按服务端规则不一定收（我不关注我自己），硬插会和下次刷新对不上。
+ */
+function prependRepost(newItem) {
+  if (!newItem || (feedFilter !== 'all' && feedFilter !== 'mine')) return;
+  const list = $('[data-feed-list]');
+  if (!list) return;
+  itemCache.set(newItem.id, newItem);
+  list.innerHTML = feedItemHtml(newItem) + list.innerHTML;
+  ntRenderMath(list);
+}
+
+async function submitRepost(form) {
+  const id = Number(form.dataset.id);
+  const item = itemCache.get(id);
+  if (!item) return;
+  const textarea = form.querySelector('textarea[name="comment"]');
+  const comment = String(textarea?.value ?? '').trim();
+  await withButtonBusy(form.querySelector('button[type="submit"]'), async () => {
+    const result = await api(`/api/feed/${id}/repost`, { method: 'POST', body: { comment } });
+    toast(result.updated ? '转发语已更新' : '转发成功，已经出现在你的动态流里 🔁', 'success');
+    item.reposted = true;
+    item.repostCount = result.repostCount;
+    paintRepostState(item);
+    prependRepost(result.item);
+  });
+}
+
+async function removeRepost(node) {
+  const id = Number(node.dataset.id);
+  const item = itemCache.get(id);
+  if (!item) return;
+  if (!confirm('撤销转发？你动态流里那条会消失。')) return;
+  await withButtonBusy(node, async () => {
+    const result = await api(`/api/feed/${id}/repost`, { method: 'DELETE' });
+    toast('已撤销转发', 'success');
+    item.reposted = false;
+    item.repostCount = result.repostCount;
+    paintRepostState(item);
+  });
 }
 
 /**

@@ -70,6 +70,32 @@ export function shapeFeedItem(row) {
             : null,
         }
       : null,
+    /**
+     * 被转发的原动态（转发 = 一条 `ref_feed_id` 指着它的普通动态）。
+     *
+     * 和 `ref` 同一个态度：原动态删了**不把这条转发也藏起来**，只把正文换成
+     * 一句「原动态已删除」—— 转发语是转发的人当时说的话，不该跟着消失。
+     * 这里只带渲染卡片够用的字段（正文 + 作者），不带回复/互动计数：
+     * 那是原动态自己的事，点进去看就行，否则一页 20 条转发要再拉 20 套。
+     */
+    refFeed: row.ref_feed_id
+      ? {
+          id: Number(row.ref_feed_id),
+          content: String(row.ref_feed_content ?? ''),
+          contentHtml: renderMarkdown(String(row.ref_feed_content ?? '')),
+          deleted: Boolean(row.ref_feed_deleted),
+          createdAt: row.ref_feed_created,
+          author: row.ref_feed_username
+            ? {
+                id: Number(row.ref_feed_user_id),
+                username: row.ref_feed_username,
+                displayName: row.ref_feed_display || row.ref_feed_username,
+                avatar: row.ref_feed_avatar ?? null,
+                role: row.ref_feed_role ?? 'member',
+              }
+            : null,
+        }
+      : null,
     author: {
       id: row.user_id,
       username: row.username,
@@ -84,6 +110,10 @@ export function shapeFeedItem(row) {
      * 时间线一页 20 条，每条都把回复带上会让首屏多 20 次查询。
      */
     replyCount: Number(row.reply_count) || 0,
+    /** 被转发了多少次（别人转的，不含我自己那条）。 */
+    repostCount: Number(row.repost_count) || 0,
+    /** 我转过这条没有 —— 决定那颗「🔁 转发」按钮显示「转发」还是「已转发」。 */
+    reposted: Boolean(row.reposted),
     liked: Boolean(row.liked),
     disliked: Boolean(row.disliked),
     createdAt: row.created_at,

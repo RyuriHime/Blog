@@ -612,6 +612,80 @@ try {
     await admin.call(`/api/feed/${privId}`, { method: 'DELETE' });
   }
 
+  /* ---------- 15. 动态转发（转发 = 一条带引用的新动态） ---------- */
+  {
+    const origin = await admin.call('/api/feed', { method: 'POST', body: { content: '要被转发的原动态', scope: 'public' } });
+    const originId = origin.data.item.id;
+
+    check('没转发过时 repostCount=0、reposted=false', origin.data.item.repostCount === 0 && origin.data.item.reposted === false);
+
+    const anonTry = await anon.call(`/api/feed/${originId}/repost`, { method: 'POST', body: { comment: '' } });
+    check('未登录不能转发（401）', anonTry.status === 401, JSON.stringify(anonTry.body));
+
+    const selfTry = await admin.call(`/api/feed/${originId}/repost`, { method: 'POST', body: { comment: '' } });
+    check('自己的动态不让转发（400 self_repost）', selfTry.status === 400 && selfTry.error?.code === 'self_repost', JSON.stringify(selfTry.body));
+
+    const done = await alice.call(`/api/feed/${originId}/repost`, { method: 'POST', body: { comment: '这条我要转' } });
+    check('别人的公开动态转得出去', done.status === 200 && done.data.reposted === true, JSON.stringify(done.body));
+    check('第一次转 updated=false（是新增，不是改）', done.data.updated === false);
+    check('转发后原动态 repostCount=1', done.data.repostCount === 1);
+    check('顺带把新转发那条整个给回来（前端要立刻插进列表）', Number.isInteger(done.data.item?.id) && done.data.item.id !== originId);
+    check('新转发那条带 refFeed（指回原动态）', done.data.item.refFeed?.id === originId, JSON.stringify(done.data.item.refFeed));
+    check('新转发那条自己也是普通动态（scope=public、有作者）', done.data.item.scope === 'public' && done.data.item.author?.username === 'alice');
+    const repostId = done.data.item.id;
+
+    check('转发语原样带回来', done.data.item.content === '这条我要转');
+    check('原动态的正文也嵌在转发卡片里（渲染成 HTML）', /要被转发的原动态/.test(done.data.item.refFeed?.contentHtml ?? ''));
+
+    // 列表接口上也要能看见「已转发」和计数 —— 否则刷新一下按钮就白了。
+    const list = (await alice.call('/api/feed')).data.items;
+    const inList = list.find((entry) => entry.id === originId);
+    check('列表里原动态 repostCount=1、reposted=true', inList?.repostCount === 1 && inList?.reposted === true);
+    check('列表里也看得到那条转发（它就在动态流里）', list.some((entry) => entry.id === repostId));
+
+    // 别人看原动态：计数是 1，但 reposted 是 false（那是按访客算的）。
+    const otherView = (await feedb.call('/api/feed')).data.items.find((entry) => entry.id === originId);
+    check('转发状态按访客算：别人看是没转过', otherView?.repostCount === 1 && otherView?.reposted === false);
+
+    // 同一条只留一条转发：再转是改转发语。
+    const again = await alice.call(`/api/feed/${originId}/repost`, { method: 'POST', body: { comment: '改一下转发语' } });
+    check('同一人再转是改转发语（updated=true）', again.status === 200 && again.data.updated === true, JSON.stringify(again.body));
+    check('再转计数不会变成 2', again.data.repostCount === 1);
+    check('改完还是同一条（没有新增）', again.data.item.id === repostId);
+    const rows = scalar('SELECT COUNT(*) AS c FROM feed_items WHERE ref_feed_id = ? AND deleted = 0', originId)?.c ?? -1;
+    check('库里确实只有一条转发行', rows === 1, `行数 = ${rows}`);
+
+    // 可见范围：转发出去的是公开的，所以「只给关注者看」的动态不能转。
+    const priv = await admin.call('/api/feed', { method: 'POST', body: { content: '只给关注者看的', scope: 'followers' } });
+    const privTry = await alice.call(`/api/feed/${priv.data.item.id}/repost`, { method: 'POST', body: { comment: '' } });
+    check('非公开动态不能转发（403 repost_scope）', privTry.status === 403 && privTry.error?.code === 'repost_scope', JSON.stringify(privTry.body));
+    await admin.call(`/api/feed/${priv.data.item.id}`, { method: 'DELETE' });
+
+    // 通知：原作者要知道被转了。
+    const notifs = (await admin.call('/api/notifications')).data.items;
+    const hit = notifs.find((entry) => entry.type === 'feed_repost');
+    check('原作者收到 feed_repost 通知', Boolean(hit), JSON.stringify(notifs.map((entry) => entry.type)));
+    check('转发通知指回被转的那条（feedItemId）', hit?.feedItemId === originId, JSON.stringify(hit?.feedItemId));
+
+    // 原动态被删：转发**不跟着消失**，只是把内嵌的卡片换成「原动态已删除」。
+    // （转发语是转发的人当时说的话，不该替别人删掉。）
+    await admin.call(`/api/feed/${originId}`, { method: 'DELETE' });
+    const afterOriginGone = (await alice.call('/api/feed')).data.items.find((entry) => entry.id === repostId);
+    check('原动态删了，转发那条还在', Boolean(afterOriginGone));
+    check('内嵌卡片标成「已删除」，转发语还在', afterOriginGone?.refFeed?.deleted === true && afterOriginGone?.content === '改一下转发语');
+
+    // 撤销转发。注意撤销是打在**原动态**的 id 上的（转发行是哪一条由服务端自己查），
+    // 前端按钮上的 `data-id` 也就是原动态 id。
+    const notMine = await feedb.call(`/api/feed/${originId}/repost`, { method: 'DELETE' });
+    check('没转过的人撤销会被拒（400 not_reposted）', notMine.status === 400 && notMine.error?.code === 'not_reposted', JSON.stringify(notMine.body));
+
+    const undone = await alice.call(`/api/feed/${originId}/repost`, { method: 'DELETE' });
+    check('撤销转发成功', undone.status === 200 && undone.data.reposted === false, JSON.stringify(undone.body));
+    check('撤销后计数归零', undone.data.repostCount === 0);
+    const gone = scalar('SELECT COUNT(*) AS c FROM feed_items WHERE ref_feed_id = ? AND deleted = 0', originId)?.c ?? -1;
+    check('撤销后库里那条转发也被软删了（不是只改了计数）', gone === 0, `行数 = ${gone}`);
+  }
+
   await finish(failures.length ? 1 : 0);
 } catch (error) {
   console.log(`❌ 测试自己崩了：${error.stack ?? error.message}`);

@@ -1046,6 +1046,93 @@ try {
     );
   }
 
+  /* ---------- 3.9c 积木页的转发区：转发同样挂影子行，接口原样复用 core ---------- */
+
+  {
+    // 转发和点赞、回复一样记在**影子行**上（`reposts.post_id` 指向它），所以积木页
+    // 不需要另造一套 `/api/docs/:id/repost` —— 只是发完不跳帖子页而已。
+    // 这组用例盯的就是「那颗按钮以前点了只弹一句话」这件事别再回来。
+    const otherId = (await other.call('/api/auth/me')).data?.user?.id;
+    const beforeView = await other.call(`/api/docs/${docId}/anchor`);
+    check(
+      'anchor 接口顺带把转发者名单给回来（reposters 数组）',
+      Array.isArray(beforeView.data?.reposters),
+      JSON.stringify(beforeView.data && Object.keys(beforeView.data)),
+    );
+    check(
+      '没转过时 reposted=false、repostCount=0',
+      beforeView.data?.post?.reposted === false && beforeView.data?.post?.repostCount === 0,
+      JSON.stringify({ reposted: beforeView.data?.post?.reposted, count: beforeView.data?.post?.repostCount }),
+    );
+    const selfRepost = await author.call(`/api/posts/${anchorId}/repost`, { method: 'POST', body: { comment: '自转' } });
+    check('自己的文章不让转发（400 self_repost，转发区里给提示不给表单）', selfRepost.error?.code === 'self_repost', `${selfRepost.status} ${JSON.stringify(selfRepost.error)}`);
+    const anonRepost = await anon.call(`/api/posts/${anchorId}/repost`, { method: 'POST', body: { comment: '路人转' } });
+    check('没登录不能转发（401）', anonRepost.status === 401, `${anonRepost.status}`);
+
+    const reposted = await other.call(`/api/posts/${anchorId}/repost`, { method: 'POST', body: { comment: '这篇值得一看' } });
+    check(
+      '积木页复用 core 的转发接口转得出去（没有另造 /api/docs/:id/repost）',
+      reposted.status === 200 && reposted.data?.reposted === true,
+      `${reposted.status} ${JSON.stringify(reposted.error)}`,
+    );
+
+    const afterRepost = await other.call(`/api/docs/${docId}/anchor`);
+    check(
+      '转完再读 anchor：按钮该显示「已转发」、计数 +1、名单里有我',
+      afterRepost.data?.post?.reposted === true &&
+        afterRepost.data?.post?.repostCount === 1 &&
+        afterRepost.data?.reposters?.length === 1 &&
+        afterRepost.data?.reposters?.[0]?.user?.id === otherId,
+      JSON.stringify({
+        reposted: afterRepost.data?.post?.reposted,
+        count: afterRepost.data?.post?.repostCount,
+        who: (afterRepost.data?.reposters ?? []).map((item) => item.user?.username),
+        otherId,
+      }),
+    );
+    check(
+      '转发语原样带回来（转发区要显示「TA 说了什么」）',
+      afterRepost.data?.reposters?.[0]?.comment === '这篇值得一看',
+      afterRepost.data?.reposters?.[0]?.comment,
+    );
+
+    const authorView = await author.call(`/api/docs/${docId}/anchor`);
+    check(
+      '转发状态是按访客算的：作者自己看这篇是「没转过」',
+      authorView.data?.post?.reposted === false && authorView.data?.post?.repostCount === 1,
+      JSON.stringify({ reposted: authorView.data?.post?.reposted, count: authorView.data?.post?.repostCount }),
+    );
+
+    const inbox = await author.call('/api/notifications?filter=unread');
+    check(
+      '作者收到了 post_repost 通知，并且指回这条影子行',
+      (inbox.data?.items ?? []).some((item) => item.type === 'post_repost' && item.post?.id === anchorId),
+      JSON.stringify((inbox.data?.items ?? []).map((item) => item.type)),
+    );
+
+    const again = await other.call(`/api/posts/${anchorId}/repost`, { method: 'POST', body: { comment: '改一下转发语' } });
+    check(
+      '同一篇只能转一次：再转是改转发语（updated=true），计数不会变成 2',
+      again.data?.updated === true && again.data?.repostCount === 1,
+      JSON.stringify(again.data),
+    );
+
+    const undone = await other.call(`/api/posts/${anchorId}/repost`, { method: 'DELETE' });
+    check('撤销转发成功', undone.status === 200 && undone.data?.reposted === false, `${undone.status} ${JSON.stringify(undone.error)}`);
+    const afterUndo = await other.call(`/api/docs/${docId}/anchor`);
+    check(
+      '撤销后计数归零、名单也空了（积木页重画转发区就靠这一条）',
+      afterUndo.data?.post?.repostCount === 0 &&
+        afterUndo.data?.post?.reposted === false &&
+        afterUndo.data?.reposters?.length === 0,
+      JSON.stringify({
+        count: afterUndo.data?.post?.repostCount,
+        reposted: afterUndo.data?.post?.reposted,
+        reposters: afterUndo.data?.reposters?.length,
+      }),
+    );
+  }
+
   /* ---------- 3.10 既有互动链路零改动复用（FR-KEEP 的正面证据） ---------- */
 
   {
