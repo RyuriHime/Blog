@@ -152,6 +152,75 @@ function aiPostPanelHtml(post, aiInfo) {
     </section>`;
 }
 
+/** 逐篇分类默认只渲染这么多行：554 篇文档一次全铺开是几十屏，其余点「显示全部」再展开。 */
+const AI_LIST_LIMIT = 30;
+
+/** 逐篇分类的一行。状态写进 `data-ai-status`，卡内的「已解读 / 未解读」筛选直接读它。 */
+function aiDocRowHtml(doc) {
+  return `
+    <div class="ai-post-row" data-ai-status="${doc.category ? 'done' : 'pending'}" data-ai-title="${esc(String(doc.title ?? '').toLowerCase())}">
+      <a class="ai-post" href="#/post/${doc.id}">
+        <span class="ai-post-title">${esc(doc.title)}</span>
+        <span class="ai-post-meta">${esc(doc.board)} · ${esc(doc.author)}${doc.replyCount ? ` · ${doc.replyCount} 条回复` : ''}</span>
+        ${doc.summary ? `<span class="ai-post-summary">${esc(doc.summary)}</span>` : ''}
+      </a>
+      <div class="ai-post-chips">
+        ${doc.category ? aiChip(doc.category, 'cat') : '<span class="hint">未解读</span>'}
+        ${doc.difficulty ? aiChip(doc.difficulty, 'diff') : ''}
+      </div>
+    </div>`;
+}
+
+/** 一个主题分组：整块默认**收起**（6 组 × 16~30 篇铺开就是十几屏），点标题才展开。 */
+function aiTopicHtml(topic) {
+  const list = topic.posts ?? [];
+  return `
+    <details class="ai-topic">
+      <summary class="ai-topic-head">
+        <span class="ai-caret" aria-hidden="true">▶</span>
+        <span class="ai-topic-name">${esc(topic.name)}</span>
+        ${topic.difficulty ? aiChip(topic.difficulty, 'diff') : ''}
+        ${(topic.prereq ?? []).map((item) => aiChip(`前置：${item}`, 'soft')).join('')}
+        <span class="ai-topic-count">${Fmt.fmtNum(list.length)} 篇</span>
+      </summary>
+      ${topic.summary ? `<div class="hint">${esc(topic.summary)}</div>` : ''}
+      <div class="ai-posts">${list.map(aiPostLink).join('')}</div>
+    </details>`;
+}
+
+/**
+ * 逐篇分类：整卡默认收起，展开后自带「全部 / 已解读 / 未解读」筛选与标题搜索，
+ * 且默认只显示前 `AI_LIST_LIMIT` 行。筛选与搜索都只动 class / dataset，不重新请求接口。
+ */
+function aiAllDocsHtml(posts, pendingCount, isAdmin) {
+  const doneCount = posts.filter((doc) => doc.category).length;
+  const clipped = posts.length > AI_LIST_LIMIT;
+  return `
+    <section class="card">
+      <details class="ai-all">
+        <summary class="ai-all-head">
+          <span class="ai-caret" aria-hidden="true">▶</span>
+          <span class="card-title">📄 逐篇分类</span>
+          <span class="hint">${Fmt.fmtNum(posts.length)} 篇${
+            pendingCount
+              ? ` · 全站还有 ${Fmt.fmtNum(pendingCount)} 篇没整理${isAdmin ? '（可在上面的「⚙ 管理」里批量处理）' : ''}`
+              : ' · 都已整理'
+          }</span>
+        </summary>
+        <div class="ai-all-controls">
+          <button class="ai-scope is-on" type="button" data-action="ai-list-scope" data-scope="all">全部 ${Fmt.fmtNum(posts.length)}</button>
+          <button class="ai-scope" type="button" data-action="ai-list-scope" data-scope="done">已解读 ${Fmt.fmtNum(doneCount)}</button>
+          <button class="ai-scope" type="button" data-action="ai-list-scope" data-scope="pending">未解读 ${Fmt.fmtNum(posts.length - doneCount)}</button>
+          <input class="ai-search" type="search" data-action="ai-list-search" placeholder="搜标题…" aria-label="按标题筛选" />
+        </div>
+        <div class="ai-posts wide" data-ai-list="1" data-scope="all"${clipped ? ' data-clip="1"' : ''}>${posts
+          .map(aiDocRowHtml)
+          .join('')}</div>
+        ${clipped ? `<button class="btn btn-sm btn-ghost ai-more" type="button" data-action="ai-list-more">显示全部 ${Fmt.fmtNum(posts.length)} 篇</button>` : ''}
+      </details>
+    </section>`;
+}
+
 /** AI 主页：全站整理结果 + 逐篇分类清单 + 全站问答。 */
 async function viewAI() {
   ui.app.innerHTML = loadingHtml();
@@ -165,6 +234,9 @@ async function viewAI() {
   const { report, topics = [], readingPath = [], posts = [], stats = {} } = data;
   const isAdmin = Fmt.isStaffUser(state.me);
   const corpus = stats.corpus ?? {};
+  // 封面篇数取 `documentCount`：后端从来没有 `postCount` 这个字段，而 `Fmt.fmtNum(undefined)`
+  // 走的是 `Number(value || 0)`，于是页面上一直写着「覆盖 0 篇」。两个字段都兜一层，后端改名也不会再静默变 0。
+  const covered = report?.documentCount ?? report?.postCount ?? 0;
 
   const head = `
     <section class="card">
@@ -172,21 +244,29 @@ async function viewAI() {
         <h1 style="font-size:21px">🤖 AI 阅读助手</h1>
         <div class="ai-head-actions">
           <a class="btn btn-sm btn-ghost" href="#/ai-edit" title="选文档 → 选块 → 让 AI 改这一块，改完真的落盘，随时可回滚">🎛 AI 编辑台</a>
-          ${isAdmin ? '<button class="btn btn-sm" type="button" data-action="ai-analyze-pending">⚡ 解读未整理的帖子</button>' : ''}
-          ${isAdmin ? '<button class="btn btn-sm btn-primary" type="button" data-action="ai-site-analyze">🧭 重新整理全站</button>' : ''}
         </div>
       </div>
       <div class="page-sub">把论坛里的 Markdown 帖子自动分类整理，给出推荐阅读顺序与前置知识；也可以基于单篇帖子或全站内容直接提问。</div>
       <div class="ai-stats">
+        <span class="ai-stat"><strong>${Fmt.fmtNum(corpus.posts ?? 0)}</strong> 篇语料</span>
         <span class="ai-stat"><strong>${Fmt.fmtNum(stats.analyzed ?? 0)}</strong> 篇已解读</span>
         ${stats.pending ? `<span class="ai-stat warn"><strong>${Fmt.fmtNum(stats.pending)}</strong> 篇待整理</span>` : ''}
-        <span class="ai-stat"><strong>${Fmt.fmtNum(corpus.posts ?? 0)}</strong> 篇帖子</span>
-        <span class="ai-stat"><strong>${Fmt.fmtNum(corpus.replies ?? 0)}</strong> 条回复</span>
         <span class="ai-stat"><strong>${Fmt.fmtNum(topics.length)}</strong> 个主题</span>
         ${stats.failed ? `<span class="ai-stat warn"><strong>${Fmt.fmtNum(stats.failed)}</strong> 篇解读失败</span>` : ''}
       </div>
       ${!aiConfigured() ? aiNoticeHtml() : ''}
       ${data.stale && report ? '<div class="ai-stale">论坛内容有更新，这份整理可能已经过时，建议重新整理。</div>' : ''}
+      ${
+        isAdmin
+          ? `<details class="ai-admin">
+        <summary><span class="ai-caret" aria-hidden="true">▶</span>⚙ 管理 · 批量解读 / 重新整理全站</summary>
+        <div class="ai-admin-menu">
+          <button class="btn btn-sm" type="button" data-action="ai-analyze-pending">⚡ 解读未整理的帖子</button>
+          <button class="btn btn-sm btn-primary" type="button" data-action="ai-site-analyze">🧭 重新整理全站</button>
+        </div>
+      </details>`
+          : ''
+      }
     </section>`;
 
   const qa = `
@@ -200,7 +280,7 @@ async function viewAI() {
     <section class="card">
       <div class="card-head">
         <span class="card-title">🧭 全站知识地图</span>
-        <span class="hint">${Fmt.timeAgo(report.createdAt)}整理 · 覆盖 ${Fmt.fmtNum(report.postCount)} 篇${report.model ? ` · ${esc(report.model)}` : ''}</span>
+        <span class="hint">${Fmt.timeAgo(report.createdAt)}整理 · 覆盖 ${Fmt.fmtNum(covered)} 篇${report.model ? ` · ${esc(report.model)}` : ''}</span>
       </div>
       ${report.status !== 'done' ? `<div class="ai-error">上次整理失败：${esc(report.error || '未知原因')}</div>` : ''}
       ${report.summary ? `<p class="ai-summary">${esc(report.summary)}</p>` : ''}
@@ -223,24 +303,8 @@ async function viewAI() {
       }
       ${
         topics.length
-          ? `<div class="ai-sub">🗂 主题分组</div>
-             <div class="ai-topics">
-               ${topics
-                 .map(
-                   (topic) => `
-                 <div class="ai-topic">
-                   <div class="ai-topic-head">
-                     <span class="ai-topic-name">${esc(topic.name)}</span>
-                     ${topic.difficulty ? aiChip(topic.difficulty, 'diff') : ''}
-                     ${(topic.prereq ?? []).map((item) => aiChip(`前置：${item}`, 'soft')).join('')}
-                     <span class="ai-topic-count">${topic.posts.length} 篇</span>
-                   </div>
-                   ${topic.summary ? `<div class="hint">${esc(topic.summary)}</div>` : ''}
-                   <div class="ai-posts">${topic.posts.map(aiPostLink).join('')}</div>
-                 </div>`,
-                 )
-                 .join('')}
-             </div>`
+          ? `<div class="ai-sub">🗂 主题分组（点标题展开）</div>
+             <div class="ai-topics">${topics.map(aiTopicHtml).join('')}</div>`
           : `<div class="hint">还没有整理过全站。${isAdmin ? '点上面的「重新整理全站」开始。' : '等管理员整理一次后这里就会显示主题分组。'}</div>`
       }
     </section>`
@@ -250,40 +314,12 @@ async function viewAI() {
       ${emptyHtml('🗺', '还没有整理过全站', isAdmin ? '点上方「重新整理全站」，AI 会聚类出主题与阅读路线' : '等管理员整理一次后这里就会显示主题分组')}
     </section>`;
 
-  const listHtml = `
+  const listHtml = posts.length
+    ? aiAllDocsHtml(posts, stats.pending ?? 0, isAdmin)
+    : `
     <section class="card">
-      <div class="card-head">
-        <span class="card-title">📄 逐篇分类</span>
-        <span class="hint">${
-          stats.pending
-            ? `还有 ${Fmt.fmtNum(stats.pending)} 篇没整理${isAdmin ? '，可以点上方「⚡ 解读未整理的帖子」批量处理' : ''}`
-            : '点开任意帖子即可单独解读'
-        }</span>
-      </div>
-      ${
-        posts.length
-          ? `<div class="ai-posts wide">${posts
-              .map(
-                (post) => `
-            <div class="ai-post-row">
-              <a class="ai-post" href="#/post/${post.id}">
-                <span class="ai-post-title">${esc(post.title)}</span>
-                <span class="ai-post-meta">${esc(post.board)} · ${esc(post.author)}${post.replyCount ? ` · ${post.replyCount} 条回复` : ''}</span>
-                ${post.summary ? `<span class="ai-post-summary">${esc(post.summary)}</span>` : ''}
-              </a>
-              <div class="ai-post-chips">
-                ${
-                  post.category
-                    ? aiChip(post.category, 'cat')
-                    : `<span class="hint">未解读</span>`
-                }
-                ${post.difficulty ? aiChip(post.difficulty, 'diff') : ''}
-              </div>
-            </div>`,
-              )
-              .join('')}</div>`
-          : emptyHtml('📭', '还没有帖子', '先去发一篇吧')
-      }
+      <div class="card-head"><span class="card-title">📄 逐篇分类</span></div>
+      ${emptyHtml('📭', '还没有帖子', '先去发一篇吧')}
     </section>`;
 
   ui.app.innerHTML = head + qa + reportHtml + listHtml;
