@@ -218,6 +218,7 @@ async function chatOnce(messages, options = {}) {
 
   return {
     text: content,
+    finishReason: String(choice?.finish_reason ?? ''),
     model: payload?.model || config.model,
     usage: {
       prompt: Number(payload?.usage?.prompt_tokens ?? 0),
@@ -228,13 +229,17 @@ async function chatOnce(messages, options = {}) {
 }
 
 /**
- * 输出被 `max_tokens` 截断（`finish_reason=length`，正文为空）。
+ * 输出被 `max_tokens` 截断（`finish_reason=length`）。
+ *
+ * 两种表现都算：正文**空的**（推理型模型把预算烧在思考上，`ai_empty_response`）、
+ * 以及**只写了半截 JSON**（解析不出来，`ai_bad_json`）。
  *
  * 这不是上游抖动：同样的预算再问一遍，结果只会一样。所以它**不重试**，
  * 而是让调用方「少问一点」（分块、对半切）或「给更多预算」。
  */
 export function isTruncated(error) {
-  return error?.code === 'ai_empty_response' && String(error?.details?.finishReason ?? '') === 'length';
+  if (String(error?.details?.finishReason ?? '') !== 'length') return false;
+  return error?.code === 'ai_empty_response' || error?.code === 'ai_bad_json';
 }
 
 /** 这些错误重试有意义：上游抖动，而不是请求本身有问题。 */
@@ -285,6 +290,8 @@ export async function chat(messages, options = {}) {
  * 调一次模型并要求它给出可解析的 JSON。
  *
  * 模型偶尔会返回半截 JSON（尤其是长输出），这种也重试：jsonAttempts 默认 2 次。
+ * 但**被 `max_tokens` 截断**的那种（`finish_reason=length`）不重试 —— 同样预算问两遍还是半截，
+ * 直接带着现场交给调用方去「少问一点」。
  * @returns {Promise<{ parsed: object, text: string, model: string, usage: object }>}
  */
 async function chatJson(messages, options = {}) {
@@ -297,10 +304,15 @@ async function chatJson(messages, options = {}) {
   let lastError = null;
 
   for (let attempt = 1; attempt <= Math.max(1, jsonAttempts); attempt += 1) {
-    const { text, model, usage } = await chat(messages, chatOptions);
+    const { text, model, usage, finishReason } = await chat(messages, chatOptions);
     const parsed = extractJson(text);
     if (parsed && typeof parsed === 'object') return { parsed, text, model, usage };
-    lastError = new AiError('ai_bad_json', badJsonMessage, { rawOutput: rawOutputHead(text) });
+    lastError = new AiError('ai_bad_json', badJsonMessage, {
+      rawOutput: rawOutputHead(text),
+      finishReason,
+      usage,
+    });
+    if (isTruncated(lastError)) break;
     if (attempt < jsonAttempts && typeof onRetry === 'function') onRetry({ attempt, lastError });
   }
   throw lastError;
@@ -356,8 +368,9 @@ export async function reviewDocument(doc, siblings = [], options = {}) {
  *   3) 目录也超预算 → 按 chunkChars 分块整理，再把各块的分组草案归并成最终地图。
  *
  * 另外两处「宁可地图糙一点，也别整页空白」的兜底：
- *   - 输出被 `max_tokens` 截断（`finish_reason=length`，推理模型常见）时，不重试，
- *     而是**落到下一级**：目录被截断就改分块，某一块被截断就把它对半切开再问（直到单篇）；
+ *   - 输出被 `max_tokens` 截断（`finish_reason=length`，推理模型常见；正文可能是空的，也可能是
+ *     半截 JSON）时，不重试，而是**落到下一级**：目录被截断就改分块，某一块被截断就把它对半
+ *     切开再问（直到单篇）；
  *   - 归并那一次失败时，直接用各块草案拼出主题与概述（并把失败记进 `failures`）。
  *
  * @param {Array<object>} docs
@@ -403,8 +416,9 @@ export async function reviewCorpus(docs, options = {}) {
       );
       return { report: normalizeSiteReport(parsed, list), model, usage, mode: 'index', included: list.length, truncated: false };
     } catch (error) {
-      // 目录不长、但**输出**被截断：别在这里失败，落到分块去「一次只问一小片」
-      if (!isTruncated(error)) throw error;
+      // 目录不长、但这一次没问出可用的地图（被截断，或是半截 JSON）：别在这里失败，
+      // 落到分块去「一次只问一小片」—— 小片更容易问完整
+      if (!isTruncated(error) && error?.code !== 'ai_bad_json') throw error;
     }
   }
 

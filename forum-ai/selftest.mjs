@@ -51,7 +51,7 @@ function check(name, condition, detail = '') {
 /* 假 AI 服务                                                          */
 /* ------------------------------------------------------------------ */
 
-const mock = { calls: [], mode: 'ok', emptyTimes: 0, failPart: null, truncateOverChars: 0, truncateIndex: false, truncatePartOver: 0, failMerge: false };
+const mock = { calls: [], mode: 'ok', emptyTimes: 0, failPart: null, truncateOverChars: 0, truncateJsonOverChars: 0, truncateIndex: false, truncateIndexJson: false, truncatePartOver: 0, truncatePartJsonOver: 0, failMerge: false };
 
 function mockReply(userText) {
   const ids = [...userText.matchAll(/\[#([\w.-]+)\]/g)].map((m) => m[1]);
@@ -128,17 +128,40 @@ const server = http.createServer((req, res) => {
         }),
       );
     };
+    const partialJson = () => {
+      // 也是撞上 max_tokens，但这次模型已经写到了半截 JSON：解析不出来，finish_reason 仍是 length
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(
+        JSON.stringify({
+          model: 'mock-model',
+          choices: [{ message: { content: '{"summary":"被截断的概述","topics":[{"name":"半截' }, finish_reason: 'length' }],
+          usage: { prompt_tokens: 11, completion_tokens: 3000 },
+        }),
+      );
+    };
     if (mock.truncateOverChars && userText.length > mock.truncateOverChars) {
       truncate();
+      return;
+    }
+    if (mock.truncateJsonOverChars && userText.length > mock.truncateJsonOverChars) {
+      partialJson();
       return;
     }
     if (mock.truncateIndex && userText.includes('【全库材料】')) {
       truncate();
       return;
     }
+    if (mock.truncateIndexJson && userText.includes('【全库材料】')) {
+      partialJson();
+      return;
+    }
     if (mock.truncatePartOver && partCount > mock.truncatePartOver) {
       // 一次问的篇数太多 → 模型想不完，被输出预算截断
       truncate();
+      return;
+    }
+    if (mock.truncatePartJsonOver && partCount > mock.truncatePartJsonOver) {
+      partialJson();
       return;
     }
     if (mock.failMerge && userText.includes('【全库概况】')) {
@@ -467,6 +490,42 @@ try {
   check('归并失败时用各块草案兜底，地图仍有主题', draftsFallback.report.topics.length > 0, JSON.stringify(draftsFallback.report.topics.map((topic) => topic.name)));
   check('兜底时把归并失败记进 failures', draftsFallback.failures.some((failure) => failure.part === 'merge') === true, JSON.stringify(draftsFallback.failures));
   check('兜底也给出概述文本', String(draftsFallback.report.summary ?? '').length > 0, draftsFallback.report.summary);
+
+  // 半截 JSON：也是被 max_tokens 截断，只是这次模型已经写了一半（线上全站总览出现过这种）
+  mock.calls.length = 0;
+  mock.truncateJsonOverChars = 10;
+  let halfJsonError = null;
+  try {
+    await reviewDocument(DOCS[0], [], { chatOptions: { env: retryEnv } });
+  } catch (error) {
+    halfJsonError = error;
+  }
+  mock.truncateJsonOverChars = 0;
+  check(
+    '半截 JSON 认得出是截断（ai_bad_json + finish_reason=length）',
+    halfJsonError?.code === 'ai_bad_json' && halfJsonError?.details?.finishReason === 'length' && isTruncated(halfJsonError) === true,
+    JSON.stringify({ code: halfJsonError?.code, finishReason: halfJsonError?.details?.finishReason, truncated: isTruncated(halfJsonError) }),
+  );
+  check('半截 JSON 不重问第二遍（同样预算还是半截）', mock.calls.length === 1, `calls=${mock.calls.length}`);
+  check('半截 JSON 现场留着模型原文', typeof halfJsonError?.details?.rawOutput === 'string' && halfJsonError.details.rawOutput.length > 0, String(halfJsonError?.details?.rawOutput).slice(0, 40));
+
+  // 目录问成半截 JSON → 也落到分块
+  mock.calls.length = 0;
+  mock.truncateIndexJson = true;
+  const halfIndex = await reviewCorpus(bigDocs, { chatOptions: { env: retryEnv }, charLimit: 24000, chunkChars: 400 });
+  mock.truncateIndexJson = false;
+  check('目录问成半截 JSON 时也改走分块', halfIndex.mode === 'chunked' && halfIndex.failures.length === 0 && halfIndex.report.topics.length > 0, `${halfIndex.mode}/${halfIndex.failures.length}`);
+
+  // 某一块问成半截 JSON → 也对半切开
+  mock.calls.length = 0;
+  mock.truncatePartJsonOver = 12;
+  const halvedHalfJson = await reviewCorpus(bigDocs, { chatOptions: { env: retryEnv }, charLimit: 600, chunkChars: 400 });
+  mock.truncatePartJsonOver = 0;
+  check(
+    '块问成半截 JSON 时也对半切开（没有失败块）',
+    halvedHalfJson.mode === 'chunked' && halvedHalfJson.failures.length === 0 && mock.calls.length > halvedHalfJson.chunks + 1,
+    `calls=${mock.calls.length} chunks=${halvedHalfJson.chunks} failures=${halvedHalfJson.failures.length}`,
+  );
 
   /* ---------------- 上游错误 ---------------- */
   console.log('\n▶ 上游错误映射');
