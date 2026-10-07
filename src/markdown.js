@@ -250,6 +250,21 @@ export function renderInline(source, options = {}) {
   while (i < src.length) {
     const ch = src[i];
 
+    // 反斜杠定界的公式：`\[…\]` 行间、`\(…\)` 行内，两个都是留给前端 KaTeX 的。
+    // ⚠️ 这一条**必须排在下面的反斜杠转义前面**：`\[` 和 `\(` 都在转义字符表里，
+    // 一旦被那条规则吃掉反斜杠，auto-render 就再也配不上定界符，公式永远显示成源码；
+    // 顺带 `\\`（LaTeX 换行）也会被压成单个 `\`，矩阵的换行全废。
+    if (ch === '\\' && (src[i + 1] === '[' || src[i + 1] === '(')) {
+      const closer = src[i + 1] === '[' ? '\\]' : '\\)';
+      const closeAt = src.indexOf(closer, i + 2);
+      if (closeAt !== -1) {
+        const whole = src.slice(i, closeAt + closer.length);
+        push(escapeHtml(whole));
+        i += whole.length;
+        continue;
+      }
+    }
+
     // 反斜杠转义：`\*` 就是字面的星号，反斜杠本身不显示。
     if (ch === '\\' && i + 1 < src.length && /[\\`*_{}[\]()#+\-.!>~$|]/.test(src[i + 1])) {
       text += src[i + 1];
