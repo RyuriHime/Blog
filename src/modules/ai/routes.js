@@ -39,6 +39,7 @@ import {
   AI_BLOCK_PROP_GUIDE,
   AI_SANDBOX_GUIDE,
   AI_AUTHORING_GUIDE,
+  AI_FENCE_GUIDE,
 } from './syntax.js';
 import { repairBlock, repairBlockList, repairMarkdown, describeRepairs } from './programs.js';
 
@@ -567,6 +568,7 @@ function blockPromptRules() {
     AI_BLOCK_PROP_GUIDE.join('\n'),
     AI_SANDBOX_GUIDE.join('\n'),
     AI_AUTHORING_GUIDE.join('\n'),
+    AI_FENCE_GUIDE.join('\n'),
     '用户没要求改的部分保持原样。',
   ].join('\n');
 }
@@ -613,11 +615,12 @@ function documentSystemPrompt() {
     // 裸文本一律变成普通正文（`prose`），程序就变成了一堆打印出来的 JSON。
     'Markdown 里的积木块必须写成围栏块：三个反引号开头、紧跟 doc:<块类型>、换行后是 JSON、再用三个反引号收尾，例如：',
     '```doc:poll\\n{"question":"…","options":[{"id":"o1","text":"甲"},{"id":"o2","text":"乙"}]}\\n```',
-    '**围栏不能省**：光写 doc:poll 那半行，它只会被当成普通正文打印出来。',
+    '**围栏不能省**：光写 doc:poll 那半行，它只会被当成普通正文打印出来（详见下面「照抄围栏块的三条铁律」）。',
     '小应用（能在浏览器里跑的程序）的围栏体是 {"app":"应用名","config":{},"code":"<button>…</button><script>…<\\/script>"}，',
     '代码全部在 code 里（样式写 <style>、脚本写 <script>），**没有 title / html / css / js 这些字段**；',
     '代码跑在隔离 iframe 里：只有内联脚本与内联样式、**没有网络**，不许写 <link>、外链 CDN 或 fetch / XMLHttpRequest；',
     '照抄已有的围栏块时，类型名与字段名一个字都别改；没见过的块类型不要发明（每类块的 props 见块编辑器的说明）。',
+    AI_FENCE_GUIDE.join('\n'),
     '注意：本站的 Markdown 与积木块是互转的，转换有损（表格分隔行会被剥掉、嵌套列表会被并成一块），',
     '能不动结构就别动结构。',
     '要「能跑的东西」（投票、小工具、小界面）时，直接在 markdown 里写 ```doc:poll / ```doc:app 围栏，',

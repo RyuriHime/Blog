@@ -35,6 +35,20 @@ import {
   AI_RANGE_TARGET_TYPES as AI_RUNTIME_RANGE_TARGET_TYPES,
   AI_SCOPES as AI_RUNTIME_SCOPES,
 } from '../src/modules/ai/schema.js';
+// 第 29 节（doc 548 投票帖事故的回归）要用纠正层的纯函数，以及 **P2 自己的**
+// 解析器与围栏工具：「修好了没有」的唯一硬判据是 `parseSourceBlocks` 的输出，
+// 不是字符串长得像不像；而两份 `fenceFor` 必须在任何时刻都逐字同算法。
+import {
+  FENCED_TYPES as AI_FENCED_TYPES,
+  FIXABLE_TYPES as AI_FIXABLE_TYPES,
+  describeRepairs,
+  fenceFor as aiFenceFor,
+  normalizePollProps,
+  repairBlock,
+  repairMarkdown,
+} from '../src/modules/ai/programs.js';
+import { parseSourceBlocks } from '../src/modules/doc/blocks/markdown.js';
+import { fenceFor as p2FenceFor } from '../src/modules/doc/blocks/text.js';
 
 const ROOT = resolve(fileURLToPath(new URL('.', import.meta.url)), '..');
 const SERVER = join(ROOT, 'src', 'server.js');
@@ -1618,6 +1632,21 @@ try {
   // 唯一的接口约定，必须钉住它的真实形状（不是猜的）。
   const contractBefore = { type: 'paragraph', props: { text: '旧文案' } };
   const contractAfter = { type: 'poll', props: { question: '选哪个？', options: ['A', 'B'] } };
+  // 从 doc 548 那次事故起，`/ops` 在写审计**之前**先过一遍形状纠正层（见第 29 节）：
+  // 投票的字符串选项会被摆成 `{ id, text }`，并补上 `multiple`。审计里存的必须是
+  // **真正会写进文档的那一份**（回滚交回的也是它），所以这里的期望值得是纠正后的形状；
+  // 拿用户发来的原样去比，只会在纠正层生效时红 —— 而红的那两条恰恰是「它真的生效了」。
+  const contractAfterStored = {
+    type: 'poll',
+    props: {
+      question: '选哪个？',
+      options: [
+        { id: 'o1', text: 'A' },
+        { id: 'o2', text: 'B' },
+      ],
+      multiple: false,
+    },
+  };
   const contract = await admin.call('/api/ai-edit/ops', {
     method: 'POST',
     body: { documentId: 'doc-9', blockId: 'block-9', before: contractBefore, after: contractAfter, reason: '落盘契约', confirm: true },
@@ -1677,7 +1706,11 @@ try {
 
   const contractRow = (await admin.call('/api/ai-edit/ops?limit=100')).data?.ops?.find((row) => row.id === contract.data?.opId);
   check('审计里存着这条操作', Boolean(contractRow), JSON.stringify(contract.data?.opId));
-  check('审计里的 after 就是 {type, props} 本身', sameJson(contractRow?.after, contractAfter), JSON.stringify(contractRow?.after));
+  check(
+    '审计里的 after 是纠正层摆正之后的 {type, props}（不再是发过去的原样）',
+    sameJson(contractRow?.after, contractAfterStored),
+    JSON.stringify(contractRow?.after),
+  );
   check('审计里的 before 同理', sameJson(contractRow?.before, contractBefore), JSON.stringify(contractRow?.before));
 
   // 审计里的 before 会被 rollback 原样交回给 P2 写盘（restore），所以它必须是
@@ -1697,7 +1730,7 @@ try {
   const dirtyRow = (await admin.call('/api/ai-edit/ops?limit=100')).data?.ops?.find((row) => row.id === dirty.data?.opId);
   check(
     '审计里的 before / after 是剥掉多余键的干净 {type, props}',
-    sameJson(dirtyRow?.after, contractAfter) && sameJson(dirtyRow?.before, contractBefore),
+    sameJson(dirtyRow?.after, contractAfterStored) && sameJson(dirtyRow?.before, contractBefore),
     `after=${JSON.stringify(dirtyRow?.after)} before=${JSON.stringify(dirtyRow?.before)}`,
   );
 
@@ -3096,6 +3129,163 @@ try {
     '校验不过的请求不吃额度：紧随其后的合法请求仍然是 503（不是 429）',
     noKeyDraftAfterBad.status === 503 && noKeyDraftAfterBad.error?.code === 'ai_not_configured',
     `实际 ${noKeyDraftAfterBad.status} ${noKeyDraftAfterBad.error?.code ?? ''}`,
+  );
+
+  /* ---------- 29. 裸写的围栏块：doc 548 投票帖事故的回归 ---------- */
+  //
+  // 事故：模型把一个投票块写成了「裸写的 `doc:poll {#b2}` + 一段 JSON」，没有围栏。
+  // P2 的解析器遇到看不懂的东西一律退化成正文（**从不抛异常**），于是线上那篇文档里
+  // 没有投票块，整段 JSON 变成了正文 —— 用户看到的就是「投票帖打开是一大片 JSON」。
+  //
+  // 这一节钉四件事：
+  //   ① 两份 `fenceFor` 逐字同算法（`programs.js` 的注释自称「ai-smoke 有一条哨兵把
+  //      两个实现对着跑」，这里把它补成真的）；
+  //   ② 纠正层补上围栏之后，**用 P2 自己的解析器**再解析一遍，第二步必须是一块投票，
+  //      而且原来的块号 `b2` 还在；
+  //   ③ 教程里用四反引号包着的示例一个字都不许动（那是「教人怎么写」，不是坏块）；
+  //   ④ `/ops` 的预览必须**已经**是修好的版本 —— 用户点确认之前就该看见真实形状，
+  //      而不是「先存坏的、以后再修」。
+  const barePollProps = {
+    question: '谁最帅？',
+    options: [
+      { id: 'o1', text: '用户一' },
+      { id: 'o2', text: '用户二' },
+      { id: 'o3', text: '用户三' },
+      { id: 'o4', text: '用户四' },
+    ],
+    multiple: false,
+  };
+  const barePollJson = JSON.stringify(barePollProps, null, 2);
+  const barePollDoc = `说明：这次投票想弄清站里谁最帅。\n\ndoc:poll {#b2}\n${barePollJson}\n\n## 结果说明\n\n结果写在这里。`;
+
+  // ① 两份 `fenceFor` 必须同算法：任一时刻改了其中一份，围栏就可能不够长，
+  //    内容里带反引号的块会把文档截成两半。
+  const fencePairs = ['abc', 'a```b', '```', 'a````b'];
+  check(
+    'AI 的 fenceFor 与 P2 text.js 的 fenceFor 逐字同算法（四组输入结果一致）',
+    fencePairs.every((text) => aiFenceFor(text) === p2FenceFor(text)),
+    fencePairs.map((text) => `${JSON.stringify(text)}:${aiFenceFor(text)}/${p2FenceFor(text)}`).join(' '),
+  );
+
+  // ② 先复现事故现场：坏文档在 P2 眼里**没有**投票块，JSON 是正文。
+  const bareParsedBefore = parseSourceBlocks(barePollDoc);
+  check(
+    '坏文档按原样解析：没有 poll 块、JSON 成了正文（这就是线上 548 的样子）',
+    bareParsedBefore.warnings.length === 0 &&
+      bareParsedBefore.blocks.length === 3 &&
+      bareParsedBefore.blocks.every((block) => block.type !== 'poll'),
+    JSON.stringify(bareParsedBefore.blocks.map((block) => block.type)),
+  );
+
+  const bareFixed = repairMarkdown(barePollDoc);
+  check(
+    '纠正层给裸写的投票补上围栏，并留一句人话说明改了什么',
+    /^`{3,}doc:poll \{#b2\}$/m.test(bareFixed.value) && bareFixed.notes.length === 1,
+    JSON.stringify(bareFixed.notes),
+  );
+
+  // ③ 最硬的判据：修完再让 P2 解析一次。
+  const bareParsedAfter = parseSourceBlocks(bareFixed.value);
+  const repairedPollBlock = bareParsedAfter.blocks.find((block) => block.type === 'poll');
+  check(
+    '修完再解析：第二步是一块真投票，块号 b2 保住了，选项也还在',
+    bareParsedAfter.warnings.length === 0 &&
+      bareParsedAfter.blocks[1]?.type === 'poll' &&
+      bareParsedAfter.blocks[1]?.block_id === 'b2' &&
+      repairedPollBlock?.props?.question === '谁最帅？' &&
+      repairedPollBlock?.props?.options?.length === 4,
+    JSON.stringify(bareParsedAfter.blocks.map((block) => [block.block_id, block.type])),
+  );
+  check(
+    '修完只动了那一处：说明与后半篇的文字原样还在',
+    bareFixed.value.includes('这次投票想弄清站里谁最帅。') && bareFixed.value.includes('结果写在这里。'),
+    bareFixed.value.slice(0, 40),
+  );
+
+  // ④ 教程守卫：四反引号围栏里包着的示例是「教人怎么写」，不是坏块。
+  const tutorialDoc = ['````text', 'doc:poll {#b7}', '{"question":"示例","options":[]}', '````', '', '正文'].join('\n');
+  const tutorialFixed = repairMarkdown(tutorialDoc);
+  check(
+    '教程里用四反引号包着的示例，纠正层一个字都不动、也不留说明',
+    tutorialFixed.value === tutorialDoc && tutorialFixed.notes.length === 0,
+    JSON.stringify(tutorialFixed.notes),
+  );
+
+  // ⑤ 单块路径（`/draft` 的纠正）走的是同一个 `repairBlock`。
+  const bareBlockFixed = repairBlock({ blockId: 'b2', type: 'prose', props: { text: `doc:poll {#b2}\n${barePollJson}` } });
+  check(
+    '单块纠正：正文里裸写着 doc:poll → 整块换成投票块，块号不变',
+    bareBlockFixed.value.type === 'poll' &&
+      bareBlockFixed.value.blockId === 'b2' &&
+      bareBlockFixed.value.props?.options?.length === 4 &&
+      bareBlockFixed.notes.length === 1,
+    JSON.stringify(bareBlockFixed.value).slice(0, 100),
+  );
+
+  // ⑥ 选项归一：模型给的选项形状五花八门，落库前必须摆成 `{ id, text }` 并收敛到上限。
+  const stringOptions = normalizePollProps({ question: '选哪个', options: ['甲', '乙'] });
+  check(
+    '选项是字符串数组时，摆成本站要的 { id, text } 形状',
+    stringOptions.props.options.length === 2 &&
+      stringOptions.props.options.every(
+        (option) => typeof option.id === 'string' && option.id !== '' && typeof option.text === 'string' && option.text !== '',
+      ) &&
+      stringOptions.notes.length === 1,
+    JSON.stringify(stringOptions.props.options),
+  );
+  const manyOptions = normalizePollProps({
+    question: '选哪个',
+    options: Array.from({ length: 12 }, (_value, index) => ({ label: `选${index}` })),
+  });
+  check(
+    '12 个选项收敛到本站上限 10 个，并留一句人话',
+    manyOptions.props.options.length === 10 && manyOptions.notes.every((note) => typeof note === 'string'),
+    String(manyOptions.props.options.length),
+  );
+  check(
+    '运行时清单：可围栏的 6 种、可自动纠正的 3 种（纠正层只碰这三种）',
+    AI_FENCED_TYPES.join(',') === 'poll,fold,embed,app,subpage,script' && AI_FIXABLE_TYPES.join(',') === 'app,script,poll',
+    `${AI_FENCED_TYPES.join(',')} / ${AI_FIXABLE_TYPES.join(',')}`,
+  );
+
+  // ⑦ 端到端：`/ops` 的整篇预览必须已经是修好的版本。
+  const bareDocOps = await admin.call('/api/ai-edit/ops', {
+    method: 'POST',
+    body: { scope: 'document', documentId: 'doc-548', after: { markdown: barePollDoc, title: '谁最帅' } },
+  });
+  check(
+    '整篇预览里裸写的投票已经被补上围栏（服务端不原样回吐）',
+    bareDocOps.status === 200 &&
+      bareDocOps.data?.applied === false &&
+      /^`{3,}doc:poll \{#b2\}$/m.test(String(bareDocOps.data?.preview?.after?.markdown ?? '')),
+    `实际 ${bareDocOps.status}`,
+  );
+  check(
+    '整篇预览带一句人话的 repairs（告诉用户服务端替他改了什么）',
+    typeof bareDocOps.data?.repairs === 'string' && bareDocOps.data.repairs.includes('围栏'),
+    String(bareDocOps.data?.repairs ?? ''),
+  );
+  check(
+    '整篇预览的 repairs 与纠正层自己的说明一致（不是另编一句）',
+    bareDocOps.data?.repairs === describeRepairs(bareFixed.notes),
+    String(bareDocOps.data?.repairs ?? ''),
+  );
+
+  const bareSectionOps = await admin.call('/api/ai-edit/ops', {
+    method: 'POST',
+    body: {
+      scope: 'section',
+      documentId: 'doc-548',
+      before: [{ blockId: 'b2', type: 'paragraph', props: { text: '旧文案' } }],
+      after: [{ blockId: 'b2', type: 'prose', props: { text: `doc:poll {#b2}\n${barePollJson}` } }],
+    },
+  });
+  check(
+    '按小节预览里，整块裸写的投票被换成了真投票块（块号还是 b2）',
+    bareSectionOps.status === 200 &&
+      bareSectionOps.data?.preview?.after?.[0]?.type === 'poll' &&
+      bareSectionOps.data?.preview?.after?.[0]?.blockId === 'b2',
+    JSON.stringify(bareSectionOps.data?.preview?.after?.map((block) => [block.blockId, block.type]) ?? null),
   );
 
   await finish(failures.length ? 1 : 0);
