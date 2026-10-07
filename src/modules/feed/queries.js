@@ -39,6 +39,7 @@ const ITEM_COLUMNS = `
       u.username, u.display_name, u.avatar, u.role,
       (SELECT COUNT(*) FROM feed_reactions fr WHERE fr.feed_item_id = f.id AND fr.kind = 'like')    AS like_count,
       (SELECT COUNT(*) FROM feed_reactions fr WHERE fr.feed_item_id = f.id AND fr.kind = 'dislike') AS dislike_count,
+      (SELECT COUNT(*) FROM feed_replies frp WHERE frp.feed_item_id = f.id AND frp.deleted = 0)      AS reply_count,
       EXISTS (SELECT 1 FROM feed_reactions fr WHERE fr.feed_item_id = f.id AND fr.kind = 'like'    AND fr.user_id = ?) AS liked,
       EXISTS (SELECT 1 FROM feed_reactions fr WHERE fr.feed_item_id = f.id AND fr.kind = 'dislike' AND fr.user_id = ?) AS disliked,
       p.title AS ref_title, p.deleted AS ref_deleted,
@@ -52,6 +53,18 @@ const ITEM_FROM = `
     JOIN users u ON u.id = f.user_id
     LEFT JOIN posts p ON p.id = f.ref_post_id
     LEFT JOIN users pu ON pu.id = p.user_id`;
+
+/**
+ * 回复的列与来源。与 `ITEM_COLUMNS` 同一个道理：列名一律写全（`u.` / `r.` 前缀不省），
+ * 免得以后有人往 `feed_replies` 上加一列 `content` 就把这里变成歧义列。
+ */
+const REPLY_COLUMNS = `
+      r.id, r.feed_item_id, r.user_id, r.content, r.created_at,
+      u.username, u.display_name, u.avatar, u.role`;
+
+const REPLY_FROM = `
+    FROM feed_replies r
+    JOIN users u ON u.id = r.user_id`;
 
 /**
  * @param {object} db           node:sqlite 的 DatabaseSync
@@ -262,6 +275,77 @@ export function createFeedQueries(db, { hasTeams = false } = {}) {
     /** 作者/管理员删动态时连带清理互动，避免留孤儿行。 */
     deleteReactionsOf(itemId) {
       bind('DELETE FROM feed_reactions WHERE feed_item_id = ?', [itemId]).run();
+    },
+
+    /**
+     * 一条动态的回复，按时间**正序**（跟帖子回复一个读法：讨论从上往下）。
+     *
+     * 拉黑过滤与动态本身的 `BLOCKED_AUTHOR_SQL` 同一套语义 —— 我拉黑的人、
+     * 拉黑我的人，互相看不到对方在这条动态下说的话。**匿名的 viewerId 是
+     * `ANON`（-1）**，不是 0：0 会被当成一个真实用户去查 blocks 表。
+     */
+    listReplies({ itemId, viewerId }) {
+      const where = buildWhere([
+        { sql: 'r.feed_item_id = ?', params: [itemId] },
+        { sql: 'r.deleted = 0', params: [] },
+        {
+          sql: `r.user_id NOT IN (
+        SELECT blocked_id FROM blocks WHERE blocker_id = ?
+        UNION
+        SELECT blocker_id FROM blocks WHERE blocked_id = ?
+      )`,
+          params: [viewerId, viewerId],
+        },
+      ]);
+      return bind(
+        `SELECT ${REPLY_COLUMNS}${REPLY_FROM}
+      WHERE ${where.sql}
+      ORDER BY r.created_at ASC, r.id ASC`,
+        where.params,
+      ).all();
+    },
+
+    countReplies(itemId) {
+      const row = bind(
+        'SELECT COUNT(*) AS count FROM feed_replies WHERE feed_item_id = ? AND deleted = 0',
+        [itemId],
+      ).get();
+      return Number(row?.count) || 0;
+    },
+
+    /**
+     * 单条回复的归属信息（**不受可见范围影响**，删之前要用它判「这条是不是我的」）。
+     * 与 `owner()` 同一个理由：越权判断不能建立在「看得见」上面。
+     */
+    replyOwner(id) {
+      const row = bind('SELECT id, feed_item_id, user_id, deleted FROM feed_replies WHERE id = ?', [id]).get();
+      return row
+        ? {
+            id: row.id,
+            itemId: row.feed_item_id,
+            userId: row.user_id,
+            deleted: Boolean(row.deleted),
+          }
+        : null;
+    },
+
+    insertReply({ itemId, userId, content }) {
+      const result = bind(
+        `INSERT INTO feed_replies (feed_item_id, user_id, content, deleted, created_at)
+       VALUES (?, ?, ?, 0, ?)`,
+        [itemId, userId, content, Date.now()],
+      ).run();
+      return Number(result.lastInsertRowid);
+    },
+
+    /** 软删（与 `softDelete()` 同一个约定）。返回真正改动的行数。 */
+    softDeleteReply(id) {
+      return Number(bind('UPDATE feed_replies SET deleted = 1 WHERE id = ? AND deleted = 0', [id]).run().changes) || 0;
+    },
+
+    /** 作者/管理员删动态时连带清理回复（与 `deleteReactionsOf` 成对）。 */
+    deleteRepliesOf(itemId) {
+      bind('DELETE FROM feed_replies WHERE feed_item_id = ?', [itemId]).run();
     },
 
     /** 备份脚本 / 迁移用：全表计数。 */

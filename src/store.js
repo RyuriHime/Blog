@@ -333,15 +333,15 @@ export function createStore(db) {
     blockedByMe: db.prepare('SELECT 1 AS hit FROM blocks WHERE blocker_id = ? AND blocked_id = ?'),
 
     insertNotification: db.prepare(
-      `INSERT INTO notifications (user_id, actor_id, type, post_id, reply_id, team_id, excerpt, read_at, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?)`,
+      `INSERT INTO notifications (user_id, actor_id, type, post_id, reply_id, team_id, feed_item_id, excerpt, read_at, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, ?)`,
     ),
     hasUnreadNotification: db.prepare(
       `SELECT 1 AS hit FROM notifications
-       WHERE user_id = ? AND actor_id IS ? AND type = ? AND post_id IS ? AND read_at IS NULL LIMIT 1`,
+       WHERE user_id = ? AND actor_id IS ? AND type = ? AND post_id IS ? AND feed_item_id IS ? AND read_at IS NULL LIMIT 1`,
     ),
     listNotifications: db.prepare(
-      `SELECT n.id, n.type, n.post_id, n.reply_id, n.team_id, n.excerpt, n.read_at, n.created_at,
+      `SELECT n.id, n.type, n.post_id, n.reply_id, n.team_id, n.feed_item_id, n.excerpt, n.read_at, n.created_at,
               a.id AS actor_id, a.username AS actor_username, a.display_name AS actor_display, a.role AS actor_role, a.avatar AS actor_avatar,
               p.title AS post_title, p.deleted AS post_deleted,
               t.slug AS team_slug, t.name AS team_name, t.deleted AS team_deleted
@@ -840,12 +840,16 @@ export function createStore(db) {
       postId = null,
       replyId = null,
       teamId = null,
+      feedItemId = null,
       excerpt = '',
       dedupe = true,
     }) {
       if (!userId) return null;
       if (actorId && actorId === userId) return null;
-      if (dedupe && statements.hasUnreadNotification.get(userId, actorId, type, postId)) return null;
+      // `hasUnreadNotification` 里的 `feed_item_id IS ?` 对新老通知都不改变语义：
+      // 老类型这一列一律是 NULL，`IS NULL` 恒真。加上它只是为了「同一个人回复了
+      // 你三条不同的动态」不要被去重成一条 —— 那种情况 postId 全是 NULL。
+      if (dedupe && statements.hasUnreadNotification.get(userId, actorId, type, postId, feedItemId)) return null;
       const info = statements.insertNotification.run(
         userId,
         actorId,
@@ -853,6 +857,7 @@ export function createStore(db) {
         postId,
         replyId,
         teamId,
+        feedItemId,
         String(excerpt ?? '').slice(0, 200),
         Date.now(),
       );

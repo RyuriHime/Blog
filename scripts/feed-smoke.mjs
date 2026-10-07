@@ -12,6 +12,7 @@
 import { spawn } from 'node:child_process';
 import { mkdirSync, openSync, rmSync } from 'node:fs';
 import { join, resolve } from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
 
@@ -89,6 +90,22 @@ const HUGE_PNG = (() => {
 
 /** 从列表里按 id 找一条动态。 */
 const findById = (items, id) => (items ?? []).find((item) => item.id === id);
+
+/**
+ * 直接查库（只读）。每次调用新开一个连接，用完就关 ——
+ * 服务器那边还握着同一个文件的句柄，共用一个会打架。
+ *
+ * 只在「HTTP 看不见的东西」上用它：比如「删动态到底有没有把回复行一起删掉」，
+ * 接口层只能证明「读不到了」，证明不了「行没了」。
+ */
+function scalar(sql, ...params) {
+  const db = new DatabaseSync(DB_FILE, { readOnly: true });
+  try {
+    return db.prepare(sql).get(...params);
+  } finally {
+    db.close();
+  }
+}
 
 mkdirSync(join(ROOT, 'data'), { recursive: true });
 for (const suffix of ['', '-wal', '-shm']) rmSync(DB_FILE + suffix, { force: true });
@@ -512,6 +529,87 @@ try {
     );
 
     if (id) await admin.call(`/api/feed/${id}`, { method: 'DELETE' });
+  }
+
+  /* ---------- 14. 动态回复 ---------- */
+  {
+    // 动态回复是**另一张表**（`feed_replies`），不是 core 的 `replies`：
+    // 那张表的 `post_id` 挂着 `REFERENCES posts(id)` 外键，而动态不是帖子。
+    // 这一节把「发 / 列 / 数 / 删 / 权限 / 可见范围 / 通知」逐条钉住。
+    const host = await admin.call('/api/feed', { method: 'POST', body: { content: '这条用来测回复', scope: 'public' } });
+    const id = host.data.item.id;
+    check('新动态的 replyCount 从 0 起', host.data.item.replyCount === 0, JSON.stringify(host.data.item.replyCount));
+
+    const anonPost = await anon.call(`/api/feed/${id}/replies`, { method: 'POST', body: { content: '匿名' } });
+    check('未登录不能回复（401）', anonPost.status === 401);
+
+    const empty = await alice.call(`/api/feed/${id}/replies`, { method: 'POST', body: { content: '   ' } });
+    check('空回复被拒（400）', empty.status === 400, JSON.stringify(empty.body));
+
+    const posted = await alice.call(`/api/feed/${id}/replies`, { method: 'POST', body: { content: '第一条 **回复**' } });
+    check('回复发得出去', posted.status === 200 && Number.isInteger(posted.data?.reply?.id), JSON.stringify(posted.body));
+    check('返回值带 replyCount', posted.data.replyCount === 1);
+    const replyId = posted.data.reply.id;
+    check('回复正文走同一个渲染器（Markdown 已变 HTML）', /<strong>回复<\/strong>/.test(posted.data.reply.contentHtml ?? ''), posted.data.reply.contentHtml);
+    check('回复带作者信息（昵称/头像来自 JOIN users）', posted.data.reply.author?.username === 'alice' && 'avatar' in posted.data.reply.author);
+
+    const listed = await anon.call(`/api/feed/${id}/replies`);
+    check('匿名也读得到公开动态的回复', listed.status === 200 && listed.data.replies.length === 1 && listed.data.replyCount === 1);
+
+    const listed2 = await anon.call('/api/feed');
+    const inList = listed2.data.items.find((entry) => entry.id === id);
+    check('列表接口也带 replyCount（不用逐条再查）', inList?.replyCount === 1);
+
+    // 删的权限：路人不行，动态作者行，回复本人行，管理员行。
+    const stranger = await feedb.call(`/api/feed/${id}/replies/${replyId}`, { method: 'DELETE' });
+    check('路人不许删别人的回复（403）', stranger.status === 403, JSON.stringify(stranger.body));
+    const missingReply = await admin.call(`/api/feed/${id}/replies/999999`, { method: 'DELETE' });
+    check('删不存在的回复是 404', missingReply.status === 404);
+
+    const second = await admin.call(`/api/feed/${id}/replies`, { method: 'POST', body: { content: '作者自己回一条' } });
+    const byAuthor = await admin.call(`/api/feed/${id}/replies/${second.data.reply.id}`, { method: 'DELETE' });
+    check('动态作者删得掉别人的回复', byAuthor.status === 200 && byAuthor.data.replyCount === 1);
+
+    const byOwner = await alice.call(`/api/feed/${id}/replies/${replyId}`, { method: 'DELETE' });
+    check('回复本人删得掉自己的回复', byOwner.status === 200 && byOwner.data.replyCount === 0);
+
+    // 回复跟着动态的可见范围走：private 的动态，别人连回复列表都读不到。
+    const priv = await admin.call('/api/feed', { method: 'POST', body: { content: '私密动态', scope: 'private' } });
+    const privId = priv.data.item.id;
+    await admin.call(`/api/feed/${privId}/replies`, { method: 'POST', body: { content: '只有我能看见' } });
+    check('私密动态的回复别人看不到（404，不是 403）', (await feedb.call(`/api/feed/${privId}/replies`)).status === 404);
+    check('私密动态的回复本人看得到', (await admin.call(`/api/feed/${privId}/replies`)).data.replyCount === 1);
+    check('别人也回不了私密动态', (await feedb.call(`/api/feed/${privId}/replies`, { method: 'POST', body: { content: '插一嘴' } })).status === 404);
+
+    // 通知：`feed_item_id` 这一列是专为它加的（`notifications.post_id` 有指向 posts 的外键，
+    // 塞动态 id 进去会直接约束失败）。
+    const before = (await admin.call('/api/notifications')).data.items.length;
+    await feedb.call(`/api/feed/${id}/replies`, { method: 'POST', body: { content: '回你一句' } });
+    const notifs = (await admin.call('/api/notifications')).data.items;
+    const hit = notifs.find((entry) => entry.type === 'feed_reply');
+    check('被回复的人收到 feed_reply 通知', Boolean(hit) && notifs.length > before, `before=${before} after=${notifs.length}`);
+    check('通知指回那条动态（feedItemId）', hit?.feedItemId === id, JSON.stringify(hit?.feedItemId));
+    check('通知的 post 是 null（动态不是帖子）', hit?.post === null, JSON.stringify(hit?.post));
+    check('自己回自己不产生通知', (await admin.call(`/api/feed/${id}/replies`, { method: 'POST', body: { content: '自言自语' } })).status === 200);
+
+    // 同一个人回复三条**不同**的动态，三条通知都要在（去重键里带了 feed_item_id）。
+    const extra = [];
+    for (let i = 0; i < 2; i += 1) {
+      const one = await admin.call('/api/feed', { method: 'POST', body: { content: `去重测试 ${i}`, scope: 'public' } });
+      extra.push(one.data.item.id);
+      await feedb.call(`/api/feed/${one.data.item.id}/replies`, { method: 'POST', body: { content: `第 ${i} 条` } });
+    }
+    const unread = (await admin.call('/api/notifications?filter=unread&perPage=50')).data.items.filter((entry) => entry.type === 'feed_reply');
+    check('同一个人回复不同动态，通知不会被去重成一条', unread.length >= 3, `unread feed_reply = ${unread.length}`);
+
+    // 删动态要连带清掉回复，不留孤儿行。
+    await admin.call(`/api/feed/${id}`, { method: 'DELETE' });
+    check('删掉动态之后回复接口也读不到了', (await admin.call(`/api/feed/${id}/replies`)).status === 404);
+    const orphans = scalar('SELECT COUNT(*) AS c FROM feed_replies WHERE feed_item_id = ?', id)?.c ?? -1;
+    check('删动态连带清掉回复行（没有孤儿）', orphans === 0, `孤儿行 = ${orphans}`);
+
+    for (const extraId of extra) await admin.call(`/api/feed/${extraId}`, { method: 'DELETE' });
+    await admin.call(`/api/feed/${privId}`, { method: 'DELETE' });
   }
 
   await finish(failures.length ? 1 : 0);

@@ -1,7 +1,7 @@
 // 动态模块（P1）：把「板块 + 帖子 + 回复」那套论坛形态换成一条时间线。
 //
-//   owns  feed_items / feed_reactions   —— 只有两张表，别的表一律只读
-//   api   /api/feed/*                   —— 前缀不与任何已有接口重叠
+//   owns  feed_items / feed_reactions / feed_replies   —— 三张表都归本模块，别的表一律只读
+//   api   /api/feed/*                                   —— 前缀不与任何已有接口重叠
 //
 // ── 为什么表在 import 期登记，而不是在 install(ctx) 里 ──
 // 开库动作发生在 `src/server.js` 里（调用 `core/open-db.js` 导出的那个函数），
@@ -9,7 +9,7 @@
 // 所以这里的 `schemas.addScript(...)` 是模块顶层语句（副作用导入），
 // 和 `src/core/tables.sql.js` 用的是同一个套路。
 // 顺序：`src/server.js` 先 import `./store.js`（它 import `./db.js` → 登记 14 张 core 表），
-// 再 import `./modules/index.js`（登记本模块的两张表）—— 所以 `feed_items.user_id`
+// 再 import `./modules/index.js`（登记本模块的三张表）—— 所以 `feed_items.user_id`
 // 引用 `users(id)` 时外键目标已经存在。
 // （注意：上面别写出「函数名 + 左括号」的字样，scripts/check-skeleton.mjs 用行正则
 //  查模块有没有偷偷自己开库，注释里出现那个样子也会被算成违规。）
@@ -20,14 +20,14 @@ import { createFeedQueries } from './queries.js';
 import { registerFeedRoutes } from './routes.js';
 import { FEED_SCHEMA } from './schema.js';
 
-// 副作用：登记本模块的两张表（必须在 openDatabase 之前，见文件头注释）。
+// 副作用：登记本模块的三张表（必须在 openDatabase 之前，见文件头注释）。
 schemas.addScript(FEED_SCHEMA, 'feed');
 
 export default {
   name: 'feed',
   apiPrefix: '/api/feed',
-  /** 本模块**拥有**的表。两张都是新增表，v1 的表一张都不动。 */
-  owns: ['feed_items', 'feed_reactions'],
+  /** 本模块**拥有**的表。三张都是新增表，v1 的表一张都不动。 */
+  owns: ['feed_items', 'feed_reactions', 'feed_replies'],
   /**
    * 会读、但不拥有的表（只读，绝不写）。
    * `users` / `follows` / `blocks` / `posts` 用来做可见范围与引用卡片；

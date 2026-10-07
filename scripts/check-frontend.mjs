@@ -839,6 +839,12 @@ const REQUESTS = [];
  */
 const FEED_REACTIONS = new Map();
 
+/**
+ * `/api/feed/:id/replies` 的假服务端状态（`Map<动态 id, 回复数组>`）。
+ * 语义照抄 `src/modules/feed/queries.js` 的 insertReply / listReplies / softDeleteReply。
+ */
+const FEED_REPLIES = new Map();
+
 let fetchCount = 0;
 globalThis.fetch = async (url, options = {}) => {
   fetchCount += 1;
@@ -987,6 +993,40 @@ globalThis.fetch = async (url, options = {}) => {
         dislikeCount: after === 'dislike' ? 1 : 0,
       };
     }
+  } else if (method === 'GET' && /^\/api\/feed\/\d+\/replies$/.test(bare)) {
+    // 回复列表是**按需拉**的：`/api/feed` 列表接口只给 `replyCount` 这个数字，
+    // 谁也没展开的时候一条回复都不该去拉。见下面「动态回复」那段交互测试。
+    const feedId = Number(bare.split('/')[3]);
+    const replies = FEED_REPLIES.get(feedId) ?? [];
+    data = { itemId: feedId, replies, replyCount: replies.length };
+  } else if (method === 'POST' && /^\/api\/feed\/\d+\/replies$/.test(bare)) {
+    // 照抄服务端 `field(content, { min: 1, max: MAX_FEED_REPLY_CONTENT, label: '回复内容' })`：
+    // 先 trim 再判长（`src/core/http.js:88`），空串和纯空格都该吃 400。
+    const feedId = Number(bare.split('/')[3]);
+    const content = String(payload?.content ?? '').replace(/\r\n?/g, '\n').trim();
+    if (content.length < 1) failure = { status: 400, code: 'invalid_field', message: '回复内容至少需要 1 个字符' };
+    else if (content.length > 2000) failure = { status: 400, code: 'invalid_field', message: '回复内容不能超过 2000 个字符' };
+    else {
+      const replies = FEED_REPLIES.get(feedId) ?? [];
+      const reply = {
+        id: 9000 + replies.length + 1,
+        itemId: feedId,
+        content,
+        contentHtml: `<p>${content.replace(/&/g, '&amp;').replace(/</g, '&lt;')}</p>`,
+        author: { id: 2, username: 'frontend-user', displayName: '前端测试', avatar: null, role: 'member' },
+        createdAt: Date.now(),
+      };
+      replies.push(reply);
+      FEED_REPLIES.set(feedId, replies);
+      data = { reply, replyCount: replies.length };
+    }
+  } else if (method === 'DELETE' && /^\/api\/feed\/\d+\/replies\/\d+$/.test(bare)) {
+    const parts = bare.split('/');
+    const feedId = Number(parts[3]);
+    const replyId = Number(parts[5]);
+    const replies = (FEED_REPLIES.get(feedId) ?? []).filter((entry) => entry.id !== replyId);
+    FEED_REPLIES.set(feedId, replies);
+    data = { deleted: true, id: replyId, replyCount: replies.length };
   } else data = pickFixture(raw);
   if (failure) {
     const body = { ok: false, error: { code: failure.code, message: failure.message } };
@@ -1359,6 +1399,97 @@ if (!state.theme) problems.push('state.theme 没被初始化');
   item.liked = saved.liked;
   item.likeCount = saved.likeCount;
   FEED_REACTIONS.delete(item.id);
+}
+
+/* ---- 交互：动态底下的回复 —— 按需拉、发得出去、收起来不再拉 ----
+ *
+ * 为什么单独测这一条：`/api/feed` 列表接口**只给 `replyCount` 这个数字**，
+ * 一句回复正文都不带（一页 20 条动态，谁也没展开的时候不该多打 20 次请求）。
+ * 所以「点了 💬 到底有没有去拉」是纯前端的事，`feed-smoke.mjs` 照不到 ——
+ * 它直接调 `/api/feed/:id/replies`，走的不是前端那条路。
+ *
+ * 反过来，「渲染出来了」也证明不了「点了会去拉」：按钮画得再对，
+ * 点下去什么都不发生的话，用户看到的就是**一串没有下文的数字**。
+ */
+{
+  const timeline = await view('timeline.js');
+  const FEED_KEY = '/api/feed?filter=all&page=1';
+  const item = pickFixture(FEED_KEY).items[0];
+  const savedCount = item.replyCount;
+  item.replyCount = 0;
+  FEED_REPLIES.delete(item.id);
+  await timeline.viewTimeline(new Map());
+
+  const repliesGet = () => REQUESTS.filter((entry) => /\/replies$/.test(entry.url) && entry.method === 'GET');
+  if (repliesGet().length) {
+    problems.push(`只是渲染一遍动态流就发了 ${repliesGet().length} 次回复请求 —— 回复要展开才拉，否则一页 20 条就是 20 次白跑`);
+  }
+
+  const box = registered(`[data-feed-replies-box="${item.id}"]`);
+  box.hidden = true;
+  box.innerHTML = '';
+
+  // ① 展开
+  const btn = makeElement('button');
+  btn.dataset = { feedAction: 'replies', id: String(item.id) };
+  // 假 DOM 的 `closest` 默认恒返回 null，而 timeline.js 的点击委托第一句就是
+  // `event.target.closest('[data-feed-action]')` —— 不接这根线，点下去什么都不会发生。
+  btn.closest = (selector) => (selector === '[data-feed-action]' ? btn : null);
+  dispatch(app, 'click', btn);
+  await settle();
+  if (!repliesGet().length) problems.push('点「💬 回复」之后没有请求 /api/feed/:id/replies');
+  if (box.hidden) problems.push('点「💬 回复」之后回复盒子还是 hidden —— 用户点了等于没点');
+  if (!box.innerHTML.includes('data-feed-reply-form')) {
+    problems.push('展开了却没有画出回复输入框（服务端返回的 replies 没被用上？）');
+  }
+
+  // ② 发一条
+  const form = registered('[data-feed-reply-form]');
+  form.dataset = { id: String(item.id) };
+  form.closest = (selector) => (selector === '[data-feed-reply-form]' ? form : null);
+  // 假 DOM 的 `querySelector` 也是查注册表，键就是**选择器原串**：
+  // 视图里写的是 `form.querySelector('textarea[name="content"]')`，所以这里必须用同一个串，
+  // 写成 `'[data-feed-reply-form] textarea[name="content"]'` 会拿到另一个空元素。
+  const textarea = registered('textarea[name="content"]');
+  textarea.value = '第一条回复';
+  const beforePost = REQUESTS.length;
+  dispatch(app, 'submit', form);
+  await settle();
+  const posted = REQUESTS.slice(beforePost).filter((entry) => entry.url === `/api/feed/${item.id}/replies` && entry.method === 'POST');
+  if (!posted.length) problems.push('在动态底下发回复之后没有 POST /api/feed/:id/replies');
+  else if (posted[0].body?.content !== '第一条回复') {
+    problems.push(`发出去的回复正文是 ${JSON.stringify(posted[0].body?.content)}，不是输入框里的原文`);
+  }
+  if (!box.innerHTML.includes('第一条回复')) problems.push('发完之后回复区没有重画，用户看不到自己刚发的那条');
+  const countNode = registered(`[data-feed-replies="${item.id}"]`);
+  if (countNode.textContent !== '1') {
+    problems.push(`发完回复之后计数还是 ${JSON.stringify(countNode.textContent)} —— 按钮上的数字没跟着走`);
+  }
+
+  // ③ 收起来之后再点开，要不要重新拉？—— 要（不然看到的是旧列表）
+  const opensBefore = repliesGet().length;
+  dispatch(app, 'click', btn);
+  await settle();
+  if (!box.hidden) problems.push('再点一次「💬 回复」没有把回复区收起来');
+  if (repliesGet().length !== opensBefore) problems.push('光是收起来就又把回复拉了一遍 —— 白跑一趟');
+  dispatch(app, 'click', btn);
+  await settle();
+  if (repliesGet().length <= opensBefore) {
+    problems.push('收起来再展开没有重新拉回复 —— 别人在这期间回的话，用户永远看不到');
+  }
+
+  // ④ 空回复不该发出去（服务端的 min:1 只是兜底，白跑一趟还弹个红条）
+  textarea.value = '   ';
+  const beforeEmpty = REQUESTS.length;
+  dispatch(app, 'submit', form);
+  await settle();
+  if (REQUESTS.slice(beforeEmpty).some((entry) => entry.url === `/api/feed/${item.id}/replies` && entry.method === 'POST')) {
+    problems.push('空回复也发了 POST —— 该在本地拦下来');
+  }
+  console.log(`  ${problems.length ? '❌' : '✅'} 交互：动态的回复按需拉、发得出去、空回复本地拦、收起再开重新拉`);
+
+  item.replyCount = savedCount;
+  FEED_REPLIES.delete(item.id);
 }
 
 /* ---- 交互：点「＋ 新建团队」必须真的把表单打开 ----

@@ -1,6 +1,6 @@
 // 动态（P1）的数据表。
 //
-// 两张表都是新增的，不动 v1 的任何一张表 —— 这样迁移就是纯加法，
+// 三张表都是新增的，不动 v1 的任何一张表 —— 这样迁移就是纯加法，
 // 线上老数据一个字都不用改（见 03-数据迁移与上线方案.md 的「方案甲·原地增量」）。
 //
 // 建表顺序 = 别的模块 import 这个文件时登记的顺序；
@@ -27,6 +27,9 @@ export const MAX_FEED_IMAGE_BYTES = 256 * 1024;
 
 /** 正文长度上限。比帖子的 20000 短：动态是短内容。 */
 export const MAX_FEED_CONTENT = 4000;
+
+/** 动态回复的长度上限。与前端 `public/views/timeline.js` 的 `MAX_REPLY` 必须一致。 */
+export const MAX_FEED_REPLY_CONTENT = 2000;
 
 export const FEED_SCHEMA = `
 -- 动态（一条时间线就是这张表倒着读）
@@ -58,4 +61,19 @@ CREATE TABLE IF NOT EXISTS feed_reactions (
   PRIMARY KEY (user_id, feed_item_id)
 );
 CREATE INDEX IF NOT EXISTS idx_feed_reactions_item ON feed_reactions (feed_item_id, kind);
+
+-- 动态的回复。
+-- 与帖子的 replies 同语义：软删（deleted = 1）、一个人可以对同一条动态回多条。
+-- **不复用 replies 表**：那张表的外键指向 posts，而动态不是帖子（可见范围、
+-- 删除语义、通知链路都不一样）。塞进同一张表会让「一条回复到底挂在哪」
+-- 变成靠 user_id 猜的事。
+CREATE TABLE IF NOT EXISTS feed_replies (
+  id           INTEGER PRIMARY KEY AUTOINCREMENT,
+  feed_item_id INTEGER NOT NULL REFERENCES feed_items(id),
+  user_id      INTEGER NOT NULL REFERENCES users(id),
+  content      TEXT    NOT NULL DEFAULT '',
+  deleted      INTEGER NOT NULL DEFAULT 0,
+  created_at   INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_feed_replies_item ON feed_replies (feed_item_id, deleted, created_at, id);
 `;

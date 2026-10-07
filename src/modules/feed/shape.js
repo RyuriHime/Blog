@@ -79,6 +79,11 @@ export function shapeFeedItem(row) {
     },
     likeCount: Number(row.like_count) || 0,
     dislikeCount: Number(row.dislike_count) || 0,
+    /**
+     * 回复条数。列表页只显示一个数字，回复正文要展开或进详情才拉 ——
+     * 时间线一页 20 条，每条都把回复带上会让首屏多 20 次查询。
+     */
+    replyCount: Number(row.reply_count) || 0,
     liked: Boolean(row.liked),
     disliked: Boolean(row.disliked),
     createdAt: row.created_at,
@@ -89,6 +94,37 @@ export function shapeFeedItem(row) {
 
 export function shapeFeedItems(rows) {
   return (rows ?? []).map(shapeFeedItem);
+}
+
+/**
+ * 一条动态回复的对外形状。
+ *
+ * 与 `shapeFeedItem` 共用同一个 `renderMarkdown`（服务端渲染），
+ * 所以回复里写 Markdown 和 LaTeX 的体验跟发动态一模一样。
+ * `itemId` 一定要带上：前端发完回复要靠它知道往哪条动态下面插。
+ */
+export function shapeFeedReply(row) {
+  if (!row) return null;
+  const content = String(row.content ?? '');
+
+  return {
+    id: row.id,
+    itemId: Number(row.feed_item_id),
+    content,
+    contentHtml: renderMarkdown(content),
+    author: {
+      id: row.user_id,
+      username: row.username,
+      displayName: row.display_name || row.username,
+      avatar: row.avatar ?? null,
+      role: row.role ?? 'member',
+    },
+    createdAt: row.created_at,
+  };
+}
+
+export function shapeFeedReplies(rows) {
+  return (rows ?? []).map(shapeFeedReply);
 }
 
 export { SCOPE_LABELS };

@@ -8,8 +8,11 @@ import { mkdirSync } from 'node:fs';
 import { readFile, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { HttpError, ensure, field } from '../../core/http.js';
-import { MAX_FEED_CONTENT, MAX_FEED_IMAGE_BYTES, MAX_FEED_IMAGES } from './schema.js';
-import { shapeFeedItem, shapeFeedItems } from './shape.js';
+// `ANON` 是「没登录」的哨兵 id。**不要在这里写 0**：0 会被当成一个真实用户
+// 去查 blocks 表，拉黑过滤就整个失效（`src/core/paths.js:43`）。
+import { ANON } from '../../core/paths.js';
+import { MAX_FEED_CONTENT, MAX_FEED_IMAGE_BYTES, MAX_FEED_IMAGES, MAX_FEED_REPLY_CONTENT } from './schema.js';
+import { shapeFeedItem, shapeFeedItems, shapeFeedReplies, shapeFeedReply } from './shape.js';
 
 /** 图片只认这三种，和头像同一口径（换成 `data:image/svg+xml` 就等于允许注入脚本）。 */
 const IMAGE_EXT = { png: 'png', jpeg: 'jpg', webp: 'webp' };
@@ -220,6 +223,9 @@ export function registerFeedRoutes(ctx, { queries }) {
     ensure(owner.userId === user.id || ctx.guards.isStaff(user), 403, 'forbidden', '只能删除自己的动态');
 
     queries.softDelete(id);
+    // 连带清回复，与 `deleteReactionsOf` 成对 —— 动态没了，底下的讨论也不该留孤儿行。
+    queries.deleteRepliesOf(id);
+    queries.deleteReactionsOf(id);
     ok(reqCtx.res, { deleted: true, id });
   });
 
@@ -251,6 +257,93 @@ export function registerFeedRoutes(ctx, { queries }) {
       likeCount: result.likeCount,
       dislikeCount: result.dislikeCount,
     });
+  });
+
+  /* ---------------- 回复 ---------------- */
+
+  /*
+   * 回复挂在动态上，**跟着动态的可见范围走**：看得见这条动态，就看得见它的回复。
+   *
+   * 为什么不给回复单独判一套可见范围：动态的 `followers` / `team` / `private`
+   * 已经由 `queries.byId()` 判过一次了，回复再判一次就等于有了两套规则，
+   * 迟早出现「看得到动态、却看不到它底下的回复」这种自相矛盾的状态。
+   * 所以三条接口都先过一遍 `byId` —— 看不见就是 404（不区分「没有」和「没权限」，
+   * 否则 404/403 的差别本身就成了可见范围的探测信道）。
+   */
+  add('GET', '/api/feed/:id/replies', async (reqCtx) => {
+    const id = Number(reqCtx.params.id);
+    ensure(Number.isInteger(id) && id > 0, 404, 'feed_not_found', '这条动态不存在');
+    const viewerId = reqCtx.user?.id ?? ANON;
+    ensure(queries.byId({ id, viewerId }), 404, 'feed_not_found', '这条动态不存在');
+
+    ok(reqCtx.res, {
+      itemId: id,
+      replies: shapeFeedReplies(queries.listReplies({ itemId: id, viewerId })),
+      replyCount: queries.countReplies(id),
+    });
+  });
+
+  add('POST', '/api/feed/:id/replies', async (reqCtx) => {
+    const user = requireUser(reqCtx);
+    const id = Number(reqCtx.params.id);
+    const content = field(reqCtx.body.content, {
+      name: 'content',
+      min: 1,
+      max: MAX_FEED_REPLY_CONTENT,
+      label: '回复内容',
+    });
+
+    // 能看见才能回。这里要的是 `byId` 的**副作用**（看不到就 404），不是那个 row。
+    const row = queries.byId({ id, viewerId: user.id });
+    ensure(row, 404, 'feed_not_found', '这条动态不存在');
+
+    const replyId = queries.insertReply({ itemId: id, userId: user.id, content });
+
+    if (row.user_id !== user.id) {
+      ctx.store.createNotification({
+        userId: row.user_id,
+        actorId: user.id,
+        type: 'feed_reply',
+        // ⚠️ 这里**必须**走 `feedItemId`，不能图省事塞 `postId`：
+        // `notifications.post_id` 上挂着 `REFERENCES posts(id)` 外键，
+        // 而 `PRAGMA foreign_keys = ON` —— 塞进去会直接约束失败。
+        feedItemId: id,
+        excerpt: content.slice(0, 120),
+      });
+    }
+
+    // 从列表里挑出刚插的那条，而不是自己拼形状：`shapeFeedReply` 需要 JOIN users
+    // 才拿得到作者的昵称和头像，手拼就会少字段（列表有、返回值没有）。
+    const reply = queries.listReplies({ itemId: id, viewerId: user.id }).find((entry) => entry.id === replyId);
+    ok(reqCtx.res, {
+      reply: shapeFeedReply(reply ?? null),
+      replyCount: queries.countReplies(id),
+    });
+  });
+
+  add('DELETE', '/api/feed/:id/replies/:replyId', async (reqCtx) => {
+    const user = requireUser(reqCtx);
+    const id = Number(reqCtx.params.id);
+    const replyId = Number(reqCtx.params.replyId);
+    ensure(Number.isInteger(replyId) && replyId > 0, 404, 'reply_not_found', '这条回复不存在');
+
+    // 归属判断走 `replyOwner`（不受可见范围影响），与「能不能编辑动态」同一个道理：
+    // 越权判断不能建立在「你看得见」上面。
+    const reply = queries.replyOwner(replyId);
+    ensure(reply && !reply.deleted && reply.itemId === id, 404, 'reply_not_found', '这条回复不存在');
+
+    // 回复本人、动态作者、管理员都能删 —— 与帖子回复同一套口径：
+    // 作者要能管得住自己动态底下的场子。
+    const item = queries.owner(id);
+    ensure(
+      reply.userId === user.id || item?.userId === user.id || ctx.guards.isStaff(user),
+      403,
+      'forbidden',
+      '只能删除自己的回复',
+    );
+
+    queries.softDeleteReply(replyId);
+    ok(reqCtx.res, { deleted: true, id: replyId, replyCount: queries.countReplies(id) });
   });
 
   /* ---------------- 配图 ---------------- */

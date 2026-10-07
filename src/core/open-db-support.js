@@ -241,6 +241,9 @@ export function migrate(db) {
   ensureColumn(db, 'posts', 'hidden_reason', "TEXT NOT NULL DEFAULT ''");
   // 团队公告的通知要能指回团队（前端据此跳到 #/team/<slug>）。
   ensureColumn(db, 'notifications', 'team_id', 'INTEGER');
+  // 「有人回复了你的动态」的通知要能指回那条动态。故意不写外键 ——
+  // feed_items 归动态模块，core 不认识它（与上面 team_id 同一个道理）。
+  ensureColumn(db, 'notifications', 'feed_item_id', 'INTEGER');
 
   const legacy = db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'likes'").get();
   if (legacy) {

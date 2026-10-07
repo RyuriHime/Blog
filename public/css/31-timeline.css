@@ -426,6 +426,84 @@ body.feed-fullscreen {
   color: var(--accent-fg);
 }
 
+/* ---------------- 动态底下的回复 ---------------- */
+
+/*
+ * 回复区挂在 `.feed-item` 卡片内部（footer 之后），默认 `hidden`，
+ * 展开时才由 `public/views/timeline.js` 的 `toggleReplies()` 填内容。
+ * 左边那条竖线与帖子页的 `.reply` 保持一致，让「这是回复」一眼看得出来。
+ */
+.feed-replies {
+  margin-top: 12px;
+  padding-top: 4px;
+  border-top: 1px dashed var(--border-soft);
+}
+
+.feed-replies-head {
+  margin: 8px 0 4px;
+  color: var(--text-dim);
+  font-size: 13px;
+}
+
+.feed-reply {
+  display: flex;
+  gap: 10px;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--border-soft);
+}
+
+.feed-reply:last-of-type {
+  border-bottom: 0;
+}
+
+.feed-reply-body {
+  flex: 1;
+  min-width: 0;
+}
+
+.feed-reply-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+}
+
+.feed-reply-author {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.feed-reply-time {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+/* 删除按钮推到最右边，和帖子页的回复一个位置 */
+.feed-reply-head .link-btn {
+  margin-left: auto;
+  font-size: 12px;
+}
+
+.feed-replies .md {
+  margin-top: 4px;
+  font-size: 14px;
+}
+
+.feed-reply-form {
+  margin-top: 10px;
+}
+
+.feed-reply-form textarea {
+  min-height: 62px;
+  resize: vertical;
+}
+
+.feed-reply-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 8px;
+}
+
 /* ---------------- 点图放大 ---------------- */
 
 .feed-lightbox {

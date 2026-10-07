@@ -14,7 +14,7 @@
 // 这是跟 `public/views/notes.js` 学的做法：
 // 中央 switch 被 `scripts/check-ui-contract.mjs` 盯着，动态的控件又天天变，
 // 分开放两边就不用每次改控件都去动那个文件。
-import { $, esc, emptyHtml, toast, ui } from '../core/dom.js';
+import { $, esc, emptyHtml, loadingHtml, toast, ui } from '../core/dom.js';
 import { api, withButtonBusy } from '../core/api.js';
 import { toastError, apiErrorText } from '../core/errors.js';
 import { state } from '../core/state.js';
@@ -34,6 +34,12 @@ import { ntRenderMath } from './notes.js';
 const MAX_IMAGE_BYTES = 256 * 1024;
 const MAX_IMAGE_SIDE = 1280;
 const MAX_IMAGES = 9;
+/**
+ * 回复正文上限，**必须与服务端 `MAX_FEED_REPLY_CONTENT` 一致**
+ * （`src/modules/feed/schema.js`）。前端这个 `maxlength` 只是提前拦住，
+ * 真判还是服务端说了算。
+ */
+const MAX_REPLY = 2000;
 
 /** 兜底的范围选项：正常应该用服务端 `GET /api/feed` 返回的 `scopes`。 */
 const FALLBACK_SCOPES = [
@@ -265,8 +271,57 @@ function feedItemHtml(item) {
         data-feed-action="react" data-id="${item.id}" data-kind="dislike">
         👎 <span data-feed-dislike="${item.id}">${Fmt.fmtNum(item.dislikeCount)}</span>
       </button>
+      <button class="react-btn" type="button"
+        data-feed-action="replies" data-id="${item.id}" title="展开回复">
+        💬 <span data-feed-replies="${item.id}">${Fmt.fmtNum(item.replyCount)}</span>
+      </button>
     </footer>
+    <div class="feed-replies" data-feed-replies-box="${item.id}" hidden></div>
   </article>`;
+}
+
+/**
+ * 一条动态回复。
+ *
+ * 删除权限与帖子回复同一套口径：回复本人、动态作者、管理员都能删
+ * （服务端 `DELETE /api/feed/:id/replies/:replyId` 也是这么判的，
+ * 这里只是别把按不动的按钮画出来）。
+ */
+function feedReplyHtml(reply, item) {
+  const mine =
+    state.me && (state.me.id === reply.author.id || state.me.id === item.author.id || Fmt.isStaffUser(state.me));
+  return `<div class="feed-reply" id="feed-reply-${reply.id}">
+    ${Avatar.avatarHtml(reply.author)}
+    <div class="feed-reply-body">
+      <div class="feed-reply-head">
+        <a class="feed-reply-author" href="#/u/${encodeURIComponent(reply.author.username)}">${esc(reply.author.displayName || reply.author.username)}</a>
+        <span class="feed-reply-time" title="${esc(new Date(reply.createdAt).toLocaleString())}">${Fmt.timeAgo(reply.createdAt)}</span>
+        ${
+          mine
+            ? `<button class="link-btn" type="button" data-feed-action="reply-delete" data-id="${item.id}" data-reply="${reply.id}">删除</button>`
+            : ''
+        }
+      </div>
+      <div class="md">${reply.contentHtml}</div>
+    </div>
+  </div>`;
+}
+
+function feedRepliesHtml(item, data) {
+  const replies = data?.replies ?? [];
+  const list = replies.length
+    ? replies.map((reply) => feedReplyHtml(reply, item)).join('')
+    : emptyHtml('💭', '还没有人回复', '说点什么吧');
+  const form = state.me
+    ? `<form class="feed-reply-form" data-feed-reply-form data-id="${item.id}">
+         <textarea class="input" name="content" rows="2" maxlength="${MAX_REPLY}" required
+           placeholder="写下你的回复…（支持 Markdown 与 LaTeX）"></textarea>
+         <div class="feed-reply-actions">
+           <button class="btn btn-sm btn-primary" type="submit">回复</button>
+         </div>
+       </form>`
+    : '<div class="hint">登录后就能回复。</div>';
+  return `<div class="feed-replies-head">💬 回复（${Fmt.fmtNum(data?.replyCount ?? replies.length)}）</div>${list}${form}`;
 }
 
 function feedListEmptyHtml() {
@@ -424,7 +479,14 @@ function bindTimelineOnce() {
   });
 
   ui.app.addEventListener('submit', (event) => {
-    if (event.target.matches('[data-feed-ref-row]')) event.preventDefault();
+    if (event.target.matches('[data-feed-ref-row]')) {
+      event.preventDefault();
+      return;
+    }
+    const replyForm = event.target.closest('[data-feed-reply-form]');
+    if (!replyForm) return;
+    event.preventDefault();
+    submitReply(replyForm).catch((error) => toastError(error));
   });
 
   // 引用帖子：回车确认
@@ -472,6 +534,10 @@ async function handleAction(action, node) {
       return restoreComposer();
     case 'react':
       return await react(node);
+    case 'replies':
+      return await toggleReplies(node);
+    case 'reply-delete':
+      return await removeReply(node);
     case 'edit':
       return startEdit(Number(node.dataset.id));
     case 'cancel-edit':
@@ -644,6 +710,77 @@ async function react(node) {
     other.classList.toggle('is-on', otherKind === 'like' ? result.liked : result.disliked);
   });
   if (item) Object.assign(item, result);
+}
+
+/**
+ * 展开 / 收起一条动态的回复区。
+ *
+ * 回复**按需拉**（列表接口只给 `replyCount` 数字）：一页 20 条动态，
+ * 谁也没展开的时候不该多打 20 次 requests。收回时只是 `hidden`，
+ * 下次展开会重新拉一遍 —— 保证看到的是最新的。
+ */
+async function toggleReplies(node) {
+  const id = Number(node.dataset.id);
+  const item = itemCache.get(id);
+  const box = $(`[data-feed-replies-box="${id}"]`);
+  if (!item || !box) return;
+  if (!box.hidden) {
+    box.hidden = true;
+    node.classList.remove('is-on');
+    return;
+  }
+  box.hidden = false;
+  node.classList.add('is-on');
+  box.innerHTML = loadingHtml();
+  await paintReplies(item, box);
+}
+
+/** 重新拉一遍某条动态的回复并重画那一块（发完 / 删完 / 展开时都走它）。 */
+async function paintReplies(item, box) {
+  const data = await api(`/api/feed/${item.id}/replies`);
+  box.innerHTML = feedRepliesHtml(item, data);
+  ntRenderMath(box);
+  const countNode = $(`[data-feed-replies="${item.id}"]`);
+  if (countNode) countNode.textContent = Fmt.fmtNum(data.replyCount);
+  item.replyCount = data.replyCount;
+  return data;
+}
+
+async function submitReply(form) {
+  const id = Number(form.dataset.id);
+  const item = itemCache.get(id);
+  const box = $(`[data-feed-replies-box="${id}"]`);
+  const textarea = form.querySelector('textarea[name="content"]');
+  const content = String(textarea?.value ?? '').trim();
+  if (!content) {
+    toast('回复不能是空的', 'error');
+    return;
+  }
+  if (!item || !box) return;
+  await withButtonBusy(form.querySelector('button[type="submit"]'), async () => {
+    const result = await api(`/api/feed/${id}/replies`, { method: 'POST', body: { content } });
+    toast('回复成功', 'success');
+    // 先清空再重画：`paintReplies` 会把整个盒子 innerHTML 换掉，textarea 跟着没了，
+    // 而用户如果这时又敲了字，重画会把新敲的吃掉 —— 这是能接受的最小代价
+    // （重画是必须的，不然回复列表和服务端的计数就对不上了）。
+    textarea.value = '';
+    await paintReplies(item, box);
+    document.getElementById(`feed-reply-${result.reply.id}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  });
+}
+
+async function removeReply(node) {
+  const id = Number(node.dataset.id);
+  const replyId = Number(node.dataset.reply);
+  const item = itemCache.get(id);
+  const box = $(`[data-feed-replies-box="${id}"]`);
+  if (!item || !box) return;
+  if (!confirm('确定删除这条回复吗？')) return;
+  await withButtonBusy(node, async () => {
+    await api(`/api/feed/${id}/replies/${replyId}`, { method: 'DELETE' });
+    toast('已删除', 'success');
+    await paintReplies(item, box);
+  });
 }
 
 /** 就地编辑：把正文那段换成 textarea，**不跳页**。 */

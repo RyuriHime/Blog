@@ -91,6 +91,9 @@ const shapeNotification = (row) => ({
   post: row.post_id ? { id: row.post_id, title: row.post_title, deleted: Boolean(row.post_deleted) } : null,
   // 团队公告一类的通知指向团队；团队被解散后 slug 还在，前端点进去会看到「不存在或已解散」。
   team: row.team_id ? { id: row.team_id, slug: row.team_slug, name: row.team_name, deleted: Boolean(row.team_deleted) } : null,
+  // 「有人回复了你的动态」指向那条动态。只给 id：动态的正文/可见范围要另拉一次
+  // （列表页 20 条通知不该顺带 20 次 feed 查询），前端点进去就是 `#/feed`。
+  feedItemId: row.feed_item_id == null ? null : Number(row.feed_item_id),
   actor: row.actor_id
     ? {
         id: row.actor_id,
