@@ -830,6 +830,14 @@ const unknownPaths = new Set();
 const REQUESTS = [];
 
 /**
+ * 测试想让某一条路**回失败**时填的表：`'PUT /api/docs/1/markdown'` → `{status, code, message}`。
+ *
+ * 为什么需要：自动保存里有一段专门处理「服务端说这次改动会让块数暴跌」（409），
+ * 而这条路只有在假 fetch 能按指令回 409 时才走得到 —— 否则那段代码测了等于没测。
+ */
+const FORCED_FAILURES = new Map();
+
+/**
  * `/api/feed/:id/reaction` 的假服务端状态（`Map<动态 id, 'like' | 'dislike'>`）。
  *
  * 为什么要单独维护一份：真服务端的 `queries.setReaction()` 是「同一个再来一次 = 取消」，
@@ -1129,7 +1137,17 @@ globalThis.fetch = async (url, options = {}) => {
     const feedId = Number(bare.split('/')[3]);
     FEED_REPOSTS.delete(feedId);
     data = { reposted: false, repostCount: 0 };
+  } else if (method === 'PUT' && /^\/api\/docs\/\d+\/markdown$/.test(bare)) {
+    // 真服务端的 `PUT /markdown` 回的是**整份详情**（`store.putMarkdown` 末尾 `present(fresh)`：
+    // doc / blocks / html / abilities / settings，改得动的人还有 source），不是 GET 那份
+    // `{title, markdown}`。自动保存要靠这次响应把「脏基线」对齐到服务端真存下来的那份 ——
+    // 形状给错，编辑器会一直以为自己还脏着，测出来的「存完不脏了」就是假的。
+    const detail = pickFixture(bare.replace(/\/markdown$/, '')) ?? {};
+    data = { ...detail, markdown: payload?.markdown ?? '' };
   } else data = pickFixture(raw);
+  // 「让某一条路回失败」的出口（自动保存那条路上的 409 就靠它）。
+  const forced = FORCED_FAILURES.get(`${method} ${bare}`);
+  if (forced) failure = forced;
   if (failure) {
     const body = { ok: false, error: { code: failure.code, message: failure.message } };
     return {
@@ -2472,6 +2490,119 @@ if (!state.theme) problems.push('state.theme 没被初始化');
   } catch (error) {
     problems.push(`团队申请 / 审核交互测试自身崩了：${error?.stack || error}`);
     console.log('  ❌ 交互：路人递申请、管理员批申请、创建者能把团队藏起来、编辑权只归作者');
+  }
+}
+
+/* ---- 交互：编辑器的自动保存 ----
+ *
+ * 为什么单独测这一条：`views/doc.js` 的自动保存是「作者忘了点保存，东西也得留下来」这**一条**
+ * 承诺的全部实现，而静态哨兵（doc-smoke 的 S4）只能证明那些名字写在文件里 —— 定时器到底响没响、
+ * 送出去的是哪一条请求、服务端拒绝之后界面说什么，只有让假 DOM 真跑一遍才看得见。
+ * 钉住五件事：
+ *   ① 改完停手一会儿，PUT 自己发出去了，而且**只发该发的那一条**（没顺手把标题/可见范围也重写一遍）；
+ *   ② 存完那颗灯说「已自动保存」（作者得知道东西存下去了，而不是等关页面才发现全丢了）；
+ *   ③ 没到最小间隔就不重复存 —— 修订记录只有 50 条（`MAX_DOC_REVISIONS`），
+ *      敲一下存一次等于把「回滚到昨天那一版」这个真需求弄没了；
+ *   ④ 撞上服务端「块数暴跌」的 409：安静这条路**绝不替作者点确认框**、也绝不自己带 `?confirm=1` 重来；
+ *   ⑤ 离开编辑页（切到阅读页）之前，排着的那一发会**尽力**发出去。
+ *
+ * 计时器是真的：`AUTO_SAVE_IDLE_MS` 是 2500ms，所以这一段的等待是实打实的（一共约 8 秒）。
+ * 假 DOM 里 `document.querySelectorAll` 一律回空数组，所以积木模式的「哪几块脏了」测不到
+ * （那一半由 doc-smoke 的静态哨兵盯着），这里测的是它旁边那条路：改标题也会自动存。
+ */
+{
+  const titleBox = registered('[data-doc-title]');
+  const scopeBox = registered('[data-doc-scope]');
+  const tagsBox = registered('[data-doc-tags]');
+  const scriptBox = registered('[data-doc-script-write]');
+  const mdBox = registered('[data-doc-markdown]');
+  const saveLight = registered('[data-doc-save-status]');
+  const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+  const putsTo = (path) => REQUESTS.filter((item) => item.method === 'PUT' && item.url.split('?')[0] === path);
+
+  try {
+    const docView = await view('doc.js');
+    const detail = pickFixture('/api/docs/1');
+    await docView.viewDocEdit(1, new Map([['mode', 'markdown']]));
+    await settle();
+
+    // 假 DOM 不解析 HTML，所以那些 `value="…"` 得按真页面的样子摆一遍。
+    // 不摆的话 `saveAll()` 会以「标题不能为空」整条跳过 —— 那就不是在测自动保存了。
+    titleBox.value = detail.doc.title;
+    scopeBox.value = detail.doc.scope;
+    tagsBox.value = (detail.doc.tags ?? []).join(', ');
+    scopeBox.dataset.docScope = '';
+    titleBox.dataset.docTitle = '';
+    tagsBox.dataset.docTags = '';
+    mdBox.dataset.docMarkdown = '';
+    mdBox.value = '## 采样标题\n\n- 甲\n- 乙\n\n- 丙';
+
+    /* ① 服务端说「这次改动会让块数暴跌」：安静这条路不该替作者确认，也不该自己重来一遍 */
+    let confirms = 0;
+    const realConfirm = window.confirm;
+    window.confirm = () => {
+      confirms += 1;
+      return true;
+    };
+    globalThis.confirm = window.confirm;
+    FORCED_FAILURES.set('PUT /api/docs/1/markdown', { status: 409, code: 'conflict', message: '块数从 6 掉到 2，确认这样存？' });
+    REQUESTS.length = 0;
+    dispatch(app, 'input', mdBox);
+    await wait(3000);
+    const rejected = putsTo('/api/docs/1/markdown');
+    if (rejected.length !== 1) problems.push(`自动保存撞上 409 之前发了 ${rejected.length} 次 PUT /markdown（该是一次，然后停下来问人）`);
+    if (confirms !== 0) problems.push('自动保存撞上「块数暴跌」，居然替作者弹了确认框（那是「这次改动算数」的决定，只有人能点）');
+    if (REQUESTS.some((item) => String(item.url).includes('confirm=1'))) problems.push('自动保存撞上 409 之后自己带 ?confirm=1 重来了（等于替作者按了确认）');
+    if (!String(saveLight.textContent).includes('跳过')) problems.push(`自动保存被服务端拒了，那颗灯却没说明原因：「${saveLight.textContent}」`);
+    if (saveLight.dataset.docSaveKind !== 'warn') problems.push(`被服务端拒了之后那颗灯该是 warn，现在是 ${saveLight.dataset.docSaveKind}`);
+
+    /* ② 正常那一发：请求送出去、正文是新的、那颗灯说「已自动保存」 */
+    FORCED_FAILURES.delete('PUT /api/docs/1/markdown');
+    mdBox.value = '## 采样标题\n\n- 甲\n- 乙\n\n- 丙\n\n- 丁';
+    REQUESTS.length = 0;
+    dispatch(app, 'input', mdBox);
+    await wait(3000);
+    const saved = putsTo('/api/docs/1/markdown');
+    if (saved.length !== 1) problems.push(`改完停手 3 秒，PUT /api/docs/1/markdown 发了 ${saved.length} 次（该是一次）`);
+    else if (!String(saved[0].body?.markdown).includes('- 丁')) problems.push(`自动保存送出去的正文不对：${JSON.stringify(saved[0].body?.markdown)}`);
+    if (REQUESTS.length !== saved.length) {
+      problems.push(`自动保存顺手发了别的请求：${REQUESTS.map((item) => `${item.method} ${item.url}`).join('、')}`);
+    }
+    if (!String(saveLight.textContent).includes('已自动保存')) problems.push(`存完那颗灯还写着「${saveLight.textContent}」`);
+    if (saveLight.dataset.docSaveKind !== 'ok') problems.push(`存完那颗灯的颜色不是 ok：${saveLight.dataset.docSaveKind}`);
+
+    /* ③ 刚存完又敲：最小间隔之内不许再存一次 */
+    mdBox.value = '## 采样标题\n\n- 甲\n- 乙\n\n- 丙\n\n- 丁\n\n- 戊';
+    REQUESTS.length = 0;
+    dispatch(app, 'input', mdBox);
+    await wait(3000);
+    if (putsTo('/api/docs/1/markdown').length) problems.push('刚存完 3 秒又存了一次 —— 最小间隔没生效，50 条修订记录会被刷满');
+
+    /* ④ 离开编辑页：排着的那一发放出去（作者切走也算「这一段写完了」） */
+    REQUESTS.length = 0;
+    await docView.viewDoc(1);
+    await settle();
+    if (!putsTo('/api/docs/1/markdown').length) problems.push('切到阅读页之前没有把排着的自动保存放出去（那几十个字就这么没了）');
+
+    /* ⑤ 积木模式改标题：没有文本草稿，自动保存同样得管（那边靠离开时那一发验证） */
+    await docView.viewDocEdit(1, new Map([['mode', 'blocks']]));
+    await settle();
+    titleBox.value = '改过的标题';
+    REQUESTS.length = 0;
+    dispatch(app, 'input', titleBox);
+    await docView.viewDoc(1);
+    await settle();
+    const metaSaved = putsTo('/api/docs/1').find((item) => item.body?.title === '改过的标题');
+    if (!metaSaved) problems.push('在积木模式下改标题，离开时没有自动存（标题也是「这篇改好了」的一部分）');
+    if (putsTo('/api/docs/1/markdown').length) problems.push('积木模式下改标题，居然还顺手发了一条 PUT /markdown');
+
+    window.confirm = realConfirm;
+    globalThis.confirm = realConfirm;
+    FORCED_FAILURES.delete('PUT /api/docs/1/markdown');
+    console.log(`  ${problems.length ? '❌' : '✅'} 交互：自动保存会自己存、存完报告、不到间隔不重复存、撞 409 不替作者确认、离开前尽力存一发`);
+  } catch (error) {
+    problems.push(`自动保存交互测试自身崩了：${error?.stack || error}`);
+    console.log('  ❌ 交互：自动保存会自己存、存完报告、不到间隔不重复存、撞 409 不替作者确认、离开前尽力存一发');
   }
 }
 

@@ -9,7 +9,7 @@
 // 它进的还是这一页 —— 块类型表只是从「独立一个 Tab」挪进了开发者功能里，
 // 页面本身没有下线，旧书签照样能打开。
 //
-// 两条贯穿全文件的纪律：
+// 三条贯穿全文件的纪律：
 //   1. **正文的 HTML 一律由后端出**（`src/modules/doc/blocks/html.js`）。
 //      前端只画外壳、只发请求。想「在浏览器里先把块渲染一遍」的冲动要忍住 ——
 //      那等于把块引擎实现两遍，出错时你分不清是哪一遍错了。
@@ -17,6 +17,11 @@
 //      「标题和正文分开存」是给实现找的方便，不是给作者找的方便 —— 作者心里
 //      「这篇改完了」是一件事。块仍然一块一块写进后端（一次 PUT 一块），
 //      但那是 `saveAll()` 内部的事，作者不用知道。
+//   3. **自动保存是默认，那颗「保存」是「立刻存」**（`scheduleAutoSave()` →
+//      `saveAll({ quiet: true })`）。自动保存不是第二条保存路，而是同一个
+//      `saveAll()` 换一副安静面孔：不弹提示、不重画（重画会把作者正打的那行字
+//      连光标一起冲掉），**也绝不替作者点「块数暴跌」那个确认框** ——
+//      静悄悄替人做决定最难查，所以那颗状态灯把每一次自动保存都明说出来。
 //
 // 权限只做「藏按钮」，真正的判断在后端 —— 前端藏起来的按钮不叫权限。
 
@@ -443,8 +448,17 @@ function docActionsHtml(doc, abilities) {
   return bits.join('');
 }
 
-/** 离开积木页面时的统一收尾：先收外挂，再拆沙箱，最后换 DOM。 */
+/** 离开积木页面时的统一收尾：先把这一页的活儿收尾，再收外挂、拆沙箱，最后换 DOM。 */
 function leaveDocPage() {
+  // 自动保存先跑：`flushAutoSave()` 会**同步**把框里的字读出来（发请求是它自己的事），
+  // 所以这一句必须排在下面那句 `ui.app.innerHTML = loadingHtml()` 之前 ——
+  // 顺序反了，等于把作者刚敲的那几行字连同 DOM 一起扔掉。
+  // 切页不留人：这一发发出去就不再等回音（回音回来时这一页早换了，按
+  // `core/route-guard.js` 的规矩作废），真没赶上还有 `beforeunload` 那句提醒兜着。
+  const rescue = flushAutoSave('leave');
+  if (rescue && typeof rescue.catch === 'function') rescue.catch(() => {});
+  // 换代：还挂着的定时器回来时什么也别干 —— 它们读的是**这个**页面上的 DOM。
+  retireAutoSave();
   if (mdPreviewTimer) {
     clearTimeout(mdPreviewTimer);
     mdPreviewTimer = null;
@@ -1274,7 +1288,7 @@ function blocksEditorHtml(blocks) {
       <ol class="doc-steps">
         <li><span class="doc-step-no">1</span>写正文：最下面「➕ 插入一块」选一种类型 —— 新块加在<strong>末尾</strong>，再用块头的 ↑ ↓ 挪到想要的位置，然后在块里填字段。</li>
         <li><span class="doc-step-no">2</span>改标题和「谁可以看」：就在这张卡上面的两个输入框里改。</li>
-        <li><span class="doc-step-no">3</span>点这张卡里的<strong>「保存」</strong>：标题、可见范围和这一页上所有改过的块<strong>一起存</strong>就完了。</li>
+        <li><span class="doc-step-no">3</span>点这张卡里的<strong>「保存」</strong>：标题、可见范围和这一页上所有改过的块<strong>一起存</strong>就完了（不点也没事：停手 ${AUTO_SAVE_SECONDS} 秒会自动存一次，「保存」只是「现在就存」）。</li>
         <li><span class="doc-step-no">4</span>只想存一块（比如表单一长、别的块还要接着改），每块自己的<strong>「保存本块」</strong>也在；要直接改数据就展开块里的「源码」。</li>
       </ol>
     </div>
@@ -1327,7 +1341,7 @@ function sourceEditorHtml(source) {
     </div>
     <div class="doc-actions">
       <button class="btn btn-sm btn-ghost" type="button" data-doc-action="src-reload">重新拉取</button>
-      <span class="doc-hint" data-doc-src-status>改完点上方的「保存」—— 标题、可见范围和这段源码一起存。</span>
+      <span class="doc-hint" data-doc-src-status>停手 ${AUTO_SAVE_SECONDS} 秒自动存；这里也会显示 AI 抽屉的状态。</span>
     </div>
     <div class="doc-hint">
       正文直接写 Markdown（标题 / 段落 / 列表 / 表格 / 代码围栏 / $$公式$$ / 图片 / [[双链]]）；
@@ -1453,6 +1467,318 @@ async function flushDraft() {
   return true;
 }
 
+/* ------------------------------------------------------------------ *
+ * 自动保存
+ *
+ * 为什么要有：作者写的是一篇要发出去的东西，而「保存」是一颗他随时会忘的按钮。
+ * 忘了点的代价是**全丢**（切页、刷新、关标签页都会把框里的字带走），这个代价
+ * 跟「多点一次按钮」完全不成比例。
+ *
+ * 为什么不是「每敲一下就存」：服务端每写一次正文/块就记一条修订（`store.js` 的
+ * `snapshot()`），而一篇只留 50 条（`MAX_DOC_REVISIONS`）。存太勤，作者写半小时就能
+ * 把修订表刷满，「回滚到昨天那一版」这个真需求反而没了 —— 所以自动保存的原则是
+ * **尽量少存几次，但一次都不许丢**。
+ * ------------------------------------------------------------------ */
+
+/** 停手多久算「这一段写完了」。 */
+const AUTO_SAVE_IDLE_MS = 2500;
+/** 两次自动保存之间至少隔这么久（护住那 50 条修订记录）。 */
+const AUTO_SAVE_MIN_GAP_MS = 10000;
+/** 一直在打字也得存一次的上限 —— 没有它，作者不停地写就永远等不到那 2.5 秒的安静。 */
+const AUTO_SAVE_MAX_WAIT_MS = 30000;
+/** 说给作者听的秒数（上面那个常量改了，这里的文案自己跟着改）。 */
+const AUTO_SAVE_SECONDS = Math.round(AUTO_SAVE_IDLE_MS / 1000);
+/** 那颗状态灯一开始（以及「什么都没改」时）说的话。 */
+const AUTO_SAVE_IDLE_TEXT = `停手 ${AUTO_SAVE_SECONDS} 秒自动存（「保存」是立刻存）—— 标题、可见范围、正文一起存。`;
+
+/**
+ * 编辑器自己那几个控件（`data-doc-*` 上的字段名）。
+ *
+ * 只有它们能触发自动保存：`ui.app` 上还挂着别的表单（导入、注册块类型、脚本模板），
+ * 在那些框里打字顺手把正文存一遍，是拿作者没说过的话去写库。
+ */
+const EDITOR_FIELDS = ['docTitle', 'docScope', 'docTags', 'docScriptWrite', 'docMarkdown', 'docSource'];
+
+/**
+ * 自动保存的进度。
+ *
+ * 全是模块级的：`renderEditor()` 会把状态灯那个元素换掉，但「存到哪一步了」是页面级的
+ * 事实，不能跟着 DOM 一起被换掉。`gen` 是「编辑器这一代」的编号 —— 切页之后旧定时器
+ * 回来时靠它认出「我已经不是当前这一页的人了」。
+ */
+const autoSave = {
+  gen: 0,
+  timer: 0,
+  hard: 0,
+  saving: false,
+  queued: false,
+  last: 0,
+  pending: false,
+  status: '',
+  kind: 'idle',
+};
+
+/** 状态里那个时间：只要「时:分:秒」—— 作者看的是「刚才存过没有」。 */
+function clockText(timestamp) {
+  const date = new Date(timestamp);
+  return [date.getHours(), date.getMinutes(), date.getSeconds()].map((part) => String(part).padStart(2, '0')).join(':');
+}
+
+/**
+ * 把那颗灯点亮（`[data-doc-save-status]`）。
+ *
+ * `kind` 只做颜色：`ok` 绿 / `dirty` 黄 / `busy` 蓝 / `warn` 黄 / `failed` 红。
+ * 颜色挂在 `data-doc-save-kind` 上、不拼进类名 —— 拼类名会在模板里留下一个半截的
+ * `doc-save-`（见 `autoSaveStatusHtml()` 那段注释）。
+ * 元素不在（页面已经切走）就只记状态、不碰 DOM —— 切页之后还去写旧页面，写的是
+ * 别人家的 DOM。状态本身留着，重画时由 `autoSaveStatusHtml()` 原样恢复。
+ */
+function paintAutoSaveStatus(text, kind = 'idle') {
+  autoSave.status = text;
+  autoSave.kind = kind;
+  const el = $('[data-doc-save-status]');
+  if (!el) return;
+  el.textContent = text;
+  el.className = 'doc-hint doc-save';
+  el.dataset.docSaveKind = kind;
+}
+
+/**
+ * 那颗灯（重画时得把它连同当前状态一起画回去，否则每次重画都像「刚打开这一页」）。
+ *
+ * 状态文字一律转义：里面会出现服务端来的错误消息（`error.message`）。
+ *
+ * 类名是**两个字面量**、颜色另外交给 `data-doc-save-kind`：老写法把状态后缀直接拼在
+ * class 属性里（`doc-hint doc-save doc-save-${kind}` 那一串），而
+ * `scripts/check-ui-contract.mjs` 扫到的类名会是「doc-save-」（它把 `${…}` 换成空格），
+ * 于是那条「模板里的类名都得有 CSS」会假红一次 —— 而真给 `.doc-save-` 写一条样式是不可能的。
+ * （连注释里都别写出那个带引号的 class 属性：这个扫的是源码文本，注释照样命中。）
+ */
+function autoSaveStatusHtml() {
+  const text = autoSave.status || AUTO_SAVE_IDLE_TEXT;
+  const kind = autoSave.kind || 'idle';
+  return `<span class="doc-hint doc-save" data-doc-save-kind="${kind}" data-doc-save-status>${esc(text)}</span>`;
+}
+
+/**
+ * 这一页上**所有改过但还没存**的块（表单里的值 vs 服务端那一份）。
+ *
+ * 只读、不发请求：`saveAll()` 与离开前的提醒都要用它，而「想知道有没有脏块」不该
+ * 顺手写一次库。回 `{ queued, problem }` —— `problem` 是「某块填得不对」的第一句
+ * 人话（说不清是哪一块，但必须让作者知道为什么一块都没存）。
+ */
+function collectDirtyBlocks() {
+  const editor = docState.editor;
+  const blocks = editor?.data?.blocks ?? [];
+  const queued = [];
+  let problem = '';
+  for (const card of document.querySelectorAll('[data-doc-card]')) {
+    const blockId = card.dataset?.docCard ?? '';
+    const block = blocks.find((item) => item.blockId === blockId);
+    if (!block) continue;
+    const { props, problems } = Blocks.readForm(card, typeDef(block.type));
+    if (problems.length > 0) {
+      if (!problem) problem = problems[0];
+      continue; // 这一块填得不对不影响别的块「脏不脏」—— 但一块都不会存（见 `saveAll()`）
+    }
+    if (sameProps(props, block.props)) continue;
+    queued.push({ blockId, props });
+  }
+  return { queued, problem };
+}
+
+/**
+ * 编辑区里还有没有「没存下去」的东西。
+ *
+ * 用途只有一个：关标签页 / 切页之前要不要提醒、要不要抢救一次。所以它必须**现读 DOM**，
+ * 谁的话都不信 —— 缓存说「存过了」而框里其实还有字，是最坏的一种错。
+ */
+function hasUnsavedWork() {
+  const editor = docState.editor;
+  if (!editor) return false;
+  const doc = editor.data?.doc ?? {};
+  const draft = currentDraft();
+  if (draft && draft.text !== draft.baseline) return true;
+  const titleEl = $('[data-doc-title]');
+  if (titleEl && String(titleEl.value ?? '').trim() !== String(doc.title ?? '')) return true;
+  const scopeEl = $('[data-doc-scope]');
+  if (scopeEl && String(scopeEl.value ?? '') !== String(doc.scope ?? 'public')) return true;
+  const tagsEl = $('[data-doc-tags]');
+  if (tagsEl && typeof tagsEl.value === 'string') {
+    const parsed = parseTags(tagsEl.value);
+    if (!parsed.error && parsed.tags.join('\n') !== (doc.tags ?? []).join('\n')) return true;
+  }
+  const scriptEl = $('[data-doc-script-write]');
+  if (scriptEl && typeof scriptEl.checked === 'boolean' && scriptEl.checked !== Boolean(editor.data?.settings?.allowScriptWrite)) return true;
+  // 积木模式：脏块也算没存（别的页面上没有块卡片，这一句自然恒假）。
+  return collectDirtyBlocks().queued.length > 0;
+}
+
+/**
+ * 敲了一下（或改了标题 / 可见范围 / 标签 / 某个块的字段）→ 排一次自动保存。
+ *
+ * 只排、不立刻发：连着敲十下只该存一次。两个定时器分工 —— `timer` 是「停手就存」，
+ * 每敲一下往后推；`hard` 是「一直在打字也得存」，排上就不动。排的时候**不弹任何提示**：
+ * 作者正写着，界面只该安静地记一笔，然后在那颗灯上写清楚现在是什么状态。
+ */
+function scheduleAutoSave() {
+  if (!docState.editor) return;
+  autoSave.pending = true;
+  const gen = autoSave.gen;
+  if (autoSave.timer) clearTimeout(autoSave.timer);
+  // 上一次自动保存（或手动保存）才刚过：把这一发推到最小间隔之后。
+  // 排队，但别挤在一起 —— 挤在一起才是把修订记录刷满的原因。
+  const wait = Math.max(AUTO_SAVE_IDLE_MS, AUTO_SAVE_MIN_GAP_MS - (Date.now() - autoSave.last));
+  autoSave.timer = setTimeout(() => {
+    autoSave.timer = 0;
+    if (gen !== autoSave.gen) return;
+    runAutoSave('idle');
+  }, wait);
+  if (!autoSave.hard) {
+    autoSave.hard = setTimeout(() => {
+      autoSave.hard = 0;
+      if (gen !== autoSave.gen) return;
+      runAutoSave('long');
+    }, AUTO_SAVE_MAX_WAIT_MS);
+  }
+  paintAutoSaveStatus(
+    autoSave.saving ? '正在保存…' : `有改动 —— 停手 ${AUTO_SAVE_SECONDS} 秒自动存`,
+    autoSave.saving ? 'busy' : 'dirty',
+  );
+}
+
+/** 取消排着的自动保存（手动点「保存」、切视图、切页时都要）。 */
+function cancelAutoSave() {
+  if (autoSave.timer) clearTimeout(autoSave.timer);
+  if (autoSave.hard) clearTimeout(autoSave.hard);
+  autoSave.timer = 0;
+  autoSave.hard = 0;
+  autoSave.pending = false;
+}
+
+/**
+ * 换一代：把上一页的定时器、排队标记、上次保存时刻全部作废。
+ *
+ * 不做这一步，「在 A 篇里排着的定时器」会在 B 篇里响 —— 存下去的是另一篇的字。
+ */
+function retireAutoSave() {
+  cancelAutoSave();
+  autoSave.gen += 1;
+  autoSave.saving = false;
+  autoSave.queued = false;
+  autoSave.last = 0;
+}
+
+/**
+ * 跑一次自动保存 —— 安静版的 `saveAll()`。
+ *
+ * 三件「安静」由 `saveAll({ quiet: true })` 负责（不弹提示、不重画、不替作者点确认框）；
+ * 这里负责的是**不并发**（正在存就把这一发排到存完之后）和**不撒谎**：
+ * 跳过了就说清为什么（标题空着、块没填完、撞上「块数暴跌」），失败了就说失败 ——
+ * 静悄悄存不上，作者会一直以为一切正常，直到关掉页面。
+ */
+async function runAutoSave(reason = 'idle') {
+  const editor = docState.editor;
+  if (!editor) return;
+  const gen = autoSave.gen;
+  if (autoSave.saving) {
+    autoSave.queued = true; // 正在存：存完补一次，别让作者这一下白敲
+    return;
+  }
+  autoSave.saving = true;
+  paintAutoSaveStatus('正在保存…', 'busy');
+  try {
+    const result = await saveAll({ quiet: true });
+    if (gen !== autoSave.gen) return; // 页面已经切走：写盘照落，但界面不是我们管的了
+    if (result?.skipped) {
+      paintAutoSaveStatus(`自动保存先跳过：${result.skipped}`, 'warn');
+    } else if (result?.changed) {
+      autoSave.last = Date.now();
+      paintAutoSaveStatus(`已自动保存 · ${clockText(autoSave.last)}`, 'ok');
+    } else if (autoSave.last) {
+      paintAutoSaveStatus(`已自动保存 · ${clockText(autoSave.last)}`, 'ok');
+    } else {
+      paintAutoSaveStatus(AUTO_SAVE_IDLE_TEXT, 'idle');
+    }
+  } catch (error) {
+    // 页面早换了：这份响应按 `core/route-guard.js` 作废（写盘该落的已经落了）。
+    if (error?.aborted) return;
+    if (gen !== autoSave.gen) return;
+    paintAutoSaveStatus(`自动保存失败：${error?.message ?? '未知错误'}（点「保存」重试）`, 'failed');
+    console.warn(`[doc] 自动保存失败（${reason}）：`, error);
+  } finally {
+    autoSave.saving = false;
+    if (gen === autoSave.gen) {
+      autoSave.pending = false;
+      if (autoSave.queued) {
+        autoSave.queued = false;
+        scheduleAutoSave();
+      }
+    }
+  }
+}
+
+/**
+ * 立刻存一次，不等那两个定时器。用在三处：页面要走了、标签页要藏起来了、切视图之前。
+ *
+ * 「页面要走」这一路是**尽力而为**：请求发出去就不再等回音（回音回来时这一页早换了，
+ * 按规矩作废）。为什么不等：拦着不让作者走比丢一次自动保存更讨厌，而且「敲一下到
+ * 2.5 秒」这个窗口本来就小，真没赶上还有 `beforeunload` 兜着。
+ */
+function flushAutoSave(reason = 'now') {
+  if (!docState.editor) return null;
+  if (!autoSave.pending && !hasUnsavedWork()) return null;
+  cancelAutoSave();
+  return runAutoSave(reason);
+}
+
+/* 关标签页 / 刷新 / 切到后台之前那几句话。
+ *
+ * `beforeunload` 里**只提醒、不抢救**：在那儿发请求是靠运气（浏览器随时能把这一页
+ * 干掉，Safari 与移动端尤其），存一个「也许存了」的东西比明说「还没存」更坏。
+ * 真要把字救下来，是 `visibilitychange` / `pagehide` 那两条的事 —— 切走标签页、
+ * 手机从后台被系统杀掉，都还会给一次机会。
+ */
+if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
+  window.addEventListener('beforeunload', (event) => {
+    if (!hasUnsavedWork()) return undefined;
+    if (event && typeof event.preventDefault === 'function') event.preventDefault();
+    if (event) event.returnValue = '';
+    return '';
+  });
+  const rescueBeforeHide = () => {
+    if (!autoSave.pending && !hasUnsavedWork()) return;
+    const task = flushAutoSave('hide');
+    // 这一发谁都不等它：失败了也不该冒出一个未处理的 Promise（见 check-frontend 的 unhandledRejection）。
+    if (task && typeof task.catch === 'function') task.catch(() => {});
+  };
+  window.addEventListener('visibilitychange', () => {
+    if (document.hidden === true || document.visibilityState === 'hidden') rescueBeforeHide();
+  });
+  window.addEventListener('pagehide', rescueBeforeHide);
+}
+
+/**
+ * 编辑器里的每一次敲键、每一次改下拉。
+ *
+ * 只认编辑器自己那几个控件（标题 / 可见范围 / 标签 / 脚本开关 / 两个文本框 / 块卡片里的字段）。
+ * 两个例外：块卡片里的「源码」框**不自动存**（它是一整份 props JSON，敲到一半必然是
+ * 坏 JSON），普通表单页（导入、注册块类型、脚本模板）也一概不碰。
+ */
+function onEditorInput(event) {
+  if (!docState.editor) return;
+  const target = event?.target;
+  if (typeof target?.closest !== 'function') return;
+  if (target.closest('[data-doc-form]')) return;
+  if (target.closest('[data-doc-src-box]')) {
+    paintAutoSaveStatus('源码框有改动 —— 存它请点那一块自己的「保存本块」', 'warn');
+    return;
+  }
+  const dataset = target.dataset ?? {};
+  if (!EDITOR_FIELDS.some((key) => key in dataset) && !target.closest('[data-doc-card]')) return;
+  scheduleAutoSave();
+}
+
 /** 重新拉一次源码（放弃本地改动）。 */
 async function reloadSource() {
   const editor = docState.editor;
@@ -1498,7 +1824,7 @@ function markdownEditorHtml(markdown, blocked = '') {
     </div>
     <div class="doc-actions">
       <button class="btn btn-sm btn-ghost" type="button" data-doc-action="md-reload">重新拉取</button>
-      <span class="doc-hint" data-doc-md-status>改完点上方的「保存」—— 标题、可见范围和这段正文一起存。</span>
+      <span class="doc-hint" data-doc-md-status>停手 ${AUTO_SAVE_SECONDS} 秒自动存；这里也会显示 AI 抽屉的状态。</span>
     </div>
     <div class="doc-hint">支持标题 / 段落 / 列表 / 代码围栏 / 表格 / $$公式$$ / 图片 / 引用 / [[双链]]；结构化块（\`\`\`doc:poll 这种）在这里只读，请去源码模式改。</div>
   </div>`;
@@ -1672,7 +1998,7 @@ function renderEditor() {
       </div>
       <div class="doc-actions">
         <button class="btn btn-sm btn-primary" type="button" data-doc-action="save-all">保存</button>
-        <span class="doc-hint">标题、可见范围、正文一起存 —— 不用先存一样再存另一样。</span>
+        ${autoSaveStatusHtml()}
       </div>
       <div class="doc-tabs">
         <button class="doc-tab${editor.mode === 'markdown' ? ' doc-tab-on' : ''}" type="button" data-doc-tab="markdown">📝 纯 Markdown${mdBlocked ? ' ⚠' : ''}</button>
@@ -1716,31 +2042,17 @@ function sameProps(a, b) {
 }
 
 /**
- * 积木模式的正文：把**这一页上所有改过的块**一起存。
+ * 积木模式的正文：把 `collectDirtyBlocks()` 收出来的那几块写下去。
  *
  * 块仍然是一块一条 PUT（块的语义本来就独立，服务端也是这么存的），但那是实现细节：
  * 作者点「保存」时心里想的是「这一篇我改完了」，不是「b7 那个块我改完了」。
  *
- * 回 `null` = 有个块填得不对（必填没填之类）—— 这时**一块都不存**。宁可什么都不存
- * 让作者改完再点一次，也不要留下「前三块存了、第四块没存」这种谁也说不清的状态。
+ * 为什么「收」与「写」分成两步：表单值必须在**换 DOM 之前**一次读完（见 `saveAll()`
+ * 里那句注释），而中间夹着好几个 `await`。分开了，读的那一步就是纯读、可以随时重来。
  */
-async function saveDirtyBlocks() {
+async function putDirtyBlocks(queued) {
   const editor = docState.editor;
-  const blocks = editor.data.blocks ?? [];
-  const queued = [];
-  for (const card of document.querySelectorAll('[data-doc-card]')) {
-    const blockId = card.dataset?.docCard ?? '';
-    const block = blocks.find((item) => item.blockId === blockId);
-    if (!block) continue;
-    const { props, problems } = Blocks.readForm(card, typeDef(block.type));
-    if (problems.length > 0) {
-      toast(problems[0], 'error');
-      return null;
-    }
-    if (sameProps(props, block.props)) continue;
-    queued.push({ blockId, props });
-  }
-  let fresh = blocks;
+  let fresh = editor.data.blocks ?? [];
   for (const item of queued) {
     // 顺序发，不并发：块之间有顺序（position），并发写同一条序列对不上。
     const result = await api(`/api/docs/${editor.id}/blocks/${item.blockId}`, {
@@ -1761,28 +2073,51 @@ async function saveDirtyBlocks() {
  * 作者得先学会服务端怎么分表，才能把文章存对。界面该跟着人走，不是跟着表走。
  *
  * 服务端该是几条请求还是几条（块的语义独立、正文有对齐逻辑），那些都发生在这一层之下。
+ *
+ * `options.quiet` = 自动保存那一副面孔，与手动只差三处：
+ *   · **不弹提示** —— 作者正打字，弹一条只会打断他；话写在那颗状态灯上；
+ *   · **不重画** —— `renderEditor()` 会把编辑框连同光标和没提交的输入一起换掉；
+ *   · **不替作者确认「块数暴跌」** —— 那个确认框是「这次改动算数」的决定，只有人能点，
+ *     所以安静这条路上撞到 409 就原样报回去，请作者自己按「保存」。
+ * 除了这三处，自动存下来的东西与手动存的**一模一样**（同一条路、同一批请求）。
+ *
+ * 回 `{ changed, skipped }`：`skipped` 非空 = 这一发什么都没存，且原因已经写成人话
+ * （它就是拿来写进状态灯的那句话）。
  */
-async function saveAll() {
+async function saveAll(options = {}) {
+  const quiet = options.quiet === true;
   const editor = docState.editor;
-  if (!editor) return;
+  if (!editor) return { changed: false, skipped: '' };
   const doc = editor.data.doc ?? {};
   const title = ($('[data-doc-title]')?.value ?? '').trim();
   if (title === '') {
-    toast('标题不能为空', 'error');
-    return;
+    if (!quiet) toast('标题不能为空', 'error');
+    return { changed: false, skipped: '标题不能为空' };
   }
   const scope = $('[data-doc-scope]')?.value ?? doc.scope ?? 'public';
   const scriptWrite = Boolean($('[data-doc-script-write]')?.checked);
   const parsedTags = parseTags($('[data-doc-tags]')?.value ?? (doc.tags ?? []).join(', '));
   if (parsedTags.error) {
-    toast(parsedTags.error, 'error');
-    return;
+    if (!quiet) toast(parsedTags.error, 'error');
+    return { changed: false, skipped: parsedTags.error };
   }
   const tags = parsedTags.tags;
   const tagsChanged = tags.join('\n') !== (doc.tags ?? []).join('\n');
   const metaChanged = title !== (doc.title ?? '') || scope !== (doc.scope ?? 'public') || tagsChanged;
   const settingsChanged = scriptWrite !== Boolean(editor.data.settings?.allowScriptWrite);
   const draft = currentDraft();
+  // 表单值**一次读完**：自动保存可能正好发生在「这一页正在被换掉」的那一拍
+  // （见 `leaveDocPage()`）—— 中间夹一个 await 再回来读 DOM，读到的就是下一页的 DOM 了。
+  const dirty = editor.mode === 'blocks' ? collectDirtyBlocks() : { queued: [], problem: '' };
+  if (dirty.problem) {
+    // 有块填错了：**一块都不存**（宁可什么都不存，也不要「前三块存了、第四块没存」
+    // 这种谁也说不清的状态）。自动保存连提示都不弹，原因交给状态灯。
+    if (!quiet) {
+      toast(dirty.problem, 'error');
+      renderEditor();
+    }
+    return { changed: false, skipped: `有块没填完 —— ${dirty.problem}` };
+  }
 
   // 1) 文档级属性。**改了才发** —— 每次都发一遍会平白多出修订记录（修订列表是给人看的）。
   if (metaChanged) {
@@ -1801,23 +2136,34 @@ async function saveAll() {
   // 2) 正文。
   let contentSaved = 0;
   if (editor.mode === 'blocks') {
-    const saved = await saveDirtyBlocks();
-    if (saved === null) {
-      // 有块填错了：已经把话说清楚了，界面原地不动，别把作者敲的东西弄丢。
-      renderEditor();
-      return;
-    }
-    contentSaved = saved;
+    if (dirty.queued.length > 0) contentSaved = await putDirtyBlocks(dirty.queued);
   } else if (draft && draft.text !== draft.baseline) {
-    const data = await withShrinkConfirm((force) => putDraft(draft.text, force));
-    if (!data) {
-      toast('正文没存：你在确认框里点了取消', 'error');
-      renderEditor();
-      return;
+    if (quiet) {
+      // 安静这条路不点确认框：撞上「块数暴跌」就把决定交回作者（不自作主张带 `?confirm=1` 重来）。
+      try {
+        await putDraft(draft.text, false);
+      } catch (error) {
+        if (Number(error?.status) === 409) {
+          return { changed: false, skipped: '这次改动会让块数暴跌，得你点「保存」确认', conflict: true };
+        }
+        throw error;
+      }
+      if (editor.mode === 'markdown') editor.markdown = draft.text;
+      contentSaved = 1;
+    } else {
+      const data = await withShrinkConfirm((force) => putDraft(draft.text, force));
+      if (!data) {
+        toast('正文没存：你在确认框里点了取消', 'error');
+        renderEditor();
+        return { changed: false, skipped: '你在确认框里点了取消' };
+      }
+      if (editor.mode === 'markdown') editor.markdown = draft.text;
+      contentSaved = 1;
     }
-    if (editor.mode === 'markdown') editor.markdown = draft.text;
-    contentSaved = 1;
   }
+
+  const changed = metaChanged || settingsChanged || contentSaved > 0;
+  if (quiet) return { changed, skipped: '', metaChanged, settingsChanged, contentSaved };
 
   // 3) 重画（本地推定「存完该长什么样」迟早对不上）。
   //    Markdown 模式**必须重新拉一次**：编辑区画的 `editor.markdown` 是上次拉的文本，
@@ -1826,9 +2172,9 @@ async function saveAll() {
   if (editor.mode === 'markdown') await loadMarkdown();
   else renderEditor();
 
-  if (!metaChanged && !settingsChanged && !contentSaved) {
+  if (!changed) {
     toast('没有改动要存');
-    return;
+    return { changed: false, skipped: '' };
   }
   const bits = [];
   if (metaChanged) {
@@ -1841,6 +2187,7 @@ async function saveAll() {
   if (settingsChanged) bits.push(`「允许脚本改块」已${scriptWrite ? '打开' : '关闭'}`);
   if (contentSaved) bits.push(editor.mode === 'blocks' ? `${contentSaved} 个块` : '正文');
   toast(`存好了：${bits.join('、')}`);
+  return { changed, skipped: '' };
 }
 
 /**
@@ -2297,6 +2644,10 @@ function ensureDelegate() {
   delegated = true;
   ui.app.addEventListener('click', onAppClick);
   ui.app.addEventListener('submit', onAppSubmit);
+  // 打字 / 改下拉 / 勾选框：在编辑器里这些**就是**「排一次自动保存」的信号
+  // （`input` 管文本框与勾选框，`change` 管下拉 —— 两个都挂上，别猜哪个控件派发哪个）。
+  ui.app.addEventListener('input', onEditorInput);
+  ui.app.addEventListener('change', onEditorInput);
 }
 
 function findAction(target) {
@@ -2395,7 +2746,17 @@ async function onAppClick(event) {
     });
   }
   if (action === 'insert') return withBusy(insertBlock);
-  if (action === 'save-all') return withBusy(saveAll);
+  if (action === 'save-all') {
+    // 手动点「保存」：排着的那一发作废（让它跟着再存一遍只会多一条修订记录），
+    // 存完把那颗灯拨到「已保存」—— 灯还停在「有改动」会让作者以为没存上。
+    cancelAutoSave();
+    return withBusy(async () => {
+      const result = await saveAll();
+      if (result?.skipped) return; // 取消 / 有块没填完：原因 `saveAll()` 已经说了，别把灯拨成「已保存」
+      autoSave.last = Date.now();
+      paintAutoSaveStatus(`已保存 · ${clockText(autoSave.last)}`, 'ok');
+    });
+  }
   if (action === 'md-reload') return withBusy(loadMarkdown);
   if (action === 'src-reload') return withBusy(reloadSource);
   if (action === 'apply-template') {
@@ -2568,6 +2929,10 @@ async function onTabClick(mode) {
   if (!editor || editor.mode === mode) return;
   try {
     if (!(await flushDraft())) return;
+    // 排着的那一发也算「这一段写完了」：积木模式没有文本草稿这条线，脏块只有靠自动保存
+    // 才存得下去 —— 而换掉 DOM 之后就读不到那些表单值了。先让它跑完，再切。
+    if (autoSave.pending || autoSave.saving) await runAutoSave('tab');
+    cancelAutoSave();
     editor.mode = mode;
     if (mode === 'markdown') return await loadMarkdown();
     // 积木视图里可能刚改过块（那些接口不回 source），切过去之前把整篇重取一遍。

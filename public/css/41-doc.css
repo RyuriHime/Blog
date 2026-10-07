@@ -1645,3 +1645,57 @@ body.doc-wide .sidebar {
 .doc-wizard[hidden] {
   display: none;
 }
+
+/* 自动保存那颗灯：编辑器的状态是「刚才那几行字存下去没有」，所以它只用一个小圆点 +
+   一句话，颜色就是状态（dirty 黄 / busy 蓝 / ok 绿 / warn 黄 / failed 红）。
+   它是 `.doc-hint` 的加强版 —— 字号、间距仍然跟着 `.doc-hint` 走。
+
+   状态色认的是 `[data-doc-save-kind]` 这个属性，不是拼在类名后面的后缀：
+   `public/views/doc.js` 里要是把状态后缀直接拼进 class 属性（`doc-hint doc-save
+   doc-save-${kind}` 那一串），`scripts/check-ui-contract.mjs` 会扫出一个谁也认不得的
+   类名 `doc-save-`（它把 `${…}` 换成空格再按空格切），
+   「模板里的类名都得有 CSS」那条就会假红。
+   属性选择器也是本仓库既有的写法（见 `.doc-wiki-tree-row[data-depth="1"]`）。 */
+.doc-save {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.doc-save::before {
+  content: '';
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--muted);
+}
+
+.doc-save[data-doc-save-kind="dirty"]::before,
+.doc-save[data-doc-save-kind="warn"]::before {
+  background: var(--warn);
+}
+
+.doc-save[data-doc-save-kind="busy"]::before {
+  background: var(--accent);
+}
+
+.doc-save[data-doc-save-kind="ok"]::before {
+  background: var(--success);
+}
+
+.doc-save[data-doc-save-kind="failed"]::before {
+  background: var(--danger);
+}
+
+.doc-save[data-doc-save-kind="ok"] {
+  color: var(--success-fg);
+}
+
+.doc-save[data-doc-save-kind="warn"] {
+  color: var(--warn-fg);
+}
+
+.doc-save[data-doc-save-kind="failed"] {
+  color: var(--danger-fg);
+}
