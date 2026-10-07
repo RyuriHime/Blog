@@ -1730,6 +1730,40 @@ if (!state.theme) problems.push('state.theme 没被初始化');
   await timeline.viewTimeline(new Map());
 }
 
+/* ---- 交互：卡片上「转发了帖子」和「引用了帖子」得说得出区别 ----
+ *
+ * 两条路都是往动态里放一张 `ref_post_id` 指着某篇帖子的卡，渲染出来长得一模一样；
+ * 唯一的区别是 `reposts` 里有没有那一条 —— `shapeFeedItem` 把它算成 `ref.repost`。
+ * 标签写错了，用户会以为自己在看引用，其实对方是转发（或者反过来）。
+ */
+{
+  const timeline = await view('timeline.js');
+  const FEED_KEY = '/api/feed?filter=all&page=1';
+  const target = pickFixture(FEED_KEY).items[0];
+  const savedRef = target.ref;
+  const labelOf = () => {
+    const html = String(registered('[data-feed-list]').innerHTML);
+    const hit = html.match(/(🔁 转发了帖子|🔗 引用了帖子)/);
+    return hit ? hit[1] : '';
+  };
+
+  target.ref = { id: 1, title: '被引用的帖子', deleted: false, repost: true, author: { id: 1, username: 'admin', displayName: '站长', role: 'owner', avatar: '' } };
+  await timeline.viewTimeline(new Map());
+  if (labelOf() !== '🔁 转发了帖子') {
+    problems.push(`转发出来的卡片写着 ${JSON.stringify(labelOf() || '（没有标签）')} —— 转过这篇就该写「🔁 转发了帖子」`);
+  }
+
+  target.ref.repost = false;
+  await timeline.viewTimeline(new Map());
+  if (labelOf() !== '🔗 引用了帖子') {
+    problems.push(`没转过的卡片写着 ${JSON.stringify(labelOf() || '（没有标签）')} —— 只是引用就该写「🔗 引用了帖子」`);
+  }
+
+  target.ref = savedRef;
+  await timeline.viewTimeline(new Map());
+  console.log(`  ${problems.length ? '❌' : '✅'} 交互：转发出来的卡片写「转发了帖子」、纯引用写「引用了帖子」`);
+}
+
 /* ---- 交互：积木页的转发区 —— 转得出、发完留在原地、撤销得掉 ----
  *
  * 为什么单独测：积木页的转发**故意没走 core 那条路**。`public/core/events.js` 里

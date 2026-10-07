@@ -45,6 +45,7 @@ const ITEM_COLUMNS = `
       EXISTS (SELECT 1 FROM feed_reactions fr WHERE fr.feed_item_id = f.id AND fr.kind = 'dislike' AND fr.user_id = ?) AS disliked,
       EXISTS (SELECT 1 FROM feed_items frep2 WHERE frep2.ref_feed_id = f.id AND frep2.user_id = ? AND frep2.deleted = 0) AS reposted,
       p.title AS ref_title, p.deleted AS ref_deleted,
+      EXISTS (SELECT 1 FROM reposts rp WHERE rp.post_id = f.ref_post_id AND rp.user_id = f.user_id) AS ref_repost,
       pu.username AS ref_username, pu.display_name AS ref_display, pu.avatar AS ref_avatar,
       rf.content AS ref_feed_content, rf.deleted AS ref_feed_deleted, rf.created_at AS ref_feed_created,
       rfu.id AS ref_feed_user_id, rfu.username AS ref_feed_username,
@@ -246,6 +247,26 @@ export function createFeedQueries(db, { hasTeams = false } = {}) {
         [itemId],
       ).get();
       return Number(row?.count) || 0;
+    },
+
+    /**
+     * 我转发某篇**帖子**留下的那条动态（没删的那条）。
+     *
+     * 与上面的 `repostByUser` 是同一件事的两种源头：动态转动态走 `ref_feed_id`，
+     * 帖子转动态走 `ref_post_id`（见 `src/modules/feed/post-repost.js`）。
+     * 两个字段互斥 —— 一条动态要么转动态、要么转帖子，不会都是。
+     *
+     * 注意条件里**没有** `reposts` 表的任何东西：动态这一侧自成闭环，
+     * 帖子撤没撤销由 core 广播事件来同步（`src/core/repost-events.js`）。
+     */
+    repostOfPostByUser({ userId, postId }) {
+      const row = bind(
+        `SELECT id, user_id, ref_post_id FROM feed_items
+        WHERE ref_post_id = ? AND user_id = ? AND deleted = 0
+        ORDER BY id DESC LIMIT 1`,
+        [postId, userId],
+      ).get();
+      return row ? { id: row.id, userId: row.user_id, refPostId: row.ref_post_id } : null;
     },
 
     /**

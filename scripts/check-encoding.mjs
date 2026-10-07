@@ -199,7 +199,7 @@ const EXPECTED = [
   //    仍保留 `public/app.js` 当候选是没用的 —— 它现在只是个 44 行的装配文件。
   ['消息通知', ['public/core/session.js', 'public/views/feed.js', 'public/views/user.js']],
   ['这篇文章暂时不能转发', ['public/core/events.js']],
-  ['转发会出现在你的主页', ['public/views/post.js']],
+  ['转发会作为一条新动态发到动态流', ['public/views/post.js']],
   ['跟随系统', ['public/core/theme.js', 'src/core/open-db-support.js']],
   ['暖阳', ['public/core/theme.js', 'public/css/00-themes.css']],
   ['奶黄', ['public/core/theme.js', 'public/css/00-themes.css']],

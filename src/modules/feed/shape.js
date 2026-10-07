@@ -55,12 +55,18 @@ export function shapeFeedItem(row) {
      * 引用的站内帖子卡片（FR-FEED-05）。
      * 引用的帖子被删了**不隐藏这张卡片** —— 动态是当时说的话，
      * 事后悄悄改掉它比留一张「帖子已删除」的卡片更糟。
+     *
+     * `repost` 区分这张卡片是「🔁 转发」还是「🔗 引用」：两者都是
+     * `ref_post_id` 指着一篇帖子、渲染出来一模一样，只有当事人知道自己是
+     * 点的哪颗按钮（转发的还多一条 `reposts` 记录，见 `ITEM_COLUMNS` 的
+     * `ref_repost`）。转发的撤销由 core 广播事件来同步，这里只负责显示。
      */
     ref: row.ref_post_id
       ? {
           id: Number(row.ref_post_id),
           title: row.ref_title ?? '（帖子已删除）',
           deleted: Boolean(row.ref_deleted),
+          repost: Boolean(row.ref_repost),
           author: row.ref_username
             ? {
                 username: row.ref_username,

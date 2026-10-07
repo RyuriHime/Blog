@@ -237,9 +237,15 @@ function feedItemHtml(item) {
         .join('')}</div>`
     : '';
 
+  /*
+   * 站内帖子卡片（`item.ref`）。两种来源长得一样，只有当事人知道自己点的是哪颗按钮：
+   * 「🔁 转发」和「🔗 引用」都是往动态里放一张指向该帖子的卡（都是 `ref_post_id`），
+   * 区别是转发还在 `reposts` 里留了一条（个人主页的「🔁 转发」分类认那条）。
+   * 服务端用 `ref.repost` 把这件事告诉前端，见 `src/modules/feed/shape.js`。
+   */
   const ref = item.ref
     ? `<a class="feed-ref" href="#/post/${item.ref.id}">
-         <span class="feed-ref-label">🔗 引用了帖子</span>
+         <span class="feed-ref-label">${item.ref.repost ? '🔁 转发了帖子' : '🔗 引用了帖子'}</span>
          <span class="feed-ref-title">${esc(item.ref.title)}</span>
          <span class="feed-ref-author">${esc(item.ref.author.displayName || item.ref.author.username)}</span>
        </a>`

@@ -17,6 +17,7 @@
 // 加一块新功能就照这个文件抄：文件夹 + `src/modules/index.js` 一行，别处都不用动。
 import { schemas } from '../../core/schema.js';
 import { createFeedQueries } from './queries.js';
+import { installPostRepostSync } from './post-repost.js';
 import { registerFeedRoutes } from './routes.js';
 import { FEED_SCHEMA } from './schema.js';
 
@@ -31,9 +32,11 @@ export default {
   /**
    * 会读、但不拥有的表（只读，绝不写）。
    * `users` / `follows` / `blocks` / `posts` 用来做可见范围与引用卡片；
+   * `reposts` 只用来分辨动态里那张帖子卡片是「🔁 转发」还是「🔗 引用」
+   *（两者都是 `ref_post_id` 指着一篇帖子，见 `ITEM_COLUMNS` 的 `ref_repost`）；
    * `team_members` 归 P4，表存在时可见范围里的 `team` 档自动生效（不存在就跳过）。
    */
-  reads: ['users', 'follows', 'blocks', 'posts', 'team_members'],
+  reads: ['users', 'follows', 'blocks', 'posts', 'reposts', 'team_members'],
   install(ctx) {
     /**
      * P4 还没建 `team_members` 时，`scope='team'` 的动态**谁也看不到**（包括作者以外的人）。
@@ -62,5 +65,14 @@ export default {
 
     const queries = createFeedQueries(ctx.db, { hasTeams });
     registerFeedRoutes(ctx, { queries });
+
+    /**
+     * 订上 core 的转发事件：帖子 / 积木帖被转发时，在动态流里落一张卡片。
+     *
+     * 转发的落点按 B 站那套语义统一到动态流（动态转动态本来就是这样），
+     * 详见 `./post-repost.js` 的文件头。core 只广播，落不落卡片由本模块决定 ——
+     * core 不碰 `feed_items`，本模块也不碰 `reposts` 的写。
+     */
+    installPostRepostSync(queries);
   },
 };

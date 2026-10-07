@@ -5,6 +5,7 @@ import { assertPinAllowed, notifyMentions, resolveOwnCategory, shapeAuthor, shap
 import { assertPostVisible, isOwner, isStaff, requireOwner, requireStaff, requireUser } from '../../core/guards.js';
 import { issueSession, removeAvatarFile, saveAvatarFile, sessionCookie } from '../../core/sessions.js';
 import { store } from '../../core/store.js';
+import { emitRepost } from '../../core/repost-events.js';
 import { ANON, MAX_AVATAR_BYTES } from '../../core/paths.js';
 import { renderMarkdown, markdownToPlainText } from '../../markdown.js';
 import { hashPassword, verifyPassword } from '../../password.js';
@@ -64,6 +65,18 @@ export function registerRoutesC(route) {
       : field(ctx.body.comment, { label: '转发语', min: 0, max: 300 });
     const result = store.createRepost({ postId: id, userId: user.id, comment });
 
+    // 转发的落点在 B 站那套语义里只有一处：动态。`reposts` 那张表管的是
+    // 「个人主页的『🔁 转发』分类 / 转发计数 / 转发者名单」，而**看得到**转发
+    // 要靠动态流 —— 所以这里广播一次，由 feed 模块自己决定要不要落一张卡片
+    //（见 `src/core/repost-events.js` 的文件头）。core 不碰 feed 的表。
+    emitRepost({
+      action: 'save',
+      postId: id,
+      userId: user.id,
+      comment,
+      publiclyVisible: !post.hidden,
+    });
+
     // 只在「第一次转发」时通知作者，改转发语不重复打扰
     if (!result.updated) {
       store.createNotification({
@@ -82,6 +95,9 @@ export function registerRoutesC(route) {
     const id = Number(ctx.params.id);
     const result = store.deleteRepost(id, user.id);
     if (result.error === 'not_reposted') throw new HttpError(400, 'not_reposted', '你还没有转发过这篇');
+    // 撤销也要广播：动态流里那张卡片得跟着消失，否则「撤销了但动态流里还挂着」。
+    // 这里不查 `hidden` —— 撤销是删，多删一张不该存在的卡片没有坏处。
+    emitRepost({ action: 'delete', postId: id, userId: user.id, comment: '', publiclyVisible: false });
     ok(res_(ctx), result);
   });
 

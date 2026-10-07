@@ -104,12 +104,21 @@ HOST=0.0.0.0 node src/server.js       # 允许局域网内其它设备访问
 **帖子**（详情页、积木阅读页的互动条上都有那颗「🔁」）：
 
 - 可以**带一句评语**转发，评语可以随时改（同一篇只保留一条转发）；
-- 转发会出现在**你的主页「🔁 转发」分类**里，别人点进去能看到你的评语和原文；
+- 转发会**同时落到两处**：一是**你的主页「🔁 转发」分类**里（别人点进去能看到你的评语和原文），
+  二是**动态流**里的一条新动态（卡片上写着「🔁 转发了帖子」，点进去就是那篇帖子）——
+  这一条是照着 B 站来的：「转发视频也是发到动态，转发动态也是发到动态」，转发的落点只有动态流一处；
 - 原作者会收到「转发了你的文章」通知；帖子详情页有完整的转发列表；
 - 可以随时「撤销转发」；「🔗 复制链接」把帖子地址复制到剪贴板，方便分享到站外；
 - **自己的文章也能转发** —— 转发不是「分享给别人」，而是「把它放进我主页的『🔁 转发』分类」，
   对作者来说那是个自己给自己置顶的位置。自己转自己不发通知（`createNotification` 里
   `actorId === userId` 直接返回 null），所以不会出现「你转发了你自己的文章」。
+- **不是公开的帖子（仅关注者 / 仅团队的积木帖）转得出去，但不往动态流里落卡片** ——
+  卡片上印着标题，而动态流是所有人可见的，落一张就等于把标题漏出去、点进去还 404。
+  转发本身照常生效（个人主页那个分类是按访客过滤的），只是没有公开的那张卡。
+- 「🔁 转发了帖子」和「🔗 引用了帖子」在动态流里长得几乎一样（都是 `ref_post_id` 指着一篇帖子），
+  区别只在于 `reposts` 里有没有那一条 —— 服务端把它算成 `ref.repost`，前端照着它写标签。
+  core 只管记转发与发通知，然后 `emitRepost()` 广播一个事件（`src/core/repost-events.js`），
+  落卡片是 feed 模块自己的事（`src/modules/feed/post-repost.js`）—— core 不许 import 业务模块。
 
 **动态**（动态流每张卡片底部的「🔁」）：
 
@@ -795,7 +804,7 @@ team_messages(id, team_id, user_id, content, deleted, created_at)
 - 链接白名单：仅允许 `http(s)` / `mailto` / 站内相对路径，`javascript:` 等伪协议会被降级为 `#`。
 - 所有 SQL 使用预编译参数绑定，不存在字符串拼接注入。
 - 登录、注册、发帖、回帖、改密、转发都有基于内存桶的速率限制；请求体大小、各字段长度均有限制。
-- 分类、置顶、转发等写操作全部在服务端校验规则（上限、归属、不能自转），前端置灰只是体验优化。
+- 分类、置顶、转发等写操作全部在服务端校验规则（上限、归属、可见范围），前端置灰只是体验优化。
 - 静态文件做了路径穿越校验，响应带 `X-Content-Type-Options: nosniff`。
 
 ---
@@ -806,12 +815,12 @@ team_messages(id, team_id, user_id, content, deleted, created_at)
 node scripts/check-golden.mjs      # ★ 行为金标准：88 条请求的状态码 + 响应结构，一条都不能变
 node scripts/check-skeleton.mjs    # ★ 骨架自检：模块能不能独立拆掉、薄入口有没有变胖
 node scripts/check-markdown.mjs    # ★ 正文渲染回归：72 项（站内链接 / 带括号 URL / 表格 / 嵌套列表 / 转义 / 危险协议 / 行内 HTML 白名单 / 列表里的块公式 / 兜底拷贝同步）
-node scripts/check-frontend.mjs    # ★ 前端渲染冒烟：39 个页面全部渲染一遍 + 关注列表 / 主页关注名单卡（自己视角排文章前面、别人视角仍在最底下）/ 团队的文件柜/群聊/成员名单/团队号/公告/加入申请与审核/隐藏开关/设置与申请改右侧抽屉/帖子预览与详情回复（「💬 回复」按钮、编辑权只归作者）/ 动态回复 / 动态转发（点开才画框、发得出当前原文、计数跟着走、转不了的画静态计数）/ 积木页转发（转得出、发完留在原地、撤销得掉、互动条跟着重画）交互 + 裸调用未定义名字的静态扫描
+node scripts/check-frontend.mjs    # ★ 前端渲染冒烟：39 个页面全部渲染一遍 + 关注列表 / 主页关注名单卡（自己视角排文章前面、别人视角仍在最底下）/ 团队的文件柜/群聊/成员名单/团队号/公告/加入申请与审核/隐藏开关/设置与申请改右侧抽屉/帖子预览与详情回复（「💬 回复」按钮、编辑权只归作者）/ 动态回复 / 动态转发（点开才画框、发得出当前原文、计数跟着走、转不了的画静态计数）/ 积木页转发（转得出、发完留在原地、撤销得掉、互动条跟着重画）/ 转发出来的卡片写「转发了帖子」而纯引用写「引用了帖子」交互 + 裸调用未定义名字的静态扫描
 node scripts/smoke.mjs             # 后端端到端：231 项（临时独立库+端口，跑完自动清理）
 node scripts/smoke-ai.mjs          # AI 接口端到端：61 项
 node scripts/ai-smoke.mjs          # AI 接口端到端（更细的一套：校验 / 限流 / 额度 / 审查 / 模板与提示词漂移哨兵）：422 项
-node scripts/feed-smoke.mjs        # 动态流端到端：145 项（含动态回复与动态转发）
-node scripts/doc-smoke.mjs         # 积木（可编程帖子）端到端：618 项（含阅读页的回复区与转发区）
+node scripts/feed-smoke.mjs        # 动态流端到端：167 项（含动态回复、动态转发、帖子转发也发到动态）
+node scripts/doc-smoke.mjs         # 积木（可编程帖子）端到端：621 项（含阅读页的回复区与转发区）
 node scripts/team-smoke.mjs        # 团队端到端：301 项（可见范围 / 越权 / 版本冲突 / 编辑权只归作者 / 文件柜 / 群聊 / 团队号 / 公告通知 / Markdown 与公式 / 帖子回复 / 加入申请与审核 / 隐藏团队 / 老库升级与坏库自愈）
 node scripts/check-ui-contract.mjs # 前端契约：CSS 类名 + API 字段 + 主题/头像/角色/私信/团队号/公告/剪贴板/公式/关注列表（已关注按钮）/详情与回复/申请与隐藏结构/编辑权与侧边抽屉/表重建与自愈/币已下线/本地偏好键读写一致（通过项数不下降哨兵：317）
 node scripts/ui-smoke.mjs          # 首页外壳轻量化 + 右侧栏抽屉 + 起始页与动态流地址（m05506 契约）：73 项
@@ -834,7 +843,7 @@ node scripts/capture-fixtures.mjs  # 重采前端冒烟用的假数据（改了�
 ```
 check-encoding 204 文件 / 84 断言 · check-skeleton 47 项 · check-golden 88 项 0 差异
 check-markdown 67 · check-frontend 39 个页面 + 34 个模块静态扫描 · smoke 231 · smoke-ai 61
-ai-smoke 422 · feed-smoke 95 · doc-smoke 597 · team-smoke 301
+ai-smoke 422 · feed-smoke 167 · doc-smoke 621 · team-smoke 301
 check-ui-contract 317 · check-notes-ui 33 · notes-smoke 44 · ui-smoke 73
 ```
 
@@ -859,7 +868,7 @@ npm run test:notes                    # AI 工作台抽屉：32 个文件 / 724 
 （`--dump` 只打印不比对；指纹文件不存在时它会**直接报错退出**，因为「改造完再补采」等于没测。）
 
 
-覆盖范围：静态资源与 SPA 回落、注册登录登出、**投币已下线（`POST /api/posts/:id/coin` 一律 404，`/api/site` 不再下发 `coinRules`，帖子形状里没有 `coinCount` / `myCoins` / `coinBalance`）**、主页分类（增删改查、上限、归属校验、按分类/未分类筛选）、主页置顶（上限 3 篇、取消置顶、越权 403）、**转发（成功计数、重复转发只改评语、撤销、不能自转、不能未登录转发、转发者列表、主页转发分类、通知原作者；动态转发见 `feed-smoke.mjs`）**、**签到与价值排行已下线（`/api/checkin`、`/api/ranking` 一律 404，`/api/site` 不再下发签到规则与价值权重，帖子形状里没有 `baseScore` / `valueScore`，个人主页没有 `coinsReceived`）**、账号设置（昵称签名校验、改密校验旧密码、改密后其它会话失效 / 当前会话保留 / 新旧密码登录）、重复用户名、会话保持、分页、全文搜索、Markdown 转义、赞踩互斥、收藏、关注与关注流、消息通知的收件人与去重、越权访问后台、封禁等。
+覆盖范围：静态资源与 SPA 回落、注册登录登出、**投币已下线（`POST /api/posts/:id/coin` 一律 404，`/api/site` 不再下发 `coinRules`，帖子形状里没有 `coinCount` / `myCoins` / `coinBalance`）**、主页分类（增删改查、上限、归属校验、按分类/未分类筛选）、主页置顶（上限 3 篇、取消置顶、越权 403）、**转发（成功计数、重复转发只改评语、撤销、自己的也能转、不能未登录转发、转发者列表、主页转发分类、通知原作者且自己转自己不发通知；动态转发与「帖子转发也发到动态」见 `feed-smoke.mjs`）**、**签到与价值排行已下线（`/api/checkin`、`/api/ranking` 一律 404，`/api/site` 不再下发签到规则与价值权重，帖子形状里没有 `baseScore` / `valueScore`，个人主页没有 `coinsReceived`）**、账号设置（昵称签名校验、改密校验旧密码、改密后其它会话失效 / 当前会话保留 / 新旧密码登录）、重复用户名、会话保持、分页、全文搜索、Markdown 转义、赞踩互斥、收藏、关注与关注流、消息通知的收件人与去重、越权访问后台、封禁等。
 
 `check-ui-contract` 另有 15 条**静态守卫**钉住「删干净了」：签到与价值排行那边 7 条 —— 签到页文件不存在、服务端没有那两条路由、`CHECKIN_*` / `VALUE_WEIGHTS` / `rankPosts` / `checkin_bonuses` 等名字一个都不剩、样式分片只剩 `78-repost.css` 与 `80-profile.css`；币这边 8 条 —— 投币路由不存在、`COIN_RULES` / `COIN_SIGNUP_GRANT` / `COIN_PER_POST_LIMIT` / `coinAvailability` / `coinState` / `giveCoin` / `coinByUserPost` / `upsertCoin` / `addCoins` / `spendCoins` / `totalCoins` / `coin_count` 这些名字一个都不剩、`tables.sql.js` 不建 `coins` 表且它不在 core 的 `owns` 清单里、帖子与用户形状里没有 `coinCount` / `myCoins` / `coinBalance` / `canCoin`、`/api/site` 不下发 `coinRules`、通知类型里没有 `post_coin`、前端没有 `data-action="coin"` 与「我的资产」卡、样式里没有 `.coin-chip`。想把这套东西加回来的人，先得来改这几条断言。（这 15 条都匹配**去掉注释后**的源码，所以注释里写「旧库的 `coins` 表不主动删」不会把它们弄红。）
 

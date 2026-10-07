@@ -2883,7 +2883,7 @@ async function onAppSubmit(event) {
         // 复用 core 的转发接口（转发记在影子行上），只是发完不跳页。
         // 转发语可以留空 —— 「直接转发」是一种正常用法，别在这里拦。
         const result = await api(`/api/posts/${anchorId}/repost`, { method: 'POST', body: { comment } });
-        toast(result.updated ? '转发语已更新' : '转发成功：你主页的「🔁 转发」分类里能看到它', 'success');
+        toast(result.updated ? '转发语已更新' : '转发成功：已经发到动态流，你主页的「🔁 转发」里也有一条', 'success');
         await refreshDocRepost(docState.editor ? docState.editor.id : docState.viewing);
         return undefined;
       }

@@ -696,6 +696,78 @@ try {
     check('撤销后库里那条转发也被软删了（不是只改了计数）', gone === 0, `行数 = ${gone}`);
   }
 
+  /* ---------- 16. 帖子转发也要发到动态（转发的落点只有一处） ---------- */
+  {
+    // 用户转述同学的原话：「你参考 b 站，转发视频也是发到动态，转发动态也是发到动态。」
+    // 动态转动态在上一节验过了，这一节验帖子那一半：转发一篇帖子（含积木帖）除了在
+    // `reposts` 里记一条（个人主页的「🔁 转发」分类认它），还要在动态流里落一条
+    // `ref_post_id` 指着它的新动态。core 只广播事件（`src/core/repost-events.js`），
+    // 落不落卡片是 feed 模块自己的事（`src/modules/feed/post-repost.js`）。
+    const posts = (await admin.call('/api/posts?perPage=1')).data.items;
+    const postId = posts[0]?.id;
+    check('能拿到一篇站内帖子用于转发', Number.isInteger(postId), JSON.stringify(posts[0]?.title));
+
+    const aliceId = (await alice.call('/api/auth/me')).data.user.id;
+    // 只看 alice 转的：第 7 节里 admin 引用过同一篇帖子，那也是一张指向它的卡片，
+    // 按 `ref.id` 一把捞会把「引用」和「转发」算在一起。
+    const aliceCards = async () =>
+      (await alice.call('/api/feed')).data.items.filter(
+        (entry) => entry.ref?.id === postId && entry.author?.username === 'alice',
+      );
+    const before = await aliceCards();
+    check('转发之前动态流里没有 alice 转这篇的卡片', before.length === 0, `已有 ${before.length} 条`);
+
+    const made = await alice.call(`/api/posts/${postId}/repost`, { method: 'POST', body: { comment: '这篇值得一转' } });
+    check('转发帖子本身就成功（core 那条接口没被改坏）', made.status === 200 && made.data.reposted === true, JSON.stringify(made.body));
+
+    const mine = await aliceCards();
+    const card = mine[0];
+    check('转发之后动态流里立刻多出一条卡片', mine.length === 1, JSON.stringify((await alice.call('/api/feed')).data.items.map((entry) => entry.id)));
+    check('卡片挂在转发者名下（不是原作者）', card?.author?.username === 'alice', JSON.stringify(card?.author));
+    check('卡片正文就是转发语', card?.content === '这篇值得一转', JSON.stringify(card?.content));
+    check('卡片标成「转发了帖子」而不是「引用了帖子」', card?.ref?.repost === true, JSON.stringify(card?.ref));
+    const repostItemId = card?.id;
+
+    const seenByOther = (await feedb.call('/api/feed')).data.items.find((entry) => entry.ref?.id === postId && entry.author?.username === 'alice');
+    check('转发出去的是公开动态，别人也看得到', seenByOther?.ref?.repost === true, JSON.stringify(seenByOther?.ref));
+
+    // 「引用」和「转发」都往动态里放一张指向该帖子的卡（都是 `ref_post_id`），
+    // 只能靠 `reposts` 里有没有那一条来分辨 —— 分辨错了，卡片上的字就变成骗人的。
+    const cite = await admin.call('/api/feed', { method: 'POST', body: { content: '引用一下这篇', refPostId: postId } });
+    check('引用同一篇帖子时卡片不标成转发', cite.data.item?.ref?.repost === false, JSON.stringify(cite.data.item?.ref));
+    await admin.call(`/api/feed/${cite.data.item.id}`, { method: 'DELETE' });
+
+    // 改转发语：还是那一条动态，不会多出一条（否则动态流会被自己的转发语刷屏）。
+    await alice.call(`/api/posts/${postId}/repost`, { method: 'POST', body: { comment: '改一下转发语' } });
+    const again = await aliceCards();
+    check('改转发语不会多出一条动态', again.length === 1, `现在有 ${again.length} 条`);
+    check('改完之后卡片正文跟着变', again[0]?.content === '改一下转发语', JSON.stringify(again[0]?.content));
+    check('还是原来那一条（id 没变）', again[0]?.id === repostItemId);
+    const rows = scalar('SELECT COUNT(*) AS c FROM feed_items WHERE ref_post_id = ? AND user_id = ? AND deleted = 0', postId, aliceId)?.c ?? -1;
+    check('库里确实只有一条帖子转发的动态', rows === 1, `行数 = ${rows}`);
+
+    // 非公开的帖子（`hidden = 1`：仅关注者 / 仅团队的积木）**不落卡片**。
+    // 卡片上印着标题，而动态流是所有人可见的 —— 落一张就等于把标题漏出去，
+    // 点进去还会 404。转发本身照常生效（个人主页那个分类是按访客过滤的）。
+    const doc = await admin.call('/api/docs', { method: 'POST', body: { title: '仅关注者的积木帖', kind: 'post', scope: 'followers' } });
+    const anchor = await admin.call(`/api/docs/${doc.data?.doc?.id}/anchor`);
+    const hiddenPostId = anchor.data?.post?.id;
+    check('非公开积木帖拿到了影子行', Number.isInteger(hiddenPostId), JSON.stringify(anchor.body));
+
+    const hiddenRepost = await alice.call(`/api/posts/${hiddenPostId}/repost`, { method: 'POST', body: { comment: '偷偷转' } });
+    check('非公开的帖子照样转得出去', hiddenRepost.status === 200 && hiddenRepost.data.reposted === true, JSON.stringify(hiddenRepost.body));
+    const leaked = (await alice.call('/api/feed')).data.items.filter((entry) => entry.ref?.id === hiddenPostId);
+    check('但动态流里一条卡片都不留（否则标题漏给所有人）', leaked.length === 0, `漏了 ${leaked.length} 条`);
+
+    // 撤销：动态流里那张卡片要跟着消失，不能「撤销了但流里还挂着」。
+    const undone = await alice.call(`/api/posts/${postId}/repost`, { method: 'DELETE' });
+    check('撤销转发成功', undone.status === 200 && undone.data.reposted === false, JSON.stringify(undone.body));
+    const afterUndo = await aliceCards();
+    check('撤销之后动态流里那张卡片也没了', afterUndo.length === 0, `还剩 ${afterUndo.length} 条`);
+    const goneRows = scalar('SELECT COUNT(*) AS c FROM feed_items WHERE ref_post_id = ? AND user_id = ? AND deleted = 0', postId, aliceId)?.c ?? -1;
+    check('库里那条动态是软删的（不是只从列表里藏起来）', goneRows === 0, `行数 = ${goneRows}`);
+  }
+
   await finish(failures.length ? 1 : 0);
 } catch (error) {
   console.log(`❌ 测试自己崩了：${error.stack ?? error.message}`);
