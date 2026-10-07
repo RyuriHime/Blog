@@ -19,6 +19,8 @@ import {
   normalizeSiteReport,
   normalizeAnswer,
   buildMaterial,
+  buildIndexLines,
+  splitByBudget,
   reviewDocument,
   reviewCorpus,
   answerQuestion,
@@ -47,7 +49,7 @@ function check(name, condition, detail = '') {
 /* 假 AI 服务                                                          */
 /* ------------------------------------------------------------------ */
 
-const mock = { calls: [], mode: 'ok' };
+const mock = { calls: [], mode: 'ok', emptyTimes: 0, failPart: null };
 
 function mockReply(userText) {
   const ids = [...userText.matchAll(/\[#([\w.-]+)\]/g)].map((m) => m[1]);
@@ -56,7 +58,13 @@ function mockReply(userText) {
   if (mock.mode === 'fenced') {
     return null; // 由调用方包成 ```json
   }
-  if (userText.includes('全库材料')) {
+  if (userText.includes('【全库目录 · 第')) {
+    return {
+      summary: '这一部分的小结。',
+      topics: [{ name: `分支${ids[0] ?? 1}`, summary: '分组', difficulty: '入门', documentIds: ids.slice(0, 3), prereq: [], order: 1 }],
+    };
+  }
+  if (userText.includes('全库材料') || userText.includes('【全库概况】')) {
     return {
       summary: '全库概述。',
       topics: [
@@ -105,6 +113,19 @@ const server = http.createServer((req, res) => {
   req.on('end', () => {
     const parsed = JSON.parse(body || '{}');
     mock.calls.push({ url: req.url, headers: req.headers, body: parsed });
+    if (mock.emptyTimes > 0) {
+      // 上游偶尔会 200 但内容为空 —— 这正是线上全站总览失败的样子
+      mock.emptyTimes -= 1;
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ model: 'mock-model', choices: [{ message: { content: '' }, finish_reason: 'stop' }], usage: { prompt_tokens: 11, completion_tokens: 0 } }));
+      return;
+    }
+    if (mock.failPart && String(parsed?.messages?.[1]?.content ?? '').includes(`第 ${mock.failPart}/`)) {
+      // 让指定的那一块目录整理不出 JSON
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ model: 'mock-model', choices: [{ message: { content: '这批目录我看不出来。' } }], usage: { prompt_tokens: 11, completion_tokens: 7 } }));
+      return;
+    }
     if (mock.mode === 'http-500') {
       res.writeHead(500, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ error: 'boom' }));
@@ -253,6 +274,118 @@ try {
   const asked = await answerQuestion('分页怎么优化？', DOCS.slice(0, 1), { scope: 'document', chatOptions: { env } });
   check('问答返回答案与引用', asked.answer.text.length > 0 && asked.answer.citations.length === 1, JSON.stringify(asked.answer.citations));
   check('问答保留备注与置信度', asked.answer.notes.length === 1 && asked.answer.confidence === 'high');
+
+  /* ---------------- 上游抖动：空响应与重试 ---------------- */
+  console.log('\n▶ 上游抖动与重试');
+  const retryEnv = { ...env, AI_RETRY_DELAY_MS: '0' };
+  check('默认重试 2 次（共 3 次请求）', aiStatus(env).retries === 2, String(aiStatus(env).retries));
+  check('重试次数可以由环境变量改', aiStatus({ ...env, AI_RETRIES: '0' }).retries === 0);
+  check('状态里列出重试相关的环境变量', aiStatus(env).envKeys.includes('AI_RETRIES') && aiStatus(env).envKeys.includes('AI_RETRY_DELAY_MS'));
+
+  mock.calls.length = 0;
+  mock.emptyTimes = 2;
+  const recovered = await chat([{ role: 'user', content: 'hi' }], { env: retryEnv });
+  check('空响应会自动重试，最终拿到内容', typeof recovered.text === 'string' && recovered.text.length > 0 && mock.calls.length === 3, `calls=${mock.calls.length}`);
+
+  mock.calls.length = 0;
+  mock.emptyTimes = 99;
+  let emptyError = null;
+  try {
+    await chat([{ role: 'user', content: 'hi' }], { env: retryEnv });
+  } catch (error) {
+    emptyError = error;
+  }
+  check('一直空响应 → 抛 ai_empty_response', emptyError?.code === 'ai_empty_response', emptyError?.code);
+  check('重试到上限就不再打上游', mock.calls.length === 3, `calls=${mock.calls.length}`);
+  check(
+    '空响应错误带上现场（finish_reason / usage）',
+    typeof emptyError?.details?.finishReason === 'string' && Number(emptyError?.details?.usage?.prompt) === 11,
+    JSON.stringify(emptyError?.details),
+  );
+
+  mock.calls.length = 0;
+  mock.emptyTimes = 1;
+  let noRetryError = null;
+  try {
+    await chat([{ role: 'user', content: 'hi' }], { env: { ...retryEnv, AI_RETRIES: '0' } });
+  } catch (error) {
+    noRetryError = error;
+  }
+  check('AI_RETRIES=0 时一次就放弃', noRetryError?.code === 'ai_empty_response' && mock.calls.length === 1, `calls=${mock.calls.length}`);
+
+  mock.mode = 'http-401';
+  mock.calls.length = 0;
+  let authError = null;
+  try {
+    await chat([{ role: 'user', content: 'hi' }], { env: retryEnv });
+  } catch (error) {
+    authError = error;
+  }
+  check('密钥错这类错误不重试', authError?.code === 'ai_unauthorized' && mock.calls.length === 1, `calls=${mock.calls.length} code=${authError?.code}`);
+
+  mock.mode = 'http-429';
+  mock.calls.length = 0;
+  let limitedError = null;
+  try {
+    await chat([{ role: 'user', content: 'hi' }], { env: retryEnv });
+  } catch (error) {
+    limitedError = error;
+  }
+  check('限流会被重试', limitedError?.code === 'ai_rate_limited' && mock.calls.length === 3, `calls=${mock.calls.length}`);
+  mock.mode = 'ok';
+
+  /* ---------------- 全库整理的分级降级 ---------------- */
+  console.log('\n▶ 全库整理的分级降级');
+  const oneLine = buildIndexLines([{ id: 7, title: '甲', category: '技术', difficulty: '入门', board: '技术', replyCount: 3 }]);
+  check('目录行只有编号 + 标题 + 归类', oneLine[0] === '[#7] 《甲》 分类=技术 难度=入门 板块=技术 回复=3', oneLine[0]);
+  check('目录行不带正文', buildIndexLines(DOCS)[0].includes('零依赖存储') === false, buildIndexLines(DOCS)[0]);
+  check(
+    'splitByBudget 按预算切块',
+    JSON.stringify(splitByBudget(['aaa', 'bbb', 'ccc'], 5)) === '[["aaa"],["bbb"],["ccc"]]' &&
+      JSON.stringify(splitByBudget(['aaa', 'bbb'], 100)) === '[["aaa","bbb"]]',
+    JSON.stringify(splitByBudget(['aaa', 'bbb', 'ccc'], 5)),
+  );
+
+  mock.calls.length = 0;
+  const smallCorpus = await reviewCorpus(DOCS, { chatOptions: { env: retryEnv }, charLimit: 100000 });
+  check('小站：一次问完（mode=material）', smallCorpus.mode === 'material' && mock.calls.length === 1, `${smallCorpus.mode}/${mock.calls.length}`);
+  check('小站报告里记下模式与篇数', smallCorpus.included === DOCS.length && smallCorpus.truncated === false, JSON.stringify({ included: smallCorpus.included }));
+
+  const bigDocs = Array.from({ length: 40 }, (_, index) => ({
+    id: String(index + 1),
+    title: `文档 ${index + 1}`,
+    content: `正文哨兵${index + 1} `.repeat(200),
+    board: '技术',
+    createdAt: Date.now(),
+    updatedAt: Date.now(),
+  }));
+
+  mock.calls.length = 0;
+  const indexed = await reviewCorpus(bigDocs, { chatOptions: { env: retryEnv }, charLimit: 24000 });
+  const indexedText = String(mock.calls[0]?.body?.messages?.[1]?.content ?? '');
+  check('大站：正文塞不下时改成只发目录（mode=index）', indexed.mode === 'index' && mock.calls.length === 1, `${indexed.mode}/${mock.calls.length}`);
+  check('目录里不再出现正文（这就是当初空响应的根因）', indexedText.includes('正文哨兵') === false, `len=${indexedText.length}`);
+  check('目录把每一篇都列上了', indexedText.includes('[#40]') && indexedText.includes('《文档 40》'));
+  check('目录模式下仍给出主题与阅读路线', indexed.report.topics.length > 0 && indexed.included === 40, JSON.stringify(indexed.report.topics.map((topic) => topic.name)));
+
+  mock.calls.length = 0;
+  const chunked = await reviewCorpus(bigDocs, { chatOptions: { env: retryEnv }, charLimit: 600, chunkChars: 400 });
+  const lastPrompt = String(mock.calls.at(-1)?.body?.messages?.[1]?.content ?? '');
+  check('超大站：目录也塞不下时分块整理（mode=chunked）', chunked.mode === 'chunked' && chunked.chunks > 1, `${chunked.mode}/${chunked.chunks}`);
+  check('最后一定有一次归并', lastPrompt.includes('【全库概况】'), lastPrompt.slice(0, 40));
+  check('分块后 token 逐块累加', chunked.usage.prompt === 11 * (chunked.chunks + 1), `prompt=${chunked.usage.prompt} chunks=${chunked.chunks}`);
+  check('归并后的地图有主题', chunked.report.topics.length > 0 && chunked.failures.length === 0, JSON.stringify(chunked.report.topics.map((topic) => topic.name)));
+
+  mock.calls.length = 0;
+  mock.failPart = 2;
+  const partialCorpus = await reviewCorpus(bigDocs, { chatOptions: { env: retryEnv }, charLimit: 600, chunkChars: 400 });
+  mock.failPart = null;
+  check('某一块失败也能出地图', partialCorpus.mode === 'chunked' && partialCorpus.report.topics.length > 0, JSON.stringify(partialCorpus.report.topics.map((topic) => topic.name)));
+  check(
+    '失败的那一块记在 failures 里',
+    partialCorpus.failures.length === 1 && partialCorpus.failures[0]?.part === 2 && typeof partialCorpus.failures[0]?.error === 'string',
+    JSON.stringify(partialCorpus.failures),
+  );
 
   /* ---------------- 上游错误 ---------------- */
   console.log('\n▶ 上游错误映射');

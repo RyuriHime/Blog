@@ -55,6 +55,52 @@ JSON 结构：
 - readingPath 给 3-8 条，是一条从入门到深入的推荐阅读顺序；
 - 不要编造材料里不存在的文档编号。`;
 
+export const SITE_PART_SYSTEM = `你是技术社区的知识库整理助手。下面给出的是全库的一小部分**目录**（只有编号、标题和归类信息，没有正文）。
+只输出 JSON，不要输出任何解释文字或 Markdown 代码块。
+JSON 结构：
+{
+  "summary": "这部分文档在讲什么，60 字内",
+  "topics": [
+    {
+      "name": "主题名（12 字内）",
+      "summary": "这一组在讲什么，40 字内",
+      "difficulty": "入门 | 进阶 | 深入",
+      "documentIds": [目录里真实存在的文档编号],
+      "prereq": ["读懂这一组需要的前置知识"],
+      "order": 1
+    }
+  ]
+}
+要求：
+- 按目录里的方向分 2-5 组，尽量把目录里的文档都分进去，不要漏掉大半；
+- 每组 documentIds 非空，编号只能来自这份目录，不要编造；
+- 不同方向不要硬凑成一组。`;
+
+export const SITE_MERGE_SYSTEM = `你是技术社区的知识库整理助手，负责把一批文档整理成一张可导航的知识地图。
+下面给出的是**同一批文档的分组草案**（每一组都带着真实的文档编号），请合并成最终的主题地图。
+只输出 JSON，不要输出任何解释文字或 Markdown 代码块。
+JSON 结构：
+{
+  "summary": "80-150 字全景概述，说明这批文档的内容重心",
+  "topics": [
+    {
+      "name": "主题名（12 字内）",
+      "summary": "这个主题下在讲什么，40 字内",
+      "difficulty": "入门 | 进阶 | 深入",
+      "documentIds": [草案里出现过的真实编号],
+      "prereq": ["读懂这一组需要的前置知识"],
+      "order": 1
+    }
+  ],
+  "readingPath": [
+    {"documentId": 数字, "title": "文档标题", "reason": "为什么按这个顺序读，25 字内", "level": "入门|进阶|深入"}
+  ]
+}
+要求：
+- 合并同类项，最终给 3-6 组，覆盖草案里的绝大部分编号；
+- 每组的 documentIds 非空、编号必须来自草案，不要编造；
+- readingPath 给 3-8 条，是一条从入门到深入的推荐阅读顺序。`;
+
 export const ASK_SYSTEM = `你是文档问答助手。只能依据下面提供的材料回答，不允许使用材料之外的知识或猜测。
 只输出 JSON，不要输出任何解释文字或 Markdown 代码块。
 JSON 结构：
@@ -100,6 +146,16 @@ export function renderAnalyzeUser({ material, siblings, wiki }) {
 
 export function renderSiteUser({ count, material }) {
   return `【全库材料】共 ${count} 篇文档\n\n${material}`;
+}
+
+/** 分块整理：第 index/total 块目录。 */
+export function renderSitePartUser({ index = 1, total = 1, count = 0, material = '' }) {
+  return `【全库目录 · 第 ${index}/${total} 部分】本部分 ${count} 篇文档\n\n${material}`;
+}
+
+/** 归并整理：把各部分的分组草案合起来。 */
+export function renderSiteMergeUser({ count = 0, parts = '' }) {
+  return `【全库概况】共 ${count} 篇文档\n【各部分的分组草案】\n\n${parts}`;
 }
 
 export function renderAskUser({ scope, material, question }) {

@@ -171,6 +171,45 @@ ai: forumAiStatus(),                                                       // GE
 
 ---
 
+## H. 全站总览「空响应」：上游抖动重试 + 三级降级（甲类，本轮新增）
+
+**现象**：`POST /api/ai/site/analyze`（别名 `/api/ai/corpus/analyze`）在线上连续 502：
+
+```json
+{"ok":false,"error":{"code":"ai_empty_response","message":"AI 接口没有返回内容"}}
+```
+
+13 秒就返回 —— 不是超时，是上游回了 200 但 `choices[0].message.content` 是空的。`GET /api/ai/site` 里
+`report.status = 'failed'`、`report.error = 'AI 接口没有返回内容'`，`stats.corpus` 显示 **554 篇 / 192,389 字符**。
+
+**原因**（两条叠加）：
+
+1. `src/ai.mjs` 的 `chat()` 只发一次请求，空响应直接抛错 —— 上游偶发的空响应没有任何补救。
+2. `reviewCorpus` 把「全库正文」塞进一次请求（默认 `charLimit = 60000`）。554 篇的正文有 19 万字符，
+   提示词一长，上游就更容易返回空内容。README 里原本把这件事写成「需要自己实现分批汇总」。
+
+**我们的修法**：
+
+| 位置 | 改动 |
+|---|---|
+| `src/ai.mjs` | 拆出 `chatOnce()`；`chat()` 变成**重试循环**：`isTransient(error)`（空响应 / 连不上 / 超时 / 限流 / 5xx·408·409）才重试，退避 `retryDelayMs × 第几次`；次数 `AI_RETRIES`（默认 2，即最多 3 次请求）、间隔 `AI_RETRY_DELAY_MS`（默认 600）。`aiStatus()` 会回 `retries`。`ai_empty_response` 的 `details` 带上 `finishReason` 与用量 |
+| `src/ai.mjs` | 新增内部 `chatJson()`：把「调一次 + 解析 JSON」包成可重试的一步（`ai_bad_json` 默认重试 2 次）；三个能力都改走它 |
+| `src/prompts.mjs` | 新增 `SITE_PART_SYSTEM`（分块草案）与 `SITE_MERGE_SYSTEM`（归并成地图）+ `renderSitePartUser` / `renderSiteMergeUser` |
+| `src/material.mjs` | 新增 `buildIndexLines(docs)`（一行式目录：`[#12] 《标题》 分类=… 难度=… 板块=… 回复=n`）与 `splitByBudget(items, charLimit, sizeOf)` |
+| `src/ai.mjs` | `reviewCorpus` 三级降级：正文塞得下 → 一次问完（`mode='material'`）；超预算 → **只发目录**（`mode='index'`）；目录也超预算 → 按 `chunkChars`（默认 12000）分块出草案再归并（`mode='chunked'`）。某一块失败**不影响整体**（记进 `failures`）；归并没给出分组时退回草案本身。返回值多出 `mode` / `included` / `chunks` / `failures` |
+| `src/routes.mjs` | `analyzeCorpus` 把 `mode` / `included` / `chunks` / `failures` 透传给前端；失败时把 `finish_reason` 与用量拼进 `error` 文案（报告表没有 `error_detail` 列，有意不动表结构） |
+| `README.md` | 3.2 节说明三级降级与返回值；配置表补 `AI_RETRIES` / `AI_RETRY_DELAY_MS` 与「哪些错误会重试」 |
+
+**顺带修的**：`answerQuestion` 的语料预算 48000 → 24000、`selectForQuestion` 的 `charBudget` 40000 → 24000
+（同样是为了别把上游逼到返回空内容）。
+
+**同步改过的作者文件**：`selftest.mjs` 新增 25 项断言（配置与重试参数、空响应重试 / 重试上限 / `AI_RETRIES=0` /
+密钥错不重试 / 限流会重试、`buildIndexLines` 与 `splitByBudget`、三级降级各自一次、目录里不含正文、
+分块 token 累加、某块失败照样出地图），并给假 AI 服务加了 `emptyTimes` / `failPart` 两个开关；`README.md` 的自测项数
+与覆盖清单同步。
+
+---
+
 ## 附：作者包的其它小问题（不影响功能，仅记录）
 
 1. `forum-ai/src/mount.mjs` 顶部的用法注释写的是 `mountForumAi({ db, resolveUser, baseDir: ROOT, aiDir: join(ROOT,'forum-ai') })`，但**实际函数签名没有 `baseDir` / `aiDir` 这两个参数**（注释与实现不一致）。
@@ -187,7 +226,7 @@ ai: forumAiStatus(),                                                       // GE
 | 测试 | 期望 |
 |---|---|
 | `node forum-ai/selftest-mount.mjs` | 通过 35 项，失败 0 项 |
-| `node forum-ai/selftest.mjs` | 通过 106 项，失败 0 项 |
+| `node forum-ai/selftest.mjs` | 通过 131 项，失败 0 项 |
 | `node scripts/smoke-ai.mjs` | 通过 65 项，失败 0 项 |
 | `node scripts/smoke.mjs` | 通过 231 项，失败 0 项 |
 | `node scripts/check-ui-contract.mjs` | 通过 317 项（下限 317），问题 0 项 |

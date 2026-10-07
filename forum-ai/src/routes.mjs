@@ -44,6 +44,20 @@ const errorText = (error) => String(error?.message ?? error).slice(0, 300);
  */
 const errorDetailText = (error) => String(error?.details?.rawOutput ?? '').slice(0, 600);
 
+/**
+ * 上游空响应的现场：`ai_empty_response` 会把 `finish_reason` 与用量挂在 details 上。
+ *
+ * 报告表没有 `error_detail` 列（有意不动表结构），所以把这点线索拼进 error 文案 ——
+ * 只留一句「AI 接口没有返回内容」是分不清「被限流」「被截断」还是「提示词太长」的。
+ */
+const errorHint = (error) => {
+  const reason = String(error?.details?.finishReason ?? '');
+  const prompt = Number(error?.details?.usage?.prompt ?? 0);
+  const completion = Number(error?.details?.usage?.completion ?? 0);
+  if (!reason && !prompt && !completion) return '';
+  return `（finish_reason=${reason || '无'}，提示 ${prompt} / 生成 ${completion} tokens）`;
+};
+
 /** 把任意异常收敛成统一响应。 */
 export function toResponse(error) {
   if (error instanceof AiError) {
@@ -389,7 +403,7 @@ export function createAiHandlers(deps = {}) {
 
       const corpusHash = store.corpusHash();
       try {
-        const { report, model, usage } = await reviewCorpus(documents, { chatOptions: { env } });
+        const { report, model, usage, mode, chunks, included, failures } = await reviewCorpus(documents, { chatOptions: { env } });
         const saved = store.saveReport(
           { ...report, documentCount: documents.length, model, tokens: usage },
           { corpusHash, createdBy: user?.id ?? null },
@@ -400,9 +414,17 @@ export function createAiHandlers(deps = {}) {
           readingPath: report.readingPath.length,
           dropped: report.dropped,
           tokens: usage,
+          // 这次是怎么问出来的：一次问完 / 只发目录 / 分块整理 —— 出问题时一眼能看出走的哪条路
+          mode,
+          included,
+          ...(chunks ? { chunks } : {}),
+          ...(Array.isArray(failures) && failures.length ? { failures } : {}),
         });
       } catch (error) {
-        store.saveReport({ status: 'failed', error: errorText(error) }, { corpusHash, createdBy: user?.id ?? null });
+        store.saveReport(
+          { status: 'failed', error: `${errorText(error)}${errorHint(error)}` },
+          { corpusHash, createdBy: user?.id ?? null },
+        );
         return toResponse(error);
       }
     },

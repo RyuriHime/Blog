@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-10-07T14:36:03.442Z",
+  "generatedAt": "2026-10-07T15:38:27.849Z",
   "note": "本文件由 examples/demo.mjs 用「假的 OpenAI 兼容服务」生成，用于展示真实数据结构；换成真实模型后字段完全一致。",
   "environment": {
     "AI_API_KEY": "(demo)",
@@ -162,6 +162,8 @@
         "prompt": 1420,
         "completion": 200
       },
+      "mode": "material",
+      "included": 5,
       "truncated": false
     },
     "askDocument": {
@@ -240,7 +242,7 @@
       "documents": 5,
       "replies": 5,
       "chars": 184,
-      "updatedAt": 1791297363400
+      "updatedAt": 1791301107804
     },
     "reviewStats": {
       "analyzed": 5,
@@ -248,7 +250,7 @@
       "documents": 5
     },
     "pending": 0,
-    "corpusHash": "5:1791297363400:5:184",
+    "corpusHash": "5:1791301107804:5:184",
     "report": {
       "id": 1,
       "status": "done",
@@ -320,13 +322,13 @@
       ],
       "documentCount": 5,
       "model": "demo-mock",
-      "corpusHash": "5:1791297363400:5:184",
+      "corpusHash": "5:1791301107804:5:184",
       "tokens": {
         "prompt": 1425,
         "completion": 200
       },
       "error": "",
-      "createdAt": 1791383763440
+      "createdAt": 1791387507847
     }
   },
   "http": {
@@ -372,7 +374,7 @@
           "documents": 5,
           "replies": 5,
           "chars": 184,
-          "updatedAt": 1791297363400
+          "updatedAt": 1791301107804
         }
       },
       "topics": [

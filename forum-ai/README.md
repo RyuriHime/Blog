@@ -23,7 +23,7 @@
 ```bash
 export AI_API_KEY=sk-xxx          # Windows: set AI_API_KEY=sk-xxx
 node examples/demo.mjs            # 用假的 AI 服务跑一遍全流程，产出 examples/demo-output.json
-node selftest.mjs                 # 92 项自测
+node selftest.mjs                 # 131 项自测
 ```
 
 最小代码（不需要数据库、不需要 HTTP）：
@@ -50,6 +50,12 @@ console.log(answer.text, answer.citations, answer.confidence);
 | `AI_MODEL` | `deepseek-chat` | 模型名 |
 | `AI_TIMEOUT_MS` | `60000` | 单次请求超时 |
 | `AI_MAX_TOKENS` | `2000` | 单次回复上限（全库整理内部会调到 3000） |
+| `AI_RETRIES` | `2` | 上游抖动时的重试次数（共 `1 + n` 次请求）；`0` 表示不重试 |
+| `AI_RETRY_DELAY_MS` | `600` | 重试间隔基数，第 n 次重试前等 `n × 该值` |
+
+**哪些错误会重试**：200 但内容为空（`ai_empty_response`）、连不上（`ai_unreachable`）、超时（`ai_timeout`）、
+限流（`ai_rate_limited`）、5xx/408/409。**不会重试**：密钥错（`ai_unauthorized`）、返回的不是 JSON、
+未配置。重试到上限仍然失败时抛最后一个错误（`ai_empty_response` 会把 `finish_reason` 与用量挂在 `details` 上）。
 
 也可以不读环境变量，直接给每次调用传 `chatOptions.env`：
 
@@ -100,6 +106,28 @@ await reviewDocument(doc, [], { chatOptions: { env: { AI_API_KEY: 'sk-x', AI_MOD
 ```
 
 `documentIds` 里不存在的编号会被剔除；编号全假的主题会被整组丢弃。
+
+**站点变大之后**：把全库正文塞进一次请求，上游会返回 200 但**内容为空**（提示词一长就容易踩到）。
+所以 `reviewCorpus` 会自己三级降级，返回值里带上走的是哪一条路：
+
+```jsonc
+{
+  "report": { /* 同上 */ },
+  "model": "deepseek-chat",
+  "usage": { "prompt": 15234, "completion": 2312 },
+  "mode": "material",      // material=正文塞得下一次问完 | index=只发目录 | chunked=分块整理再归并
+  "included": 554,         // 这次实际覆盖到的文档数
+  "truncated": false,
+  "chunks": 12,            // 仅 chunked：分成几块
+  "failures": [{ "part": 3, "count": 50, "error": "…" }]   // 仅 chunked：哪几块整理失败了
+}
+```
+
+- **index**：正文超预算时改用「编号 + 标题 + 归类」的一行式目录（`buildIndexLines`），
+  全库整理要的本来就是「有哪些文档、各属于什么方向」，554 篇的目录只有 1.7 万字符。
+- **chunked**：目录也超预算时按 `chunkChars`（默认 12000）分块，每块出一份分组草案（`SITE_PART_SYSTEM`），
+  再用 `SITE_MERGE_SYSTEM` 把草案归并成最终地图；**某一块失败不影响整体**（记进 `failures`），
+  归并没给可用分组时退回草案本身，宁可地图糙一点也别只剩一份空报告。
 
 ### 3.3 问答 `answer`
 
@@ -223,17 +251,19 @@ http.createServer(async (req, res) => {
 - **批量解读的优先级**：没解读过 → 解读失败 → 内容已变化；上游整体故障时立即返回部分结果（`partial: true`），不会把剩下的都试一遍。
 - **并发安全**：同一文档重复解读是覆盖写（`ON CONFLICT DO UPDATE`）；批量为串行，避免把上游打爆。
 
-## 6. 自测覆盖（92 项，无需真实密钥）
+## 6. 自测覆盖（131 项，无需真实密钥）
 
 ```
 ▶ 配置与降级      未配置抛错、状态不含密钥、映射成 503
 ▶ JSON 容错       代码块 / 前后夹带 / 嵌套 / 字符串内花括号 / 非法输入
 ▶ 归一化          枚举回落、长度限制、缺摘要兜底、**编号幻觉过滤**、数量截断
-▶ 材料装配        预算截断、首篇保留、可关回复
+▶ 材料装配        预算截断、首篇保留、可关回复、**一行式目录**
 ▶ 三个能力        字段与用量、推荐编号校验、引用过滤
+▶ 上游抖动        空响应自动重试、重试上限、AI_RETRIES=0、密钥错不重试、限流会重试
 ▶ 上游错误        401/429/500 → 稳定错误码与状态码
+▶ 分级降级        小站一次问完 / 大站只发目录（正文绝不进提示词）/ 超大站分块 + 归并 / 某块失败照样出地图
 ▶ 检索选择        命中排序、预算控制、空问题
-▶ SQLite 缓存     索引同步、指纹稳定与变化、缓存读写、过期判定、批量优先级
+▶ SQLite 缓存     索引同步、指纹稳定与变化、缓存读写、过期判定、批量优先级、失败现场落库
 ▶ HTTP 处理器     未登录 401、非管理员 403、未配置 503 且不写脏缓存、404、
                   问答 scope、参数校验、清缓存、**上游故障的部分失败语义**
 ```
@@ -243,7 +273,9 @@ http.createServer(async (req, res) => {
 - **没有向量检索**：问答选材靠关键词打分，同义改写（「性能」vs「速度」）不会互相命中。要语义检索，把 `rankDocuments` 换成你的向量召回即可，其余不用动。
 - **中文分类靠模型**：`category` 依赖提示词里的固定词表，模型偶尔会给出词表外的值，此时回落成「其他」。
 - **单轮对话**：问答是无状态的一次性调用，没有多轮上下文与追问。
-- **材料上限**：单篇解读正文截断到 3000 字/篇（`buildMaterial` 的 `contentPerDoc`），全库整理总预算 60000 字符；超大库会只覆盖前面的文档，需要自己实现分批汇总。
+- **材料上限**：单篇解读正文截断到 3000 字/篇（`buildMaterial` 的 `contentPerDoc`），全库整理总预算 24000 字符；
+  超预算时会自动退到「只发目录」或「分块整理再归并」（见 3.2），不需要自己实现分批汇总。
+- **一次整理的耗时**：`index` 是一次请求；`chunked` 是 `块数 + 1` 次，站点很大时会明显变慢（逐块串行）。
 - **token 计费**：全库整理是最贵的一次调用（所有文档都要进上下文），建议在管理后台手动触发。
 
 ## 8. 目录结构
@@ -261,7 +293,7 @@ forum-ai/
 ├── examples/
 │   ├── demo.mjs          # 端到端演示（自带假 AI 服务）
 │   └── demo-output.json  # 演示产物：真实数据结构长什么样
-├── selftest.mjs          # 92 项自测
+├── selftest.mjs          # 131 项自测
 └── README.md
 ```
 
