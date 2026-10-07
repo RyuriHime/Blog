@@ -321,7 +321,7 @@ export function registerRoutesC(route) {
       categoryLimit: store.profileCategoryLimit(),
       filter: categoryParam ?? 'all',
       followers: store.listFollowers(row.id, viewerId).map(shapePerson),
-      following: store.listFollowing(row.id).map(shapePerson),
+      following: store.listFollowing(row.id, viewerId).map(shapePerson),
       posts,
     });
   });
@@ -329,7 +329,7 @@ export function registerRoutesC(route) {
   route('GET', '/api/me/following', async (ctx) => {
     const user = requireUser(ctx);
     ok(res_(ctx), {
-      items: store.listFollowing(user.id).map(shapePerson),
+      items: store.listFollowing(user.id, user.id).map(shapePerson),
       counts: store.followCounts(user.id),
     });
   });

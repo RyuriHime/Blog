@@ -178,7 +178,7 @@ function personChipHtml(person, { unfollow = false, follow = false } = {}) {
       </div>
       ${
         unfollow
-          ? `<button class="btn btn-sm" data-action="follow" data-user="${person.id}" data-name="${esc(person.displayName)}">已关注</button>`
+          ? `<button class="btn btn-sm is-on" data-action="follow" data-user="${person.id}" data-name="${esc(person.displayName)}">✓ 已关注</button>`
           : follow
             ? `<button class="btn btn-sm ${person.viewerFollows ? 'is-on' : ''}" data-action="follow" data-user="${person.id}" data-name="${esc(person.displayName)}">${person.viewerFollows ? '✓ 已关注' : '＋ 关注'}</button>`
             : `<span class="hint">${person.postCount ?? 0} 帖</span>`

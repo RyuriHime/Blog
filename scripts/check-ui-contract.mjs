@@ -43,8 +43,12 @@ const BASE = `http://127.0.0.1:${PORT}`;
  * 「服务端产出的类名也都有 CSS」这条立刻变红 —— 已补进 `public/css/41-doc.css`。
  * 教训：「通过项数掉了」有两个原因，一是有人撤了断言，二是**有一条断言正在失败**；
  * 抬下限把后一种一并盖住，等于把哨兵调哑，所以这里老老实实留在 314。
+ * 第五次**加上去**：主页两张关注名单卡（关注者 / TA 关注的人）与「我关注的人」名单
+ * 现在都要求下发 viewerFollows（按钮据此显示「✓ 已关注」，再点一次取消关注），
+ * 断言从 1 条字段检查扩成 3 条（两张卡都要 viewerFollows + 名单字段 + 名单成员与关注结果一致），
+ * 这一轮是**真的加断言**（不是改期望值），实测 316，抬到 316。
  */
-const MIN_CHECKS = Number(process.env.MIN_UI_CHECKS || 314);
+const MIN_CHECKS = Number(process.env.MIN_UI_CHECKS || 316);
 
 /**
  * 前端源码入口清单。搬家前这三份文件在 public/ 根目录；骨架会把它们拆进
@@ -1176,13 +1180,33 @@ try {
     JSON.stringify(profile.user).slice(0, 240),
   );
   check('个人主页返回 followers/following/posts', Array.isArray(profile.followers) && Array.isArray(profile.following) && Array.isArray(profile.posts));
+  // 「关注者」和「TA 关注的人」两张卡用的是同一套 person-chip 按钮：每行都必须带上
+  // viewerFollows，否则按钮会在「你已经关注了 TA」时还显示「＋ 关注」，点一下反而是取关。
+  const viewerFollowRows = [...(profile.followers ?? []), ...(profile.following ?? [])];
   check(
-    '关注列表成员字段（前端 chip 依赖）',
-    hasAll(profile.followers[0] ?? profile.following[0] ?? {}, ['id', 'username', 'displayName', 'role', 'viewerFollows']),
+    '关注名单成员字段（前端 chip 依赖，两张卡都要 viewerFollows）',
+    viewerFollowRows.length > 0 &&
+      viewerFollowRows.every((person) =>
+        hasAll(person, ['id', 'username', 'displayName', 'role', 'viewerFollows']),
+      ),
+    JSON.stringify(viewerFollowRows[0] ?? {}).slice(0, 240),
   );
 
   const following = (await admin('/api/me/following')).json.data;
   check('我的关注返回 items/counts（不含 coinBalance）', Array.isArray(following.items) && has(following, 'counts.followerCount') && has(following, 'counts.followingCount') && !('coinBalance' in following), JSON.stringify(following.counts));
+  // 「关注列表」页的按钮文字直接读 viewerFollows：名单里的人都应该翻成 true
+  //（这一页列的就是「我关注的人」），否则按钮会显示「＋ 关注」，点一下反而取关。
+  check(
+    '「我关注的人」名单里 viewerFollows 全为 true（按钮显示「已关注」）',
+    following.items.length > 0 && following.items.every((person) => person.viewerFollows === true),
+    JSON.stringify(following.items.map((person) => `${person.username}:${person.viewerFollows}`)),
+  );
+  // 名单成员与关注状态必须同步：刚在 1146 行关注/取关过的那个作者，在不在名单里要和它一致。
+  check(
+    '「我关注的人」名单成员与关注/取关结果一致',
+    following.items.some((person) => person.id === target.author.id) === follow.following,
+    JSON.stringify({ target: target.author.username, following: follow.following, rows: following.items.map((person) => person.username) }),
+  );
 
   const notifications = (await admin('/api/notifications?perPage=20')).json.data;
   check(

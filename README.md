@@ -118,6 +118,8 @@ HOST=0.0.0.0 node src/server.js       # 允许局域网内其它设备访问
 
 关注作者后：首页出现「我关注的」标签页；作者发新帖会推送通知；个人主页可以查看 TA 的关注者 / 关注的人和统计；在「📋 关注列表」（`#/following`，侧栏和用户菜单都有入口）里可以随时取关。
 
+个人主页的「关注者」和「TA 关注的人」两张卡、以及关注列表页，用的是同一套按钮：**已经关注的人显示「✓ 已关注」**，再点一次就取消关注（按钮随即翻回「＋ 关注」，关注列表页的名单与计数一起刷新）。每次点击都是「切换」，不会出现「明明关注了却显示 ＋ 关注、点一下反而取关」。
+
 ### 消息通知 🔔
 
 顶栏铃铛带未读数徽标（每 60 秒自动刷新一次），触发规则：
@@ -321,7 +323,7 @@ forum/
 │   ├── views/                   # 页面：feed / user / post / compose / timeline / messages / notes / doc / team / ai / admin …
 │   └── css/                     # 22 个样式分片（00-themes … 97-notes）
 ├── scripts/
-│   ├── smoke.mjs                # 后端端到端冒烟测试（227 项）
+│   ├── smoke.mjs                # 后端端到端冒烟测试（231 项）
 │   ├── check-golden.mjs         # ★ 行为金标准：88 条请求的状态码 + 响应结构指纹
 │   ├── check-skeleton.mjs       # ★ 骨架自检：模块解耦证明 + 薄入口行数
 │   ├── check-ui-contract.mjs    # 前端契约检查：CSS 类名 + API 字段 + 主题/头像/角色/私信结构
@@ -364,7 +366,7 @@ forum/
 | `#/settings` | 账号设置：资料、密码、账号信息 |
 | `#/u/:username` | 个人主页：分类筛选、三种排版、置顶推荐、关注者与关注列表 |
 | `#/notifications` | 消息通知（全部 / 只看未读） |
-| `#/following` | 📋 关注列表：我关注了**谁**（头像 + 昵称 + 一键取关）。关注**流**（只看 TA 们发的帖子）是动态流的一个筛选，走 `#/feed?filter=following` |
+| `#/following` | 📋 关注列表：我关注了**谁**（头像 + 昵称 + 「✓ 已关注」按钮，点一下就取关）。关注**流**（只看 TA 们发的帖子）是动态流的一个筛选，走 `#/feed?filter=following` |
 | `#/bookmarks` | 我的收藏 |
 | `#/search?q=关键词` | 全文搜索（标题 + 正文），落在动态流上（等价于 `#/feed?q=…`） |
 | `#/login`、`#/register` | 登录 / 注册 |
@@ -762,13 +764,13 @@ node scripts/check-golden.mjs      # ★ 行为金标准：88 条请求的状态
 node scripts/check-skeleton.mjs    # ★ 骨架自检：模块能不能独立拆掉、薄入口有没有变胖
 node scripts/check-markdown.mjs    # ★ 正文渲染回归：67 项（站内链接 / 带括号 URL / 表格 / 嵌套列表 / 转义 / 危险协议 / 行内 HTML 白名单 / 列表里的块公式 / 兜底拷贝同步）
 node scripts/check-frontend.mjs    # ★ 前端渲染冒烟：39 个页面全部渲染一遍 + 关注列表 / 团队的文件柜/群聊/成员名单/团队号/公告/加入申请与审核/隐藏开关/设置与申请改右侧抽屉/帖子预览与详情回复（「💬 回复」按钮、编辑权只归作者）交互 + 裸调用未定义名字的静态扫描
-node scripts/smoke.mjs             # 后端端到端：227 项（临时独立库+端口，跑完自动清理）
+node scripts/smoke.mjs             # 后端端到端：231 项（临时独立库+端口，跑完自动清理）
 node scripts/smoke-ai.mjs          # AI 接口端到端：61 项
 node scripts/ai-smoke.mjs          # AI 接口端到端（更细的一套：校验 / 限流 / 额度 / 审查 / 模板与提示词漂移哨兵）：422 项
 node scripts/feed-smoke.mjs        # 动态流端到端：95 项
 node scripts/doc-smoke.mjs         # 积木（可编程帖子）端到端：597 项
 node scripts/team-smoke.mjs        # 团队端到端：301 项（可见范围 / 越权 / 版本冲突 / 编辑权只归作者 / 文件柜 / 群聊 / 团队号 / 公告通知 / Markdown 与公式 / 帖子回复 / 加入申请与审核 / 隐藏团队 / 老库升级与坏库自愈）
-node scripts/check-ui-contract.mjs # 前端契约：CSS 类名 + API 字段 + 主题/头像/角色/私信/团队号/公告/剪贴板/公式/关注列表/详情与回复/申请与隐藏结构/编辑权与侧边抽屉/表重建与自愈/币已下线（通过项数不下降哨兵：314）
+node scripts/check-ui-contract.mjs # 前端契约：CSS 类名 + API 字段 + 主题/头像/角色/私信/团队号/公告/剪贴板/公式/关注列表（已关注按钮）/详情与回复/申请与隐藏结构/编辑权与侧边抽屉/表重建与自愈/币已下线（通过项数不下降哨兵：316）
 node scripts/ui-smoke.mjs          # 首页外壳轻量化 + 右侧栏抽屉 + 起始页与动态流地址（m05506 契约）：73 项
 node scripts/check-encoding.mjs    # 源码编码体检：BOM / 乱码 / 关键中文内容
 node scripts/check-notes-ui.mjs    # 笔记 UI
@@ -788,9 +790,9 @@ node scripts/capture-fixtures.mjs  # 重采前端冒烟用的假数据（改了�
 
 ```
 check-encoding 202 文件 / 84 断言 · check-skeleton 47 项 · check-golden 88 项 0 差异
-check-markdown 67 · check-frontend 39 个页面 + 34 个模块静态扫描 · smoke 227 · smoke-ai 61
+check-markdown 67 · check-frontend 39 个页面 + 34 个模块静态扫描 · smoke 231 · smoke-ai 61
 ai-smoke 422 · feed-smoke 95 · doc-smoke 597 · team-smoke 301
-check-ui-contract 314 · check-notes-ui 33 · notes-smoke 44 · ui-smoke 73
+check-ui-contract 316 · check-notes-ui 33 · notes-smoke 44 · ui-smoke 73
 ```
 
 > 知识网络图（`knowledge-pack/` + `#/graph` + `/api/knowledge/*`）已在 2026-10 整条链路删除：

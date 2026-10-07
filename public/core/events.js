@@ -240,7 +240,10 @@ document.addEventListener('click', async (event) => {
         }
         actionNode.classList.toggle('is-on', result.following);
         actionNode.textContent = result.following ? '✓ 已关注' : '＋ 关注';
+        // 主页：整页重渲染一次，名单里所有按钮与「关注者 / 关注中」计数一起对齐
         if (document.querySelector('.profile-head')) await User.viewUser(currentUsername(), new URLSearchParams());
+        // 「关注列表」页：刚取关的人不该还挂在这份名单上，重渲染让名单和计数一起变
+        else if (window.location.hash.startsWith('#/following')) await Router.route();
         break;
       }
       case 'open-notification': {

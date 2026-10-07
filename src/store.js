@@ -196,10 +196,14 @@ export function createStore(db) {
     hasFollow: db.prepare('SELECT 1 AS hit FROM follows WHERE follower_id = ? AND followee_id = ?'),
     followerCount: db.prepare('SELECT COUNT(*) AS count FROM follows WHERE followee_id = ?'),
     followingCount: db.prepare('SELECT COUNT(*) AS count FROM follows WHERE follower_id = ?'),
+    // 名单里的「浏览者是否也关注了这个人」要一并查出来：主页的「TA 关注的人」
+    // 与「我关注的人」都用同一套 person-chip 按钮，少了这一列，按钮就会在
+    // 「你已经关注了 TA」的时候还显示「＋ 关注」，点下去反而把人取消了关注。
     listFollowing: db.prepare(
       `SELECT u.id, u.username, u.display_name, u.role, u.bio, u.avatar, f.created_at AS followed_at,
               (SELECT COUNT(*) FROM posts p WHERE p.user_id = u.id AND p.deleted = 0) AS post_count,
-              (SELECT COUNT(*) FROM follows f2 WHERE f2.followee_id = u.id) AS follower_count
+              (SELECT COUNT(*) FROM follows f2 WHERE f2.followee_id = u.id) AS follower_count,
+              EXISTS (SELECT 1 FROM follows f3 WHERE f3.follower_id = ? AND f3.followee_id = u.id) AS viewer_follows
        FROM follows f JOIN users u ON u.id = f.followee_id
        WHERE f.follower_id = ? ORDER BY f.created_at DESC`,
     ),
@@ -818,7 +822,7 @@ export function createStore(db) {
       return { ...this.followCounts(followeeId), following: !following };
     },
 
-    listFollowing: (userId) => statements.listFollowing.all(userId),
+    listFollowing: (userId, viewerId = ANON) => statements.listFollowing.all(viewerId, userId),
     listFollowers: (userId, viewerId = ANON) => statements.listFollowers.all(viewerId, userId),
 
     /* ---------------- 通知 ---------------- */

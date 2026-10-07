@@ -293,6 +293,37 @@ try {
   const unknownUser = await anon.call('/api/users/definitely_not_here');
   check('不存在的用户返回 404', unknownUser.status === 404);
 
+  // 主页的「关注者」和「TA 关注的人」两张卡、以及「关注列表」页，用的是同一套
+  // person-chip 按钮。每行都得带 viewerFollows，按钮才知道该显示「＋ 关注」还是
+  // 「✓ 已关注」；少了它，已经关注的人也会显示「＋ 关注」，点一下反而是取关。
+  const adminProfile = await member.call('/api/users/admin');
+  check(
+    '主页两张关注名单卡都下发 viewerFollows',
+    [...(adminProfile.data.followers ?? []), ...(adminProfile.data.following ?? [])].every(
+      (person) => typeof person.viewerFollows === 'boolean',
+    ),
+    JSON.stringify((adminProfile.data.following ?? []).map((person) => `${person.username}:${person.viewerFollows}`)),
+  );
+  check(
+    '「我关注的人」名单里 viewerFollows 全为 true',
+    following.data.items.every((item) => item.viewerFollows === true),
+    JSON.stringify(following.data.items.map((item) => `${item.username}:${item.viewerFollows}`)),
+  );
+  const unfollow = await member.call(`/api/users/${adminId}/follow`, { method: 'POST' });
+  const afterUnfollow = await member.call('/api/me/following');
+  check(
+    '再点一次「已关注」就取消关注（名单里立刻没有 TA）',
+    unfollow.data.following === false && !afterUnfollow.data.items.some((item) => item.id === adminId),
+    JSON.stringify(afterUnfollow.data.items.map((item) => item.username)),
+  );
+  const refollow = await member.call(`/api/users/${adminId}/follow`, { method: 'POST' });
+  const afterRefollow = await member.call('/api/me/following');
+  check(
+    '取消之后还能再关注回来（名单里又有 TA 了）',
+    refollow.data.following === true && afterRefollow.data.items.some((item) => item.id === adminId),
+    JSON.stringify({ following: refollow.data.following, rows: afterRefollow.data.items.length }),
+  );
+
   console.log('\n▶ 消息通知');
   // 通知应该发给内容作者 / 被关注者，而不是操作者
   const authorNotifs = await member.call('/api/notifications?perPage=50');
