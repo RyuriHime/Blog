@@ -185,6 +185,21 @@ try {
   const shortTitle = await member.call('/api/posts', { method: 'POST', body: { boardId: 1, title: 'x', content: 'yy' } });
   check('过短标题被拒绝（400）', shortTitle.status === 400, `status=${shortTitle.status}`);
 
+  /*
+   * 恶意 / 手滑的分页参数不能让列表接口 500。
+   *
+   * `?page=1e999` 得到 `Infinity`、`?page=1e30` 超出安全整数范围，两个都会被当成
+   * LIMIT / OFFSET 绑进 SQL，`node:sqlite` 抛 `datatype mismatch` → 500。这类 URL
+   * 能贴在地址栏里、能转发给别人，一个链接就能把整页打成「服务器开小差了」。
+   * 统一走 `pageParam`（`src/core/http.js`），不认识的输入一律退回第 1 页。
+   */
+  for (const bad of ['1e999', '1e30', '2.5', 'abc', '-3']) {
+    const r = await anon.call(`/api/posts?page=${encodeURIComponent(bad)}`);
+    check(`奇怪的页码 ?page=${bad} 不该 500`, r.status === 200 && r.data.page === 1, `status=${r.status} page=${r.data?.page}`);
+  }
+  const badNotifPage = await member.call('/api/notifications?page=1e30');
+  check('通知列表的奇怪页码也不该 500', badNotifPage.status === 200, `status=${badNotifPage.status}`);
+
   const listed = await anon.call('/api/posts?perPage=5&page=1');
   check('列表分页字段完整', listed.data.items.length <= 5 && listed.data.totalPages >= 1);
   check(

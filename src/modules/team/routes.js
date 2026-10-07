@@ -6,7 +6,7 @@
 // 不能只从 `ctx.http` 解构。模块外的辅助函数（本文件里的 `readScope`、`loadTeam` …）
 // 看不见解构出来的名字，症状是接口报 500 `internal_error` 而不是 400 ——
 // 抛的其实是 ReferenceError，跟「参数不对」看起来毫无关系。
-import { HttpError, ensure, field, rateLimit } from '../../core/http.js';
+import { HttpError, ensure, field, pageParam, rateLimit } from '../../core/http.js';
 import { requireUser } from '../../core/guards.js';
 import { ANON } from '../../core/paths.js';
 import { markdownToPlainText } from '../../markdown.js';
@@ -97,13 +97,13 @@ function readRequestStatus(query) {
 
 /** 申请列表分页（与帖子、文件分开：这一页只在管理面板里出现，条目轻）。 */
 function readRequestPage(query) {
-  const page = Math.max(1, Number(query.get('page')) || 1);
+  const page = pageParam(query.get('page'));
   const perPage = Math.min(TEAM_JOIN_REQUEST_PAGE_MAX, Math.max(1, Number(query.get('perPage')) || 20));
   return { page, perPage, offset: (page - 1) * perPage };
 }
 
 function readPage(query) {
-  const page = Math.max(1, Number(query.get('page')) || 1);
+  const page = pageParam(query.get('page'));
   const perPage = Math.min(TEAM_PAGE_MAX, Math.max(1, Number(query.get('perPage')) || 20));
   return { page, perPage, offset: (page - 1) * perPage };
 }
@@ -197,7 +197,7 @@ function requireTeamMember(reqCtx, queries, teamRow) {
 
 /** 文件柜分页（上限与帖子分开，文件条目更重）。 */
 function readFilePage(query) {
-  const page = Math.max(1, Number(query.get('page')) || 1);
+  const page = pageParam(query.get('page'));
   const perPage = Math.min(TEAM_FILE_PAGE_MAX, Math.max(1, Number(query.get('perPage')) || 20));
   return { page, perPage, offset: (page - 1) * perPage };
 }
@@ -205,7 +205,7 @@ function readFilePage(query) {
 /** 群聊一次拉多少条 + 从哪条之后拉（`after=0` 表示「给我最近的一批」）。 */
 function readMessageWindow(query) {
   const limit = Math.min(TEAM_MESSAGE_PAGE_MAX, Math.max(1, Number(query.get('limit')) || 30));
-  const after = Math.max(0, Number(query.get('after')) || 0);
+  const after = pageParam(query.get('after'), 0);
   return { limit, after };
 }
 

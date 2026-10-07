@@ -222,7 +222,11 @@ try {
 
   /* ---------- 3. 四档可见范围：服务端强制 ---------- */
   const privateId = (await admin.call('/api/feed', { method: 'POST', body: { content: '只有我自己能看', scope: 'private' } })).data.item.id;
-  const teamId = (await admin.call('/api/feed', { method: 'POST', body: { content: '只给团队看', scope: 'team' } })).data.item.id;
+  // 「仅团队」得指名一个团队了。以前不挑也能发出去，代价是库里留下一行 `team_id` 为空的
+  // 死数据 —— 可见性 SQL 永远匹配不上它，队友一条也看不到（见第 18 节）。
+  const scopeTeam = await admin.call('/api/teams', { method: 'POST', body: { name: '可见范围测试队', slug: `scope-team-${Date.now()}` } });
+  const scopeTeamId = scopeTeam.data.team.id;
+  const teamId = (await admin.call('/api/feed', { method: 'POST', body: { content: '只给团队看', scope: 'team', teamId: scopeTeamId } })).data.item.id;
   // 作者换成 feeda：它的关注关系是干净的，不会被种子数据搅进来
   const followerId = (await feeda.call('/api/feed', { method: 'POST', body: { content: '只给关注我的人看', scope: 'followers' } })).data.item.id;
 
@@ -252,8 +256,8 @@ try {
     check('再调一次关注接口 = 取关（toggle 语义）', unfollowed.data?.following === false, JSON.stringify(unfollowed.body));
     check('FR-FEED-08 followers：取关后立刻又看不到了', !findById((await feedb.call('/api/feed')).data.items, followerId));
 
-    // P4 还没建 team_members，team 这一档对谁都不可见（宁可少显示，不可漏）
-    check('FR-FEED-08 team：P4 的表还不存在时，别人看不到', !findById((await alice.call('/api/feed')).data.items, teamId));
+    // 「仅团队」这一档只给该团队的成员看。admin 是建队人（自动入队），alice 不在队里。
+    check('FR-FEED-08 team：不在队里的人看不到', !findById((await alice.call('/api/feed')).data.items, teamId));
     check('FR-FEED-08 team：作者自己看得到', Boolean(findById((await admin.call('/api/feed')).data.items, teamId)));
   }
 
@@ -746,6 +750,25 @@ try {
     const rows = scalar('SELECT COUNT(*) AS c FROM feed_items WHERE ref_post_id = ? AND user_id = ? AND deleted = 0', postId, aliceId)?.c ?? -1;
     check('库里确实只有一条帖子转发的动态', rows === 1, `行数 = ${rows}`);
 
+    /*
+     * 反方向删一次：在动态流里直接删掉那张转发的卡片，帖子那边那条转发记录也要跟着没。
+     *
+     * 只删卡片、不撤 `reposts` 的话会自相矛盾 —— 帖子页底部还亮着「🔁 已转发」、
+     * 名单里还挂着他、主页「🔁 转发」分类里还有它，而卡片已经不见了。
+     */
+    const delCard = await alice.call(`/api/feed/${repostItemId}`, { method: 'DELETE' });
+    check('删掉那张转发的卡片', delCard.status === 200 && delCard.data.deleted === true, JSON.stringify(delCard.body));
+    const repostRows = scalar('SELECT COUNT(*) AS c FROM reposts WHERE post_id = ? AND user_id = ?', postId, aliceId)?.c ?? -1;
+    check('删卡片也会把帖子那条转发记录一起撤掉（不留孤儿）', repostRows === 0, `reposts 行数 = ${repostRows}`);
+    const afterDel = await alice.call(`/api/posts/${postId}`);
+    check('帖子详情里转发计数归零、转发者名单也空了', afterDel.data.post.repostCount === 0 && afterDel.data.reposters.length === 0, JSON.stringify({ n: afterDel.data.post.repostCount, r: afterDel.data.reposters.length }));
+    check('删完之后动态流里也没有残留卡片', (await aliceCards()).length === 0);
+
+    // 重新转一次，好让后面「撤销转发」那段继续有东西可撤。
+    await alice.call(`/api/posts/${postId}/repost`, { method: 'POST', body: { comment: '再转一次' } });
+    const remade = await aliceCards();
+    check('删了还能重新转（没有把转发资格一起锁死）', remade.length === 1, `现在有 ${remade.length} 条`);
+
     // 非公开的帖子（`hidden = 1`：仅关注者 / 仅团队的积木）**不落卡片**。
     // 卡片上印着标题，而动态流是所有人可见的 —— 落一张就等于把标题漏出去，
     // 点进去还会 404。转发本身照常生效（个人主页那个分类是按访客过滤的）。
@@ -766,6 +789,63 @@ try {
     check('撤销之后动态流里那张卡片也没了', afterUndo.length === 0, `还剩 ${afterUndo.length} 条`);
     const goneRows = scalar('SELECT COUNT(*) AS c FROM feed_items WHERE ref_post_id = ? AND user_id = ? AND deleted = 0', postId, aliceId)?.c ?? -1;
     check('库里那条动态是软删的（不是只从列表里藏起来）', goneRows === 0, `行数 = ${goneRows}`);
+  }
+
+  /* ---------- 17. 奇怪的页码不能把动态流打成 500 ---------- */
+  {
+    // `?page=1e999` → `Infinity`、`?page=1e30` 超出安全整数范围，两者绑进
+    // LIMIT / OFFSET 都会让 `node:sqlite` 抛 `datatype mismatch` → 500。
+    // 这种链接能贴在地址栏、能转发给别人，所以必须挡住（统一走 `pageParam`）。
+    for (const bad of ['1e999', '1e30', '2.5', 'abc', '-3']) {
+      const r = await alice.call(`/api/feed?page=${encodeURIComponent(bad)}`);
+      check(`奇怪的页码 ?page=${bad} 不该 500`, r.status === 200 && r.data?.page === 1, `status=${r.status} page=${r.data?.page}`);
+    }
+    const bigPerPage = await alice.call('/api/feed?perPage=1e999');
+    check('perPage 给个天文数字也只是被夹到上限', bigPerPage.status === 200 && bigPerPage.data.perPage <= 50, `perPage=${bigPerPage.data?.perPage}`);
+  }
+
+  /* ---------- 18. 「仅团队」动态（这一档以前是坏的） ---------- */
+  {
+    // 老实现把 `team_id` 写死成 null，而可见性 SQL 是 `tm.team_id = f.team_id` ——
+    // 永远匹配不上，于是「仅团队」静默退化成「仅自己」：作者以为发给了队友，
+    // 队友一条也看不到，两边都不报错。这一节就是钉住「它现在是真的」。
+    const created = await alice.call('/api/teams', { method: 'POST', body: { name: '喂喂测试队', slug: `feed-team-${Date.now()}` } });
+    const teamId = created.data?.team?.id;
+    check('先把团队建出来（建队的人自动是成员）', created.status === 200 && Number.isInteger(teamId), JSON.stringify(created.body));
+
+    const made = await alice.call('/api/feed', { method: 'POST', body: { content: '只给队里看的一条', scope: 'team', teamId } });
+    check('「仅团队」的动态发得出去', made.status === 200 && made.data.item.scope === 'team', JSON.stringify(made.body));
+    check('真的存了团队编号（不再写死 null）', made.data.item.teamId === teamId, `teamId=${made.data.item.teamId}`);
+    const teamPostId = made.data.item.id;
+
+    const mineList = (await alice.call('/api/feed')).data.items.find((entry) => entry.id === teamPostId);
+    check('自己能看见自己的「仅团队」动态', Boolean(mineList));
+    const outsider = (await feedb.call('/api/feed')).data.items.find((entry) => entry.id === teamPostId);
+    check('不在队里的人看不见它（这一档这才叫「仅团队」）', !outsider);
+
+    // 进了队就该看得见 —— 否则「仅团队」和「仅自己」还是没差别。
+    await feedb.call(`/api/teams/${teamId}/join`, { method: 'POST', body: {} });
+    const joined = (await feedb.call('/api/feed')).data.items.find((entry) => entry.id === teamPostId);
+    check('队友进队之后就能看见了', Boolean(joined), JSON.stringify((await feedb.call('/api/feed')).data.items.map((e) => e.id)));
+
+    const noTeam = await alice.call('/api/feed', { method: 'POST', body: { content: '忘了挑团队', scope: 'team' } });
+    check('选「仅团队」却没挑团队 → 400 team_required', noTeam.status === 400 && noTeam.error?.code === 'team_required', JSON.stringify(noTeam.body));
+    const notMine = await feedb.call('/api/feed', { method: 'POST', body: { content: '投进别人的队', scope: 'team', teamId: 999999 } });
+    check('挑一个自己不在的团队 → 403 not_a_member', notMine.status === 403 && notMine.error?.code === 'not_a_member', JSON.stringify(notMine.body));
+    const publicWithTeam = await alice.call('/api/feed', { method: 'POST', body: { content: '公开的，顺手带了个团队号', scope: 'public', teamId } });
+    check('公开动态不会偷偷存下团队编号', publicWithTeam.status === 200 && publicWithTeam.data.item.teamId === null, `teamId=${publicWithTeam.data.item.teamId}`);
+
+    // 编辑：把「仅团队」改成「公开」，团队编号必须清掉；改回去必须重新指名。
+    const toPublic = await alice.call(`/api/feed/${teamPostId}`, { method: 'PUT', body: { scope: 'public' } });
+    check('把「仅团队」改成「公开」时团队编号被清掉', toPublic.status === 200 && toPublic.data.item.scope === 'public' && toPublic.data.item.teamId === null, JSON.stringify(toPublic.data.item));
+    const backToTeam = await alice.call(`/api/feed/${teamPostId}`, { method: 'PUT', body: { scope: 'team' } });
+    check('改回「仅团队」却不带团队号 → 400 team_required', backToTeam.status === 400 && backToTeam.error?.code === 'team_required', JSON.stringify(backToTeam.body));
+    const backOk = await alice.call(`/api/feed/${teamPostId}`, { method: 'PUT', body: { scope: 'team', teamId } });
+    check('带上团队号就改回去了', backOk.status === 200 && backOk.data.item.teamId === teamId, JSON.stringify(backOk.data.item));
+
+    // 转发的动态永远是公开的，不该带上团队号。
+    const repost = await feedb.call(`/api/feed/${teamPostId}/repost`, { method: 'POST', body: { comment: '转到动态流' } });
+    check('队内的动态转不出去（只有公开的能转）', repost.status === 403 && repost.error?.code === 'repost_scope', JSON.stringify(repost.body));
   }
 
   await finish(failures.length ? 1 : 0);

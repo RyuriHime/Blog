@@ -20,7 +20,11 @@ async function viewCompose(postId) {
   if (postId) {
     const data = await api(`/api/posts/${postId}`);
     post = data.post;
-    if (post.author.id !== state.me.id && state.me.role !== 'admin') {
+    // 用 isStaffUser 而不是 `role !== 'admin'`：站长（owner）也是管理团队的一员，
+    // 而服务端 `src/core/guards.js` 给的编辑权限本来就是 owner + admin。
+    // 写成只认 admin 的话，一个只有站长、没有管理员的站点里，站长点自己帖子以外的
+    // 「编辑」只会看到一张「没有权限」的空卡片 —— 前端比后端还严。
+    if (post.author.id !== state.me.id && !Fmt.isStaffUser(state.me)) {
       ui.app.innerHTML = `<div class="card">${emptyHtml('🚫', '没有权限编辑这个帖子')}</div>`;
       return;
     }

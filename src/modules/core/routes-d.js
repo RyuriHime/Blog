@@ -1,6 +1,6 @@
 // core 路由：消息通知 / 管理后台
 // // 搬运自 src/server.js 的固定行区间（预铺骨架，逐字未改），见 docs/tools/extract-server-modules.mjs。
-import { HttpError, ensure, field, ok, rateLimit, res_ } from '../../core/http.js';
+import { HttpError, ensure, field, ok, pageParam, rateLimit, res_ } from '../../core/http.js';
 import { assertPinAllowed, notifyMentions, resolveOwnCategory, shapeAuthor, shapeCategory, shapeConversation, shapeMessage, shapeNotification, shapePerson, shapePostDetail, shapePostListRow, shapeProfile, shapeReply, shapeReposter, shapeUser } from '../../core/shape.js';
 import { isOwner, isStaff, requireOwner, requireStaff, requireUser } from '../../core/guards.js';
 import { issueSession, removeAvatarFile, saveAvatarFile, sessionCookie } from '../../core/sessions.js';
@@ -15,7 +15,7 @@ export function registerRoutesD(route) {
 
   route('GET', '/api/notifications', async (ctx) => {
     const user = requireUser(ctx);
-    const page = Math.max(1, Number(ctx.query.get('page') || 1) || 1);
+    const page = pageParam(ctx.query.get('page'));
     const perPage = Math.min(50, Math.max(5, Number(ctx.query.get('perPage') || 20) || 20));
     const unreadOnly = ctx.query.get('filter') === 'unread';
     const total = store.countNotifications(user.id, unreadOnly);

@@ -100,6 +100,40 @@ body.feed-fullscreen {
   font-size: 13px;
 }
 
+/*
+ * 「仅团队」那两块：团队选择器 + 下面那行提醒。
+ *
+ * 提醒那一行是**必要的**，不是装饰：选错团队属于静默失败 —— 发出去一切正常，
+ * 只是该看见的人看不见。把队名摊开写在下面，至少发之前能自己发现挑错了。
+ */
+.composer-team-slot {
+  display: contents;
+}
+
+.composer-team {
+  width: auto;
+  min-width: 132px;
+  padding: 5px 8px;
+  font-size: 13px;
+}
+
+.composer-team-hint {
+  flex-basis: 100%;
+  color: var(--text-dim);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.composer-team-hint a {
+  color: var(--accent);
+}
+
+.composer-scope-hint {
+  margin: 6px 0 0;
+  color: var(--text-dim);
+  font-size: 12px;
+}
+
 .composer-file {
   position: relative;
   overflow: hidden;

@@ -1440,6 +1440,13 @@ try {
   const missing = await owner.client.call('/api/teams/99999999');
   check('不存在的团队返回 404', missing.status === 404 && missing.error?.code === 'team_not_found', String(missing.status));
 
+  // 奇怪的页码不能把团队列表打成 500：`?page=1e30` 超出安全整数范围，绑进 OFFSET
+  // 会让 `node:sqlite` 抛 `datatype mismatch`，再被兜成 500。统一走 `pageParam`。
+  for (const bad of ['1e999', '1e30', '2.5', 'abc', '-3']) {
+    const r = await owner.client.call(`/api/teams?page=${encodeURIComponent(bad)}`);
+    check(`奇怪的页码 ?page=${bad} 不该 500`, r.status === 200, `status=${r.status}`);
+  }
+
   await finish(failures.length === 0 ? 0 : 1);
 } catch (error) {
   console.error('❌ 测试脚本自己崩了：', error);

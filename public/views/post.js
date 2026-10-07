@@ -245,7 +245,9 @@ async function viewPost(id) {
                <a class="btn btn-primary" href="#/login">登录</a>
                <a class="btn" href="#/register">注册新账号</a>
              </div>`
-          : post.locked && state.me.role !== 'admin'
+          // 锁定的帖子只有管理团队还能回（服务端 `src/core/guards.js` 的口径是 owner + admin）。
+          // 这里曾写成只认 admin，站长就被自己的锁定帖挡在门外了。
+          : post.locked && !Fmt.isStaffUser(state.me)
             ? '<div class="hint">该帖子已锁定，暂时无法回复。</div>'
             : `<form class="form" data-action="reply" data-id="${post.id}">
                  <div class="field">

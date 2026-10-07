@@ -93,6 +93,21 @@ function field(value, { name = '', min = 0, max = 100000, pattern, label }) {
   if (pattern) ensure(pattern.test(text), 400, 'invalid_field', `${label}${name}`);
   return text;
 }
+
+/**
+ * 把查询串里的页码读成**安全范围内的正整数**，不合格就退回默认值。
+ *
+ * 别写成 `Math.max(1, Number(raw) || 1)` —— 它挡不住三种能贴进地址栏的输入：
+ *   `?page=1e999` → `Infinity`，`?page=1e30` → 超出安全整数范围，`?page=2.5` → 小数。
+ * 三者都会被当成 LIMIT / OFFSET 绑进 SQL，`node:sqlite` 抛 `datatype mismatch`，
+ * 再被 `src/core/handler.js` 兜成 500 —— 一个能转发给别人的链接就能把整页打成
+ * 「服务器开小差了」。这类参数一律走这里，别在各模块手写。
+ */
+function pageParam(raw, fallback = 1) {
+  const value = Number(String(raw ?? '').trim());
+  return Number.isSafeInteger(value) && value > 0 ? value : fallback;
+}
+
 export {
   HttpError,
   ensure,
@@ -104,4 +119,5 @@ export {
   buckets,
   rateLimit,
   field,
+  pageParam,
 };

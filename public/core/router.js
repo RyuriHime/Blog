@@ -23,6 +23,7 @@ import * as Notes from '../views/notes.js';
 import * as Notif from '../views/notifications.js';
 import * as Post from '../views/post.js';
 import { beginRoute, endRoute } from './route-guard.js';
+import * as Sandbox from './sandbox.js';
 import * as Session from './session.js';
 import * as Settings from '../views/settings.js';
 import * as Start from '../views/start.js';
@@ -77,6 +78,17 @@ async function route() {
   // 由积木的阅读页在真的需要时再加回来 —— 不然离开 wiki 之后首页也少一栏。
   document.body.classList.remove('doc-wide');
   Compose.destroyComposeNotesPanel(); // 换页时销毁写作页的 AI 工作台（见其定义处的说明）
+  /*
+   * 换页时把积木里的小应用沙箱也拆掉。
+   *
+   * `leaveDocPage()` 只在积木自己的页面流程里被调（doc.js 里那几处），**用户直接点侧栏
+   * 或链接跳走时走不到**。不拆的后果有两个，都不好查：看门狗两秒后往已经摘掉的 iframe
+   * 里写消息；以及已经 ready 的沙箱会整场会话留在 registry 里，直到刷新页面为止 ——
+   * 也就是说人已经离开那篇积木帖子了，那个小应用还在后台活着、还发得出请求。
+   *
+   * 放在这里等于给所有出口兜底：沙箱是「页面的附庸」，换页就该跟着死。
+   */
+  Sandbox.unmountSandboxes();
   Session.renderSidebar();
   if (first !== 'search') ui.searchInput.value = query.get('q') || '';
 

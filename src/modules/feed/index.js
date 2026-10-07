@@ -1,6 +1,8 @@
 // 动态模块（P1）：把「板块 + 帖子 + 回复」那套论坛形态换成一条时间线。
 //
 //   owns  feed_items / feed_reactions / feed_replies   —— 三张表都归本模块，别的表一律只读
+//                                                        （唯一的例外是对 core 的 `reposts`
+//                                                         发一次删除，见下面 `reads` 的说明）
 //   api   /api/feed/*                                   —— 前缀不与任何已有接口重叠
 //
 // ── 为什么表在 import 期登记，而不是在 install(ctx) 里 ──
@@ -30,11 +32,17 @@ export default {
   /** 本模块**拥有**的表。三张都是新增表，v1 的表一张都不动。 */
   owns: ['feed_items', 'feed_reactions', 'feed_replies'],
   /**
-   * 会读、但不拥有的表（只读，绝不写）。
+   * 会读、但不拥有的表。
    * `users` / `follows` / `blocks` / `posts` 用来做可见范围与引用卡片；
-   * `reposts` 只用来分辨动态里那张帖子卡片是「🔁 转发」还是「🔗 引用」
+   * `reposts` 用来分辨动态里那张帖子卡片是「🔁 转发」还是「🔗 引用」
    *（两者都是 `ref_post_id` 指着一篇帖子，见 `ITEM_COLUMNS` 的 `ref_repost`）；
    * `team_members` 归 P4，表存在时可见范围里的 `team` 档自动生效（不存在就跳过）。
+   *
+   * **`reposts` 是唯一一处例外：本模块会对它发一次写** —— 删掉一张「转发了帖子」
+   * 的动态卡片时，要请 `ctx.store.deleteRepost()` 把帖子那边那条转发记录一起撤掉，
+   * 否则帖子页还写着「已转发」而卡片已经没了（见 `routes.js` 的 `DELETE /api/feed/:id`）。
+   * 走共享数据层、不写裸 SQL，也不算「拥有」这张表；和 doc 往 core 的 `boards`
+   * 写一行「积木」板块是同一类跨模块动作。
    */
   reads: ['users', 'follows', 'blocks', 'posts', 'reposts', 'team_members'],
   install(ctx) {

@@ -177,9 +177,19 @@ function collectMentions(content) {
   return [...names];
 }
 
-function notifyMentions({ content, actorId, postId = null, replyId = null }) {  for (const username of collectMentions(content)) {
+/**
+ * @param {object} args
+ * @param {(userId: number) => boolean} [args.visibleTo]
+ *   可选：判断被 @ 的人**能不能看见这条内容**。不传 = 一律通知。
+ *   帖子和回复本来就是公开的，所以那边不传；动态有 private / followers / team 三档
+ *   可见范围，而通知的 `excerpt` 是正文前 60 字 —— 不做这层过滤的话，
+ *   「只给我自己看」的动态里 @ 谁，谁就在通知中心读到了那 60 字。
+ */
+function notifyMentions({ content, actorId, postId = null, replyId = null, visibleTo }) {
+  for (const username of collectMentions(content)) {
     const mentioned = store.userByUsername(username);
     if (!mentioned || mentioned.id === actorId) continue;
+    if (typeof visibleTo === 'function' && !visibleTo(mentioned.id)) continue;
     store.createNotification({
       userId: mentioned.id,
       actorId,

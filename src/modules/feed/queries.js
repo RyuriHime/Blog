@@ -208,10 +208,29 @@ export function createFeedQueries(db, { hasTeams = false } = {}) {
       ).get();
     },
 
-    /** 只取归属和删除位：判断「能不能改」时用，不受可见范围影响。 */
+    /**
+     * 只取归属和删除位：判断「能不能改」时用，不受可见范围影响。
+     * 顺带带上 `refPostId`：删一条「转发了帖子」的动态时，得知道它转发的是哪篇，
+     * 才好把那条转发记录一起撤掉（否则帖子页还写着「已转发」，卡片却没了）。
+     */
     owner(id) {
-      const row = bind('SELECT id, user_id, deleted FROM feed_items WHERE id = ?', [id]).get();
-      return row ? { id: row.id, userId: row.user_id, deleted: Boolean(row.deleted) } : null;
+      const row = bind('SELECT id, user_id, ref_post_id, deleted FROM feed_items WHERE id = ?', [id]).get();
+      return row
+        ? { id: row.id, userId: row.user_id, refPostId: row.ref_post_id ?? null, deleted: Boolean(row.deleted) }
+        : null;
+    },
+
+    /**
+     * 这个人是不是这个团队的成员。发布「仅团队」动态时**必须**先问这一句。
+     *
+     * 不验证的话，随手填一个别人的 `team_id` 就等于把动态投进了别人的团队。
+     * `hasTeams` 为 false（团队模块还没建表）时一律 false —— 宁可发不出去，不可发错地方。
+     */
+    isTeamMember({ teamId, userId }) {
+      if (!hasTeams) return false;
+      const id = Number(teamId);
+      if (!Number.isInteger(id) || id <= 0) return false;
+      return Boolean(bind('SELECT 1 FROM team_members WHERE team_id = ? AND user_id = ?', [id, userId]).get());
     },
 
     insert({ userId, content, scope, teamId, images, refPostId, refFeedId = null }) {

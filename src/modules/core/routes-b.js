@@ -1,6 +1,6 @@
 // core 路由：帖子列表 / 帖子详情 / 发帖 / 互动
 // // 搬运自 src/server.js 的固定行区间（预铺骨架，逐字未改），见 docs/tools/extract-server-modules.mjs。
-import { ensure, field, HttpError, ok, rateLimit, res_ } from '../../core/http.js';
+import { ensure, field, HttpError, ok, pageParam, rateLimit, res_ } from '../../core/http.js';
 import { assertPinAllowed, notifyMentions, resolveOwnCategory, shapeAuthor, shapeCategory, shapeConversation, shapeMessage, shapeNotification, shapePerson, shapePostDetail, shapePostListRow, shapeProfile, shapeReply, shapeReposter, shapeUser } from '../../core/shape.js';
 import { assertPostVisible, isOwner, isStaff, requireOwner, requireStaff, requireUser } from '../../core/guards.js';
 import { issueSession, removeAvatarFile, saveAvatarFile, sessionCookie } from '../../core/sessions.js';
@@ -29,7 +29,7 @@ export function registerRoutesB(route) {
     }
     const q = (ctx.query.get('q') || '').trim().slice(0, 60);
     const sort = ['latest', 'hot', 'active'].includes(ctx.query.get('sort')) ? ctx.query.get('sort') : 'latest';
-    const page = Math.max(1, Number(ctx.query.get('page') || 1) || 1);
+    const page = pageParam(ctx.query.get('page'));
     const perPage = Math.min(30, Math.max(5, Number(ctx.query.get('perPage') || 10) || 10));
     const bookmarkedBy = ctx.query.get('bookmarked') === '1' ? requireUser(ctx).id : null;
     const followingBy = ctx.query.get('following') === '1' ? requireUser(ctx).id : null;

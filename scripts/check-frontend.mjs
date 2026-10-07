@@ -1452,6 +1452,53 @@ if (!state.theme) problems.push('state.theme 没被初始化');
   if (refInput.value !== '12') problems.push(`外壳重画后引用输入框里的编号丢了（现在是 ${JSON.stringify(refInput.value)}）`);
   console.log(`  ${problems.length ? '❌' : '✅'} 交互：外壳重画后草稿 / 可见范围 / 引用编号都还在（重画 ${renderCount} 次）`);
 
+  /*
+   * ---- 「仅团队」必须真的挑一个团队 ----
+   *
+   * 这一档以前是坏的：接口把 `team_id` 写死成 null，可见性 SQL 永远匹配不上，
+   * 于是「仅团队」静默退化成「仅自己」—— 作者以为发给了队友，队友一条也看不到。
+   * 所以这里钉三件事：公开档不画选择器、选团队时才去问、没挑就发不出去。
+   */
+  const teamSlot = registered('[data-feed-team-slot]');
+  const scopeHint = registered('[data-feed-scope-hint]');
+  const feedPosts = () => REQUESTS.filter((item) => item.method === 'POST' && item.url.split('?')[0] === '/api/feed').length;
+
+  fire(scope, 'change', '[data-feed-scope]', 'public');
+  if (String(teamSlot.innerHTML).includes('data-feed-team')) problems.push('选了「公开」却还画着团队选择器');
+  if (scopeHint.hidden !== true) problems.push('选了「公开」还挂着「只有某个队能看」的提醒');
+
+  const postsBeforeTeam = feedPosts();
+  fire(scope, 'change', '[data-feed-scope]', 'team');
+  await settle();
+  await settle();
+  const teamHtml = String(teamSlot.innerHTML);
+  if (!teamHtml.includes('data-feed-team')) problems.push('选了「仅团队」却没画出团队选择器 —— 用户根本没法挑队，只能吃 400');
+  if (!teamHtml.includes(TEAM_FIXTURE.name)) problems.push(`团队选择器里没有「${TEAM_FIXTURE.name}」这个队`);
+  // 提醒那行是用 `textContent` 写的（假 DOM 不解析 HTML，读 innerHTML 会永远是空的）
+  if (scopeHint.hidden === true || !String(scopeHint.textContent).includes(TEAM_FIXTURE.name)) {
+    problems.push('「仅团队」时那行提醒没写出队名 —— 挑错队是静默失败，发之前得看得见');
+  }
+
+  // 挑好队再发：请求体里必须带上团队编号（服务端才存得下真的 team_id）
+  const publishBtn = makeElement('button');
+  publishBtn.dataset = { feedAction: 'publish' };
+  publishBtn.closest = (selector) => (selector === '[data-feed-action]' ? publishBtn : null);
+  fire(input, 'input', '[data-feed-input]', '只给队里看的一条');
+  const teamSelect = registered('[data-feed-team]');
+  teamSelect.value = String(TEAM_FIXTURE.id);
+  teamSelect.matches = (candidate) => candidate === '[data-feed-team]';
+  dispatch(app, 'change', teamSelect);
+  dispatch(app, 'click', publishBtn);
+  await settle();
+  await settle();
+  const teamPost = REQUESTS.filter((item) => item.method === 'POST' && item.url.split('?')[0] === '/api/feed').pop();
+  // 假 fetch 存下来的 body 可能是字符串也可能是对象，两种都认
+  const teamBody = typeof teamPost?.body === 'string' ? JSON.parse(teamPost.body) : teamPost?.body ?? null;
+  if (teamBody?.scope !== 'team') problems.push(`选了「仅团队」却按 ${JSON.stringify(teamBody?.scope)} 发出去`);
+  if (teamBody?.teamId !== TEAM_FIXTURE.id) problems.push(`请求体里没带上团队编号（现在是 ${JSON.stringify(teamBody?.teamId)}）`);
+
+  console.log(`  ${problems.length ? '❌' : '✅'} 交互：「仅团队」才画团队选择器、发出去的请求带着队号`);
+
   /* ---- 引用帖子：用掉的编号不能留在框里，取消引用不能留下旧标题 ---- */
   const refRow = registered('[data-feed-ref-row]');
   const chip = registered('[data-feed-ref-chip]');
@@ -1762,6 +1809,46 @@ if (!state.theme) problems.push('state.theme 没被初始化');
   target.ref = savedRef;
   await timeline.viewTimeline(new Map());
   console.log(`  ${problems.length ? '❌' : '✅'} 交互：转发出来的卡片写「转发了帖子」、纯引用写「引用了帖子」`);
+}
+
+/* ---- 交互：动态流的筛选标签和翻页都留在动态流里 ----
+ *
+ * 为什么单独测：这三个标签曾经写成 `routeQuery('/', …)`，点「我关注的」直接把人弹回首页
+ * ——功能没坏，但用户看到的是「点了就跳走」，只会当成坏了。翻页那条同理。
+ * 标签是纯字符串拼出来的 `<a href>`，假 DOM 照得到，不需要真浏览器。
+ */
+{
+  const timeline = await view('timeline.js');
+  const tabHref = (label) => {
+    const html = String(app.innerHTML);
+    const hit = html.match(new RegExp(`<a class="feed-tab[^"]*" href="([^"]*)"[^>]*>${label}</a>`));
+    return hit ? hit[1] : '';
+  };
+
+  await timeline.viewTimeline(new Map());
+  const all = tabHref('全部');
+  const following = tabHref('我关注的');
+  const mine = tabHref('我的');
+  if (all !== '#/feed') {
+    problems.push(`「全部」标签指向 ${JSON.stringify(all || '（没找到）')} —— 该指向 #/feed，指到别处就是点了弹走`);
+  }
+  if (following !== '#/feed?filter=following') {
+    problems.push(`「我关注的」标签指向 ${JSON.stringify(following || '（没找到）')} —— 该是 #/feed?filter=following，不然点了会弹回首页`);
+  }
+  if (mine !== '#/feed?filter=mine') {
+    problems.push(`「我的」标签指向 ${JSON.stringify(mine || '（没找到）')} —— 该是 #/feed?filter=mine`);
+  }
+
+  // 搜索时切筛选不能把关键词丢掉。
+  // 注意：href 是拼进 HTML 的，`&` 会被 esc() 转成 `&amp;` —— 浏览器读属性时再解回来，
+  // 这里也照着解一次，不然断言比的是转义后的字符串。
+  await timeline.viewTimeline(new Map([['q', '计数器']]));
+  const searched = tabHref('我关注的').replace(/&amp;/g, '&');
+  if (searched !== '#/feed?q=%E8%AE%A1%E6%95%B0%E5%99%A8&filter=following') {
+    problems.push(`在搜索结果里，「我关注的」指向 ${JSON.stringify(searched || '（没找到）')} —— 切筛选不该把搜索词丢掉`);
+  }
+  await timeline.viewTimeline(new Map());
+  console.log(`  ${problems.length ? '❌' : '✅'} 交互：动态流的三个筛选标签都指向 #/feed（搜索词会带过去），点了不会弹回首页`);
 }
 
 /* ---- 交互：积木页的转发区 —— 转得出、发完留在原地、撤销得掉 ----
@@ -2827,6 +2914,34 @@ if (!state.theme) problems.push('state.theme 没被初始化');
   }
   if (scanned < 25) problems.push(`只扫到 ${scanned} 个前端模块，文件枚举八成坏了（正常是二十九个）`);
   console.log(`  ${problems.length ? '❌' : '✅'} 静态：${scanned} 个前端模块里没有「裸调用未定义的名字」，也没有「调了隔壁模块没导出的成员」`);
+}
+
+/*
+ * 换页要拆沙箱：积木里的小应用是「页面的附庸」，人跳走了它就该死。
+ *
+ * 积木自己的 `leaveDocPage()` 只覆盖它那几条出口（返回广场、删掉、换篇……），
+ * 用户直接点侧栏或站内链接跳走时走不到 —— 兜底必须落在 router 上。
+ * 不拆的两个后果都不好查：看门狗两秒后去动已经摘掉的 iframe；
+ * 已经 ready 的沙箱整场会话留在 registry 里，人走了它还在后台活着、还发得出请求。
+ *
+ * 这条断言是**真的挂一个沙箱再换页**，不是 grep 源码里有没有那几个字。
+ */
+{
+  const Sandbox = await import(pathToFileURL(join(ROOT, 'public', 'core', 'sandbox.js')).href);
+  const { route } = await import(pathToFileURL(join(ROOT, 'public', 'core', 'router.js')).href);
+  const frame = makeElement('iframe');
+  frame.contentWindow = {}; // 假 DOM 的 iframe 没有 contentWindow，attachSandbox 靠它当 registry 的键
+  Sandbox.attachSandbox(frame, { block_id: 'b-sandbox', props: {} }, {});
+  const mounted = Sandbox.sandboxCount();
+  if (mounted !== 1) problems.push(`刚挂上的沙箱没进 registry（sandboxCount = ${mounted}），这条断言就等于没测`);
+
+  window.location.hash = '#/feed';
+  await route();
+  const left = Sandbox.sandboxCount();
+  if (left !== 0) {
+    problems.push(`换页之后还挂着 ${left} 个沙箱 —— 人已经离开那篇积木帖子了，小应用却还在后台跑（router.js 换页时要 unmountSandboxes）`);
+  }
+  console.log('  ✅ 交互：换页会把积木的小应用沙箱拆干净（不拆就是人走了它还在跑）');
 }
 
 if (problems.length) {

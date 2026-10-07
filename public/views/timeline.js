@@ -78,6 +78,14 @@ const composerState = {
    */
   draft: '',
   scope: 'public',
+  /**
+   * 「仅团队」要指名一个团队，这里存选中的那个。
+   *
+   * `teams` 是**懒加载**的（`null` = 还没问过服务端）：绝大多数人发动态都选「公开」，
+   * 没必要每进一次动态流就打一趟 `/api/teams?mine=1`。
+   */
+  teamId: null,
+  teams: null,
   /** 「引用帖子」那行输入框里没提交的编号/链接（同上：重画不能丢）。 */
   refInput: '',
 };
@@ -159,6 +167,78 @@ function scopeOptionsHtml(selected) {
     .join('');
 }
 
+/**
+ * 「仅团队」那一档的团队选择器。只有选中「仅团队」时才画出来 ——
+ * 平时摆一个用不上的下拉框，只会让人以为发动态必须选团队。
+ *
+ * 三种情况分别给不同的话：
+ *   没加入任何团队  → 直接说清「先加入一个团队」，而不是给一个空下拉框让人干瞪眼
+ *   还没问过服务端  → 先画「载入中」，等 `loadTeams()` 回来再重画
+ *   有团队          → 正常列出，默认选第一个
+ */
+function teamPickerHtml() {
+  if (composerState.scope !== 'team') return '';
+  if (composerState.teams === null) {
+    return '<select class="input composer-team" data-feed-team disabled><option>载入中…</option></select>';
+  }
+  if (!composerState.teams.length) {
+    return `<span class="composer-team-hint">你还没有加入任何团队 —— 去<a href="#/teams">团队</a>里加一个，再回来发「仅团队」的动态。</span>`;
+  }
+  const options = composerState.teams
+    .map(
+      (team) =>
+        `<option value="${esc(String(team.id))}" ${Number(team.id) === Number(composerState.teamId) ? 'selected' : ''}>🎽 ${esc(team.name)}</option>`,
+    )
+    .join('');
+  return `<select class="input composer-team" data-feed-team title="这条动态只给哪个团队看">${options}</select>`;
+}
+
+/**
+ * 问服务端「我加入了哪些团队」，结果留在 `composerState.teams` 里（一次就够）。
+ *
+ * 失败**不清空**已有的列表：网络抖一下不该让用户已经挑好的团队消失。
+ * 真正的兜底在服务端 —— 发出去的时候它还会再验一遍成员资格。
+ */
+async function loadTeams() {
+  if (composerState.teams !== null) return;
+  try {
+    const data = await api('/api/teams?mine=1&perPage=50');
+    composerState.teams = Array.isArray(data.items) ? data.items.map((team) => ({ id: team.id, name: team.name })) : [];
+  } catch {
+    composerState.teams = [];
+  }
+  if (!composerState.teams.some((team) => Number(team.id) === Number(composerState.teamId))) {
+    composerState.teamId = composerState.teams[0]?.id ?? null;
+  }
+  repaintComposerTeam();
+}
+
+/** 只重画团队选择器那一小块（重画整个 composer 会把用户正在写的字冲掉）。 */
+function repaintComposerTeam() {
+  const host = document.querySelector('[data-feed-team-slot]');
+  if (host) host.innerHTML = teamPickerHtml();
+  syncPreviewScopeHint();
+}
+
+/**
+ * 团队选择器旁边那句提醒。
+ *
+ * 「仅团队」最坑的一点：**选错团队是静默的** —— 发出去一切正常，
+ * 只是那个队以外的人看不到、队里的人也可能没注意到。所以选完就把队名写在旁边。
+ */
+function syncPreviewScopeHint() {
+  const hint = document.querySelector('[data-feed-scope-hint]');
+  if (!hint) return;
+  if (composerState.scope !== 'team') {
+    hint.textContent = '';
+    hint.hidden = true;
+    return;
+  }
+  const team = (composerState.teams ?? []).find((entry) => Number(entry.id) === Number(composerState.teamId));
+  hint.hidden = false;
+  hint.textContent = team ? `只有「${team.name}」的成员能看到这条` : '先挑一个团队';
+}
+
 function refChipHtml() {
   if (!composerState.ref) return '';
   const { id, title } = composerState.ref;
@@ -217,11 +297,13 @@ function composerHtml() {
       <button class="btn btn-sm" type="button" data-feed-action="preview">👁 预览</button>
       <button class="btn btn-sm" type="button" data-feed-action="fullscreen">⛶ 全屏</button>
       <span class="composer-spacer"></span>
+      <span class="composer-team-slot" data-feed-team-slot>${teamPickerHtml()}</span>
       <select class="input composer-scope" data-feed-scope title="谁可以看到这条动态">
         ${scopeOptionsHtml(composerState.scope)}
       </select>
       <button class="btn btn-sm btn-primary" type="button" data-feed-action="publish">发布</button>
     </div>
+    <p class="composer-scope-hint" data-feed-scope-hint hidden></p>
   </div>`;
 }
 
@@ -388,10 +470,14 @@ function filterTabsHtml() {
     ['following', '我关注的'],
     ['mine', '我的'],
   ];
+  // 目标必须是 `/feed`：这三个标签是**动态流自己的筛选**。写成 `/` 会把用户送回首页
+  // ——点了「我关注的」页面直接弹走，看起来像坏了。搜索词要带过去：在搜索结果里切
+  // 「我关注的」不该把关键词丢掉，只把页码归零（切筛选后还停在第 3 页最容易翻出空白页）。
+  const query = feedQuery ? new URLSearchParams({ q: feedQuery }) : new Map();
   return `<div class="feed-tabs">${tabs
     .map(
       ([value, label]) =>
-        `<a class="feed-tab ${feedFilter === value ? 'is-active' : ''}" href="${esc(routeQuery('/', new Map(), { filter: value === 'all' ? null : value }))}">${label}</a>`,
+        `<a class="feed-tab ${feedFilter === value ? 'is-active' : ''}" href="${esc(routeQuery('/feed', query, { filter: value === 'all' ? null : value }))}">${label}</a>`,
     )
     .join('')}</div>`;
 }
@@ -434,8 +520,9 @@ async function viewTimeline(query = new Map()) {
 
   const pager = $('[data-feed-pager]');
   if (pager) {
+    // 同理：翻页也是动态流自己的事，`/` 会把第 2 页送到首页去。
     pager.innerHTML = paginationHtml(data.page, data.totalPages, (target) =>
-      routeQuery('/', query, { page: target === 1 ? null : String(target) }),
+      routeQuery('/feed', query, { page: target === 1 ? null : String(target) }),
     );
   }
 
@@ -480,6 +567,8 @@ function restoreComposer() {
 
   const scope = $('[data-feed-scope]');
   if (scope) scope.value = composerState.scope;
+  // 团队选择器和那行提醒也要跟着重画：新 innerHTML 出来的壳里这两块是空的
+  repaintComposerTeam();
 
   const refInput = $('[data-feed-ref-input]');
   if (refInput && refInput.value !== composerState.refInput) refInput.value = composerState.refInput;
@@ -564,6 +653,15 @@ function bindTimelineOnce() {
   ui.app.addEventListener('change', (event) => {
     if (event.target.matches('[data-feed-scope]')) {
       composerState.scope = event.target.value;
+      // 挑「仅团队」时才去问「我加入了哪些团队」，问完还要把选择器画出来
+      if (composerState.scope === 'team') void loadTeams();
+      else repaintComposerTeam();
+      return;
+    }
+    if (event.target.matches('[data-feed-team]')) {
+      const picked = Number(event.target.value);
+      if (Number.isInteger(picked) && picked > 0) composerState.teamId = picked;
+      syncPreviewScopeHint();
       return;
     }
     if (!event.target.matches('[data-feed-file]')) return;
@@ -725,12 +823,26 @@ async function publish(button) {
   const input = composerInput();
   if (!input) return;
   const content = input.value;
+
+  /*
+   * 「仅团队」没挑团队就别发。
+   *
+   * 服务端也会拦（400 team_required），但那是一条 toast 报错；在这里拦住能顺手把
+   * 团队选择器滚进视野、让人知道该点哪儿。**更不该做的是「没挑就退化成公开」** ——
+   * 用户明明选了「仅团队」，发出去却全网可见，这是最坏的一种失败。
+   */
+  if (composerState.scope === 'team' && !composerState.teamId) {
+    toast(composerState.teams?.length ? '先挑一个团队，这条动态只给那个队看' : '你还没有加入任何团队，先去「团队」里加一个', 'error');
+    return;
+  }
+
   await withButtonBusy(button, async () => {
     const result = await api('/api/feed', {
       method: 'POST',
       body: {
         content,
         scope: composerState.scope,
+        teamId: composerState.scope === 'team' ? composerState.teamId : null,
         images: composerState.images,
         refPostId: composerState.ref?.id ?? null,
       },

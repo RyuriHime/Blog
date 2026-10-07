@@ -7,7 +7,7 @@ import { randomBytes } from 'node:crypto';
 import { mkdirSync } from 'node:fs';
 import { readFile, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
-import { HttpError, ensure, field } from '../../core/http.js';
+import { HttpError, ensure, field, pageParam } from '../../core/http.js';
 // `ANON` 是「没登录」的哨兵 id。**不要在这里写 0**：0 会被当成一个真实用户
 // 去查 blocks 表，拉黑过滤就整个失效（`src/core/paths.js:43`）。
 import { ANON } from '../../core/paths.js';
@@ -114,10 +114,43 @@ export function registerFeedRoutes(ctx, { queries }) {
     return id;
   }
 
+  /**
+   * 「仅团队」那一档的团队编号。
+   *
+   * 这一档以前是**坏的**：接口把 `team_id` 写死成 `null`，而可见性 SQL 是
+   * `EXISTS (SELECT 1 FROM team_members tm WHERE tm.team_id = f.team_id AND tm.user_id = ?)` ——
+   * `f.team_id` 恒为 NULL，永远匹配不上。结果「仅团队」静默退化成「仅自己」：
+   * 作者以为自己发给了队友，队友一条也看不到，两边都不会报错。
+   *
+   * 现在必须指名一个团队，而且要**真的是它的成员** —— 否则随手填一个别人的
+   * `team_id` 就等于把动态投进了别人的团队。
+   *
+   * 不是 `team` 档时一律存 `null`：库里留着一个没用的团队编号，哪天有人把 scope
+   * 改回 team 又没带 teamId，就会莫名其妙投进上一次那个队。
+   */
+  function readTeamId(value, user, scope) {
+    if (scope !== 'team') return null;
+    const teamId = Number(value);
+    ensure(Number.isInteger(teamId) && teamId > 0, 400, 'team_required', '「仅团队」要挑一个团队');
+    ensure(
+      queries.isTeamMember({ teamId, userId: user.id }),
+      403,
+      'not_a_member',
+      '你不在这个团队里，发不了只给它看的动态',
+    );
+    return teamId;
+  }
+
+  /**
+   * 分页参数走 core 的 `pageParam`（安全范围内的正整数，否则退回默认值）。
+   *
+   * `perPage` 本身已经被 `Math.min(PAGE_MAX, …)` 夹住了，`Infinity` 也只会变成上限，
+   * 所以只有 `page` 需要这一层。别改回手写：`?page=1e999` → `Infinity`、
+   * `?page=1e30` → 超出安全整数范围，绑进 LIMIT/OFFSET 就是 `datatype mismatch` → 500。
+   */
   function readPage(query) {
-    const page = Math.max(1, Number(query.get('page')) || 1);
-    const perPage = Math.min(PAGE_MAX, Math.max(1, Number(query.get('perPage')) || 20));
-    return { page, perPage };
+    const page = pageParam(query.get('page'));
+    return { page, perPage: Math.min(PAGE_MAX, Math.max(1, Number(query.get('perPage')) || 20)) };
   }
 
   /* ---------------- 读：时间线 ---------------- */
@@ -165,16 +198,30 @@ export function registerFeedRoutes(ctx, { queries }) {
       label: '动态内容',
     });
     const scope = readScope(reqCtx.body.scope);
+    const teamId = readTeamId(reqCtx.body.teamId, user, scope);
     const images = normalizeImages(reqCtx.body.images);
     const refPostId = readRefPostId(reqCtx.body.refPostId, user);
 
-    const id = queries.insert({ userId: user.id, content, scope, teamId: null, images, refPostId });
+    const id = queries.insert({ userId: user.id, content, scope, teamId, images, refPostId });
 
     // @人 通知（FR-FEED-06）。复用 core 的 collectMentions/notifyMentions：
     // 通知类型是 `mention`，`postId` 传 null（动态不是帖子），前端会退回「跳到 @ 的人主页」。
+    //
+    // `visibleTo` 这一层不能省：通知里带的是正文前 60 字，而动态有「仅关注者 / 仅团队 /
+    // 仅自己」三档。不过滤的话，一条「仅自己可见」的动态里写了 @某人，某人打开通知中心
+    // 就能读到那 60 字 —— 内容没被看见，摘要先漏了。可见性本来就有现成的判定（byId 会按
+    // viewerId 过一遍 scope），逐个人问一遍就行，被 @ 的人通常只有一两个。
     if (notifyMentions && collectMentions) {
       const names = collectMentions(content);
-      if (names.length) notifyMentions({ content, actorId: user.id, postId: null, replyId: null });
+      if (names.length) {
+        notifyMentions({
+          content,
+          actorId: user.id,
+          postId: null,
+          replyId: null,
+          visibleTo: (mentionedId) => Boolean(queries.byId({ id, viewerId: mentionedId })),
+        });
+      }
     }
 
     const row = queries.byId({ id, viewerId: user.id, ignoreVisibility: true });
@@ -205,10 +252,19 @@ export function registerFeedRoutes(ctx, { queries }) {
         ? String(current.content)
         : field(body.content, { name: 'content', min: 1, max: MAX_FEED_CONTENT, label: '动态内容' });
     const scope = body.scope === undefined ? current.scope : readScope(body.scope);
+    /*
+     * `team_id` 不跟着「没传就不改」的规矩走，而是由**改完之后的 scope** 决定：
+     * 是「仅团队」就必须要一个自己加入了的团队，不是就清成 null。
+     *
+     * 原因有二：① 老数据里可能有 `scope='team'` 但 `team_id` 是空的（上一版就是这么写的），
+     * 那种动态本来就谁也看不见，作者一编辑就得补一个团队，否则永远修不好；
+     * ② 反过来，把「仅团队」改成「公开」时必须把团队编号清掉。
+     */
+    const teamId = readTeamId(body.teamId ?? current.team_id, user, scope);
     const images = body.images === undefined ? currentImagesOf(current) : normalizeImages(body.images);
     const refPostId = body.refPostId === undefined ? current.ref_post_id : readRefPostId(body.refPostId, user);
 
-    queries.update({ id, content, scope, teamId: null, images, refPostId });
+    queries.update({ id, content, scope, teamId, images, refPostId });
     const row = queries.byId({ id, viewerId: user.id, ignoreVisibility: true });
     ok(reqCtx.res, { item: shapeFeedItem(row) });
   });
@@ -222,10 +278,29 @@ export function registerFeedRoutes(ctx, { queries }) {
     // 能删不能读是刻意的：处理举报不需要先读遍全站私密内容）。
     ensure(owner.userId === user.id || ctx.guards.isStaff(user), 403, 'forbidden', '只能删除自己的动态');
 
+    /*
+     * 删掉的如果是一条「转发了帖子」的动态，帖子那边那条转发记录也要撤掉。
+     *
+     * 不撤的话两边会自相矛盾：动态流里卡片没了，帖子页底部却还亮着「🔁 已转发 1」、
+     * 名单里还挂着这个人、主页的「🔁 转发」分类里还有它。用户只会觉得「删了没删干净」。
+     *
+     * 这里**不能**用 `emitRepost` 让订阅方去办：那个广播的订阅方就是本模块自己，
+     * 它只够得着 `feed_items`，够不着 `reposts`（core 的表）。而 `reposts` 是
+     * core 的事，正确的口子是共享数据层 `ctx.store`（本模块已经在用它发通知了）。
+     * 与 core 广播事件那套并不冲突：那边管「转发之后要在动态流落一张卡片」，
+     * 这边管「卡片没了要把转发记录一起撤掉」，两个方向各走各的口子。
+     *
+     * `ctx.store.deleteRepost` 认 (postId, userId)，不传转发语也不会误伤别人。
+     */
+    if (owner.refPostId) {
+      ctx.store.deleteRepost(owner.refPostId, owner.userId);
+    }
+
     queries.softDelete(id);
     // 连带清回复，与 `deleteReactionsOf` 成对 —— 动态没了，底下的讨论也不该留孤儿行。
     queries.deleteRepliesOf(id);
     queries.deleteReactionsOf(id);
+
     ok(reqCtx.res, { deleted: true, id });
   });
 
