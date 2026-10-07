@@ -1336,9 +1336,38 @@ try {
     check('Markdown 编辑区带 name="content"（抽屉与旧脚本都靠它认编辑区）', editorJs.includes('name="content"'), '');
     check('离开页面时收掉预览定时器与 AI 抽屉', editorJs.includes('DocAi.destroyDocAi()'), '');
 
+    // 自动保存：编辑器的默认姿势是「存下来」，「保存」那颗按钮是「立刻存一遍」。
+    // 实现全在 `public/views/doc.js` 的「自动保存」那一块，行为测试在 check-frontend。
+    check(
+      '编辑器有自动保存（不是只有一颗要记得点的「保存」）',
+      editorJs.includes('AUTO_SAVE_IDLE_MS') && editorJs.includes('scheduleAutoSave()'),
+      '',
+    );
+    check('自动保存与手动保存走同一条路（同一个 saveAll，只是安静那一副面孔）', editorJs.includes('saveAll({ quiet: true })'), '');
+    check('自动保存不用 setInterval（check-frontend 里它是个桩，用了等于没装定时器）', !/\bsetInterval\s*\(/.test(editorJs), '只许 setTimeout');
+    check('两次自动保存之间有最小间隔（不然那 50 条修订记录一会儿就满了）', editorJs.includes('AUTO_SAVE_MIN_GAP_MS'), '');
+    check('一直打字也有保存的上限（不然永远等不到「停手」那一下）', editorJs.includes('AUTO_SAVE_MAX_WAIT_MS'), '');
+    check('离开编辑页之前先把排着的那一发放出去', editorJs.includes("flushAutoSave('leave')"), '必须排在换 DOM 之前');
+    check('切到后台 / 页面被藏起来也会抢救一次', editorJs.includes("'visibilitychange'") && editorJs.includes("'pagehide'"), '');
+    check('没存完就想关标签页会拦一下（beforeunload 只提醒，不发请求）', editorJs.includes("'beforeunload'"), '');
+    check(
+      '那颗状态灯挂在工具栏上（作者得看得见「存到哪一步了」）',
+      editorJs.includes('data-doc-save-status') && editorJs.includes('autoSaveStatusHtml()'),
+      '',
+    );
+    check('块里那个源码框不自动存（敲到一半必然是坏 JSON，得作者自己点「保存本块」）', editorJs.includes('[data-doc-src-box]') && editorJs.includes('保存本块'), '');
+    check(
+      'check-frontend 里有自动保存的行为用例',
+      frontend.includes('没到最小间隔就不重复存'),
+      '静态哨兵只能证明写在文件里，存不存得下去得让假 DOM 真跑一遍',
+    );
+
     const docCss = readText('public/css/41-doc.css');
     for (const cls of ['.doc-md-grid', '.doc-md-edit', '.doc-md-side', '.doc-md-preview']) {
       check(`41-doc.css 定义了 ${cls}`, docCss.includes(cls), '');
+    }
+    for (const cls of ['.doc-save', '.doc-save[data-doc-save-kind="ok"]', '.doc-save[data-doc-save-kind="failed"]']) {
+      check(`41-doc.css 定义了 ${cls}（状态灯得有颜色）`, docCss.includes(cls), '');
     }
 
     // 阅读态的 HTML 由后端出，前端不许自己再实现一遍渲染 —— 实现两遍就一定会漂移。
@@ -2267,8 +2296,12 @@ try {
       // 这条钉子跟着「一次保存」改了名字：以前是 `saveMarkdown()` 自己存自己重拉，
     // 现在正文、标题、可见范围都由 `saveAll()` 一处存完 —— 但「Markdown 存完必须重拉」
     // 这条不变量没变（不重拉就会把作者刚敲的从编辑区抹掉）。
-    check('8.9 Markdown 存完会重新拉一次（不重拉就会把刚敲的从编辑区抹掉）', /async function saveAll\(\)[\s\S]{0,4000}?if \(editor\.mode === 'markdown'\) await loadMarkdown\(\)/.test(editorJs), '');
-    check('8.9 编辑器只有一个「保存」（标题 / 可见范围 / 正文一起存）', editorJs.includes('function saveAll()') && !editorJs.includes('data-doc-action="save-meta"') && !editorJs.includes('function saveMeta('), '');
+    // 自动保存给 `saveAll()` 加了一个 `options`（安静那一版不重画），签名不再是空括号：
+    // 这里改成**先把那个函数体切出来**再找那句话 —— 比原来的「4000 字符窗口」更准，
+    // 窗口一放宽就可能配上隔壁函数里长得一样的一行，钉子就白钉了。
+    const saveAllBody = (editorJs.split('async function saveAll(')[1] ?? '').split(/\n(?:async )?function /)[0];
+    check('8.9 Markdown 存完会重新拉一次（不重拉就会把刚敲的从编辑区抹掉）', saveAllBody.includes("if (editor.mode === 'markdown') await loadMarkdown()"), '');
+    check('8.9 编辑器只有一个「保存」（标题 / 可见范围 / 正文一起存）', editorJs.includes('function saveAll(') && !editorJs.includes('data-doc-action="save-meta"') && !editorJs.includes('function saveMeta('), '');
       check('8.9 源码里有 Markdown 表达不了的块时，Markdown 页只读并说明原因', editorJs.includes('function markdownViewBlocked(') && editorJs.includes('MARKDOWN_VIEW_TYPES') && editorJs.includes('blocked ? \' readonly\' : \'\''), '');
       check('8.9 编辑器开头有「四步」说明卡', editorJs.includes('doc-howto') && editorJs.includes('保存本块'), '');
       check('8.9 每块底部也有一个「保存本块」（表单一长就滚不到顶上那个）', editorJs.includes('doc-block-foot'), '');
