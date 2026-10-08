@@ -491,9 +491,11 @@ async function refreshProfile() {
   if (parts[0] === 'u' && parts[1]) await User.viewUser(parts[1], query);
 }
 
-// 「逐篇分类」卡内的标题搜索。整张卡的行都已经在 DOM 里（最多 171 行），所以按 `data-ai-title`
-// 匹配、给没命中的行加 `data-hidden` 就够了，不用重新请求接口。
+// 「逐篇分类」卡内的搜索：先在已渲染的行里按 `data-ai-title` 即时过滤（老行为），
+// 同时两个字起防抖 250ms 去 `/api/ai/search` 搜全站语料（标题 + 正文，wiki 词条正文也在内）——
+// 只按标题过滤本地那几十行是搜不到 wiki 正文的。
 // 这是全站唯一一个 input 监听，只认 `[data-action="ai-list-search"]`，其它输入框不受影响。
+let aiSearchTimer = 0;
 document.addEventListener('input', (event) => {
   const search = event.target.closest('[data-action="ai-list-search"]');
   if (!search) return;
@@ -510,6 +512,29 @@ document.addEventListener('input', (event) => {
     const hit = !keyword || String(row.dataset.aiTitle ?? '').includes(keyword);
     row.toggleAttribute('data-hidden', !hit);
   }
+
+  const hits = list.parentElement.querySelector('[data-ai-hits]');
+  if (aiSearchTimer) clearTimeout(aiSearchTimer);
+  aiSearchTimer = 0;
+  if (!hits) return;
+  if (keyword.length < Ai.AI_SEARCH_MIN) {
+    hits.hidden = true;
+    hits.innerHTML = '';
+    return;
+  }
+  aiSearchTimer = setTimeout(async () => {
+    aiSearchTimer = 0;
+    try {
+      const data = await api(`/api/ai/search?q=${encodeURIComponent(keyword)}`);
+      // 请求回来时用户可能又改了几个字，对不上就丢掉这次结果
+      if ((search.value ?? '').trim().toLowerCase() !== keyword) return;
+      hits.innerHTML = Ai.aiSearchHitsHtml(data);
+      hits.hidden = false;
+    } catch (error) {
+      hits.innerHTML = `<div class="ai-hits-head">${esc(apiErrorText(error))}</div>`;
+      hits.hidden = false;
+    }
+  }, 250);
 });
 
 document.addEventListener('change', async (event) => {

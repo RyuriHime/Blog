@@ -643,6 +643,22 @@ try {
   const hashOf1 = store.documentHash('1');
   check('每篇有自己的指纹', Boolean(hashOf1) && hashOf1 !== store.documentHash('2') && hashOf1 !== hashBefore);
 
+  // LOCAL PATCH (see LOCAL-PATCHES.md): 语料检索（标题 + 正文）。
+  const searchBody = store.searchCorpus({ query: '分页' });
+  check(
+    '正文命中也能搜到（不是只搜标题）',
+    searchBody.total === 1 && searchBody.items[0].id === '1' && searchBody.items[0].inTitle === false,
+    JSON.stringify(searchBody).slice(0, 200),
+  );
+  check('命中片段带上下文', searchBody.items[0].snippet.includes('分页'), String(searchBody.items[0].snippet));
+  check('检索知道一共多少篇', searchBody.documents === 3, String(searchBody.documents));
+  const searchTitle = store.searchCorpus({ query: 'SQLite' });
+  check('标题命中标成 inTitle 并排在前面', searchTitle.total === 1 && searchTitle.items[0].inTitle === true, JSON.stringify(searchTitle.items.map((item) => item.id)));
+  check('命中带板块与回复数', searchTitle.items[0].board === '技术' && searchTitle.items[0].replyCount === 1, JSON.stringify(searchTitle.items[0]));
+  const searchLimit = store.searchCorpus({ query: '一', limit: 1 });
+  check('limit 只截返回条数', searchLimit.items.length <= 1, JSON.stringify({ total: searchLimit.total, got: searchLimit.items.length }));
+  check('空关键词什么都不返回', store.searchCorpus({ query: '   ' }).total === 0);
+
   check('初始无缓存', store.reviewOf('1') === null);
   check('初始全是待整理', store.countPending() === 3 && store.pendingDocuments({ limit: 2 }).length === 2, JSON.stringify(store.pendingDocuments({ limit: 2 })));
   const savedReview = store.saveReview(

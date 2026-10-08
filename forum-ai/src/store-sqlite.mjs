@@ -148,6 +148,26 @@ export function createAiStore({ db, documentSource, tablePrefix = DEFAULT_PREFIX
     }
   };
 
+  /*
+   * LOCAL PATCH (see LOCAL-PATCHES.md): 语料检索要的上下文片段。
+   *
+   * 命中位置在正文里可能很靠后（wiki 词条几千字），直接把正文丢给前端没用 ——
+   * 从命中处往回取半屏、往回不到头就补省略号，空白折成一格（Markdown 里全是换行）。
+   */
+  const excerptAround = (text, at, matchLength, { width = 50, max = 160 } = {}) => {
+    const flat = String(text ?? '').replace(/\s+/g, ' ').trim();
+    if (!flat) return '';
+    // 折过空白后位置会漂，按命中前后的原文片段重新定位（找不到就从头开始）
+    const needle = String(text ?? '').slice(Math.max(0, at), Math.max(0, at) + Math.max(matchLength, 1));
+    const flatNeedle = needle.replace(/\s+/g, ' ').trim();
+    const hit = flatNeedle ? flat.indexOf(flatNeedle) : -1;
+    const center = hit >= 0 ? hit : 0;
+    const start = Math.max(0, center - width);
+    const end = Math.min(flat.length, center + Math.max(flatNeedle.length, 1) + width);
+    const body = flat.slice(start, end).slice(0, max);
+    return `${start > 0 ? '…' : ''}${body}${end < flat.length ? '…' : ''}`;
+  };
+
   /** 索引行里「这一篇自己的内容时间」：正文更新时间与它自己的回复里最晚的一条。 */
   const latestContentAt = (row) => {
     let latest = Math.max(Number(row.updated_at ?? 0), Number(row.created_at ?? 0));
@@ -269,6 +289,55 @@ export function createAiStore({ db, documentSource, tablePrefix = DEFAULT_PREFIX
 
     corpusHash() {
       return fingerprintOf(api.corpusDocuments({ withContent: true, withReplies: true }));
+    },
+
+    /*
+     * LOCAL PATCH (see LOCAL-PATCHES.md): 语料检索（标题 + 正文）。
+     *
+     * 上游只有「按 id 取一篇」和「整站指纹」，没有检索接口 —— 站内那个「搜标题…」
+     * 是前端拿 /api/ai/site 报到的几十篇在本地过滤，正文（尤其 wiki 词条正文）根本搜不到。
+     * 这里在索引表上做大小写无关的子串匹配：命中的标题排前面，正文命中给一段上下文；
+     * 全库几百篇、几 MB，一次扫描几十毫秒，用不着上 FTS 表。
+     */
+    searchCorpus({ query = '', limit = 20 } = {}) {
+      const keyword = String(query ?? '').trim();
+      const needle = keyword.toLowerCase();
+      const rows = statements.listIndex.all();
+      if (!needle) return { query: keyword, documents: rows.length, total: 0, items: [] };
+
+      const max = Math.min(Math.max(Number(limit) || 20, 1), 50);
+      const hits = [];
+      for (const row of rows) {
+        const title = String(row.title ?? '');
+        const content = String(row.content ?? '');
+        const titleAt = title.toLowerCase().indexOf(needle);
+        const contentAt = content.toLowerCase().indexOf(needle);
+        if (titleAt < 0 && contentAt < 0) continue;
+        const meta = safeJson(row.meta_json, {});
+        const replies = Number(row.reply_count) || 0;
+        hits.push({
+          id: String(row.document_id),
+          title,
+          board: String(meta.board ?? ''),
+          author: String(meta.author ?? ''),
+          replyCount: replies,
+          updatedAt: Number(row.updated_at) || 0,
+          // 标题命中一律排在只命中正文的前面；正文越靠前、回复越多越靠前
+          inTitle: titleAt >= 0,
+          snippet: excerptAround(content, Math.max(contentAt, 0), needle.length),
+          score:
+            (titleAt >= 0 ? 1000 - Math.min(titleAt, 200) : 0) +
+            (contentAt >= 0 ? 200 - Math.min(Math.floor(contentAt / 40), 200) : 0) +
+            Math.min(replies, 30),
+        });
+      }
+      hits.sort((a, b) => b.score - a.score || a.id.localeCompare(b.id, 'en'));
+      return {
+        query: keyword,
+        documents: rows.length,
+        total: hits.length,
+        items: hits.slice(0, max).map(({ score, ...item }) => item),
+      };
     },
 
     /*

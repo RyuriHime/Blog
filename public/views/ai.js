@@ -155,6 +155,42 @@ function aiPostPanelHtml(post, aiInfo) {
 /** 逐篇分类默认只渲染这么多行：554 篇文档一次全铺开是几十屏，其余点「显示全部」再展开。 */
 const AI_LIST_LIMIT = 30;
 
+/** 语料检索的最短关键词（与后端 forum-ai 的 SEARCH_MIN_LENGTH 一致）。 */
+const AI_SEARCH_MIN = 2;
+
+/**
+ * 语料检索的一条命中（`/api/ai/search`）：标题 + 一段上下文片段。
+ *
+ * 链接仍走 `#/post/<id>`：wiki 词条的影子帖会由 doc 模块改道到积木页，正文命中时给片段，
+ * 只命中标题的（片段为空）就不画那一行。
+ */
+function aiSearchHitHtml(item) {
+  const meta = [item.board, item.author, item.replyCount ? `${Fmt.fmtNum(item.replyCount)} 条回复` : '']
+    .filter(Boolean)
+    .join(' · ');
+  return `
+    <a class="ai-hit" href="#/post/${esc(String(item.id ?? ''))}">
+      <span class="ai-hit-title">${esc(item.title || '（无标题）')}${
+        item.wiki ? '<span class="ai-hit-tag">Wiki 词条</span>' : ''
+      }</span>
+      ${item.snippet ? `<span class="ai-hit-snippet">${esc(item.snippet)}</span>` : ''}
+      ${meta ? `<span class="ai-hit-meta">${esc(meta)}</span>` : ''}
+    </a>`;
+}
+
+/** 语料检索结果块（events.js 的 ai-list-search 拿到接口结果后往里塞）。 */
+function aiSearchHitsHtml(data) {
+  const items = data?.items ?? [];
+  const query = String(data?.query ?? '');
+  const documents = Fmt.fmtNum(data?.documents ?? 0);
+  if (!items.length) return `<div class="ai-hits-head">${documents} 篇语料里没搜到「${esc(query)}」</div>`;
+  const total = Number(data?.total ?? items.length);
+  const more = total > items.length ? `，先看前 ${items.length} 篇` : '';
+  return `
+    <div class="ai-hits-head">${documents} 篇语料里搜到 ${Fmt.fmtNum(total)} 篇（标题或正文命中）${more}</div>
+    <div class="ai-hits-list">${items.map(aiSearchHitHtml).join('')}</div>`;
+}
+
 /** 逐篇分类的一行。状态写进 `data-ai-status`，卡内的「已解读 / 未解读」筛选直接读它。 */
 function aiDocRowHtml(doc) {
   return `
@@ -211,8 +247,9 @@ function aiAllDocsHtml(posts, pendingCount, isAdmin) {
           <button class="ai-scope is-on" type="button" data-action="ai-list-scope" data-scope="all">全部 ${Fmt.fmtNum(posts.length)}</button>
           <button class="ai-scope" type="button" data-action="ai-list-scope" data-scope="done">已解读 ${Fmt.fmtNum(doneCount)}</button>
           <button class="ai-scope" type="button" data-action="ai-list-scope" data-scope="pending">未解读 ${Fmt.fmtNum(posts.length - doneCount)}</button>
-          <input class="ai-search" type="search" data-action="ai-list-search" placeholder="搜标题…" aria-label="按标题筛选" />
+          <input class="ai-search" type="search" data-action="ai-list-search" placeholder="搜标题或正文…" aria-label="搜索语料（标题或正文）" />
         </div>
+        <div class="ai-hits" data-ai-hits hidden></div>
         <div class="ai-posts wide" data-ai-list="1" data-scope="all"${clipped ? ' data-clip="1"' : ''}>${posts
           .map(aiDocRowHtml)
           .join('')}</div>
@@ -335,7 +372,7 @@ export { aiChip };
 export { aiIdOf };
 export { aiPostLink };
 export { aiAskFormHtml };
-export { aiAnswerHtml };
+export { aiAnswerHtml, aiSearchHitsHtml, AI_SEARCH_MIN };
 export { aiReviewCardHtml };
 export { aiPostPanelHtml };
 export { viewAI };

@@ -39,6 +39,12 @@ export const fail = (status, code, message) => ({ status, body: { ok: false, err
 const errorText = (error) => String(error?.message ?? error).slice(0, 300);
 
 /**
+ * 语料检索的最短关键词（LOCAL PATCH，见 LOCAL-PATCHES.md 的 M 节）。
+ * 一个字太吵：中文里「图」能命中几百篇，前后端都按这个下限拦一道。
+ */
+export const SEARCH_MIN_LENGTH = 2;
+
+/**
  * 失败时模型原始输出的开头一段（`ai.mjs` 在 `ai_bad_json` 上挂在 `details.rawOutput`）。
  * 存进缓存的 `errorDetail` 列：下次再出现「不是合法 JSON」，能直接看出是截断还是格式错，
  * 不用再去猜（失败记录里只有一句错误文案是查不出原因的）。
@@ -399,8 +405,39 @@ export function createAiHandlers(deps = {}) {
       });
     },
 
+    /**
+     * GET /api/ai/search?q=…&limit=20 —— 在语料里搜（标题 + 正文，wiki 词条正文也在内）。
+     *
+     * LOCAL PATCH (see LOCAL-PATCHES.md 的 M 节): 上游没有检索接口，页面上那个「搜标题…」
+     * 只是拿 /api/ai/site 报到的几十篇在前端过滤，正文（尤其 wiki 词条）根本搜不到。
+     * 和别的读接口一样要求登录：命中的片段就是正文本身，不该给未登录的人看。
+     */
+    async search(ctx) {
+      requireUser(ctx);
+      const rawUrl = String(ctx.req?.url ?? '');
+      const search = rawUrl ? new URL(rawUrl, 'http://localhost').searchParams : null;
+      const query = String(search?.get('q') ?? ctx.query?.q ?? '').trim();
+      const limit = Number(search?.get('limit') ?? ctx.query?.limit ?? 20) || 20;
+      const docs = store.corpusStats().documents;
+      if (query.length < SEARCH_MIN_LENGTH) {
+        return ok({ query, minLength: SEARCH_MIN_LENGTH, documents: docs, total: 0, items: [] });
+      }
+
+      const found = store.searchCorpus({ query, limit });
+      // 语料里的 wiki 词条用的是影子帖 id，标一下让前端知道这是词条（链接走 #/post/<id> 会改道积木页）
+      const wikiAnchors = new Set(wikiPageList().map((page) => String(page.anchorPostId ?? '')).filter(Boolean));
+      return ok({
+        query: found.query,
+        minLength: SEARCH_MIN_LENGTH,
+        documents: found.documents,
+        total: found.total,
+        items: found.items.map((item) => ({ ...item, wiki: wikiAnchors.has(String(item.id)) })),
+      });
+    },
+
     /** POST /api/ai/corpus/analyze —— 重新整理全库（默认仅管理员）。 */
     async analyzeCorpus(ctx) {
+
       const user = requireAdmin(ctx);
       await beforeWrite(ctx);
       const documents = store.corpusDocuments({ withContent: true, withReplies: true });
@@ -500,6 +537,7 @@ export function createAiRouter(handlers, { prefix = '/api/ai' } = {}) {
   const table = [
     ['GET', `${prefix}/status`, handlers.status, false],
     ['GET', `${prefix}/documents/:id`, handlers.getReview, true],
+    ['GET', `${prefix}/search`, handlers.search, false],
     ['POST', `${prefix}/documents/:id/analyze`, handlers.analyzeDocument, true],
     ['POST', `${prefix}/documents/analyze-pending`, handlers.analyzePending, true],
     ['GET', `${prefix}/corpus`, handlers.getCorpusReport, true],

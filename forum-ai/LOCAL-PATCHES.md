@@ -363,6 +363,35 @@ AI 接口没有返回内容（finish_reason=length，提示 8840 / 生成 3000 t
 
 ---
 
+## M. 没有语料检索：「搜标题」搜不到 wiki，也搜不到正文（乙类）
+
+**现象**：`#/ai` 页头那个框写着「搜标题…」，但它只是**在前端已经渲染出来的前 30 行上按标题过滤**
+（宿主 `public/views/ai.js` 的 `AI_LIST_LIMIT = 30`），而这份列表又只来自 `/api/ai/site` 报告里 `readingPath` + `topics[].documentIds`
+去重后的 80 条。于是在线上：wiki 词条搜不到（它们大多不在报告列表里），**就算在，也只能按标题搜 —— 正文里写了什么都搜不出来**。
+用户原话：「这里的搜索无法搜到wiki」。K 节把整页正文喂进了语料之后，这一条就变成明摆着的缺口：内容有了，没有检索的入口。
+
+**原因**：作者包**根本没有检索接口** —— `createAiRouter()` 只暴露 `GET /status`、`GET /posts/:id`、`POST /posts/:id/analyze`、
+`POST /posts/analyze-pending`、`GET /site`、`POST /site/analyze`、`DELETE /site`、`DELETE /cache`、`POST /ask`（AI 侧没有 search 路由）。
+语料只被当成「喂给模型的材料」，从来没被当成一个可以查的库。
+
+**我们的修法**（不改宿主语料，只在包内加一条只读检索 + 宿主前端接上）：
+
+| 位置 | 改动 |
+|---|---|
+| `src/store-sqlite.mjs` | 新增 `excerptAround(text, at, matchLength, { width = 50, max = 160 })`（命中处左右各 50 字、截 160、两端补 `…`）与 api `searchCorpus({ query, limit })`：遍历 `ai_corpus_index` 的标题 + 正文做大小写无关子串匹配，返回 `{ query, documents, total, items: [{ id, title, board, author, replyCount, updatedAt, inTitle, snippet }] }`；排序 = 标题命中（越靠前越优先）→ 正文命中（越靠前越优先）→ 回复多的；`limit` 夹 1..50 |
+| `src/routes.mjs` | 新增 `GET /search?q=&limit=`（**要登录**）：handler 的 ctx 里没有 query 字段，所以自己从 `ctx.req.url` 解析；两字以下只回 `{ minLength: 2, total: 0, items: [] }`；每个命中项附 `wiki: true/false`（用 `wikiPageList()` 的影子帖 id 集合判断），前端据此画「Wiki 词条」小标 |
+| `src/mount.mjs` | 路由表加 `['GET', `${basePath}/search`, handlers.search, false]` |
+| 宿主 `public/views/ai.js` | 输入框占位改成「搜标题或正文…」，新增 `aiSearchHitsHtml()` / `aiSearchHitHtml()` 与 `<div class="ai-hits" data-ai-hits hidden></div>` 落点 |
+| 宿主 `public/core/events.js` | 本地按标题过滤照旧（列表不必等后端），另加 250ms 防抖的后端检索；回来时输入已变就丢弃；失败把原因写进结果卡的头一行 |
+| 宿主 `public/css/95-ai.css` | `.ai-hits` / `.ai-hit` / `.ai-hit-tag` 等一整套样式 |
+
+**同步改过的作者文件**：`selftest.mjs` 在「▶ SQLite 存储层」加 7 项（正文命中、命中片段、语料总数、标题命中优先、板块与回复数、limit 只截条数、空关键词）；
+`selftest-mount.mjs` 加「▶ 语料检索」7 项（200、正文命中、片段、标题命中、limit、两字以下 `minLength`、未登录 401）；
+`scripts/smoke-ai.mjs` 加 6 项（同样这几种，走真实 HTTP）；宿主 `scripts/check-frontend.mjs`（`#/ai` 渲染出的 `data-ai-hits` / 新占位 / 老的本地过滤钩子）
+与 `scripts/check-ui-contract.mjs`（真的打到 `/api/ai/search`、有防抖与最短长度、结果有落点）各加守卫；`README.md` 接口表补 `GET /search`。
+
+---
+
 ## 附：作者包的其它小问题（不影响功能，仅记录）
 
 1. `forum-ai/src/mount.mjs` 顶部的用法注释写的是 `mountForumAi({ db, resolveUser, baseDir: ROOT, aiDir: join(ROOT,'forum-ai') })`，但**实际函数签名没有 `baseDir` / `aiDir` 这两个参数**（注释与实现不一致）。
@@ -378,12 +407,12 @@ AI 接口没有返回内容（finish_reason=length，提示 8840 / 生成 3000 t
 
 | 测试 | 期望 |
 |---|---|
-| `node forum-ai/selftest-mount.mjs` | 通过 42 项，失败 0 项 |
-| `node forum-ai/selftest.mjs` | 通过 169 项，失败 0 项 |
-| `node scripts/smoke-ai.mjs` | 通过 76 项，失败 0 项 |
+| `node forum-ai/selftest-mount.mjs` | 通过 49 项，失败 0 项 |
+| `node forum-ai/selftest.mjs` | 通过 176 项，失败 0 项 |
+| `node scripts/smoke-ai.mjs` | 通过 82 项，失败 0 项 |
 | `node scripts/smoke.mjs` | 通过 237 项，失败 0 项 |
 | `node scripts/check-golden.mjs` | 通过 88 项，差异 0 项（对外行为与改造前一致） |
-| `node scripts/check-ui-contract.mjs` | 通过 319 项（下限 317），问题 0 项 |
+| `node scripts/check-ui-contract.mjs` | 通过 322 项（下限 317），问题 0 项 |
 | `node scripts/check-encoding.mjs` | 已检查 210 个文件（下限 205），中文片段断言 84 条 |
 
-合计 **931 项**（2026-10 复跑实测；数量随轮次增删会变，以各脚本自己打印的下限为准）。另外 `node scripts/check-encoding.mjs` 在 Linux 上会报 `ENOENT ... start.cmd` —— 它硬编码要检查 `start.cmd`（Windows 专用文件、故意不上传），**这个失败是预期的，不是问题**。
+合计 **954 项**（2026-10 复跑实测；数量随轮次增删会变，以各脚本自己打印的下限为准）。另外 `node scripts/check-encoding.mjs` 在 Linux 上会报 `ENOENT ... start.cmd` —— 它硬编码要检查 `start.cmd`（Windows 专用文件、故意不上传），**这个失败是预期的，不是问题**。
