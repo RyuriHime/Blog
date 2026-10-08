@@ -144,6 +144,94 @@ function openTab(href) {
   return true;
 }
 
+/**
+ * 让 Tab 在文本框里**真的缩进**，而不是把焦点跳到下一个控件上。
+ *
+ * 为什么要有这个：写代码、写脚本的地方，Tab 不能缩进等于没法写 ——
+ * 用户只能手打空格，还得数着打几个。这是站内被抱怨最久的一条
+ * （早先一条测试动态的正文干脆叫 `imveryangrybecauseicantusetabinthecodeblocks`）。
+ *
+ * `target` 可以是 textarea 本身，也可以是**装着 textarea 的容器** ——
+ * 容器那种走事件委托。积木模式的块是随时插入、随时整页重画的，
+ * 一个个挂监听会漏掉后来的那些；委托只挂一次，永远不漏。
+ *
+ * 行为（和常见编辑器对齐）：
+ *   · 没选中东西：Tab 在光标处插一个制表符；Shift+Tab 往左退一级缩进。
+ *   · 选中了东西：Tab 把碰到的每一行都缩进一级，Shift+Tab 反向，选区保留。
+ *
+ * 改完派发一次 `input`：实时预览、自动保存这些都是挂在 `input` 上的既有监听，
+ * 这里不该绕过它们去调私有函数。
+ */
+const OUTDENT_RE = /^(\t| {1,4})/;
+
+/** 写回内容 + 选区，再派发 input。假 DOM 没有 Event / dispatchEvent，吞掉即可 —— 缩进本身已经生效。 */
+function writeTextarea(textarea, value, start, end) {
+  textarea.value = value;
+  if (typeof textarea.setSelectionRange === 'function') textarea.setSelectionRange(start, end);
+  try {
+    textarea.dispatchEvent(new Event('input', { bubbles: true }));
+  } catch {
+    /* 无头测试里的假 DOM */
+  }
+}
+
+function applyIndent(textarea, unit, outdent) {
+  const value = String(textarea.value ?? '');
+  let start = Number(textarea.selectionStart ?? 0);
+  let end = Number(textarea.selectionEnd ?? 0);
+  if (!Number.isFinite(start) || start < 0) start = 0;
+  if (!Number.isFinite(end) || end < 0) end = 0;
+  if (end < start) [start, end] = [end, start];
+
+  const lineStartOf = (index) => value.lastIndexOf('\n', Math.max(0, index - 1)) + 1;
+
+  // 没选区：只在光标处动一个缩进单位，整行不跟着挪 —— 写 Markdown 时这样最可预期。
+  if (start === end) {
+    if (!outdent) {
+      writeTextarea(textarea, value.slice(0, start) + unit + value.slice(end), start + unit.length, start + unit.length);
+      return;
+    }
+    const lineFrom = lineStartOf(start);
+    const leading = value.slice(lineFrom).match(OUTDENT_RE)?.[0] ?? '';
+    if (!leading) return;
+    // 整行退一级，光标跟着左移同样的格数（不会退到上一行去）。
+    const at = Math.max(lineFrom, start - leading.length);
+    writeTextarea(textarea, value.slice(0, lineFrom) + value.slice(lineFrom + leading.length), at, at);
+    return;
+  }
+
+  // 有选区：碰到的每一行整行缩进 / 反缩进。
+  const from = lineStartOf(start);
+  // 选区正好停在某一行的行首时，那一行不算被碰到。
+  const to = end === lineStartOf(end) ? end - 1 : (() => {
+    const newline = value.indexOf('\n', end);
+    return newline === -1 ? value.length : newline;
+  })();
+  const chunk = value.slice(from, to);
+  if (!chunk) return;
+  const lines = chunk.split('\n');
+  const mapped = lines.map((line) => (outdent ? line.replace(OUTDENT_RE, '') : unit + line));
+  const changed = mapped.join('\n');
+  const next = value.slice(0, from) + changed + value.slice(to);
+  // 光标按实际增删的字数平移，再夹回合法范围 —— 整块反缩进时第一行会变短，
+  // 不夹的话选区左端会跑到 0 左边去（假 DOM 里就照出来了）。
+  const nextStart = Math.max(0, Math.min(next.length, start + (mapped[0].length - lines[0].length)));
+  const nextEnd = Math.max(nextStart, Math.min(next.length, end + (changed.length - chunk.length)));
+  writeTextarea(textarea, next, nextStart, nextEnd);
+}
+
+function indentTextarea(target, options = {}) {
+  if (typeof target?.addEventListener !== 'function') return;
+  const unit = options.unit ?? '\t';
+  target.addEventListener('keydown', (event) => {
+    if (event.key !== 'Tab') return;
+    const textarea = event.target;
+    if (textarea?.tagName !== 'TEXTAREA') return;
+    event.preventDefault();
+    applyIndent(textarea, unit, Boolean(event.shiftKey));
+  });
+}
+
 // ── 导出 ──────────────────────────────────────────────────────────────
 export { ui };
 export { $ };
@@ -155,5 +243,6 @@ export { toast };
 export { copyText };
 export { selectText };
 export { openTab };
+export { indentTextarea };
 
 /* @hand-written */

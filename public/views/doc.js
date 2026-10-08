@@ -25,7 +25,7 @@
 //
 // 权限只做「藏按钮」，真正的判断在后端 —— 前端藏起来的按钮不叫权限。
 
-import { $, emptyHtml, esc, loadingHtml, toast, ui } from '../core/dom.js';
+import { $, emptyHtml, esc, indentTextarea, loadingHtml, toast, ui } from '../core/dom.js';
 import { api, withButtonBusy } from '../core/api.js';
 import { toastError } from '../core/errors.js';
 import { navigate } from '../core/router.js';
@@ -1529,16 +1529,9 @@ function mountSourceTools() {
   };
 
   textarea.addEventListener('input', paint);
-  // Tab 键插两个空格 —— 源码里要写脚本，没有缩进等于没法写。
-  textarea.addEventListener('keydown', (event) => {
-    if (event.key !== 'Tab') return;
-    event.preventDefault();
-    const start = textarea.selectionStart ?? 0;
-    const end = textarea.selectionEnd ?? 0;
-    if (typeof textarea.setRangeText === 'function') textarea.setRangeText('  ', start, end, 'end');
-    else textarea.value = `${textarea.value.slice(0, start)}  ${textarea.value.slice(end)}`;
-    paint();
-  });
+  // Tab 缩进不在这儿挂：它是 `ensureDelegate()` 里挂在 `ui.app` 上的**一份**委托，
+  // 源码 textarea 与积木模式的每个块字段框共用（见 `../core/dom.js` 的 `indentTextarea`）。
+  // 以前这里自己挂了一份、只插两个空格，积木模式那边就完全没有 —— 一块一块填代码的人按 Tab 只会跳走焦点。
 
   paint();
   mountDocAiPanel(status);
@@ -2692,6 +2685,9 @@ function ensureDelegate() {
   ui.app.addEventListener('change', onEditorInput);
   // 广场筛选栏里「改一下就该立刻见效」的那两颗（只勾自己 / 换标签）单独挂 —— 它们不在编辑器里。
   ui.app.addEventListener('change', onFilterChange);
+  // Tab 缩进：挂在 ui.app 上而不是逐个 textarea 上 —— 积木模式的块随时插入、整页随时重画，
+  // 一个个挂必然漏；委托还让源码 textarea 与每个块字段框自动共用同一套行为。
+  indentTextarea(ui.app);
 }
 
 /**

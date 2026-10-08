@@ -323,6 +323,48 @@ check(
 check('首页顶部仍有编辑框可发帖（feed-composer）', /feed-composer/.test(read('views/timeline.js')));
 
 /* ================================================================== */
+/* 三·6、Tab 缩进：源码框与积木模式的块字段框都得能按                    */
+/* ================================================================== */
+
+console.log('\n▶ Tab 缩进');
+
+{
+  const domJs = read('core/dom.js');
+  const docJs = read('views/doc.js');
+
+  check(
+    'core/dom.js 导出了 indentTextarea',
+    /export \{[^}]*\bindentTextarea\b[^}]*\}/.test(domJs),
+    'dom.js 没导出 indentTextarea，别的模块拿不到',
+  );
+  check(
+    'indentTextarea 只认 Tab，并且会拦下默认行为（不拦焦点就跳走了）',
+    /event\.key !== 'Tab'[\s\S]{0,400}?event\.preventDefault\(\)/.test(domJs),
+    'indentTextarea 里没有「只认 Tab + preventDefault」这对组合',
+  );
+  check(
+    "缩进单位是制表符 \\t（用户要的是能按 Tab，不是继续插空格）",
+    /options\.unit \?\? '\\t'/.test(domJs),
+    "indentTextarea 的默认缩进单位不是 '\\t'",
+  );
+  check(
+    'doc.js 引进了 indentTextarea',
+    /import \{[^}]*\bindentTextarea\b[^}]*\} from '\.\.\/core\/dom\.js'/.test(docJs),
+    'doc.js 没 import indentTextarea',
+  );
+  check(
+    'doc.js 在 ui.app 上挂了一份委托（源码框与块字段框共用同一套行为）',
+    /addEventListener\('change', onFilterChange\)[\s\S]{0,400}?indentTextarea\(ui\.app\)/.test(docJs),
+    'ensureDelegate() 里没挂 indentTextarea(ui.app) —— 积木模式的块字段框还是按不了 Tab',
+  );
+  check(
+    "源码模式里那份「Tab 插两个空格」的旧处理器已经删掉（留着会跟新委托抢同一个按键）",
+    !/setRangeText\('  '/.test(docJs),
+    "doc.js 里还留着 setRangeText('  ')",
+  );
+}
+
+/* ================================================================== */
 /* 四、布局与窄屏                                                      */
 /* ================================================================== */
 

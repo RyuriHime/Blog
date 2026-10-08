@@ -3334,6 +3334,84 @@ if (!state.theme) problems.push('state.theme 没被初始化');
   console.log('  ✅ 交互：公告页翻页带着页码去取，首页那块只肯要 5 条');
 }
 
+/*
+ * ---- Tab 缩进：文本框里按 Tab 必须真的缩进 ----
+ *
+ * 这是站内被抱怨最久的一条 —— 早先一条测试动态的正文干脆叫
+ * `imveryangrybecauseicantusetabinthecodeblocks`。以前只有源码模式的 textarea
+ * 自己挂了一份处理器、插的还是两个空格；积木模式那些块字段框**一份都没有**，
+ * 按 Tab 直接把焦点跳走，想缩进只能手打空格。
+ *
+ * 现在统一走 `public/core/dom.js` 的 `indentTextarea`，挂在 `ui.app` 上做事件委托。
+ * 这里照那条委托的实际走法验一遍：假 DOM 没有 `dispatchEvent`，所以把容器上挂的
+ * keydown 处理器取出来自己调 —— 测的正是「用户按下那个键时文本会变成什么」。
+ */
+{
+  const { indentTextarea } = await import(pathToFileURL(join(ROOT, 'public', 'core', 'dom.js')).href);
+
+  const handlers = [];
+  const host = { addEventListener: (type, handler) => handlers.push({ type, handler }) };
+  indentTextarea(host);
+  const onKeydown = handlers.find((item) => item.type === 'keydown')?.handler;
+
+  if (!onKeydown) {
+    problems.push('indentTextarea 没在容器上挂 keydown —— Tab 缩进根本没接线');
+  } else {
+    const press = (value, start, end, shiftKey = false) => {
+      const textarea = makeElement('textarea');
+      textarea.value = value;
+      textarea.selectionStart = start;
+      textarea.selectionEnd = end;
+      // 假 DOM 的 setSelectionRange 是空实现，这里让它真的记下来，好顺便核对光标。
+      textarea.setSelectionRange = (from, to) => { textarea.selectionStart = from; textarea.selectionEnd = to; };
+      let prevented = false;
+      onKeydown({ key: 'Tab', shiftKey, target: textarea, preventDefault() { prevented = true; } });
+      return { value: textarea.value, start: textarea.selectionStart, end: textarea.selectionEnd, prevented };
+    };
+
+    const cases = [
+      ['光标在行首按 Tab：插一个制表符', press('a\nb', 0, 0), '\ta\nb', 1, 1],
+      ['选中三行按 Tab：每行都缩进', press('a\nb\nc', 0, 5), '\ta\n\tb\n\tc', 1, 8],
+      ['选中两行 Shift+Tab：每行退一级', press('\ta\n\tb', 0, 6, true), 'a\nb', 0, 3],
+      ['四个空格缩进的行 Shift+Tab：退一级', press('    x', 5, 5, true), 'x', 1, 1],
+      ['没有缩进的行 Shift+Tab：原样不动', press('plain', 3, 3, true), 'plain', 3, 3],
+    ];
+    for (const [label, got, want, wantStart, wantEnd] of cases) {
+      if (got.value !== want) {
+        problems.push(`Tab 缩进：${label} —— 文本成了 ${JSON.stringify(got.value)}，该是 ${JSON.stringify(want)}`);
+      }
+      if (got.start !== wantStart || got.end !== wantEnd) {
+        problems.push(`Tab 缩进：${label} —— 光标落在 ${got.start}..${got.end}，该是 ${wantStart}..${wantEnd}`);
+      }
+      if (!got.prevented) {
+        problems.push(`Tab 缩进：${label} —— 没拦下默认行为，焦点还是会被 tab 走`);
+      }
+    }
+
+    // 不是 textarea 的地方必须放行：按钮、下拉之间用 Tab 跳焦点是正常操作，拦了就成骚扰。
+    const button = makeElement('button');
+    let preventedOnButton = false;
+    onKeydown({ key: 'Tab', shiftKey: false, target: button, preventDefault() { preventedOnButton = true; } });
+    if (preventedOnButton) {
+      problems.push('Tab 缩进把按钮 / 下拉上的 Tab 也拦了 —— 那些地方跳焦点是正常的，不该管');
+    }
+
+    // Enter 之类的键当然不该被动：只认 Tab。
+    // （这里必须真的发一个非 Tab 的键 —— 用上面那个 press() 等于自己骗自己，它恒发 Tab。）
+    const enterBox = makeElement('textarea');
+    enterBox.value = 'a';
+    enterBox.selectionStart = 1;
+    enterBox.selectionEnd = 1;
+    let enterPrevented = false;
+    onKeydown({ key: 'Enter', shiftKey: false, target: enterBox, preventDefault() { enterPrevented = true; } });
+    if (enterBox.value !== 'a' || enterPrevented) {
+      problems.push('Tab 缩进对非 Tab 键也动手了 —— 只该认 Tab');
+    }
+
+    console.log('  ✅ 交互：文本框里 Tab 真的缩进、Shift+Tab 真的退级，别的控件上放行');
+  }
+}
+
 if (problems.length) {
   console.log('\n发现的问题：');
   for (const item of problems) console.log(`  ❌ ${item}`);

@@ -403,7 +403,7 @@ forum/
 | `#/admin` | 管理后台（仅管理员） |
 | `#/docs` | 积木广场：可编程帖子 / 笔记 / 主页文档的列表，支持 `?kind=` `?scope=` `?mine=1` `?q=` `?tag=标签`（点卡片上的标签就是跳到这儿）`?drafts=1`（**草稿箱**：只有自己有草稿的那些，卡片上带「草稿」徽章）；两种排法 `▦ 网格` / `☰ 列表`（从上往下列下来），选择记在本地偏好 `forum:docsLayout` 里 |
 | `#/doc/:id` | 积木阅读页：块渲染结果、降级警告、修订记录、导出/导入、顶部挂着**标签**（点一下看同标签的积木），底下是**互动条**（点赞 / 踩 / 收藏 / 转发 / 关注作者 + AI 解读）—— 它挂在文档的锚点帖上，走 `GET /api/docs/:id/anchor`，不再需要跳到帖子页 |
-| `#/doc/:id/edit` | 积木编辑器：逐块编辑、上下移动、Markdown 双向、`ops` 增量改动、套模板、回滚、沙箱开关、标签（跟着同一个「保存」一起存）；**Markdown / 源码模式左侧挂着一个 AI 抽屉**（`public/views/doc-ai.js`）—— 对着它说一句话，右边这段正文就跟着改（整理格式、学术审查、加个积木块、写积木脚本），走的是 `/api/ai-edit/*` 同一套，结果只写回编辑区，落盘还是那颗「保存」 |
+| `#/doc/:id/edit` | 积木编辑器：逐块编辑、上下移动、Markdown 双向、`ops` 增量改动、套模板、回滚、沙箱开关、标签（跟着同一个「保存」一起存）；**两种编辑面（⚡ 源码 / 🧱 积木模式）里所有文本框都支持 `Tab` 缩进、`Shift+Tab` 退一级**（选中多行就整块缩进；用制表符，不是空格）；**Markdown / 源码模式左侧挂着一个 AI 抽屉**（`public/views/doc-ai.js`）—— 对着它说一句话，右边这段正文就跟着改（整理格式、学术审查、加个积木块、写积木脚本），走的是 `/api/ai-edit/*` 同一套，结果只写回编辑区，落盘还是那颗「保存」 |
 | `#/doc/:id/blocks` | 同一个编辑器的高级入口（默认落在积木模式）：块列表 + 当前块的 props 表单 |
 | `#/blocks` | 块类型表的老地址：进的是同一页 `#/dev`（页面没下线，收藏夹里的链接照样能开） |
 | `#/dev` | 开发者功能：块类型表（内置/自定义类型的 schema 速查 + 注册自己的块类型）+「我的脚本模板」（把自己常写的沙箱代码存下来，一键新建一篇只带这一块的积木） |
@@ -828,7 +828,7 @@ node scripts/feed-smoke.mjs        # 动态流端到端：191 项（含动态回
 node scripts/doc-smoke.mjs         # 积木（可编程帖子）端到端：694 项（含阅读页的回复区与转发区）
 node scripts/team-smoke.mjs        # 团队端到端：306 项（可见范围 / 越权 / 版本冲突 / 编辑权只归作者 / 文件柜 / 群聊 / 团队号 / 公告通知 / Markdown 与公式 / 帖子回复 / 加入申请与审核 / 隐藏团队 / 老库升级与坏库自愈）
 node scripts/check-ui-contract.mjs # 前端契约：CSS 类名 + API 字段 + 主题/头像/角色/私信/团队号/公告/剪贴板/公式/关注列表（已关注按钮）/详情与回复/申请与隐藏结构/编辑权与侧边抽屉/表重建与自愈/币已下线/本地偏好键读写一致（通过项数不下降哨兵：317）
-node scripts/ui-smoke.mjs          # 首页外壳轻量化 + 右侧栏抽屉 + 起始页与动态流地址 + 站务公告列表页 + 单条动态 #/feed/<id>（m05506 契约）：81 项
+node scripts/ui-smoke.mjs          # 首页外壳轻量化 + 右侧栏抽屉 + 起始页与动态流地址 + 站务公告列表页 + 单条动态 #/feed/<id>（m05506 契约）+ 编辑区与积木块字段框的 Tab 缩进：87 项
 node scripts/check-encoding.mjs    # 源码编码体检：BOM / 乱码 / 关键中文内容
 node scripts/check-notes-ui.mjs    # 笔记 UI
 node scripts/notes-smoke.mjs       # 笔记接口
@@ -849,7 +849,7 @@ node scripts/capture-fixtures.mjs  # 重采前端冒烟用的假数据（改了�
 check-encoding 210 文件 / 84 断言 · check-skeleton 47 项 · check-golden 88 项 0 差异
 check-markdown 72 · check-frontend 43 个页面 + 34 个模块静态扫描 · smoke 237 · smoke-ai 89
 ai-smoke 486 · feed-smoke 191 · doc-smoke 694 · team-smoke 306
-check-ui-contract 325 · check-notes-ui 33 · notes-smoke 44 · ui-smoke 81
+check-ui-contract 325 · check-notes-ui 33 · notes-smoke 44 · ui-smoke 87
 ```
 
 > 知识网络图（`knowledge-pack/` + `#/graph` + `/api/knowledge/*`）已在 2026-10 整条链路删除：
