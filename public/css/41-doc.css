@@ -80,6 +80,68 @@
   min-width: 0;
 }
 
+/* Markdown 工具条（源码模式顶部）：一组一组排开，行不够就换行；公式那组单独隔开。
+   按钮是纯文字/符号，靠 hover 才显出底色 —— 编辑区本来就满，工具条不该抢注意力。 */
+.doc-md-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  padding: 5px 8px;
+  margin-bottom: 8px;
+  border: 1px solid var(--border-soft);
+  border-radius: 9px;
+  background: var(--bg-soft);
+}
+
+.doc-md-tool-group {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.doc-md-tool-group + .doc-md-tool-group {
+  padding-left: 7px;
+  margin-left: 3px;
+  border-left: 1px solid var(--border-soft);
+}
+
+.doc-md-tool-label {
+  margin-right: 4px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.doc-md-tool {
+  min-width: 30px;
+  height: 28px;
+  padding: 0 7px;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text-dim);
+  font: inherit;
+  font-size: 13px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.doc-md-tool:hover {
+  background: var(--panel-2);
+  color: var(--text);
+  border-color: var(--border-soft);
+}
+
+.doc-md-tool:active {
+  transform: translateY(1px);
+}
+
+/* 公式那组用等宽字体，跟正文里的 LaTeX 看起来是一家的 */
+.doc-md-tool-math .doc-md-tool {
+  font-family: var(--font-mono, ui-monospace, Consolas, monospace);
+  color: var(--accent-fg);
+}
+
 .doc-md-side {
   display: flex;
   flex-direction: column;

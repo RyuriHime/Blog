@@ -1336,6 +1336,120 @@ function blocksEditorHtml(blocks) {
  * 为什么不做 CodeMirror：仓库的规矩是「零依赖、无构建」，而沙箱化的环境里
  * 没有网络、拉不到 vendor。一个 `textarea` + 服务端预览已经能写脚本、能看结果。
  */
+/**
+ * 源码视图顶上的 Markdown 工具条。
+ *
+ * 每个按钮只做一件事：把 Markdown 记号裹到当前选区（没选东西就插占位文字并选中它），
+ * 然后让 textarea 派发一次 `input` —— 自动保存与右侧实时预览都挂在那条线上，不用另接。
+ *
+ * 动作名与「动态」那边的编辑器（`compose.js`）保持一致（bold/italic/code/block/
+ * quote/list/link/mention），这里按源码模式的需要多给了标题、表格、分隔线，
+ * 以及一组公式：行内 `$…$`、行间 `$$…$$`，还有分式 / 根号 / 求和 / 积分 / 上下标。
+ */
+function mdToolbarHtml() {
+  const tool = (kind, label, title) =>
+    `<button class="doc-md-tool" type="button" data-doc-action="md" data-doc-md="${kind}" title="${esc(title)}">${label}</button>`;
+  return `<div class="doc-md-toolbar" data-doc-md-toolbar role="toolbar" aria-label="Markdown 工具条">
+    <span class="doc-md-tool-group">
+      ${tool('bold', '<b>B</b>', '粗体')}
+      ${tool('italic', '<i>I</i>', '斜体')}
+      ${tool('strike', '<s>S</s>', '删除线')}
+      ${tool('code', '&lt;/&gt;', '行内代码')}
+      ${tool('block', '{ }', '代码块')}
+    </span>
+    <span class="doc-md-tool-group">
+      ${tool('h2', 'H2', '二级标题')}
+      ${tool('h3', 'H3', '三级标题')}
+      ${tool('quote', '❝', '引用')}
+      ${tool('list', '•', '无序列表')}
+      ${tool('olist', '1.', '有序列表')}
+      ${tool('hr', '—', '分隔线')}
+    </span>
+    <span class="doc-md-tool-group">
+      ${tool('link', '🔗', '链接')}
+      ${tool('image', '🖼', '图片')}
+      ${tool('table', '▦', '表格')}
+      ${tool('mention', '@', '@提及')}
+    </span>
+    <span class="doc-md-tool-group doc-md-tool-math">
+      <span class="doc-md-tool-label">公式</span>
+      ${tool('math', '$x$', '行内公式 $…$')}
+      ${tool('mathblock', '$$', '行间公式 $$…$$')}
+      ${tool('frac', 'a/b', '分式 \\frac{a}{b}')}
+      ${tool('sqrt', '√', '根号 \\sqrt{x}')}
+      ${tool('sum', '∑', '求和 \\sum')}
+      ${tool('int', '∫', '积分 \\int')}
+      ${tool('script', 'x²', '上标 ^{}')}
+      ${tool('subscript', 'x₂', '下标 _{}')}
+    </span>
+  </div>`;
+}
+
+/** 工具条的落点：把记号裹进选区 / 前缀整行 / 另起一段插入。 */
+function applyMdTool(kind) {
+  const area = $('[data-doc-source]');
+  if (!docState.editor || !area || !kind) return;
+  const value = area.value ?? '';
+  const start = area.selectionStart ?? 0;
+  const end = area.selectionEnd ?? 0;
+  const picked = value.slice(start, end);
+
+  const wrap = (before, after, placeholder) => {
+    const body = picked || placeholder;
+    area.value = `${value.slice(0, start)}${before}${body}${after}${value.slice(end)}`;
+    area.setSelectionRange(start + before.length, start + before.length + body.length);
+  };
+  const prefixLines = (prefix) => {
+    const lineStart = value.lastIndexOf('\n', Math.max(0, start - 1)) + 1;
+    const found = value.indexOf('\n', end);
+    const lineEnd = found === -1 ? value.length : found;
+    const block = value.slice(lineStart, lineEnd) || '这一行';
+    const next = block
+      .split('\n')
+      .map((line, index) => `${prefix.replace('$1', String(index + 1))}${line}`)
+      .join('\n');
+    area.value = `${value.slice(0, lineStart)}${next}${value.slice(lineEnd)}`;
+    area.setSelectionRange(lineStart, lineStart + next.length);
+  };
+  const insertBlock = (text) => {
+    const at = end || start;
+    const head = value.slice(0, at);
+    const gap = head && !head.endsWith('\n') ? '\n\n' : '';
+    area.value = `${head}${gap}${text}\n${value.slice(at)}`;
+    const caret = head.length + gap.length + text.length + 1;
+    area.setSelectionRange(caret, caret);
+  };
+
+  if (kind === 'bold') wrap('**', '**', '粗体');
+  else if (kind === 'italic') wrap('*', '*', '斜体');
+  else if (kind === 'strike') wrap('~~', '~~', '删除线');
+  else if (kind === 'code') wrap('`', '`', 'code');
+  else if (kind === 'block') wrap('\n```js\n', '\n```\n', '// 在这里写代码');
+  else if (kind === 'h2') prefixLines('## ');
+  else if (kind === 'h3') prefixLines('### ');
+  else if (kind === 'quote') prefixLines('> ');
+  else if (kind === 'list') prefixLines('- ');
+  else if (kind === 'olist') prefixLines('$1. ');
+  else if (kind === 'hr') insertBlock('---');
+  else if (kind === 'link') wrap('[', '](https://example.com)', '链接文字');
+  else if (kind === 'image') wrap('![', '](https://example.com/a.png)', '图片说明');
+  else if (kind === 'mention') wrap('@', ' ', 'username');
+  else if (kind === 'table') insertBlock('| 列 1 | 列 2 |\n| --- | --- |\n| 内容 | 内容 |');
+  else if (kind === 'math') wrap('$', '$', '\\frac{a}{b}');
+  else if (kind === 'mathblock') insertBlock('$$\n\\frac{a}{b}\n$$');
+  else if (kind === 'frac') wrap('$\\frac{', '}{b}$', 'a');
+  else if (kind === 'sqrt') wrap('$\\sqrt{', '}$', 'x');
+  else if (kind === 'sum') wrap('$\\sum_{', '}^{n}$', 'i=1');
+  else if (kind === 'int') wrap('$\\int_{', '}^{b}$', 'a');
+  else if (kind === 'script') wrap('^{', '}', '2');
+  else if (kind === 'subscript') wrap('_{', '}', 'i');
+  else return;
+
+  area.focus();
+  // 派发一次 input：自动保存与右侧实时预览都监听它，工具条不必自己再走一遍。
+  area.dispatchEvent(new Event('input', { bubbles: true }));
+}
+
 function sourceEditorHtml(source) {
   // `name="content"` 是 AI 抽屉与旧外挂认「编辑区」用的：这里就是那个唯一的文本编辑框。
   return `<div class="card doc-panel">
@@ -1347,6 +1461,7 @@ function sourceEditorHtml(source) {
       ${DocAi.docAiHtml(docState.editor?.id ?? '')}
       <div class="doc-md-grid">
         <div class="doc-md-edit" data-doc-editor-host>
+          ${mdToolbarHtml()}
           <textarea class="doc-input doc-textarea doc-md" name="content" data-doc-source rows="26" spellcheck="false">${esc(source ?? '')}</textarea>
         </div>
         <div class="doc-md-side">
@@ -2648,6 +2763,7 @@ async function onAppClick(event) {
     if (panel) panel.hidden = !panel.hidden;
     return;
   }
+  if (action === 'md') return applyMdTool(node.dataset.docMd);
   if (action === 'block-save') return withBusy(() => saveBlock(blockId));
   if (action === 'source-save') return withBusy(() => saveBlockSource(blockId));
   if (action === 'wiki-open') return withBusy(() => openWikiPage(node.dataset.wikiName));
