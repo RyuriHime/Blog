@@ -822,7 +822,7 @@ node scripts/check-markdown.mjs    # ★ 正文渲染回归：72 项（站内链
 node scripts/check-frontend.mjs    # ★ 前端渲染冒烟：41 个页面全部渲染一遍 + 关注列表 / 主页关注名单卡（自己视角排文章前面、别人视角仍在最底下）/ 团队的文件柜/群聊/成员名单/团队号/公告/加入申请与审核/隐藏开关/设置与申请改右侧抽屉/帖子预览与详情回复（「💬 回复」按钮、编辑权只归作者）/ 动态回复 / 动态转发（点开才画框、发得出当前原文、计数跟着走、转不了的画静态计数）/ 积木页转发（转得出、发完留在原地、撤销得掉、互动条跟着重画）/ 转发出来的卡片写「转发了帖子」而纯引用写「引用了帖子」/ 公告页翻页带页码而首页那块只要 5 条 交互 + 裸调用未定义名字的静态扫描
 node scripts/smoke.mjs             # 后端端到端：237 项（临时独立库+端口，跑完自动清理）
 node scripts/smoke-ai.mjs          # AI 接口端到端：65 项
-node scripts/ai-smoke.mjs          # AI 接口端到端（更细的一套：校验 / 限流 / 额度 / 审查 / 模板与提示词漂移哨兵 / 能力目录只列接上了线的能力 / 用量面板分层）：476 项
+node scripts/ai-smoke.mjs          # AI 接口端到端（更细的一套：校验 / 限流 / 额度 / 审查 / 模板与提示词漂移哨兵 / 能力目录只列接上了线的能力 / 用量面板分层 / 跨日界的计数口径哨兵）：478 项
 node scripts/feed-smoke.mjs        # 动态流端到端：191 项（含动态回复、动态转发、帖子转发也发到动态、「仅团队」的可见范围）
 node scripts/doc-smoke.mjs         # 积木（可编程帖子）端到端：635 项（含阅读页的回复区与转发区）
 node scripts/team-smoke.mjs        # 团队端到端：306 项（可见范围 / 越权 / 版本冲突 / 编辑权只归作者 / 文件柜 / 群聊 / 团队号 / 公告通知 / Markdown 与公式 / 帖子回复 / 加入申请与审核 / 隐藏团队 / 老库升级与坏库自愈）
@@ -847,7 +847,7 @@ node scripts/capture-fixtures.mjs  # 重采前端冒烟用的假数据（改了�
 ```
 check-encoding 209 文件 / 84 断言 · check-skeleton 47 项 · check-golden 88 项 0 差异
 check-markdown 72 · check-frontend 41 个页面 + 34 个模块静态扫描 · smoke 237 · smoke-ai 65
-ai-smoke 476 · feed-smoke 191 · doc-smoke 690 · team-smoke 306
+ai-smoke 478 · feed-smoke 191 · doc-smoke 690 · team-smoke 306
 check-ui-contract 318 · check-notes-ui 33 · notes-smoke 44 · ui-smoke 80
 ```
 

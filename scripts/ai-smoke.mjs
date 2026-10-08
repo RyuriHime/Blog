@@ -21,6 +21,10 @@ import { spawn } from 'node:child_process';
 import { mkdirSync, openSync, readFileSync, rmSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { join, resolve } from 'node:path';
+// 第 21 节末尾那条「跨日界哨兵」要直接往审计表里塞一条**只被一个日窗口圈住**的合成账：
+// 光拿审计表自己数一遍抓不到「今日计数改回北京日窗口」的回归 —— 测试环境里所有账都是
+// 刚刚造的，UTC 日窗口与北京日窗口都圈得住它们，断言照样绿（见那一段的注释）。
+import { DatabaseSync } from 'node:sqlite';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
 // 第 19 节要用**运行时**那份白名单：真正决定 `blockPatchProblem` 放行谁的是它，
@@ -1809,6 +1813,39 @@ try {
   // 缓存命中 400，输出 200），登记的单价又是 Flash 高峰价，所以每次调用该是
   //   (600×2 + 400×0.04 + 200×8) / 1000000 = 0.002816 元
   // —— 期望值能一眼算出来，这条断言才算真的钉住了算术。
+  // ── 跨日界哨兵 ─────────────────────────────────────────────────────────────
+  // 「今日的计数」是配额闸门的口径（UTC 自然日），跟钱用的北京日不是一回事。
+  // 光把面板数字和审计表比一遍**抓不到**「有人把它改回北京日窗口」这条回归：测试里所有
+  // 账都是刚刚造的，两个窗口都圈得住它们，断言照样绿。所以这里往 keyed 那台的库里塞一条
+  // 合成账，让它只被其中一个窗口圈住 —— 两个日界相差 8 小时，取较早的那个 +1 小时，
+  // 必然落在那段 8 小时的带子里（在北京日窗口里就不在 UTC 日窗口里，反之亦然）。
+  // 读一次面板（before）→ 插标记 → 再读（keyedUsage）→ 断言 → 立刻删掉标记，
+  // 免得后面小节数到的账里混进这一条。
+  const beforeUsage = await keyedAdmin.call('/api/ai-edit/usage');
+  const beforeMe = beforeUsage.data?.me ?? {};
+  const beforeBilled = Number(beforeMe.today?.billed ?? -1);
+  check(
+    '金额：用量面板会告诉请求者「你是谁」（me.userId / me.username）',
+    Number.isInteger(beforeMe.userId) &&
+      beforeMe.userId > 0 &&
+      typeof beforeMe.username === 'string' &&
+      beforeMe.username !== '',
+    JSON.stringify({ userId: beforeMe.userId, username: beforeMe.username }),
+  );
+  const dayMs = 86400000;
+  const beijingOffsetMs = 8 * 3600000;
+  const utcDayStart = Date.now() - (Date.now() % dayMs);
+  const beijingDayStart = Math.floor((Date.now() + beijingOffsetMs) / dayMs) * dayMs - beijingOffsetMs;
+  const markerAt = Math.min(beijingDayStart, utcDayStart) + 3600000;
+  const markerInUtcDay = markerAt >= utcDayStart;
+  const expectedBilled = markerInUtcDay ? beforeBilled + 1 : beforeBilled;
+  const markerDb = new DatabaseSync(KEYED_DB_FILE);
+  const marker = markerDb
+    .prepare(
+      `INSERT INTO ai_op_logs (user_id, capability, action, target_type, target_id, status, reason, created_at)
+       VALUES (?, 'edit_content', 'draft', '', '', 'applied', 'ai-smoke 跨日界哨兵', ?)`,
+    )
+    .run(beforeMe.userId, markerAt);
   const keyedUsage = await keyedAdmin.call('/api/ai-edit/usage');
   const kSite = keyedUsage.data?.site?.today ?? {};
   const kTokens = kSite.tokens ?? {};
@@ -1827,11 +1864,8 @@ try {
     Number(kMe.tokens?.total) <= Number(kTokens.total) && Number(kMe.billed ?? 0) <= Number(kSite.billed ?? 0),
     JSON.stringify({ me: kMe.tokens?.total, site: kTokens.total, meBilled: kMe.billed, siteBilled: kSite.billed }),
   );
-  // 「今日的计数」是配额闸门的口径（UTC 自然日），跟钱用的北京日不是一回事。这条断言
-  // 拿审计表自己数一遍：面板上的 `me.today.billed` 应当等于自己今天的计费行数。若有人把
-  // 它改回北京日窗口，早上 8 点前后（两个日界之间）就会差出一整段，这条会红。
+  // 「今日的计数」拿审计表自己数一遍：面板上的 `me.today.billed` 应当等于自己今天的账。
   const kOps = await keyedAdmin.call('/api/ai-edit/ops?limit=100');
-  const utcDayStart = Date.now() - (Date.now() % 86400000);
   const quotaActions = ['read', 'draft', 'apply', 'publish', 'tool'];
   const myBilledToday = (kOps.data?.ops ?? []).filter(
     (op) => Number(op.createdAt ?? 0) >= utcDayStart && quotaActions.includes(op.action) && op.status !== 'blocked',
@@ -1841,6 +1875,24 @@ try {
     myBilledToday === Number(kMe.billed ?? -1),
     JSON.stringify({ ops: myBilledToday, panel: kMe.billed, utcDayStart }),
   );
+  // 这一条才是回归哨兵：合成账只被一个窗口圈住，所以只要窗口选错（北京日 / UTC 日 反了），
+  // 面板上的数字就会跟 expectedBilled 差 1 —— 不管跑测试的时候是几点。
+  check(
+    '金额：「我的今日计费」用的窗口是 UTC 日，不是北京日（跨日界的那条合成账只为一边 +1）',
+    Number(kMe.billed ?? -1) === expectedBilled,
+    JSON.stringify({
+      panel: kMe.billed,
+      expected: expectedBilled,
+      before: beforeBilled,
+      markerInUtcDay,
+      markerAt,
+      utcDayStart,
+      beijingDayStart,
+    }),
+  );
+  // 哨兵读完就把合成账删掉，后面小节看到的审计表跟插之前一模一样。
+  markerDb.prepare('DELETE FROM ai_op_logs WHERE id = ?').run(Number(marker.lastInsertRowid));
+  markerDb.close();
   check('金额：每次调用的用量都记全了（missing 为 0）', kTokens.missing === 0, JSON.stringify(kTokens));
   check(
     '金额：输入 = 命中 + 未命中，且每次调用一行（1000 / 400 / 200 × 次数）',
