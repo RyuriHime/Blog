@@ -516,6 +516,30 @@ AI 接口没有返回内容（finish_reason=length，提示 8840 / 生成 3000 t
 
 ---
 
+## P. 页头「已解读」比「语料」多（甲类，同日补）
+
+**现象**：`#/ai` 页头写着 **567 篇语料 · 573 篇已解读**，比语料多出 6 篇；`GET /api/ai/site` 也一样
+（`{"analyzed":573,"failed":0,"documents":567,"pending":0}`）。
+
+**原因**：`syncCorpus()` 会把**已经不在语料里的文档**从索引表删掉，但它对应的解读行留在
+`ai_document_reviews` 里（那是有价值的缓存，删了下次还得再花钱问一遍），而
+`reviewStats()` 用的是 `SELECT COUNT(*) FROM ai_document_reviews WHERE status = 'done'` ——
+**只数解读表、从不跟语料对账**。于是文档离开语料后，它的旧解读就永远挂在「已解读」上。
+「待整理」反而没这个毛病：`pendingDocuments()` 是遍历**索引表**算的，孤儿解读根本进不去，
+所以才会出现「573 已解读 / 0 待整理 / 567 语料」这种自相矛盾的三件套。
+
+**我们的修法**（计数跟语料对账，但**不删缓存**）：
+
+| 位置 | 改动 |
+|---|---|
+| `src/store-sqlite.mjs` | `countDone` / `countFailed` 改成 `JOIN ai_corpus_index`：只数**还在语料里**的篇目 |
+| `src/store-sqlite.mjs` | 新增 `countOrphanReviews`（`LEFT JOIN … WHERE i.document_id IS NULL`），`reviewStats()` 多报一个 `orphans`：不在语料里的旧解读既不冒充「已解读」，也不冒充「失败」，需要时能一眼看到它还在 |
+| `public/views/ai.js` | 顺带把过期横幅说清楚：以前只有一句「论坛内容有更新，这份整理可能已经过时」，现在写明**这份整理是按多少篇生成的、多久以前、现在多少篇**（`report.documentCount` + `createdAt` 本来就在接口里，只是没人用） |
+
+**同步改过的作者文件**：`selftest.mjs` +4 项（两篇都在语料里时两种状态各算一篇 / 语料里删掉的篇目不再算进「已解读、失败」/ 删掉的旧解读单独用 `orphans` 报到 / 已解读永远不会超过语料篇数）= **207 项**；`scripts/smoke-ai.mjs` +3 项（统计口径对账、删掉被解读过的积木后不再算进「已解读」、旧解读改记进 `orphans`）= **92 项**。
+
+---
+
 ## 附：作者包的其它小问题（不影响功能，仅记录）
 
 1. `forum-ai/src/mount.mjs` 顶部的用法注释写的是 `mountForumAi({ db, resolveUser, baseDir: ROOT, aiDir: join(ROOT,'forum-ai') })`，但**实际函数签名没有 `baseDir` / `aiDir` 这两个参数**（注释与实现不一致）。
@@ -532,11 +556,11 @@ AI 接口没有返回内容（finish_reason=length，提示 8840 / 生成 3000 t
 | 测试 | 期望 |
 |---|---|
 | `node forum-ai/selftest-mount.mjs` | 通过 49 项，失败 0 项 |
-| `node forum-ai/selftest.mjs` | 通过 203 项，失败 0 项 |
-| `node scripts/smoke-ai.mjs` | 通过 89 项，失败 0 项 |
+| `node forum-ai/selftest.mjs` | 通过 207 项，失败 0 项 |
+| `node scripts/smoke-ai.mjs` | 通过 92 项，失败 0 项 |
 | `node scripts/smoke.mjs` | 通过 237 项，失败 0 项 |
 | `node scripts/check-golden.mjs` | 通过 88 项，差异 0 项（对外行为与改造前一致） |
 | `node scripts/check-ui-contract.mjs` | 通过 325 项（下限 317），问题 0 项 |
-| `node scripts/check-encoding.mjs` | 已检查 210 个文件（下限 205），中文片段断言 84 条 |
+| `node scripts/check-encoding.mjs` | 已检查 211 个文件（下限 205），中文片段断言 84 条 |
 
-合计 **991 项**（2026-10 复跑实测；数量随轮次增删会变，以各脚本自己打印的下限为准）。另外 `node scripts/check-encoding.mjs` 在 Linux 上会报 `ENOENT ... start.cmd` —— 它硬编码要检查 `start.cmd`（Windows 专用文件、故意不上传），**这个失败是预期的，不是问题**。
+合计 **998 项**（2026-10 复跑实测；数量随轮次增删会变，以各脚本自己打印的下限为准）。另外 `node scripts/check-encoding.mjs` 在 Linux 上会报 `ENOENT ... start.cmd` —— 它硬编码要检查 `start.cmd`（Windows 专用文件、故意不上传），**这个失败是预期的，不是问题**。

@@ -364,6 +364,12 @@ try {
   check('主题下带出帖子摘要', siteIndex.data.topics[0].posts.length >= 1 && siteIndex.data.topics[0].posts[0].title.length > 0);
   check('阅读路径带出帖子对象', siteIndex.data.readingPath.every((step) => step.post && step.post.id), JSON.stringify(siteIndex.data.readingPath));
   check('统计里有已解读篇数', siteIndex.data.stats.analyzed >= 2, JSON.stringify(siteIndex.data.stats));
+  check(
+    '统计口径对账：已解读不会超过语料篇数（孤儿解读单独记）',
+    typeof siteIndex.data.stats.orphans === 'number' &&
+      siteIndex.data.stats.analyzed <= siteIndex.data.stats.documents,
+    JSON.stringify(siteIndex.data.stats),
+  );
   check('整理后不算过期', siteIndex.data.stale === false, `stale=${siteIndex.data.stale}`);
 
   console.log('\n▶ 语料检索');
@@ -494,6 +500,17 @@ try {
 
   const siteAfter = await member2.call('/api/ai/site');
   check('内容变化后全站整理仍标记过期', siteAfter.data?.stale === true, `stale=${siteAfter.data?.stale}`);
+
+  // 那篇被解读过的积木删掉后：它不再算进「已解读」，旧解读改记在 orphans 里（缓存不删）
+  const delDoc = await admin2.call(`/api/docs/${newDocId}`, { method: 'DELETE' });
+  check('删掉那篇被解读过的积木', delDoc.status === 200, `status=${delDoc.status} ${JSON.stringify(delDoc.error ?? delDoc.body).slice(0, 120)}`);
+  await member2.call(`/api/ai/search?q=${encodeURIComponent('Node')}`); // 触发一次语料同步
+  const siteOrphan = await member2.call('/api/ai/site');
+  check(
+    '删掉的那篇不再算进已解读，改记进 orphans',
+    siteOrphan.data.stats.orphans >= 1 && siteOrphan.data.stats.analyzed <= siteOrphan.data.stats.documents,
+    JSON.stringify(siteOrphan.data.stats),
+  );
 
   console.log('\n▶ 失败现场与重试');
   mock.failWith = '抱歉，我暂时没法给出结构化结果。';

@@ -454,7 +454,11 @@ async function viewAI() {
         ${stats.failed ? `<span class="ai-stat warn"><strong>${Fmt.fmtNum(stats.failed)}</strong> 篇解读失败</span>` : ''}
       </div>
       ${!aiConfigured() ? aiNoticeHtml() : ''}
-      ${data.stale && report ? '<div class="ai-stale">论坛内容有更新，这份整理可能已经过时，建议重新整理。</div>' : ''}
+      ${
+        data.stale && report
+          ? `<div class="ai-stale">这份整理生成于 ${Fmt.timeAgo(report.createdAt)}（当时 ${Fmt.fmtNum(covered)} 篇），现在语料 ${Fmt.fmtNum(corpus.posts ?? 0)} 篇 —— 论坛内容有更新，建议重新整理。</div>`
+          : ''
+      }
       ${
         isAdmin
           ? `<details class="ai-admin">
