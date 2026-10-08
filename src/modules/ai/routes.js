@@ -1881,10 +1881,15 @@ export function registerAiRoutes(ctx) {
     const monthStart = startOfBeijingMonth(at);
 
     // 「我的账」：计费次数（与自己的额度逐字同口径）＋ token 与钱（北京时间窗口）。
-    const myBucket = (from) => {
+    //
+    // **今日这一次的计数必须用 UTC 日**（`countFrom`）：它报的是「配额闸门今天放了你几次」，
+    // 与用户额度、全站预算逐字同口径 —— 跟 `site.today.billed` 用同一个窗口。要是这里跟着
+    // 钱用北京日，早上 8 点前后就会出现「面板说今天用了 3 次、闸门说用了 5 次」这种对不上
+    // 的账（北京日比 UTC 日晚 8 小时开始）。周/月不在闸门口径里，跟着钱的窗口走。
+    const myBucket = (from, countFrom = from) => {
       const usage = usageTotals(db, { from, userId: user.id });
       return {
-        billed: billedIn(db, { from, userId: user.id }),
+        billed: billedIn(db, { from: countFrom, userId: user.id }),
         tokens: tokenCounts(usage),
         cost: moneyOf(usage),
       };
@@ -1892,7 +1897,7 @@ export function registerAiRoutes(ctx) {
     const me = {
       userId: user.id,
       username: String(user.username ?? ''),
-      today: myBucket(dayStart),
+      today: myBucket(dayStart, since),
       week: myBucket(weekStart),
       month: myBucket(monthStart),
     };

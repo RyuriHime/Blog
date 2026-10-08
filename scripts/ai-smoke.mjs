@@ -1827,6 +1827,20 @@ try {
     Number(kMe.tokens?.total) <= Number(kTokens.total) && Number(kMe.billed ?? 0) <= Number(kSite.billed ?? 0),
     JSON.stringify({ me: kMe.tokens?.total, site: kTokens.total, meBilled: kMe.billed, siteBilled: kSite.billed }),
   );
+  // 「今日的计数」是配额闸门的口径（UTC 自然日），跟钱用的北京日不是一回事。这条断言
+  // 拿审计表自己数一遍：面板上的 `me.today.billed` 应当等于自己今天的计费行数。若有人把
+  // 它改回北京日窗口，早上 8 点前后（两个日界之间）就会差出一整段，这条会红。
+  const kOps = await keyedAdmin.call('/api/ai-edit/ops?limit=100');
+  const utcDayStart = Date.now() - (Date.now() % 86400000);
+  const quotaActions = ['read', 'draft', 'apply', 'publish', 'tool'];
+  const myBilledToday = (kOps.data?.ops ?? []).filter(
+    (op) => Number(op.createdAt ?? 0) >= utcDayStart && quotaActions.includes(op.action) && op.status !== 'blocked',
+  ).length;
+  check(
+    '金额：「我的今日计费」按配额口径（UTC 自然日）数，与审计表里自己今天的账逐条对上',
+    myBilledToday === Number(kMe.billed ?? -1),
+    JSON.stringify({ ops: myBilledToday, panel: kMe.billed, utcDayStart }),
+  );
   check('金额：每次调用的用量都记全了（missing 为 0）', kTokens.missing === 0, JSON.stringify(kTokens));
   check(
     '金额：输入 = 命中 + 未命中，且每次调用一行（1000 / 400 / 200 × 次数）',
