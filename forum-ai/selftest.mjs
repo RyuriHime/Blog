@@ -619,6 +619,41 @@ try {
   store.syncCorpus();
   check('这一篇自己变了才回队', store.pendingDocuments({ limit: 10 }).includes('1') === true);
   check('待整理顺序：失败 → 从未解读 → 这一篇自己变了', store.pendingDocuments({ limit: 10 }).join(',') === '2,3,4,1', JSON.stringify(store.pendingDocuments({ limit: 10 })));
+
+  // LOCAL PATCH (see LOCAL-PATCHES.md): 老库里的**整站**指纹要被一次性换成逐篇指纹，
+  // 否则改完判据之后那些老账会永远算「内容已变」，「待整理」还是等于全站总数。
+  {
+    const legacyDocs = [
+      { id: 'L1', title: '老账一', content: '正文', createdAt: 1000, updatedAt: 1000, replies: [] },
+      { id: 'L2', title: '老账二', content: '正文二', createdAt: 2000, updatedAt: 2000, replies: [] },
+    ];
+    const legacyStore = createAiStore({
+      db: new DatabaseSync(':memory:'),
+      documentSource: () => legacyDocs,
+      tablePrefix: 'ai_',
+    });
+    legacyStore.syncCorpus();
+    // 老账：解读里存的是当时的整站语料指纹（`2:…`），换成按篇判之后它就一直对不上。
+    legacyStore.saveReview(
+      { documentId: 'L1', status: 'done', category: 'x', summary: 's', model: 'm' },
+      { contentHash: legacyStore.corpusHash() },
+    );
+    check('老库的整站指纹会一直算过期', legacyStore.pendingDocuments({ limit: 10 }).includes('L1') === true);
+    check('补齐逐篇指纹：补了 1 篇', legacyStore.backfillDocumentHashes() === 1);
+    check('补完就不在待整理里', legacyStore.pendingDocuments({ limit: 10 }).includes('L1') === false);
+    check('补齐是幂等的（再跑不用补）', legacyStore.backfillDocumentHashes() === 0);
+
+    // 解读之后这一篇自己动过 → 不补，保留「内容已变」（宁可多问一次，也不假装它没过期）。
+    legacyStore.saveReview(
+      { documentId: 'L2', status: 'done', category: 'y', summary: 's2', model: 'm' },
+      { contentHash: legacyStore.corpusHash() },
+    );
+    legacyDocs[1] = { ...legacyDocs[1], content: '正文二（改过）', updatedAt: 9999999999999 };
+    legacyStore.syncCorpus();
+    check('解读之后动过的老账不补', legacyStore.backfillDocumentHashes() === 0);
+    check('只有真动过的那篇留在待整理', legacyStore.pendingDocuments({ limit: 10 }).join(',') === 'L2');
+  }
+
   check('reportIsStale 对空报告返回 true', store.reportIsStale() === true);
 
   const savedReport = store.saveReport(

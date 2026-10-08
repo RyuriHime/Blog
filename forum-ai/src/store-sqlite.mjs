@@ -115,6 +115,8 @@ export function createAiStore({ db, documentSource, tablePrefix = DEFAULT_PREFIX
         prompt_tokens = excluded.prompt_tokens, completion_tokens = excluded.completion_tokens,
         error = excluded.error, error_detail = excluded.error_detail, updated_at = excluded.updated_at`),
     deleteReview: db.prepare(`DELETE FROM ${P}document_reviews WHERE document_id = ?`),
+    // LOCAL PATCH (see LOCAL-PATCHES.md): 旧库补齐逐篇指纹时用（见 backfillDocumentHashes）。
+    setReviewHash: db.prepare(`UPDATE ${P}document_reviews SET content_hash = ? WHERE document_id = ?`),
     countDone: db.prepare(`SELECT COUNT(*) AS count FROM ${P}document_reviews WHERE status = 'done'`),
     countFailed: db.prepare(`SELECT COUNT(*) AS count FROM ${P}document_reviews WHERE status <> 'done'`),
     clearReviews: db.prepare(`DELETE FROM ${P}document_reviews`),
@@ -145,6 +147,26 @@ export function createAiStore({ db, documentSource, tablePrefix = DEFAULT_PREFIX
       return fallback;
     }
   };
+
+  /** 索引行里「这一篇自己的内容时间」：正文更新时间与它自己的回复里最晚的一条。 */
+  const latestContentAt = (row) => {
+    let latest = Math.max(Number(row.updated_at ?? 0), Number(row.created_at ?? 0));
+    for (const reply of safeJson(row.replies_json, [])) {
+      latest = Math.max(latest, Number(reply.createdAt ?? 0));
+    }
+    return latest;
+  };
+
+  /** 索引行 → 这一篇自己的指纹（形状与 documentHash() 一致）。 */
+  const fingerprintOfIndexRow = (row) =>
+    fingerprintOf([
+      {
+        content: row.content,
+        createdAt: row.created_at,
+        updatedAt: row.updated_at,
+        replies: safeJson(row.replies_json, []),
+      },
+    ]);
 
   const shapeReviewRow = (row) =>
     row && {
@@ -268,6 +290,35 @@ export function createAiStore({ db, documentSource, tablePrefix = DEFAULT_PREFIX
 
     documentHash(documentId) {
       return api.documentHashes([documentId]).get(String(documentId)) ?? '';
+    },
+
+    /*
+     * LOCAL PATCH (see LOCAL-PATCHES.md): 旧库一次性补齐逐篇指纹。
+     *
+     * 换成按篇判之后，老账里存的**整站**指纹（`564:1791433912605:3:192568`）全都对不上，
+     * 「待整理」还是等于全站总数 —— 光改判据不够，得把这些老账改写成逐篇指纹。
+     * 旧值反推不出「这一篇当时」的指纹，只能拿时间戳判：
+     *   这篇自己（正文 + 它自己的回复）在最后一次解读之后没动过 → 补上当前逐篇指纹；
+     *   动过 → 保留旧值，继续算「内容已变」（宁可多问一次，也不假装它没过期）。
+     * 逐篇指纹一定以 `1:` 开头（只算一篇），所以这条迁移天然幂等：跑过一次就不再动它。
+     * 返回补了几篇。
+     */
+    backfillDocumentHashes() {
+      const legacy = statements.reviewsByIds
+        .all()
+        .filter((row) => row.content_hash && !String(row.content_hash).startsWith('1:'));
+      if (legacy.length === 0) return 0;
+      const index = new Map(statements.listIndex.all().map((row) => [String(row.document_id), row]));
+      let repaired = 0;
+      for (const review of legacy) {
+        const row = index.get(String(review.document_id));
+        if (!row) continue; // 索引里没有它（已被删）→ 交给「从未解读 / 已消失」那套逻辑
+        const reviewAt = Number(review.updated_at || review.created_at || 0);
+        if (reviewAt <= 0 || latestContentAt(row) > reviewAt) continue;
+        statements.setReviewHash.run(fingerprintOfIndexRow(row), String(review.document_id));
+        repaired += 1;
+      }
+      return repaired;
     },
 
     /* ---------------- 单篇解读缓存 ---------------- */
@@ -396,6 +447,9 @@ export function createAiStore({ db, documentSource, tablePrefix = DEFAULT_PREFIX
       return selectDocs(question, api.corpusDocuments(), options);
     },
   };
+
+  // LOCAL PATCH (see LOCAL-PATCHES.md): 老库里的整站指纹在这里一次性换成逐篇指纹（幂等）。
+  api.backfillDocumentHashes();
 
   return api;
 }
