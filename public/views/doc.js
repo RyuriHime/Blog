@@ -1984,27 +1984,14 @@ function templatePanelHtml() {
   </div>`;
 }
 
-function toolboxHtml(doc) {
-  return `<div class="card doc-panel">
-    <div class="card-head"><span class="card-title">🧰 工具箱</span></div>
-    <div class="doc-actions">
-      <button class="btn btn-sm" type="button" data-doc-action="revisions">修订记录</button>
-      <button class="btn btn-sm" type="button" data-doc-action="export">导出 JSON</button>
-      <button class="btn btn-sm" type="button" data-doc-action="import-toggle">导入 JSON</button>
-      <!--「互动锚点」那颗按钮去掉了：它指向影子帖页面，而帖子页现在
-          只会把读者送回来（重定向到这一篇），点一次等于原地转一圈。
-          互动（赞 / 收藏 / 回复）本来就长在这一页上。 -->
-      <button class="btn btn-sm btn-ghost" type="button" data-doc-action="delete">删除这篇</button>
-    </div>
-    <form class="doc-new" data-doc-form="import" hidden>
-      <textarea class="doc-input doc-textarea" name="payload" rows="6" placeholder="把导出的 JSON 贴进来"></textarea>
-      <div class="doc-new-row">
-        <select class="doc-input doc-select" name="scope">${scopeOptionsHtml('private')}</select>
-        <button class="btn btn-sm btn-primary" type="submit">导入成新的一篇</button>
-      </div>
-    </form>
-  </div>`;
-}
+/**
+ * 「工具箱」整块去掉了（修订记录 / 导出 JSON / 导入 JSON / 删除这篇）。
+ *
+ * 这四件事在**阅读页**的 `docActionsHtml()` 里已经有一份（修订记录 / 导出 / 删除），
+ * 编辑页再摆一遍只是多一块永远折叠在页面底部的卡片；导入那条路用得极少，
+ * 却要在编辑页常驻一个空文本框。接口一律留着（`/api/docs/meta/import` 仍由
+ * doc-smoke 那条「导出再导入」的用例盯着），要哪个入口再挂回来都是一行。
+ */
 
 function renderEditor() {
   const editor = docState.editor;
@@ -2052,9 +2039,7 @@ function renderEditor() {
       editor.mode === 'source'
         ? sourceEditorHtml(editor.data.source ?? '')
         : `${blocksEditorHtml(blocks, editor.data?.doc?.kind)}${templatePanelHtml()}`
-    }
-    ${toolboxHtml(doc)}
-    <div class="card doc-revisions" data-doc-revisions hidden></div>`;
+    }`;
   ensureDelegate();
   if (editor.mode === 'source') mountSourceTools();
 }
@@ -2797,11 +2782,6 @@ async function onAppClick(event) {
     if (layout) Prefs.writePreference('forum:docsLayout', layout === 'list' ? 'list' : 'grid');
     return withBusy(() => viewDocs(docState.listQuery ?? new URLSearchParams()));
   }
-  if (action === 'import-toggle') {
-    const panel = $('[data-doc-form="import"]');
-    if (panel) panel.hidden = !panel.hidden;
-    return;
-  }
   if (action === 'md') return applyMdTool(node.dataset.docMd);
   if (action === 'preview-toggle') {
     // 右边那块实时预览的开关（按钮在源码模式工具条的最右边）。
@@ -2945,17 +2925,6 @@ async function onAppSubmit(event) {
         // 不清空它，否则「在某个标签里搜标题」一按筛选就变回全站了。
         if (values.tag) params.set('tag', values.tag);
         return navigate(`/docs${params.toString() ? `?${params}` : ''}`);
-      }
-      if (form.dataset.docForm === 'import') {
-        let payload;
-        try {
-          payload = JSON.parse(values.payload ?? '');
-        } catch {
-          return toast('贴进来的不是合法 JSON', 'error');
-        }
-        const created = await api('/api/docs/meta/import', { method: 'POST', body: { payload, scope: values.scope } });
-        toast('导入好了');
-        return navigate(`/doc/${created.doc.id}/edit`);
       }
       if (form.dataset.docForm === 'register') {
         let propsSchema;
