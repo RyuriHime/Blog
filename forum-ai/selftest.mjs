@@ -355,6 +355,11 @@ try {
   check('全库整理返回主题', corpus.report.topics.length === 1 && corpus.report.topics[0].documentIds.length >= 1, JSON.stringify(corpus.report.topics));
   check('全库整理返回阅读路线', corpus.report.readingPath.length === 1);
   check('请求里带 Bearer 密钥', mock.calls.at(-1).headers.authorization === 'Bearer test-key');
+  check(
+    '整理全站没关思考模式（只有问答那条路才关）',
+    mock.calls.at(-1)?.body?.thinking === undefined,
+    JSON.stringify(mock.calls.at(-1)?.body?.thinking),
+  );
 
   const asked = await answerQuestion('分页怎么优化？', DOCS.slice(0, 1), { scope: 'document', chatOptions: { env } });
   check('问答返回答案与引用', asked.answer.text.length > 0 && asked.answer.citations.length === 1, JSON.stringify(asked.answer.citations));
@@ -365,6 +370,11 @@ try {
   mock.calls.length = 0;
   await answerQuestion('分页怎么优化？', DOCS.slice(0, 2), { scope: 'corpus', chatOptions: { env } });
   check('问答默认输出预算放宽到 4000（上游写死 1200，宽问题必被截断）', mock.calls.at(-1)?.body?.max_tokens === 4000, String(mock.calls.at(-1)?.body?.max_tokens));
+  check(
+    '问答请求显式关掉思考模式（默认开着，思维链又慢又吃预算）',
+    mock.calls.at(-1)?.body?.thinking?.type === 'disabled',
+    JSON.stringify(mock.calls.at(-1)?.body?.thinking),
+  );
   mock.calls.length = 0;
   await answerQuestion('分页怎么优化？', DOCS.slice(0, 2), { scope: 'corpus', chatOptions: { env: { ...env, AI_ASK_MAX_TOKENS: '5000' } } });
   check('预算可以用 AI_ASK_MAX_TOKENS 覆盖', mock.calls.at(-1)?.body?.max_tokens === 5000, String(mock.calls.at(-1)?.body?.max_tokens));

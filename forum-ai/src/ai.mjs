@@ -138,11 +138,24 @@ function ensureConfigured(env) {
  * 调用一次 OpenAI 兼容的 chat completion（不带重试，重试逻辑在 chat 里）。
  * @param {Array<{role:string,content:string}>} messages
  * @param {{ temperature?: number, maxTokens?: number, json?: boolean, fetchImpl?: Function,
- *           signal?: AbortSignal, env?: object }} [options]
+ *           signal?: AbortSignal, env?: object, thinking?: { type: string },
+ *           reasoningEffort?: string }} [options]
+ *   `thinking` / `reasoningEffort` 是 DeepSeek 的思考模式开关（LOCAL PATCH，见 LOCAL-PATCHES.md
+ *   的 Q 节）：默认不开思考模式时服务端按 `high` 推理，思维链会算进 `completion_tokens`，
+ *   又慢又贵。不传就沿用服务端默认（开着），只有需要快的那几条路显式关掉。
  * @returns {Promise<{ text:string, model:string, usage:{prompt:number,completion:number}, raw:any }>}
  */
 async function chatOnce(messages, options = {}) {
-  const { temperature = 0.2, maxTokens, json = true, fetchImpl = fetch, signal, env = process.env } = options;
+  const {
+    temperature = 0.2,
+    maxTokens,
+    json = true,
+    fetchImpl = fetch,
+    signal,
+    env = process.env,
+    thinking,
+    reasoningEffort,
+  } = options;
   const config = ensureConfigured(env);
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), config.timeoutMs);
@@ -166,6 +179,9 @@ async function chatOnce(messages, options = {}) {
         temperature,
         max_tokens: maxTokens ?? config.maxTokens,
         ...(json ? { response_format: { type: 'json_object' } } : {}),
+        // 思考模式（DeepSeek 专有参数）：不传 = 服务端默认开着（effort=high）
+        ...(thinking ? { thinking } : {}),
+        ...(reasoningEffort ? { reasoning_effort: reasoningEffort } : {}),
       }),
       signal: controller.signal,
     });
@@ -552,6 +568,21 @@ function askMaxTokens(env) {
 }
 
 /**
+ * 问答显式关掉思考模式（LOCAL PATCH，见 LOCAL-PATCHES.md 的 Q 节）。
+ *
+ * DeepSeek 的 `deepseek-flash` **默认开着思考模式、effort=high**，思维链会算进
+ * `completion_tokens`：线上一次「问全站」实测 completion 1100~2500 token，而答案本身只有
+ * 500~1300 字 —— 大头是思维链。结果是 6 次实测平均 7.7 秒、最慢 11.2 秒，而且宽问题还容易
+ * 被思维链把 `max_tokens` 吃光（就是 O/O2/O3 那三节里那些 502/503 的成因之一）。
+ *
+ * 问答这条路不需要长思考：材料就摆在提示词里、答案限 800 字、输出还得是 JSON。
+ * 按官方文档（思考模式那页）把 `thinking` 传成 `{"type":"disabled"}` 即可关掉，
+ * 思维链归零、延迟掉到 5 秒上下。**解读与整理全站那两条路照旧开着**（那边真需要推理，
+ * 而且是一次性成本，不在用户等待路径上）。
+ */
+const ASK_THINKING = { type: 'disabled' };
+
+/**
  * 基于材料的问答。
  * @param {string} question
  * @param {Array<object>} docs 本次允许使用的材料
@@ -572,7 +603,7 @@ export async function answerQuestion(question, docs, options = {}) {
         { role: 'system', content: ASK_SYSTEM },
         { role: 'user', content: renderAskUser({ scope, material: material.text, question: clampText(question, 500), brief }) },
       ],
-      { temperature: 0.3, maxTokens, badJsonMessage: 'AI 返回的问答结果不是合法 JSON', ...chatOptions },
+      { temperature: 0.3, maxTokens, badJsonMessage: 'AI 返回的问答结果不是合法 JSON', thinking: ASK_THINKING, ...chatOptions },
     ).then((result) => ({ ...result, material }));
   };
 
