@@ -27,6 +27,9 @@ import {
   answerQuestion,
   rankDocuments,
   selectForQuestion,
+  questionTerms,
+  extractHeadings,
+  excerptAroundFocus,
   createAiStore,
   createAiHandlers,
   createAiRouter,
@@ -292,6 +295,21 @@ try {
   check('预算被真正卡住', tiny.text.length <= 50 + 8, String(tiny.text.length));
   check('可以关闭回复', buildMaterial(DOCS, { withReplies: false }).text.includes('分页那里') === false);
 
+  // 命中词在 3000 字之后时，从开头截等于没喂；要从命中处截，并报出命中的小标题。
+  const longDoc = {
+    id: '9',
+    title: '长词条',
+    content: `${'前面都是无关的铺垫。'.repeat(200)}\n## DFS 的实现\n递归写法与显式栈写法。`,
+  };
+  const focused = buildMaterial([longDoc], { charLimit: 100000, contentPerDoc: 300, focus: ['dfs'] });
+  check('正文从命中处截（不再只看开头）', focused.text.includes('## DFS 的实现'), focused.text.slice(0, 120));
+  check('截出来的片段带省略号', focused.text.includes('…'));
+  check('材料里报出命中的小标题', focused.text.includes('相关小节：DFS 的实现'), focused.text);
+  const notFocused = buildMaterial([longDoc], { charLimit: 100000, contentPerDoc: 300 });
+  check('不给 focus 时行为不变（仍从头截）', notFocused.text.includes('## DFS 的实现') === false);
+  check('excerptAroundFocus 命中词不在开头时从中间取', excerptAroundFocus(`开头${'填充'.repeat(400)}命中词结尾`, ['命中词'], 200).includes('命中词'));
+
+
   /* ---------------- 三个能力 ---------------- */
   console.log('\n▶ 单篇解读 / 全库整理 / 问答');
   const WIKI = [
@@ -367,6 +385,18 @@ try {
     String(mock.calls.at(-1)?.body?.messages?.at(-1)?.content ?? '').length < String(mock.calls[0]?.body?.messages?.at(-1)?.content ?? '').length,
     `${String(mock.calls[0]?.body?.messages?.at(-1)?.content ?? '').length} → ${String(mock.calls.at(-1)?.body?.messages?.at(-1)?.content ?? '').length}`,
   );
+
+  // 全站问答：每篇只喂命中处的一段，材料整体压在 12000 字以内，并带上命中的小标题
+  const focusingDocs = Array.from({ length: 5 }, (_, index) => ({
+    id: `focus-${index + 1}`,
+    title: `词条 ${index + 1}`,
+    content: `## DFS 的实现 ${index + 1}\n${'铺垫内容。'.repeat(1200)}`,
+  }));
+  mock.calls.length = 0;
+  await answerQuestion('dfs 怎么实现', focusingDocs, { scope: 'corpus', chatOptions: { env } });
+  const focusPrompt = String(mock.calls.at(-1)?.body?.messages?.at(-1)?.content ?? '');
+  check('全站问答的材料压在 12000 字以内', focusPrompt.length <= 12000 + 2000, String(focusPrompt.length));
+  check('材料里带上命中的小标题（不用模型自己找）', focusPrompt.includes('相关小节：DFS 的实现 1'), focusPrompt.slice(0, 160));
 
   mock.calls.length = 0;
   mock.truncateOverChars = 200; // 砍半后仍然超预算：两次都答不完
@@ -635,6 +665,22 @@ try {
   check('预算极小时也返回至少一篇', selected.picked.length >= 1);
   const selectedAll = selectForQuestion('性能', DOCS, { charBudget: 100000 });
   check('预算充足时全选', selectedAll.picked.length === 3);
+
+  // 标题 ≫ 小标题 > 正文：正文里的偶发命中不该压过标题/小标题命中
+  const TIRED = [
+    { id: 'body', title: '杂谈', content: '这里顺便提到了 dfs 两个字。' },
+    { id: 'head', title: '图论基础', content: '## DFS 的实现\n递归与显式栈。' },
+    { id: 'title', title: 'DFS 入门', content: '深度优先搜索的基本写法。' },
+  ];
+  const tiredRanked = rankDocuments('dfs 怎么实现', TIRED);
+  check('标题命中排在小标题命中前面', String(tiredRanked[0].doc.id) === 'title', JSON.stringify(tiredRanked.map((r) => [r.doc.id, r.score, r.titleHit, r.headingHit])));
+  check('小标题命中排在纯正文命中前面', String(tiredRanked[1].doc.id) === 'head', String(tiredRanked[1]?.doc?.id));
+  const tiered = selectForQuestion('dfs 怎么实现', [...TIRED, { id: 'w1', title: '甲', content: 'dfs' }, { id: 'w2', title: '乙', content: 'dfs' }, { id: 'w3', title: '丙', content: 'dfs' }], { charBudget: 100000, maxDocuments: 8, maxWeak: 1 });
+  check('有强命中时，纯正文命中的最多补 maxWeak 篇', tiered.picked.length === 3 && tiered.weak === 1, JSON.stringify({ picked: tiered.picked.map((doc) => doc.id), strong: tiered.strong, weak: tiered.weak }));
+  check('选材按「进材料后的字数」估体量（长文档不再一票吃光预算）', selectForQuestion('dfs', [{ id: 'big', title: 'DFS 大全', content: 'x'.repeat(50000) }, { id: 'two', title: 'DFS 续', content: 'y'.repeat(50000) }], { charBudget: 5000 }).picked.length === 2);
+  check('小标题抽取认得 # 标题与整行加粗', extractHeadings('# 一\n正文\n**二**\n### 三').join(',') === '一,二,三', extractHeadings('# 一\n正文\n**二**\n### 三').join(','));
+  const terms = questionTerms('想学习dfs，然后实现成代码');
+  check('问题分词包含英文词与汉字段', terms.includes('dfs') && terms.includes('想学习'), JSON.stringify(terms));
 
   /* ---------------- 存储层 ---------------- */
   console.log('\n▶ SQLite 存储层');
