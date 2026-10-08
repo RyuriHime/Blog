@@ -8,14 +8,14 @@
  *
  * 响应协议与宿主保持一致：`{ ok: true, data }` / `{ ok: false, error: { code, message } }`。
  */
-import { aiConfig, aiSource } from './ai.mjs';
+import { aiConfig, aiSource, chat } from './ai.mjs';
 import { blocksToMarkdown, assignBlockIds } from './blocks.mjs';
 import { analyzeStructure } from './structure.mjs';
 import { extractSession, extractMaterial } from './extract/index.mjs';
 import { extractText } from './extract/text.mjs';
 import { generate as defaultGenerate, turn as defaultTurn } from './orchestrator.mjs';
 import { reviewDraft as defaultReview, applyReviewPatch } from './review.mjs';
-import { buildMaterial, DEFAULT_CHAR_BUDGET, MAX_IMAGES } from './material.mjs';
+import { buildMaterial, DEFAULT_CHAR_BUDGET, MAX_IMAGES, MAX_IMAGE_BYTES } from './material.mjs';
 import { normalizeBlocks } from './formulas.mjs';
 import { applyOps } from './ops.mjs';
 import { UPLOAD_RULES } from './uploads-meta.mjs';
@@ -533,6 +533,53 @@ export function createHandlers({
           .map((item) => String(item.markdown).trim())
           .join('\n\n---\n\n'),
       });
+    }],
+
+    /**
+     * 图片 → Markdown 源码：图片交给**视觉模型**，只回 Markdown。
+     *
+     * 跟 `/extract` 是两条路：那条抽文字层、不花钱也不需要 AI；这条**必须有配好的 AI**
+     * ——图片里没有「文字层」可抽，只能让模型看。图片按 data URL 走 JSON（不走 multipart，
+     * 于是不必动上传扩展名白名单）。返回的正文已经要求模型只写 Markdown、公式用
+     * `$…$` / `$$…$$`。
+     */
+    ['POST', ['extract-image'], async (ctx) => {
+      const user = requireUser(ctx);
+      if (!config.configured) {
+        throw new NotesError(503, 'notes_not_configured', '这个站点还没有配置 AI 接口，请联系管理员（图片识别必须走模型）');
+      }
+      if (!check(`${user.id}:extract-image`)) throw new NotesError(429, 'ai_rate_limited', '操作太频繁，请等一分钟再试');
+      const list = Array.isArray(ctx.body?.images) ? ctx.body.images : [];
+      if (!list.length) throw new NotesError(400, 'no_images', '没有收到图片');
+      if (list.length > MAX_IMAGES) throw new NotesError(400, 'too_many_images', `一次最多 ${MAX_IMAGES} 张图片`);
+
+      const parts = [];
+      for (const item of list.slice(0, MAX_IMAGES)) {
+        const url = String(item?.dataUrl ?? '');
+        if (!/^data:image\/(png|jpe?g|webp|gif);base64,/i.test(url)) {
+          throw new NotesError(400, 'bad_image', '只收 png / jpg / webp / gif 图片');
+        }
+        // data URL 是 base64，长度约为原字节的 4/3
+        if (url.length > MAX_IMAGE_BYTES * 1.4 + 1024) {
+          throw new NotesError(400, 'image_too_large', `单张图片不能超过 ${Math.round(MAX_IMAGE_BYTES / 1024 / 1024)}MB`);
+        }
+        parts.push({ type: 'image_url', image_url: { url } });
+      }
+      const requirement = String(ctx.body?.requirement ?? '').trim().slice(0, 500);
+      parts.push({ type: 'text', text: requirement || '把图里的公式转成 Markdown 源码。' });
+
+      const answer = await chat([
+        {
+          role: 'system',
+          content:
+            '你是公式录入助手。看图，把里面的数学公式转成 Markdown 源码：行内公式用 $…$，行间公式用 $$…$$，' +
+            'LaTeX 命令原样保留；公式之外的必要文字也用 Markdown（标题用 #，列表用 -）。' +
+            '只输出转换结果本身，不要解释、不要寒暄、不要用 ``` 围栏包整篇。看不清的地方写 % 待确认。',
+        },
+        { role: 'user', content: parts },
+      ]);
+      const text = String(answer?.text ?? '').trim().replace(/^```[a-z]*\n?/i, '').replace(/\n?```$/, '');
+      return ok(200, { markdown: text, model: answer?.model ?? null, usage: answer?.usage ?? null });
     }],
 
     ['POST', ['generate'], async (ctx) => {

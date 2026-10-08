@@ -68,8 +68,11 @@ export function docAiHtml(documentId) {
       </div>
       <div class="doc-hint">把 PDF / Word / PPT / 文本里的内容抽成 Markdown 源码，公式会被归一成 <code class="doc-code">$…$</code> / <code class="doc-code">$$…$$</code>。这条路<strong>不花 AI、不需要密钥</strong>；图片识别要等 AI 通道。</div>
       <div class="doc-ai-convert-row">
-        <label class="btn btn-sm doc-ai-convert-pick">选择文件
+        <label class="btn btn-sm doc-ai-convert-pick">📄 文档
           <input type="file" accept=".pdf,.docx,.pptx,.md,.markdown,.txt,application/pdf" multiple hidden data-doc-ai-file>
+        </label>
+        <label class="btn btn-sm doc-ai-convert-pick">🖼 图片
+          <input type="file" accept="image/png,image/jpeg,image/webp,image/gif" multiple hidden data-doc-ai-image>
         </label>
         <button class="btn btn-sm btn-ghost" type="button" data-doc-ai-convert="insert" disabled>插到光标处</button>
         <button class="btn btn-sm btn-ghost" type="button" data-doc-ai-convert="append" disabled>追加到末尾</button>
@@ -114,6 +117,7 @@ export function mountDocAi(options = {}) {
 
   const convertBox = root.querySelector('[data-doc-ai-convert]');
   const fileInput = root.querySelector('[data-doc-ai-file]');
+  const imageInput = root.querySelector('[data-doc-ai-image]');
   const convertStatus = root.querySelector('[data-doc-ai-convert-status]');
   const convertPreview = root.querySelector('[data-doc-ai-convert-preview]');
   const convertButtons = [...root.querySelectorAll('[data-doc-ai-convert]')];
@@ -147,6 +151,17 @@ export function mountDocAi(options = {}) {
     return true;
   }
 
+  /** 抽/认完了：预览 + 放开三个落点按钮。两条路（文档抽取、图片识别）共用。 */
+  function showConverted(markdown, note) {
+    convertedMarkdown = String(markdown ?? '');
+    if (convertPreview) {
+      convertPreview.hidden = convertedMarkdown === '';
+      convertPreview.textContent = convertedMarkdown.slice(0, 4000);
+    }
+    for (const button of convertButtons) button.disabled = convertedMarkdown === '';
+    convertHint(convertedMarkdown ? `${note} · ${convertedMarkdown.length} 字符 —— 选一个落点` : `${note}（没拿到内容）`);
+  }
+
   async function convertFiles(files) {
     const list = [...(files ?? [])];
     if (!list.length) return;
@@ -159,25 +174,49 @@ export function mountDocAi(options = {}) {
       const payload = await response.json().catch(() => null);
       if (!response.ok || !payload?.ok) throw new Error(payload?.error?.message || `抽取失败（HTTP ${response.status}）`);
       const data = payload.data ?? {};
-      convertedMarkdown = String(data.markdown ?? '');
       const names = (data.items ?? []).map((item) => (item.error ? `${item.name}（${item.error}）` : item.name)).join('、');
-      if (convertPreview) {
-        convertPreview.hidden = convertedMarkdown === '';
-        convertPreview.textContent = convertedMarkdown.slice(0, 4000);
-      }
-      for (const button of convertButtons) button.disabled = convertedMarkdown === '';
-      convertHint(convertedMarkdown ? `抽好了：${names} · ${convertedMarkdown.length} 字符 —— 选一个落点` : `没抽到内容：${names}`);
+      showConverted(data.markdown, `抽好了：${names}`);
     } catch (error) {
-      convertedMarkdown = '';
-      for (const button of convertButtons) button.disabled = true;
-      if (convertPreview) convertPreview.hidden = true;
-      convertHint(`抽取失败：${error?.message ?? '未知错误'}`);
+      showConverted('', `抽取失败：${error?.message ?? '未知错误'}`);
+    }
+  }
+
+  const readAsDataUrl = (file) =>
+    new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onerror = () => reject(new Error('图片读取失败'));
+      reader.onload = () => resolve({ name: file.name, dataUrl: String(reader.result ?? '') });
+      reader.readAsDataURL(file);
+    });
+
+  /** 图片 → Markdown：走视觉模型（`/api/note-agent/extract-image`），需要站点配好 AI。 */
+  async function convertImages(files) {
+    const list = [...(files ?? [])];
+    if (!list.length) return;
+    convertHint(`正在看图（${list.length} 张）…（这一步会花模型）`);
+    try {
+      const images = await Promise.all(list.map(readAsDataUrl));
+      const response = await fetch('/api/note-agent/extract-image', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ images }),
+        credentials: 'same-origin',
+      });
+      const payload = await response.json().catch(() => null);
+      if (!response.ok || !payload?.ok) throw new Error(payload?.error?.message || `识别失败（HTTP ${response.status}）`);
+      showConverted(payload.data?.markdown, `识别完成（${payload.data?.model ?? '模型'}）`);
+    } catch (error) {
+      showConverted('', `识别失败：${error?.message ?? '未知错误'}`);
     }
   }
 
   fileInput?.addEventListener('change', () => {
     void convertFiles(fileInput.files);
     fileInput.value = '';
+  });
+  imageInput?.addEventListener('change', () => {
+    void convertImages(imageInput.files);
+    imageInput.value = '';
   });
   convertBox?.addEventListener('click', (event) => {
     const button = event.target?.closest?.('[data-doc-ai-convert]');
