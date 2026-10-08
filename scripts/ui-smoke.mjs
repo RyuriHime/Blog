@@ -115,6 +115,31 @@ console.log('\n▶ 输入框（「粘贴帖子链接」那一行）');
 const timelineCss = read('css/31-timeline.css');
 const formsCss = read('css/50-forms.css');
 
+/* ================================================================== */
+/* 三·3、积木编辑器：源码模式顶上的 Markdown 工具条                     */
+/* ================================================================== */
+
+console.log('\n▶ 积木编辑器（Markdown 工具条）');
+
+const docJs = read('views/doc.js');
+const docCss = read('css/41-doc.css');
+
+check('源码框上方渲染了工具条', /function mdToolbarHtml\s*\(/.test(docJs) && /\$\{mdToolbarHtml\(\)\}/.test(docJs));
+check('工具条挂在委托点击上（data-doc-action="md"）', /action === 'md'\)\s*return applyMdTool\(node\.dataset\.docMd\)/.test(docJs));
+check(
+  '常用格式按钮齐（粗体/斜体/删除线/代码/代码块/标题/引用/列表/链接/图片/表格/@）',
+  ['bold', 'italic', 'strike', 'code', 'block', 'h2', 'h3', 'quote', 'list', 'olist', 'hr', 'link', 'image', 'table', 'mention'].every((k) => docJs.includes(`tool('${k}'`)),
+);
+check(
+  '公式按钮齐（行内 / 行间 / 分式 / 根号 / 求和 / 积分 / 上标 / 下标）',
+  ['math', 'mathblock', 'frac', 'sqrt', 'sum', 'int', 'script', 'subscript'].every((k) => docJs.includes(`tool('${k}'`)),
+);
+check('插入后派发 input（自动保存与右侧实时预览都挂在这条线上）', /dispatchEvent\(new Event\('input'/.test(docJs));
+check(
+  '工具条样式在 41-doc.css 里（条 / 组 / 按钮 / 公式组）',
+  /\.doc-md-toolbar\s*\{/.test(docCss) && /\.doc-md-tool-group\s*\{/.test(docCss) && /\.doc-md-tool\s*\{/.test(docCss) && /\.doc-md-tool-math\s+\.doc-md-tool\s*\{/.test(docCss),
+);
+
 check(
   '「粘贴帖子链接」那一行有自己的主题样式（不再是浏览器默认的白框）',
   /\.composer-ref-row\s+\.input\s*\{[^}]*(background|border)\s*:/.test(timelineCss),
