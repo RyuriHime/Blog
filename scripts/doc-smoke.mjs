@@ -1332,7 +1332,7 @@ try {
     const frontend = readText('scripts/check-frontend.mjs');
     check(
       'check-frontend 的 CASES 里加了积木的页面',
-      ['积木广场', '积木阅读页', '积木编辑器', '积木 Markdown 模式', '块类型表'].every((label) => frontend.includes(label)),
+      ['积木广场', '积木阅读页', '积木编辑器', '积木源码模式', '块类型表'].every((label) => frontend.includes(label)),
       '',
     );
 
@@ -1341,8 +1341,8 @@ try {
     // 它们都是「嵌得进去」就够，所以只钉接线本身，不钉面板内部。
     const editorJs = readText('public/views/doc.js');
     const drawerJs = readText('public/views/doc-ai.js');
-    check('编辑器接了实时预览', editorJs.includes("'/api/markdown/preview'"), '');
-    check('预览是防抖自动跑的（不是按钮）', editorJs.includes('mdPreviewTimer') && editorJs.includes('setTimeout'), '');
+    check('编辑器接了实时预览', editorJs.includes('/api/docs/${editor.id}/preview'), '');
+    check('预览是防抖自动跑的（不是按钮）', editorJs.includes('paint.timer') && editorJs.includes('setTimeout'), '');
     check('编辑器挂了 AI 抽屉', editorJs.includes('DocAi.mountDocAi('), '');
     check(
       'AI 抽屉在编辑区左侧（三栏外壳里它排在编辑框前面）',
@@ -2317,20 +2317,20 @@ try {
       check('8.9 建完直接进编辑器（跳转那一行还在）', editorJs.includes('return navigate(`/doc/${created.doc.id}/edit`)'), '');
       check('8.9 模板搬到了积木模式那一栏（模板栏只在积木视图里渲染）', editorJs.includes('function templatePanelHtml()') && editorJs.includes('${blocksEditorHtml(blocks)}${templatePanelHtml()}'), '');
       /* 用户在浏览器里报的四个 bug（m01284 / m01317）的回归钉：
-         ① 默认是纯 Markdown；② 三种视图共用一份草稿（切之前先存）；③ 源码里有 Markdown
-         表达不了的块时 Markdown 页只读；④ 保存之后编辑区不能被清空。 */
-      check('8.9 默认是纯 Markdown 模式', editorJs.includes("const wanted = query.get('mode') ?? 'markdown'"), '');
+         ① 默认是源码（支持 Markdown/LaTeX）；② 两个视图共用一份草稿（切之前先存）；
+         ③ 保存之后编辑区不能被清空。纯 Markdown 那一种编辑方式已经整条删掉（本轮需求）。 */
+      check('8.9 默认进源码（支持 Markdown/LaTeX）模式', editorJs.includes("const wanted = query.get('mode') ?? 'source'"), '');
       check('8.9 切视图前先把当前编辑区的改动存下去', editorJs.includes('async function flushDraft()') && editorJs.includes('if (!(await flushDraft())) return;'), '');
       // 这条钉子跟着「一次保存」改了名字：以前是 `saveMarkdown()` 自己存自己重拉，
-    // 现在正文、标题、可见范围都由 `saveAll()` 一处存完 —— 但「Markdown 存完必须重拉」
-    // 这条不变量没变（不重拉就会把作者刚敲的从编辑区抹掉）。
-    // 自动保存给 `saveAll()` 加了一个 `options`（安静那一版不重画），签名不再是空括号：
-    // 这里改成**先把那个函数体切出来**再找那句话 —— 比原来的「4000 字符窗口」更准，
-    // 窗口一放宽就可能配上隔壁函数里长得一样的一行，钉子就白钉了。
-    const saveAllBody = (editorJs.split('async function saveAll(')[1] ?? '').split(/\n(?:async )?function /)[0];
-    check('8.9 Markdown 存完会重新拉一次（不重拉就会把刚敲的从编辑区抹掉）', saveAllBody.includes("if (editor.mode === 'markdown') await loadMarkdown()"), '');
-    check('8.9 编辑器只有一个「保存」（标题 / 可见范围 / 正文一起存）', editorJs.includes('function saveAll(') && !editorJs.includes('data-doc-action="save-meta"') && !editorJs.includes('function saveMeta('), '');
-      check('8.9 源码里有 Markdown 表达不了的块时，Markdown 页只读并说明原因', editorJs.includes('function markdownViewBlocked(') && editorJs.includes('MARKDOWN_VIEW_TYPES') && editorJs.includes('blocked ? \' readonly\' : \'\''), '');
+      // 现在正文、标题、可见范围都由 `saveAll()` 一处存完 —— 但「存完必须重画」这条不变量没变
+      // （不重画就会把作者刚敲的从编辑区抹掉，脏基线也对不上服务端真存下来的那份）。
+      // 自动保存给 `saveAll()` 加了一个 `options`（安静那一版不重画），签名不再是空括号：
+      // 这里改成**先把那个函数体切出来**再找那句话 —— 比原来的「4000 字符窗口」更准，
+      // 窗口一放宽就可能配上隔壁函数里长得一样的一行，钉子就白钉了。
+      const saveAllBody = (editorJs.split('async function saveAll(')[1] ?? '').split(/\n(?:async )?function /)[0];
+      check('8.9 存完一律重画（脏基线跟着服务端那份对齐）', saveAllBody.includes('renderEditor()'), '');
+      check('8.9 编辑器只有一个「保存」（标题 / 可见范围 / 正文一起存）', editorJs.includes('function saveAll(') && !editorJs.includes('data-doc-action="save-meta"') && !editorJs.includes('function saveMeta('), '');
+      check('8.9 「纯 Markdown」这种编辑方式已经删掉（只剩源码 / 积木两栏）', !editorJs.includes('markdownEditorHtml') && !editorJs.includes('MARKDOWN_VIEW_TYPES') && !editorJs.includes("mode === 'markdown'"), '');
       check('8.9 编辑器开头有「四步」说明卡', editorJs.includes('doc-howto') && editorJs.includes('保存本块'), '');
       check('8.9 每块底部也有一个「保存本块」（表单一长就滚不到顶上那个）', editorJs.includes('doc-block-foot'), '');
       check('8.9 联动默认收起（进阶功能不抢主线）', partsJs.includes('块间联动（进阶，可选）') && partsJs.includes('<details class="doc-bind"'), '');
@@ -2548,7 +2548,7 @@ try {
     check('10.2.9 认不出的 wiki 取值当没给（默认照样过滤）', !(plazaBogus.data?.documents ?? []).some((row) => row.title === 'S10 第一页') && plazaBogus.data?.wiki === '', JSON.stringify(plazaBogus.data?.wiki));
     // 前端那颗开关在 `views/doc.js` 里（这里现读一次，别抢后面那几个 `const docJs` 的名字）。
     const docJsPlaza = readFileSync(join(ROOT, 'public', 'views', 'doc.js'), 'utf8');
-    check('10.2.9 前端广场有「连站里的页一起列」那颗开关', docJsPlaza.includes("toggle.set('wiki', 'all')") && docJsPlaza.includes('不含 wiki 站里的页'), '');
+    check('10.2.9 前端广场不再有「连站里的页一起列」那颗开关（点了没用的那颗）', !docJsPlaza.includes("toggle.set('wiki', 'all')") && !docJsPlaza.includes('toggleHref') && !docJsPlaza.includes("params.set('wiki'") && docJsPlaza.includes('不含 wiki 站里的页'), '');
 
     // 10.2.1 「一个 wiki = 一篇帖子」：页的影子行**不进任何列表**。
     //
@@ -3024,6 +3024,10 @@ try {
     // 大小写不敏感（COLLATE NOCASE）：作者写 Css，别人搜 css 也要找得到。
     check('12.4 标签筛选不分大小写（Css / css 是同一个）', (await author.call('/api/docs?tag=css')).data?.documents?.some((item) => item.id === taggedId) === true, '');
     check('12.4 不存在的标签 → 空列表（不是报错）', ((await author.call('/api/docs?tag=没有这个标签')).data?.documents ?? []).length === 0, '');
+    // 点积木上的 tag = 把这个 tag 填进搜索框再搜一次 —— 所以 `?q=` 也得认标签
+    //（这一篇没有正文，标题里也没有「学术笔记」，命中只可能来自 doc_tags）。
+    check('12.4 ?q= 也能靠标签搜到（点标签就是拿标签去搜）', (await author.call(`/api/docs?q=${encodeURIComponent('学术笔记')}`)).data?.documents?.some((item) => item.id === taggedId) === true, '');
+    check('12.4 搜索命中标签时也不分大小写（Css / css 是同一个）', (await author.call('/api/docs?q=css')).data?.documents?.some((item) => item.id === taggedId) === true, '');
 
     // 12.5 看得见才算数：标签不是绕过可见范围的后门。
     const secret = await author.call('/api/docs', {
@@ -3071,9 +3075,11 @@ try {
     check('12.10 删文档顺手清掉它的标签', before > 0 && after === 0, JSON.stringify({ before, after }));
 
     // 12.11 前端接线（这几条是「界面真的做到了」的账）。
-    check('12.11 卡片与阅读页都渲染标签，点标签是去看同标签的积木', docJs.includes('function tagChipsHtml(') && docJs.includes('href="#/docs?tag='), '');
+    check('12.11 卡片与阅读页都渲染标签，点标签是拿这个标签去搜（填进搜索框）', docJs.includes('function tagChipsHtml(') && docJs.includes('href="#/docs?q='), '');
     check('12.11 广场认 ?tag= 这个参数', docJs.includes("query.get('tag')") && docJs.includes("params.set('tag', tag)"), '');
-    check('12.11 筛选表单里带着 tag（在标签里搜标题不会把标签丢掉）', docJs.includes('type="hidden" name="tag"') && docJs.includes("if (values.tag) params.set('tag', values.tag)"), '');
+    check('12.11 筛选表单里带着 tag（在标签里搜标题不会把标签丢掉）', docJs.includes('name="tag"') && docJs.includes("if (values.tag) params.set('tag', values.tag)"), '');
+    check('12.11 搜索框自己说清了能搜标签', docJs.includes('搜标题、正文或标签'), '');
+    check('12.11「只看我的」勾上就生效，不用再按「筛选」', docJs.includes('data-doc-auto') && docJs.includes('function onFilterChange(') && docJs.includes('requestSubmit()'), '');
     check('12.11 编辑器有标签框，且跟着「保存」一起存（不是第二个保存按钮）', docJs.includes('data-doc-tags') && docJs.includes('parseTags(') && !docJs.includes('data-doc-action="save-tags"'), '');
     check('12.11 标签上限来自服务端（客户端没自己发明一份 5 / 24）', docJs.includes("api('/api/docs/meta/tags')") && docJs.includes('docState.maxTags'), '');
 
@@ -3081,7 +3087,7 @@ try {
     check('12.12 顶栏不再有「学术笔记」入口', !sessionJs.includes('href="#/notes"'), '');
     check('12.12 老地址没坏：路由还在，页面还在', routerJs.includes("first === 'notes'") && notesJs.includes('async function viewNotes()'), '');
     check('12.12 老页面顶上写明「并进积木了」并给了标签入口', notesJs.includes('并进积木') && notesJs.includes('#/docs?tag='), '');
-    check('12.12 广场的形态筛选里不再单列「笔记」', docJs.includes("item.value !== 'note'"), '');
+    check('12.12 广场不再有形态筛选下拉（笔记与个人主页都不在广场里）', !docJs.includes('name="kind"') && !docJs.includes('全部形态'), '');
 
     // 12.13 第二种排法：从上往下列下来。
     check('12.13 排法偏好读写同一个 key，并且真的导出（check-frontend 会查命名空间）', prefsJs.includes("const docsLayout = () => readPreference('forum:docsLayout'") && prefsJs.includes('export { docsLayout };'), '');

@@ -134,6 +134,10 @@ export function createDocQueries(db) {
       if (kind && DOC_KINDS.includes(kind)) {
         conditions.push('d.kind = ?');
         params.push(kind);
+      } else {
+        // 个人主页（`kind = 'profile'`）不进广场 —— 它是「这个人的主页」，
+        // 从 `#/u/:username` 那条路看，铺在广场上只是一堆同名卡片。点名要 profile 才给。
+        conditions.push("d.kind <> 'profile'");
       }
       if (scope) {
         conditions.push('d.scope = ?');
@@ -157,7 +161,8 @@ export function createDocQueries(db) {
       }
       // 挂在 wiki 站里的页（`doc_settings.station_id` 非 0）默认不在广场列出来：
       // 导进来的一个 OI Wiki 就是 519 页，全铺在广场上会把别人写的东西淹掉；
-      // 它们按站自己的目录树看（`#/wiki`）。`?wiki=all` 才都列，`?wiki=only` 则只要站里的页。
+      // 它们按站自己的目录树看（`#/wiki`）。`?wiki=all` 才都列、`?wiki=only` 则只要站里的页
+      //（广场前端不再有那颗开关，`#/docs?wiki=all` 也不再往下传 —— 这套参数留给接口本身）。
       if (wiki === 'only') {
         conditions.push('EXISTS (SELECT 1 FROM doc_settings s WHERE s.document_id = d.id AND COALESCE(s.station_id, 0) <> 0)');
       } else if (wiki !== 'all') {
@@ -180,8 +185,20 @@ export function createDocQueries(db) {
         conditions.push('NOT EXISTS (SELECT 1 FROM doc_drafts dd WHERE dd.document_id = d.id AND dd.published = 0)');
       }
       if (q) {
-        conditions.push('d.title LIKE ?');
-        params.push(`%${q.replace(/[%_]/g, (ch) => `\\${ch}`)}%`);
+        // 标题、**正文**、**标签**都要搜得到：正文不在 `documents` 表里，它在块表里；
+        // 标签在 `doc_tags` 里 —— 点积木上的 tag 就是把 tag 填进搜索框再搜一次，
+        // 没有这一条，点上去就是空列表。
+        // 搜的是「线上那一份」的块 —— 有草稿行的看发布快照（`doc_published_blocks`），
+        // 没有草稿行的看 `document_blocks`。**未发布的草稿改动不进搜索结果**（别剧透）。
+        const like = `%${q.replace(/[%_]/g, (ch) => `\\${ch}`)}%`;
+        conditions.push(
+          `(d.title LIKE ?
+            OR EXISTS (SELECT 1 FROM doc_tags dt WHERE dt.document_id = d.id AND dt.tag LIKE ?)
+            OR EXISTS (SELECT 1 FROM doc_published_blocks pb WHERE pb.document_id = d.id AND pb.props_json LIKE ?)
+            OR (NOT EXISTS (SELECT 1 FROM doc_drafts dd WHERE dd.document_id = d.id)
+                AND EXISTS (SELECT 1 FROM document_blocks b WHERE b.document_id = d.id AND b.props_json LIKE ?)))`,
+        );
+        params.push(like, like, like, like);
       }
       if (visible) {
         conditions.push(visible.sql);

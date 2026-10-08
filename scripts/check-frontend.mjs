@@ -48,6 +48,14 @@ function registered(selector) {
 /** 表单类选择器：给元素塞 innerHTML = 真实 DOM 里把它们换成新元素（值自然清零）。 */
 const FORM_SELECTORS = ['[data-feed-input]', '[data-feed-ref-input]', '[data-feed-scope]'];
 
+/**
+ * 假 DOM 的元素都得是 `Element` 的实例。
+ *
+ * 视图里那句 `mount instanceof Element`（`public/views/doc-ai.js`：判断传进来的是元素还
+ * 是选择器）在浏览器里恒成立，假 DOM 里要是没有这个全局，就是一条 `ReferenceError`。
+ */
+class FakeElement {}
+
 function makeElement(tag = 'div') {
   const el = {
     _handlers: [],
@@ -116,6 +124,7 @@ function makeElement(tag = 'div') {
     form: null,
     parentNode: null,
   };
+  Object.setPrototypeOf(el, FakeElement.prototype);
   return el;
 }
 
@@ -231,6 +240,7 @@ globalThis.clearInterval = () => {};
 globalThis.confirm = () => true;
 globalThis.alert = () => {};
 globalThis.Image = class { set src(v) { this.onload?.(); } };
+globalThis.Element = FakeElement;
 globalThis.URL.createObjectURL = () => 'blob:fake';
 globalThis.URL.revokeObjectURL = () => {};
 
@@ -1378,7 +1388,7 @@ const CASES = [
   ['积木广场', 'doc.js', 'viewDocs', [new Map()]],
   ['积木阅读页', 'doc.js', 'viewDoc', [1]],
   ['积木编辑器', 'doc.js', 'viewDocEdit', [1, new Map()]],
-  ['积木 Markdown 模式', 'doc.js', 'viewDocEdit', [1, new Map([['mode', 'markdown']])]],
+  ['积木源码模式', 'doc.js', 'viewDocEdit', [1, new Map([['mode', 'source']])]],
   ['块类型表', 'doc.js', 'viewBlocks', []],
   // 「块类型表」挪进了开发者功能（`#/dev`），老地址 `#/blocks` 进的是同一页 ——
   // 这两行都留着：前者是契约（doc-smoke 认这个标签），后者是实际入口。
@@ -2828,7 +2838,7 @@ if (!state.theme) problems.push('state.theme 没被初始化');
   const scopeBox = registered('[data-doc-scope]');
   const tagsBox = registered('[data-doc-tags]');
   const scriptBox = registered('[data-doc-script-write]');
-  const mdBox = registered('[data-doc-markdown]');
+  const mdBox = registered('[data-doc-source]');
   const saveLight = registered('[data-doc-save-status]');
   const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
   const putsTo = (path) => REQUESTS.filter((item) => item.method === 'PUT' && item.url.split('?')[0] === path);
@@ -2836,7 +2846,7 @@ if (!state.theme) problems.push('state.theme 没被初始化');
   try {
     const docView = await view('doc.js');
     const detail = pickFixture('/api/docs/1');
-    await docView.viewDocEdit(1, new Map([['mode', 'markdown']]));
+    await docView.viewDocEdit(1, new Map([['mode', 'source']]));
     await settle();
 
     // 假 DOM 不解析 HTML，所以那些 `value="…"` 得按真页面的样子摆一遍。
@@ -2847,7 +2857,7 @@ if (!state.theme) problems.push('state.theme 没被初始化');
     scopeBox.dataset.docScope = '';
     titleBox.dataset.docTitle = '';
     tagsBox.dataset.docTags = '';
-    mdBox.dataset.docMarkdown = '';
+    mdBox.dataset.docSource = '';
     mdBox.value = '## 采样标题\n\n- 甲\n- 乙\n\n- 丙';
 
     /* ① 服务端说「这次改动会让块数暴跌」：安静这条路不该替作者确认，也不该自己重来一遍 */

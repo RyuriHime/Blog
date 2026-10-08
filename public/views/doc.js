@@ -2,7 +2,7 @@
 //
 //   积木广场     #/docs            列表 + 筛选 + 新建
 //   阅读页       #/doc/:id         外壳 + 后端渲染好的正文
-//   编辑器       #/doc/:id/edit    积木模式 / Markdown 模式
+//   编辑器       #/doc/:id/edit    源码模式 / 积木模式
 //   开发者功能   #/dev             块类型表（速查 + 注册）+ 我自己的脚本模板
 //
 // `#/blocks` 是登记在案的旧地址（README、侧栏、doc-smoke 都引用它），
@@ -57,8 +57,7 @@ const docState = {
 /** 开发者功能里的「我的脚本模板」：只对登录用户有意义，没登录就是一份空表。 */
 const scriptTemplateState = { templates: [], limit: 0, maxCode: 0, loaded: false, failed: false };
 
-/** 两个文本视图的两件外挂的生命周期手柄（预览防抖句柄 + 左侧 AI 抽屉实例）。 */
-let mdPreviewTimer = null;
+/** 左侧 AI 抽屉的生命周期手柄。 */
 let mdAiPanel = null;
 
 async function loadMeta(force = false) {
@@ -155,11 +154,11 @@ function download(filename, payload) {
 /* 积木广场                                                            */
 /* ------------------------------------------------------------------ */
 
-/** 标签徽章：点一下就去看「所有同标签的积木」。 */
+/** 标签徽章：点一下就把这个标签填进广场的搜索框（搜标题/正文/标签都能命中）。 */
 function tagChipsHtml(tags) {
   return (tags ?? [])
     .filter((tag) => typeof tag === 'string' && tag)
-    .map((tag) => `<a class="doc-tag" href="#/docs?tag=${encodeURIComponent(tag)}">#${esc(tag)}</a>`)
+    .map((tag) => `<a class="doc-tag" href="#/docs?q=${encodeURIComponent(tag)}">#${esc(tag)}</a>`)
     .join('');
 }
 
@@ -218,9 +217,8 @@ async function viewDocs(query = new URLSearchParams()) {
   const drafts = query.get('drafts') === '1';
   const q = query.get('q') ?? '';
   const tag = query.get('tag') ?? '';
-  // 挂在 wiki 站里的页默认不列（一个导进来的 OI Wiki 就 519 页，会把别人的积木淹掉）：
-  // 想看它们去 `#/wiki` 走站的目录树，或者点下面那颗「连站里的页一起列」。
-  const wiki = query.get('wiki') === 'all' || query.get('wiki') === 'only' ? query.get('wiki') : '';
+  // 挂在 wiki 站里的页不在广场列（一个导进来的 OI Wiki 就 519 页，会把别人的积木淹掉）：
+  // 想看它们去 `#/wiki` 走站的目录树。广场上不再有「连站里的页一起列」那颗开关。
   const layout = Prefs.docsLayout() === 'list' ? 'list' : 'grid';
   const params = new URLSearchParams();
   if (kind) params.set('kind', kind);
@@ -228,11 +226,6 @@ async function viewDocs(query = new URLSearchParams()) {
   if (drafts) params.set('drafts', '1');
   if (q) params.set('q', q);
   if (tag) params.set('tag', tag);
-  if (wiki) params.set('wiki', wiki);
-  const toggle = new URLSearchParams(query);
-  if (wiki === 'all') toggle.delete('wiki');
-  else toggle.set('wiki', 'all');
-  const toggleHref = `#/docs${toggle.toString() ? `?${toggle}` : ''}`;
   const data = await api(`/api/docs${params.toString() ? `?${params}` : ''}`);
   const documents = data.documents ?? [];
   const layoutTabs = DOC_LAYOUTS.map(
@@ -244,7 +237,7 @@ async function viewDocs(query = new URLSearchParams()) {
     <div class="card doc-panel">
       <div class="card-head">
         <span class="card-title">${drafts ? '📥 草稿箱' : '🧩 积木广场'}</span>
-        <span class="hint">${Fmt.fmtNum(data.total ?? documents.length)} 篇${drafts ? '（没发布的改动只有你自己看得见）' : wiki ? '' : '（不含 wiki 站里的页）'}</span>
+        <span class="hint">${Fmt.fmtNum(data.total ?? documents.length)} 篇${drafts ? '（没发布的改动只有你自己看得见）' : '（不含 wiki 站里的页）'}</span>
       </div>
       ${
         tag
@@ -253,19 +246,14 @@ async function viewDocs(query = new URLSearchParams()) {
       }
       <form class="doc-filters" data-doc-form="filter">
         <input type="hidden" name="tag" value="${esc(tag)}">
-        <input class="doc-input" type="search" name="q" value="${esc(q)}" placeholder="搜标题或正文摘要…">
-        <select class="doc-input doc-select" name="kind">
-          <option value="">全部形态</option>
-          ${optionsHtml(docState.kinds.filter((item) => item.value !== 'note'), kind)}
-        </select>
-        <label class="doc-check-label"><input type="checkbox" class="doc-check" name="mine"${mine ? ' checked' : ''}>只看我的</label>
+        <input class="doc-input" type="search" name="q" value="${esc(q)}" placeholder="搜标题、正文或标签…">
+        <label class="doc-check-label"><input type="checkbox" class="doc-check" name="mine" data-doc-auto${mine ? ' checked' : ''}>只看我的</label>
         <button class="btn btn-sm btn-primary" type="submit">筛选</button>
       </form>
       <div class="doc-actions">
         ${state.me ? '<button class="btn btn-sm" type="button" data-doc-action="new">＋ 新建一篇</button>' : '<a class="btn btn-sm" href="#/login">登录后可以新建</a>'}
         ${state.me ? `<a class="btn btn-sm${drafts ? ' btn-primary' : ''}" href="#/docs?drafts=1">📥 草稿箱</a>` : ''}
         <a class="btn btn-sm" href="#/wiki">⧉ Wiki 站</a>
-        <a class="btn btn-sm btn-ghost" href="${toggleHref}">${wiki === 'all' ? '不列站里的页' : '连站里的页一起列'}</a>
         <a class="btn btn-sm btn-ghost" href="#/dev">🛠 开发者功能</a>
         <div class="tabs tabs-sm doc-layout-tabs">${layoutTabs}</div>
       </div>
@@ -471,10 +459,6 @@ function leaveDocPage() {
   if (rescue && typeof rescue.catch === 'function') rescue.catch(() => {});
   // 换代：还挂着的定时器回来时什么也别干 —— 它们读的是**这个**页面上的 DOM。
   retireAutoSave();
-  if (mdPreviewTimer) {
-    clearTimeout(mdPreviewTimer);
-    mdPreviewTimer = null;
-  }
   // 左侧 AI 抽屉自己收：它挂的是它自己的监听（`./doc-ai.js`），这里只管把它拆掉。
   try {
     DocAi.destroyDocAi();
@@ -1326,7 +1310,7 @@ function blocksEditorHtml(blocks) {
     <div class="doc-editor">
       ${
         cards ||
-        `<div class="card">${emptyHtml('🧱', '这篇还没有块', '从下面的「插入一块」开始，或者切到 Markdown 模式贴一篇进来')}</div>`
+        `<div class="card">${emptyHtml('🧱', '这篇还没有块', '从下面的「插入一块」开始，或者切到源码模式贴一篇进来')}</div>`
       }
     </div>
     <div class="card doc-panel">
@@ -1353,10 +1337,10 @@ function blocksEditorHtml(blocks) {
  * 没有网络、拉不到 vendor。一个 `textarea` + 服务端预览已经能写脚本、能看结果。
  */
 function sourceEditorHtml(source) {
-  // `name="content"` 与 Markdown 模式同款：两个文本视图在外挂眼里是一样的东西。
+  // `name="content"` 是 AI 抽屉与旧外挂认「编辑区」用的：这里就是那个唯一的文本编辑框。
   return `<div class="card doc-panel">
     <div class="card-head">
-      <span class="card-title">⚡ 源码模式</span>
+      <span class="card-title">⚡ 源码（支持 Markdown/LaTeX）</span>
       <span class="hint">整篇就是这段文本；右边实时预览，脚本会真的跑起来</span>
     </div>
     <div class="doc-md-wrap">
@@ -1383,7 +1367,7 @@ function sourceEditorHtml(source) {
   </div>`;
 }
 
-/** 源码模式的挂载：Tab 缩进 + 实时预览 + AI 抽屉（与 Markdown 模式共用同一份面板）。 */
+/** 源码模式的挂载：Tab 缩进 + 实时预览 + AI 抽屉。 */
 function mountSourceTools() {
   const editor = docState.editor;
   const textarea = $('[data-doc-source]');
@@ -1440,7 +1424,7 @@ function mountSourceTools() {
 /**
  * 把「这段文本就是这篇的正文」交给服务端。
  *
- * 两个文本视图（纯 Markdown / 源码）共用同一条路：服务端解析、按 id 对齐、写回
+ * 源码视图走这一条路：服务端解析、按 id 对齐、写回
  * `source_text`，再把对齐之后的 `source` 与 `blocks` 还回来 —— 客户端**绝不**自己推定
  * 「存完应该长什么样」，对齐是服务端才做得了的事（LCS + id 归属）。
  */
@@ -1472,17 +1456,17 @@ async function withShrinkConfirm(task) {
 function currentDraft() {
   const editor = docState.editor;
   if (!editor) return null;
-  const el = editor.mode === 'source' ? $('[data-doc-source]') : editor.mode === 'markdown' ? $('[data-doc-markdown]') : null;
+  const el = editor.mode === 'source' ? $('[data-doc-source]') : null;
   if (!el) return null;
-  const baseline = editor.mode === 'source' ? (editor.data?.source ?? '') : (editor.markdown ?? '');
+  const baseline = editor.mode === 'source' ? (editor.data?.source ?? '') : '';
   return { el, text: el.value ?? '', baseline };
 }
 
 /**
  * 切视图之前把改动存下去。
  *
- * 为什么切视图一定要存：三个视图是**同一篇帖子的三种看法**，而块与 id 的真相在服务端
- * （Markdown 视图里根本没有 id，源码视图里有）。「在 Markdown 里写一半就切过去拼积木」
+ * 为什么切视图一定要存：两个视图是**同一篇帖子的两种看法**，而块与 id 的真相在服务端
+ * （源码文本里写下的块围栏，要靠服务端解析才成为块）。「在源码里写一半就切过去拼积木」
  * 只有两条路 —— 让服务端把这段文本解析成块，或者在客户端再养一份解析器。后者是第二份
  * 真相，迟早对不上；所以选前者。
  *
@@ -1493,7 +1477,6 @@ async function flushDraft() {
   if (!draft || draft.text === draft.baseline) return true;
   const data = await withShrinkConfirm((force) => putDraft(draft.text, force));
   if (!data) return false;
-  if (docState.editor.mode === 'markdown') docState.editor.markdown = draft.text;
   toast('切换前先把改动存下了');
   return true;
 }
@@ -1528,7 +1511,7 @@ const AUTO_SAVE_IDLE_TEXT = `停手 ${AUTO_SAVE_SECONDS} 秒自动存（「保�
  * 只有它们能触发自动保存：`ui.app` 上还挂着别的表单（导入、注册块类型、脚本模板），
  * 在那些框里打字顺手把正文存一遍，是拿作者没说过的话去写库。
  */
-const EDITOR_FIELDS = ['docTitle', 'docScope', 'docTags', 'docScriptWrite', 'docMarkdown', 'docSource'];
+const EDITOR_FIELDS = ['docTitle', 'docScope', 'docTags', 'docScriptWrite', 'docSource'];
 
 /**
  * 自动保存的进度。
@@ -1792,7 +1775,7 @@ if (typeof window !== 'undefined' && typeof window.addEventListener === 'functio
 /**
  * 编辑器里的每一次敲键、每一次改下拉。
  *
- * 只认编辑器自己那几个控件（标题 / 可见范围 / 标签 / 脚本开关 / 两个文本框 / 块卡片里的字段）。
+ * 只认编辑器自己那几个控件（标题 / 可见范围 / 标签 / 脚本开关 / 正文文本框 / 块卡片里的字段）。
  * 两个例外：块卡片里的「源码」框**不自动存**（它是一整份 props JSON，敲到一半必然是
  * 坏 JSON），普通表单页（导入、注册块类型、脚本模板）也一概不碰。
  */
@@ -1816,103 +1799,6 @@ async function reloadSource() {
   const data = await api(`/api/docs/${editor.id}`);
   absorb(data);
   toast('拿回服务端的版本了');
-}
-
-/**
- * 纯 Markdown 视图能**如实**表达的块：正文类的这些。
- *
- * 判据只认块类型，不认「Markdown 里能不能打出来」—— 因为出问题的不是打字，
- * 是**看见的和你改的不是一回事**：`poll` / `app` / `script` / 自定义块在纯 Markdown 里
- * 只能退化成一坨围栏 JSON（` ```doc:poll `），作者在其中改错一个字符就毁了整块。
- */
-const MARKDOWN_VIEW_TYPES = new Set(['heading', 'paragraph', 'prose', 'list', 'quote', 'code', 'table', 'formula', 'image', 'wiki']);
-
-/** 这篇能不能用纯 Markdown 编辑？不能就回一句「为什么」（能就回空串）。 */
-function markdownViewBlocked(blocks) {
-  const exotic = (blocks ?? []).filter((block) => !MARKDOWN_VIEW_TYPES.has(String(block?.type ?? '')));
-  if (exotic.length === 0) return '';
-  const names = [...new Set(exotic.map((block) => String(block.type)))].join(' / ');
-  return `这篇里有 Markdown 表达不了的积木（${names}），所以这一页只读 —— 点上面的「⚡ 源码模式」改。`;
-}
-
-function markdownEditorHtml(markdown, blocked = '') {
-  // `name="content"` 是从 AI 抽屉那条契约里留下来的：源码模式那个 textarea 也叫它，
-  // 两个文本视图长得一样，抽屉（以及还在用它的旧脚本）就不用分辨自己在哪一页。
-  const ro = blocked ? ' readonly' : '';
-  return `<div class="card doc-panel">
-    <div class="card-head"><span class="card-title">📝 纯 Markdown</span><span class="hint">右边跟着打字实时更新；保存会把整篇的块换成这份 Markdown 解析出来的块</span></div>
-    ${blocked ? `<div class="doc-hint doc-md-blocked">⚠ ${esc(blocked)}</div>` : ''}
-    <div class="doc-md-wrap">
-      ${DocAi.docAiHtml(docState.editor?.id ?? '')}
-      <div class="doc-md-grid">
-        <div class="doc-md-edit" id="docMdHost" data-doc-editor-host>
-          <textarea class="doc-input doc-textarea doc-md" name="content" data-doc-markdown rows="18" spellcheck="false"${ro}>${esc(markdown ?? '')}</textarea>
-        </div>
-        <div class="doc-md-side">
-          <div class="doc-md-preview" data-doc-preview><div class="md"><span class="hint">开始打字就有预览。</span></div></div>
-        </div>
-      </div>
-    </div>
-    <div class="doc-actions">
-      <button class="btn btn-sm btn-ghost" type="button" data-doc-action="md-reload">重新拉取</button>
-      <span class="doc-hint" data-doc-md-status>停手 ${AUTO_SAVE_SECONDS} 秒自动存；这里也会显示 AI 抽屉的状态。</span>
-    </div>
-    <div class="doc-hint">支持标题 / 段落 / 列表 / 代码围栏 / 表格 / $$公式$$ / 图片 / 引用 / [[双链]]；结构化块（\`\`\`doc:poll 这种）在这里只读，请去源码模式改。</div>
-  </div>`;
-}
-
-/**
- * Markdown 模式的两件外挂：实时预览 + 左侧的 AI 抽屉。
- *
- * 预览复用站点既有的 `POST /api/markdown/preview`（compose 的「预览」按钮走的就是
- * 它，LaTeX 也在这一层渲染），只是这里改成**防抖自动跑**，不需要点按钮。
- * AI 抽屉是这一轮新写的（`./doc-ai.js`）：左边说一句话，右边这段文本跟着改 ——
- * 它打的是 `/api/ai-edit/*`（与 `#/ai-edit` 页面同一个后端，不另造模型调用链）。
- *
- * 两个都**只做锦上添花**：拿不到就把原因写在状态里，绝不让编辑器本身挂掉。
- */
-function mountMarkdownTools(blocked = '') {
-  const textarea = $('[data-doc-markdown]');
-  const box = $('[data-doc-preview] .md');
-  const status = $('[data-doc-md-status]');
-
-  if (textarea && box) {
-    const paint = async () => {
-      const text = textarea.value ?? '';
-      if (text.trim() === '') {
-        box.innerHTML = '<span class="hint">开始打字就有预览。</span>';
-        return;
-      }
-      try {
-        const { html } = await api('/api/markdown/preview', { method: 'POST', body: { content: text } });
-        box.innerHTML = html || '<span class="hint">（空内容）</span>';
-        // LaTeX 走的是站点原本那一套（离线 KaTeX，见 views/notes.js）。
-        // 服务端只吐 `$…$` 原文，公式得在 innerHTML 之后才排得出来。
-        ntRenderMath(box);
-      } catch (error) {
-        box.innerHTML = `<span class="hint">预览渲染失败：${esc(error.message)}</span>`;
-      }
-    };
-    if (typeof textarea.addEventListener === 'function') {
-      textarea.addEventListener('input', () => {
-        if (mdPreviewTimer) clearTimeout(mdPreviewTimer);
-        mdPreviewTimer = setTimeout(() => {
-          mdPreviewTimer = null;
-          paint();
-        }, 400);
-      });
-    }
-    paint();
-  }
-
-  const mount = $('[data-doc-ai]');
-  // 只读的 Markdown 页**不挂 AI 抽屉**：抽屉的「写入编辑区」就是直接写 `textarea.value`，
-  // readonly 拦不住它 —— 挂上去就等于留了一条绕过「这一页改不了」的后门。
-  if (blocked) {
-    if (status) status.textContent = '这一页只读，AI 抽屉在源码模式里可用';
-    return;
-  }
-  mountDocAiPanel(status);
 }
 
 /**
@@ -1942,7 +1828,7 @@ function mountDocAiPanel(status) {
       }
       const target = currentDraft();
       if (!target) {
-        if (status) status.textContent = '这个视图没有可写的文本框 —— 切到 Markdown / 源码模式再让 AI 改。';
+        if (status) status.textContent = '这个视图没有可写的文本框 —— 切到源码模式再让 AI 改。';
         return;
       }
       target.el.value = text;
@@ -2000,7 +1886,6 @@ function renderEditor() {
   const editor = docState.editor;
   const doc = editor.data.doc ?? {};
   const blocks = editor.data.blocks ?? [];
-  const mdBlocked = markdownViewBlocked(blocks);
   ui.app.innerHTML = `
     <div class="card doc-panel">
       <div class="card-head">
@@ -2035,22 +1920,18 @@ function renderEditor() {
         ${autoSaveStatusHtml()}
       </div>
       <div class="doc-tabs">
-        <button class="doc-tab${editor.mode === 'markdown' ? ' doc-tab-on' : ''}" type="button" data-doc-tab="markdown">📝 纯 Markdown${mdBlocked ? ' ⚠' : ''}</button>
-        <button class="doc-tab${editor.mode === 'source' ? ' doc-tab-on' : ''}" type="button" data-doc-tab="source">⚡ 源码模式</button>
+        <button class="doc-tab${editor.mode === 'source' ? ' doc-tab-on' : ''}" type="button" data-doc-tab="source">⚡ 源码（支持 Markdown/LaTeX）</button>
         <button class="doc-tab${editor.mode === 'blocks' ? ' doc-tab-on' : ''}" type="button" data-doc-tab="blocks">🧱 积木模式</button>
       </div>
     </div>
     ${
       editor.mode === 'source'
         ? sourceEditorHtml(editor.data.source ?? '')
-        : editor.mode === 'markdown'
-          ? markdownEditorHtml(editor.markdown, mdBlocked)
-          : `${blocksEditorHtml(blocks)}${templatePanelHtml()}`
+        : `${blocksEditorHtml(blocks)}${templatePanelHtml()}`
     }
     ${toolboxHtml(doc)}
     <div class="card doc-revisions" data-doc-revisions hidden></div>`;
   ensureDelegate();
-  if (editor.mode === 'markdown') mountMarkdownTools(mdBlocked);
   if (editor.mode === 'source') mountSourceTools();
 }
 
@@ -2198,7 +2079,6 @@ async function saveAll(options = {}) {
         }
         throw error;
       }
-      if (editor.mode === 'markdown') editor.markdown = draft.text;
       contentSaved = 1;
     } else {
       const data = await withShrinkConfirm((force) => putDraft(draft.text, force));
@@ -2207,7 +2087,6 @@ async function saveAll(options = {}) {
         renderEditor();
         return { changed: false, skipped: '你在确认框里点了取消' };
       }
-      if (editor.mode === 'markdown') editor.markdown = draft.text;
       contentSaved = 1;
     }
   }
@@ -2216,11 +2095,9 @@ async function saveAll(options = {}) {
   if (quiet) return { changed, skipped: '', metaChanged, settingsChanged, contentSaved };
 
   // 3) 重画（本地推定「存完该长什么样」迟早对不上）。
-  //    Markdown 模式**必须重新拉一次**：编辑区画的 `editor.markdown` 是上次拉的文本，
-  //    不重拉就等于把作者刚敲的东西从框里抹掉（空文档上尤其明显：直接变空白）；
-  //    顺带也把脏基线对齐到服务端真存下来的那份（解析是有损的：表格分隔行、嵌套列表会被改写）。
-  if (editor.mode === 'markdown') await loadMarkdown();
-  else renderEditor();
+  //    源码视图存完也一律重画：脏基线跟着服务端真存下来的那份对齐
+  //   （解析是有损的：表格分隔行、嵌套列表会被改写）。
+  renderEditor();
 
   if (!changed) {
     toast('没有改动要存');
@@ -2305,13 +2182,6 @@ async function insertBlock() {
   toast('加了一块，填完记得保存本块');
 }
 
-async function loadMarkdown() {
-  const editor = docState.editor;
-  const data = await api(`/api/docs/${editor.id}/markdown`);
-  editor.markdown = data.markdown ?? '';
-  renderEditor();
-}
-
 async function showRevisions() {
   const id = docState.editor ? docState.editor.id : docState.viewing;
   const data = await api(`/api/docs/${id}/revisions`);
@@ -2364,15 +2234,13 @@ async function viewDocEdit(id, query = new URLSearchParams()) {
     toast('只有作者和站务能编辑这篇文档', 'error');
     return navigate(`/doc/${id}`);
   }
-  // 默认进**纯 Markdown**：这一轮的主编辑面是「先写字」，积木与脚本是后面才切过去的事。
-  const wanted = query.get('mode') ?? 'markdown';
+  // 默认进**源码（支持 Markdown/LaTeX）**：这一轮的主编辑面是「先写字」，积木与脚本是后面才切过去的事。
+  const wanted = query.get('mode') ?? 'source';
   docState.editor = {
     id,
     data,
-    mode: wanted === 'source' || wanted === 'blocks' ? wanted : 'markdown',
-    markdown: '',
+    mode: wanted === 'blocks' ? 'blocks' : 'source',
   };
-  if (docState.editor.mode === 'markdown') return loadMarkdown();
   renderEditor();
 }
 
@@ -2699,6 +2567,24 @@ function ensureDelegate() {
   // （`input` 管文本框与勾选框，`change` 管下拉 —— 两个都挂上，别猜哪个控件派发哪个）。
   ui.app.addEventListener('input', onEditorInput);
   ui.app.addEventListener('change', onEditorInput);
+  // 广场筛选栏里「改一下就该立刻见效」的那两颗（只勾自己 / 换标签）单独挂 —— 它们不在编辑器里。
+  ui.app.addEventListener('change', onFilterChange);
+}
+
+/**
+ * 广场筛选栏：勾上「只看我的」、或在标签下拉里换一项，**当场**重新筛一遍，
+ * 不必再点一次「筛选」。
+ *
+ * 搜索框不在此列：打字打到一半就跳页是骚扰，那个仍然按回车或点「筛选」。
+ * 走 `requestSubmit()` 而不是自己拼参数 —— 筛选条件只该有一份实现（`onAppSubmit` 里那份）。
+ */
+function onFilterChange(event) {
+  const target = event?.target;
+  if (typeof target?.closest !== 'function') return;
+  const node = target.closest('[data-doc-form="filter"] [data-doc-auto]');
+  if (!node) return;
+  const form = node.closest('[data-doc-form="filter"]');
+  if (typeof form?.requestSubmit === 'function') form.requestSubmit();
 }
 
 function findAction(target) {
@@ -2825,7 +2711,6 @@ async function onAppClick(event) {
       toast('发布出去了，别人现在看到的就是这一版', 'success');
     });
   }
-  if (action === 'md-reload') return withBusy(loadMarkdown);
   if (action === 'src-reload') return withBusy(reloadSource);
   if (action === 'apply-template') {
     const key = $('[data-doc-template]')?.value ?? '';
@@ -2892,8 +2777,8 @@ async function onAppSubmit(event) {
         if (values.q) params.set('q', values.q);
         if (values.kind) params.set('kind', values.kind);
         if (values.mine) params.set('mine', '1');
-        // 标签是从卡片上点进来的，筛选表单里带着一个 hidden 的 tag：不清空它，
-        // 否则「在某个标签里搜标题」一按筛选就变回全站了。
+        // 标签可能是从卡片上点进来的（下拉里会补出当前这一项），也可能是下拉里选的：
+        // 不清空它，否则「在某个标签里搜标题」一按筛选就变回全站了。
         if (values.tag) params.set('tag', values.tag);
         return navigate(`/docs${params.toString() ? `?${params}` : ''}`);
       }
@@ -2986,9 +2871,9 @@ async function refreshEditorData() {
 }
 
 /**
- * 编辑器里的三个视图页签。
+ * 编辑器里的两个视图页签。
  *
- * 切之前先 `flushDraft()`：这样「Markdown 里写一半 → 切过去拼积木 → 再切回来」
+ * 切之前先 `flushDraft()`：这样「源码里写一半 → 切过去拼积木 → 再切回来」
  * 一路都不会丢东西，而且积木/源码视图看到的是**服务端解析出来**的那份。
  * 作者在「块数暴跌」的确认框上点了取消，就原地不动 —— 半途切走会让他以为改动没了。
  */
@@ -3002,7 +2887,6 @@ async function onTabClick(mode) {
     if (autoSave.pending || autoSave.saving) await runAutoSave('tab');
     cancelAutoSave();
     editor.mode = mode;
-    if (mode === 'markdown') return await loadMarkdown();
     // 积木视图里可能刚改过块（那些接口不回 source），切过去之前把整篇重取一遍。
     await refreshEditorData();
     renderEditor();

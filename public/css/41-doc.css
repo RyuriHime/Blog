@@ -68,7 +68,7 @@
   min-height: 320px;
 }
 
-/* Markdown 模式：左边编辑区，右边实时预览 + AI 抽屉。 */
+/* 源码模式：左边编辑区，右边实时预览 + AI 抽屉。 */
 .doc-md-grid {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
@@ -122,15 +122,6 @@
   border: 1px solid var(--accent);
   color: var(--accent);
   background: var(--panel);
-}
-
-/* 纯 Markdown 视图改不了这篇时的横幅（原因由 doc.js 的 markdownViewBlocked() 拼）。 */
-.doc-md-blocked {
-  margin: 0 0 10px;
-  padding: 8px 10px;
-  border-radius: var(--radius);
-  border: 1px solid var(--accent);
-  color: var(--accent);
 }
 
 /* 块间联动：这一块的值从哪一块的哪个字段来（`bind`，跨块约定，见设计 §3.3③）。 */

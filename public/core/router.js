@@ -149,7 +149,7 @@ async function route() {
     if (first === 'notes') return await Notes.viewNotes();
     // 积木（v2 可编程帖子）：`/doc/:id/edit` 与 `/doc/:id/blocks` 必须排在
     // `/doc/:id` 前面，否则编辑页会被当成 id 是 "…/edit" 的文档（parts 里第三段会被丢掉）。
-    // 两个入口进的是同一个编辑器，只是默认落在哪个模式上；`?mode=markdown` 可覆盖。
+    // 两个入口进的是同一个编辑器，只是默认落在哪个模式上；`?mode=blocks` 可覆盖。
     if (first === 'docs') return await Doc.viewDocs(query);
     // `#/blocks` 是块类型表的老地址（README、侧栏、doc-smoke 都还引用它）——
     // 它和 `#/dev` 进的是同一页：块类型表挪进了「开发者功能」，页面本身没下线。
