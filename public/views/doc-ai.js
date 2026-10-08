@@ -154,9 +154,13 @@ export function docAiHtml(documentId) {
     <div class="card-head doc-ai-head">
       <span class="card-title">🤖 AI 助手</span>
       <span class="doc-ai-docid">#${esc(String(documentId ?? ''))}</span>
-      <button class="btn btn-sm btn-ghost" type="button" data-doc-ai-action="collapse" title="收起抽屉">‹</button>
+      <div class="doc-ai-switch" data-doc-ai-switch role="tablist" aria-label="左栏内容">
+        <button class="doc-ai-switch-btn is-on" type="button" role="tab" aria-selected="true" data-doc-ai-pane="ai">AI 助手</button>
+        <button class="doc-ai-switch-btn" type="button" role="tab" aria-selected="false" data-doc-ai-pane="convert">📄 转换</button>
+        <button class="doc-ai-switch-btn doc-ai-switch-collapse" type="button" data-doc-ai-action="collapse" title="收起这一栏">收起</button>
+      </div>
     </div>
-    <div class="doc-ai-body">
+    <div class="doc-ai-body" data-doc-ai-pane-body="ai">
       <div class="doc-ai-log" data-doc-ai-log>
         <div class="doc-ai-note">在下面说一句话，AI 就改右边这片正文：整理格式、学术审查、加积木块、写积木脚本都行。</div>
       </div>
@@ -170,7 +174,7 @@ export function docAiHtml(documentId) {
       </div>
       <div class="doc-hint" data-doc-ai-status></div>
     </div>
-    <section class="doc-ai-convert" data-doc-ai-convert>
+    <section class="doc-ai-convert" data-doc-ai-convert data-doc-ai-pane-body="convert" hidden>
       <div class="card-head doc-ai-convert-head">
         <span class="card-title">📄 PDF / 文档 → Markdown</span>
       </div>
@@ -234,6 +238,34 @@ export function mountDocAi(options = {}) {
   const convertPreview = root.querySelector('[data-doc-ai-convert-preview]');
   const convertButtons = [...root.querySelectorAll('[data-doc-ai-convert]')];
   let convertedMarkdown = '';
+
+  /* ------------------------------------------------------------------ */
+  /* 左栏三态开关：AI 助手 / 📄 转换 / 收起                                */
+  /*   「收起」沿用既有的 is-collapsed（按钮上的 data-doc-ai-action 没变，   */
+  /*   所以老的那套 onClick 照常管用）；前两态只切下面这两个面板。           */
+  /*   状态留在内存里：重开编辑器回到默认的「AI 助手」。                    */
+  /* ------------------------------------------------------------------ */
+  const switchBox = root.querySelector('[data-doc-ai-switch]');
+  const panes = [...root.querySelectorAll('[data-doc-ai-pane-body]')];
+  let activePane = 'ai';
+
+  const paintPane = () => {
+    for (const pane of panes) pane.hidden = pane.dataset.docAiPaneBody !== activePane;
+    const buttons = switchBox ? switchBox.querySelectorAll('[data-doc-ai-pane]') : [];
+    for (const button of buttons) {
+      const on = button.dataset.docAiPane === activePane;
+      button.classList.toggle('is-on', on);
+      button.setAttribute('aria-selected', on ? 'true' : 'false');
+    }
+  };
+
+  switchBox?.addEventListener('click', (event) => {
+    const button = event.target?.closest?.('[data-doc-ai-pane]');
+    if (!button) return;
+    activePane = button.dataset.docAiPane === 'convert' ? 'convert' : 'ai';
+    paintPane();
+  });
+  paintPane();
 
   const convertHint = (text) => {
     if (convertStatus) convertStatus.textContent = text;
