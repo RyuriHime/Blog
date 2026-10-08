@@ -256,6 +256,19 @@ check('回答不再用 <br /> 顶替分段', !/esc\(data\.answer\)\.replace\(\/\
 check('回答支持 ``` 代码块（行内标记会摆正）', /aiFencesToLines/.test(appJs) && /ai-pre-lang/.test(appJs));
 check('代码块里的 Markdown 标记不被当结构', /aiNormalizeProse/.test(appJs) && /AI_CODE_LANGS/.test(appJs));
 check('回答支持 Markdown 表格', /ai-table/.test(appJs) && /AI_TABLE_SEP/.test(appJs));
+// m11909：编辑页那块「工具箱」删掉之后，阅读页成了「修订记录」的唯一入口，
+// 而那排「回滚到这一版」是死的（`rollback()` 开头 `if (!docState.editor) return;`，
+// 阅读页恰好把 editor 置空 → 点了连请求都不发）。这三条守住「接上了」与「读者不画按钮」。
+check(
+  '阅读页也能回滚（没有编辑器时用 viewing 的 id）',
+  /const id = editor \? editor\.id : docState\.viewing;\n  if \(!id\) return;/.test(appJs),
+);
+check('阅读页回滚后原地重画整篇', /renderDoc\(data\);\s*toast\(/.test(appJs));
+check(
+  '没编辑权限的人看不到回滚按钮',
+  /const canRollback = Boolean\(docState\.editor\) \|\| docState\.canEdit === true;/.test(appJs) &&
+    /docState\.canEdit = Boolean\(abilities\.canEdit\);/.test(appJs),
+);
 check(
   'route() 有请求序号守卫（防切页竞态）',
   /routeSeq \+= 1/.test(appJs) && /throw routeAborted\(\)/.test(appJs) && /if \(seq !== null && seq !== routeSeq\)/.test(appJs),
