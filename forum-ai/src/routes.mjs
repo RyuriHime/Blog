@@ -225,7 +225,9 @@ export function createAiHandlers(deps = {}) {
       throw error;
     }
 
-    const contentHash = store.corpusHash();
+    // LOCAL PATCH (see LOCAL-PATCHES.md): 记的是**这一篇自己**的指纹，
+    // 不是整站语料指纹 —— 否则任何一篇别的帖子动过，这篇的解读也算过期。
+    const contentHash = store.documentHash(id);
     const siblings = recommendPool(id);
     const wiki = wikiPool(doc);
 
@@ -272,7 +274,8 @@ export function createAiHandlers(deps = {}) {
       return ok({
         document: { id, title: doc.title },
         cached: cached ?? null,
-        stale: Boolean(cached) && cached.contentHash !== store.corpusHash(),
+        // LOCAL PATCH (see LOCAL-PATCHES.md): 逐篇比，见 store.documentHash。
+        stale: Boolean(cached) && cached.contentHash !== store.documentHash(id),
       });
     },
 

@@ -374,8 +374,9 @@ try {
 
   // 帖子写入接口已经下线（`POST /api/posts` 一律 410 `posts_retired`），
   // 所以这里改「建一篇公开积木」—— 积木会顺带配一条影子帖（hidden = 0、deleted = 0），
-  // AI 语料指纹里的「篇数 + 最新更新时间 + 正文总字符数」照样会变，
-  // 要验的「内容一变缓存就标过期」一个字没少。
+  // 它也会进 AI 语料。顺带验 LOCAL PATCH（见 `forum-ai/LOCAL-PATCHES.md`）：
+  // 解读缓存的过期改按**这一篇自己**的指纹判 —— 新增别篇不该让老解读过期，
+  // 只有这一篇自己的正文变了才回队。
   const newDoc = await member2.call('/api/docs', {
     method: 'POST',
     body: {
@@ -390,10 +391,34 @@ try {
     newDoc.status === 200 && Number(newDoc.data?.doc?.id) > 0,
     `status=${newDoc.status} ${JSON.stringify(newDoc.error ?? newDoc.body).slice(0, 160)}`,
   );
+  const newDocId = newDoc.data?.doc?.id;
+  const anchor = await member2.call(`/api/docs/${newDocId}/anchor`);
+  const newPostId = Number(anchor.data?.post?.id);
+  check('新积木的影子帖拿得到 id', newPostId > 0, JSON.stringify(anchor.data?.post ?? anchor.body).slice(0, 160));
+
   const afterChange = await member2.call('/api/ai/posts/2');
-  check('内容变化后缓存标记为过期', afterChange.data?.stale === true, `stale=${afterChange.data?.stale}`);
+  check('新增别篇不让老解读过期（按篇判过期）', afterChange.data?.stale === false, `stale=${afterChange.data?.stale}`);
+
+  const analyzedNew = await member2.call(`/api/ai/posts/${newPostId}/analyze`, { method: 'POST' });
+  check('新建的那一篇解读成功', analyzedNew.status === 200, `status=${analyzedNew.status}`);
+  const freshNew = await member2.call(`/api/ai/posts/${newPostId}`);
+  check('刚解读完自己不算过期', freshNew.data?.stale === false, `stale=${freshNew.data?.stale}`);
+
+  const newMd = await member2.call(`/api/docs/${newDocId}/markdown`);
+  const wrote = await member2.call(`/api/docs/${newDocId}/markdown`, {
+    method: 'PUT',
+    body: { markdown: `${newMd.data?.markdown ?? ''}\n\n这一段是新加的：验「这一篇自己变了才标过期」。` },
+  });
+  check(
+    '改这一篇自己的正文',
+    wrote.status === 200,
+    `status=${wrote.status} ${JSON.stringify(wrote.error ?? wrote.body).slice(0, 160)}`,
+  );
+  const changedSelf = await member2.call(`/api/ai/posts/${newPostId}`);
+  check('这一篇自己变了才标过期', changedSelf.data?.stale === true, `stale=${changedSelf.data?.stale}`);
+
   const siteAfter = await member2.call('/api/ai/site');
-  check('内容变化后全站整理也标记过期', siteAfter.data?.stale === true, `stale=${siteAfter.data?.stale}`);
+  check('内容变化后全站整理仍标记过期', siteAfter.data?.stale === true, `stale=${siteAfter.data?.stale}`);
 
   console.log('\n▶ 失败现场与重试');
   mock.failWith = '抱歉，我暂时没法给出结构化结果。';

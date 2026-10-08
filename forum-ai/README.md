@@ -184,9 +184,11 @@ const store = createAiStore({
 });
 
 store.syncCorpus();                    // 业务数据变化后调用一次
-store.corpusHash();                    // 语料指纹：变了说明缓存过期
-store.pendingDocuments({ limit: 10 }); // 待整理：失败过 → 没解读过 → 内容已变化
-store.saveReview({ documentId: 1, status: 'done', category: '数据库', /* … */ }, { contentHash: store.corpusHash() });
+store.corpusHash();                    // 整站语料指纹：变了说明「全站整理」的报告过期
+store.documentHash(1);                 // 单篇指纹：这一篇自己的正文/回复变了才变
+store.documentHashes();                // Map<documentId, 单篇指纹>
+store.pendingDocuments({ limit = 10 }); // 待整理：失败过 → 没解读过 → 这一篇自己变了
+store.saveReview({ documentId: 1, status: 'done', category: '数据库', /* … */ }, { contentHash: store.documentHash(1) });
 store.reviewOf(1);
 store.latestReport();
 store.clearAll();
@@ -256,12 +258,12 @@ http.createServer(async (req, res) => {
 - **JSON 容错**：兼容 ```json 代码块、前后夹带说明、以及截取第一个平衡花括号块；仍失败才抛 `ai_bad_json`。
 - **材料预算**：`buildMaterial` 按字符预算拼材料并截断，第一篇永远保留；超预算时先截断长正文，不会出现空材料。
 - **检索**：`rankDocuments` 是零依赖的关键词打分（标题 12 / 标签 8 / 摘要 6 / 分类 5 / 正文 3 / 回复 2，叠加热度与新鲜度）；`selectForQuestion` 在预算内按分数取前 N 篇，语料小的时候等于全量。
-- **缓存与过期**：语料指纹 = 文档数 + 最新更新时间 + 回复数 + 正文总字符数。指纹变化 → `stale: true` → 前端提示重新解读。
+- **缓存与过期**：**逐篇**指纹 = 这一篇的正文/回复/更新时间（`documentHash(id)`）；**整站**指纹 = 文档数 + 最新更新时间 + 回复数 + 正文总字符数（`corpusHash()`）。单篇解读只按前者判过期（`stale: true`），「全站整理」的报告按后者判（别的帖子新增/改动也算报告过期）。
 - **失败不污染缓存**：「没配密钥」不写入缓存；上游故障写入 `status: 'failed'` 并保留错误信息，便于排查。
-- **批量解读的优先级**：没解读过 → 解读失败 → 内容已变化；上游整体故障时立即返回部分结果（`partial: true`），不会把剩下的都试一遍。
+- **批量解读的优先级**：解读失败 → 没解读过 → 这一篇自己变了；上游整体故障时立即返回部分结果（`partial: true`），不会把剩下的都试一遍。
 - **并发安全**：同一文档重复解读是覆盖写（`ON CONFLICT DO UPDATE`）；批量为串行，避免把上游打爆。
 
-## 6. 自测覆盖（151 项，无需真实密钥）
+## 6. 自测覆盖（154 项，无需真实密钥）
 
 ```
 ▶ 配置与降级      未配置抛错、状态不含密钥、映射成 503
@@ -274,7 +276,7 @@ http.createServer(async (req, res) => {
 ▶ 分级降级        小站一次问完 / 大站只发目录（正文绝不进提示词）/ 超大站分块 + 归并 / 某块失败照样出地图
 ▶ 输出截断        不重试（只打一次上游）/ 半截 JSON 也算截断 / 目录截断自动落分块 / 块截断对半切开 / 归并失败用草案兜底
 ▶ 检索选择        命中排序、预算控制、空问题
-▶ SQLite 缓存     索引同步、指纹稳定与变化、缓存读写、过期判定、批量优先级、失败现场落库
+▶ SQLite 缓存     索引同步、逐篇指纹与整站指纹、缓存读写、过期判定（新增别篇不算过期）、批量优先级、失败现场落库
 ▶ HTTP 处理器     未登录 401、非管理员 403、未配置 503 且不写脏缓存、404、
                   问答 scope、参数校验、清缓存、**上游故障的部分失败语义**
 ```

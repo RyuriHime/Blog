@@ -587,12 +587,15 @@ try {
   check('corpusDocuments 带回正文与回复', store.corpusDocuments()[0].content.includes('node:sqlite') && store.corpusDocuments()[0].replies.length === 1);
   const hashBefore = store.corpusHash();
   check('指纹稳定', store.corpusHash() === hashBefore);
+  // LOCAL PATCH (see LOCAL-PATCHES.md): 解读缓存记的是**这一篇自己**的指纹。
+  const hashOf1 = store.documentHash('1');
+  check('每篇有自己的指纹', Boolean(hashOf1) && hashOf1 !== store.documentHash('2') && hashOf1 !== hashBefore);
 
   check('初始无缓存', store.reviewOf('1') === null);
   check('初始全是待整理', store.countPending() === 3 && store.pendingDocuments({ limit: 2 }).length === 2, JSON.stringify(store.pendingDocuments({ limit: 2 })));
   const savedReview = store.saveReview(
     { documentId: '1', status: 'done', category: '数据库', difficulty: '进阶', summary: 's', tags: ['sqlite'], prereq: [], recommend: [], model: 'm', tokens: { prompt: 3, completion: 2 } },
-    { contentHash: hashBefore },
+    { contentHash: hashOf1 },
   );
   check('保存解读可读回', savedReview.category === '数据库' && savedReview.tokens.prompt === 3);
   check('已解读的不在待整理里', store.pendingDocuments({ limit: 10 }).includes('1') === false);
@@ -600,7 +603,7 @@ try {
 
   const failedReview = store.saveReview(
     { documentId: '2', status: 'failed', error: 'AI 返回的解读结果不是合法 JSON', errorDetail: '{"category": "数据' },
-    { contentHash: hashBefore },
+    { contentHash: store.documentHash('2') },
   );
   check('失败也把模型原文存进 errorDetail', failedReview.errorDetail === '{"category": "数据' && store.reviewOf('2').errorDetail === '{"category": "数据', JSON.stringify(failedReview));
   check('失败的篇目排在从未解读的前面', store.pendingDocuments({ limit: 2 }).join(',') === '2,3', JSON.stringify(store.pendingDocuments({ limit: 10 })));
@@ -609,8 +612,13 @@ try {
   source = [...DOCS, { id: '4', title: '新文档', content: '新增内容' }];
   store.syncCorpus();
   check('内容变化后指纹改变', store.corpusHash() !== hashBefore);
-  check('内容变化后旧解读算过期', store.pendingDocuments({ limit: 10 }).includes('1') === true);
-  check('待整理顺序：失败 → 从未解读 → 内容已变', store.pendingDocuments({ limit: 10 }).join(',') === '2,3,4,1', JSON.stringify(store.pendingDocuments({ limit: 10 })));
+  check('新增别篇不让旧解读过期（按篇判过期）', store.pendingDocuments({ limit: 10 }).includes('1') === false);
+  check('还没解读过的新篇照样待整理', store.pendingDocuments({ limit: 10 }).join(',') === '2,3,4', JSON.stringify(store.pendingDocuments({ limit: 10 })));
+
+  source = source.map((doc) => (doc.id === '1' ? { ...doc, content: `${doc.content}（改过）` } : doc));
+  store.syncCorpus();
+  check('这一篇自己变了才回队', store.pendingDocuments({ limit: 10 }).includes('1') === true);
+  check('待整理顺序：失败 → 从未解读 → 这一篇自己变了', store.pendingDocuments({ limit: 10 }).join(',') === '2,3,4,1', JSON.stringify(store.pendingDocuments({ limit: 10 })));
   check('reportIsStale 对空报告返回 true', store.reportIsStale() === true);
 
   const savedReport = store.saveReport(

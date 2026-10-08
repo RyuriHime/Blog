@@ -266,6 +266,38 @@ AI 接口没有返回内容（finish_reason=length，提示 8840 / 生成 3000 t
 
 ---
 
+## J. 逐篇判过期：「待整理」永远等于全站总数（甲类）
+
+**现象**：`#/ai`「AI 阅读助手」页头同时写着 **563 篇已解读** 和 **563 篇待整理**，黄色提示「论坛内容有更新，这份整理可能已经过时，建议重新整理」也一直亮着。
+两个数不可能同时都对：既然全站都解读过了，待整理就不该等于全站；那个「内容有更新」也不是全站一起更新。
+
+**原因**：存解读时写进 `content_hash` 的是 **`store.corpusHash()`** —— 整站语料指纹（`篇数:最新更新时间:回复数:正文总字符数`，见
+`src/store-sqlite.mjs` 的 `fingerprintOf()`），而 `pendingDocuments()` 又拿它去跟**当前整站指纹**比。于是论坛里
+**任何**一篇帖子或一条回复被写过，全站每一篇的旧解读都同时落进 `stale` 桶 ——「待整理」永远 = 全站总数，
+这也让「批量解读」每次都想把 563 篇重跑一遍。线上实测：抽三篇的 `content_hash` 分别是 `554:1791389447994:3:192724`、
+`554:1791389447994:3:192724`、`555:1791420236171:3:192534`，而当时整站指纹已经是 `564:…:3:192568` 的口径 —— 三篇都在
+「内容已变」里躺着，其实它们自己一个字都没改。
+
+**我们的修法**（区分两种粒度：单篇解读按单篇判，全站报告按整站判）：
+
+| 位置 | 改动 |
+|---|---|
+| `src/store-sqlite.mjs` | 新增 `export function documentHashes(ids = null)`：返回 `Map<documentId, 指纹>`，对 `corpusDocuments({ withContent: true, withReplies: true, ids })` 里的每一篇跑一次 `fingerprintOf([doc])`（= 这一篇的正文长度 + 它自己的最新更新时间 + 它自己的回复数） |
+| `src/store-sqlite.mjs` | 新增 `documentHash(documentId)` 作为单篇快捷方式（`documentHashes([id])` 取不出就回 `''`） |
+| `src/store-sqlite.mjs` | `pendingDocuments()` 里 `const hash = api.corpusHash()` 改成 `const hashes = api.documentHashes()`，判断改成 `review.content_hash !== hashes.get(String(row.document_id))` —— 「内容已变化」现在是**这一篇自己**变了 |
+| `src/routes.mjs` | `runReview()` 存的是 `store.documentHash(id)`（原来 `store.corpusHash()`）；`getReview()` 返回的 `stale` 同样按 `store.documentHash(id)` 比 |
+| `src/store-sqlite.mjs` | `corpusHash()` 与 `reportIsStale()` **有意不动**：「整理全站」的报告本来就是全站粒度，别的帖子新增/改动让报告过期是对的（这一条与页头黄色提示的语义一致） |
+
+改完之后：3 篇已解读、其中 1 篇正文被改过 → 待整理是 1 篇（就是被改的那篇 + 从没解读过的），
+不再是全站总数；`/api/ai/site` 的 `stale`（报告过期）仍然是「语料动过就 true」，两者不再互相冒充。
+
+**同步改过的作者文件**：`README.md`（4.2 的接口示例改成 `documentHash(1)` / `documentHashes()`、`saveReview(…, { contentHash: store.documentHash(1) })`；
+3.x「缓存与过期」讲清逐篇与整站两种指纹；「批量解读的优先级」顺序与 `LOCAL PATCH G1` 对齐；自测项数同步）、
+`selftest.mjs`（+3 项：「每篇有自己的指纹」「新增别篇不让旧解读过期」「这一篇自己变了才回队」，原来那条「内容变化后旧解读算过期」拆成按篇的两条）、
+`scripts/smoke-ai.mjs`（+5 项：新积木的影子帖拿得到 id、新增别篇不让老解读过期、新建那篇解读成功、刚解读完自己不算过期、改这一篇自己的 Markdown 才标过期；原来那条「全站整理仍标记过期」保留）。
+
+---
+
 ## 附：作者包的其它小问题（不影响功能，仅记录）
 
 1. `forum-ai/src/mount.mjs` 顶部的用法注释写的是 `mountForumAi({ db, resolveUser, baseDir: ROOT, aiDir: join(ROOT,'forum-ai') })`，但**实际函数签名没有 `baseDir` / `aiDir` 这两个参数**（注释与实现不一致）。
@@ -282,11 +314,11 @@ AI 接口没有返回内容（finish_reason=length，提示 8840 / 生成 3000 t
 | 测试 | 期望 |
 |---|---|
 | `node forum-ai/selftest-mount.mjs` | 通过 35 项，失败 0 项 |
-| `node forum-ai/selftest.mjs` | 通过 151 项，失败 0 项 |
-| `node scripts/smoke-ai.mjs` | 通过 65 项，失败 0 项 |
-| `node scripts/smoke.mjs` | 通过 238 项，失败 0 项 |
+| `node forum-ai/selftest.mjs` | 通过 154 项，失败 0 项 |
+| `node scripts/smoke-ai.mjs` | 通过 70 项，失败 0 项 |
+| `node scripts/smoke.mjs` | 通过 237 项，失败 0 项 |
 | `node scripts/check-golden.mjs` | 通过 88 项，差异 0 项（对外行为与改造前一致） |
-| `node scripts/check-ui-contract.mjs` | 通过 317 项（下限 317），问题 0 项 |
-| `node scripts/check-encoding.mjs` | 已检查 207 个文件（下限 205），中文片段断言 84 条 |
+| `node scripts/check-ui-contract.mjs` | 通过 318 项（下限 317），问题 0 项 |
+| `node scripts/check-encoding.mjs` | 已检查 210 个文件（下限 205），中文片段断言 84 条 |
 
-合计 **806 项**（2026-10 复跑实测；数量随轮次增删会变，以各脚本自己打印的下限为准）。另外 `node scripts/check-encoding.mjs` 在 Linux 上会报 `ENOENT ... start.cmd` —— 它硬编码要检查 `start.cmd`（Windows 专用文件、故意不上传），**这个失败是预期的，不是问题**。
+合计 **901 项**（2026-10 复跑实测；数量随轮次增删会变，以各脚本自己打印的下限为准）。另外 `node scripts/check-encoding.mjs` 在 Linux 上会报 `ENOENT ... start.cmd` —— 它硬编码要检查 `start.cmd`（Windows 专用文件、故意不上传），**这个失败是预期的，不是问题**。
