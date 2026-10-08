@@ -455,6 +455,33 @@ AI 接口没有返回内容（finish_reason=length，提示 8840 / 生成 3000 t
 
 ---
 
+## O2. 上面那条宽问题**改完还是红条**：模型自己写得太长，两次都把预算烧光（甲类，同日补）
+
+**现象**：O 节上线后线上复测，同一条「想学习dfs，然后实现成代码」仍然 503 `ai_answer_truncated`，
+而且这次**耗了 38.8 秒**——说明两次尝试（默认预算 → 翻倍重试）**都被 `finish_reason=length` 掐断**。
+（同批其它问题都正常：「博弈论」7040ms / 5 篇 / 754 字，「2-SAT 是什么」5292ms / 6 篇 / 1027 字，
+「Markdown 表格怎么写」9009ms / 4 篇 / 708 字。）
+
+**原因**：这条问题里明确要「实现成代码」，模型于是写一长段程序（可能还有多种变体），
+`answer` 800 字的提示词约束、以及 3000/6000 的输出预算都拦不住它；
+而 `isTruncated()`（`finish_reason === 'length'`）在作者的实现里**明确不重试**，
+于是两次尝试失败后只能抛 503。也就是说：**问题不在材料太肥，而在「答案本身太长」**。
+
+**我们的修法**（让「答案太长」这条路也能自己救回来）：
+
+| 位置 | 改动 |
+|---|---|
+| `src/ai.mjs` | `ASK_MAX_TOKENS_DEFAULT` **3000 → 4000**（`max_tokens` 是上限、不是花费，宽问题第一次尝试的余量给足） |
+| `src/ai.mjs` | 截断重试从「少喂一半 + 预算 ×2（封顶 8000）」改成**少喂到三分之一**（`Math.max(2, ceil(n/3))`、材料 `Math.max(3000, floor(limit/3))`）+ **预算用满 8000**（`Math.min(Math.max(budget, 4000) * 2, 8000)`） |
+| `src/ai.mjs` + `src/prompts.mjs` | 重试时 `renderAskUser(..., { brief: true })` 在提问末尾加【上一次】：说明上次是被预算掐断的、**只要要点**、要代码就给 20 行以内的片段、`answer` 控制在 400 字以内 |
+| `src/prompts.mjs` | `ASK_SYSTEM` 再补两条：要写代码时**只给最小可运行片段（20 行以内）**、不给多份变体；`citations` **最多 8 条**、每条 `quote` 30 字内（引用本身也可能吃掉输出预算） |
+
+**同步改过的作者文件**：`selftest.mjs` 的「▶ 问答预算与截断自适应」改成 4000 / 8000 并 +2 项
+（第二次只喂三分之一、第二次的提问里带【上一次】）；
+`scripts/smoke-ai.mjs` 对应两条改成 4000 / 8000，并 +1 项（重问时明确要求短答案）。
+
+---
+
 ## 附：作者包的其它小问题（不影响功能，仅记录）
 
 1. `forum-ai/src/mount.mjs` 顶部的用法注释写的是 `mountForumAi({ db, resolveUser, baseDir: ROOT, aiDir: join(ROOT,'forum-ai') })`，但**实际函数签名没有 `baseDir` / `aiDir` 这两个参数**（注释与实现不一致）。
@@ -471,11 +498,11 @@ AI 接口没有返回内容（finish_reason=length，提示 8840 / 生成 3000 t
 | 测试 | 期望 |
 |---|---|
 | `node forum-ai/selftest-mount.mjs` | 通过 49 项，失败 0 项 |
-| `node forum-ai/selftest.mjs` | 通过 190 项，失败 0 项 |
-| `node scripts/smoke-ai.mjs` | 通过 86 项，失败 0 项 |
+| `node forum-ai/selftest.mjs` | 通过 192 项，失败 0 项 |
+| `node scripts/smoke-ai.mjs` | 通过 87 项，失败 0 项 |
 | `node scripts/smoke.mjs` | 通过 237 项，失败 0 项 |
 | `node scripts/check-golden.mjs` | 通过 88 项，差异 0 项（对外行为与改造前一致） |
 | `node scripts/check-ui-contract.mjs` | 通过 325 项（下限 317），问题 0 项 |
 | `node scripts/check-encoding.mjs` | 已检查 210 个文件（下限 205），中文片段断言 84 条 |
 
-合计 **975 项**（2026-10 复跑实测；数量随轮次增删会变，以各脚本自己打印的下限为准）。另外 `node scripts/check-encoding.mjs` 在 Linux 上会报 `ENOENT ... start.cmd` —— 它硬编码要检查 `start.cmd`（Windows 专用文件、故意不上传），**这个失败是预期的，不是问题**。
+合计 **978 项**（2026-10 复跑实测；数量随轮次增删会变，以各脚本自己打印的下限为准）。另外 `node scripts/check-encoding.mjs` 在 Linux 上会报 `ENOENT ... start.cmd` —— 它硬编码要检查 `start.cmd`（Windows 专用文件、故意不上传），**这个失败是预期的，不是问题**。
