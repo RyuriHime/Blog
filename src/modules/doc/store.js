@@ -11,7 +11,7 @@
 //   3. 影子行跟着文档走：scope 变、标题变、删除，都要同步过去，
 //      因为点赞 / 收藏两个核心接口只认 `posts` 那一行。
 import { HttpError } from '../../core/http.js';
-import { isStaff } from '../../core/guards.js';
+import { isStaff, postListExclude } from '../../core/guards.js';
 import {
   DOC_KINDS,
   DOC_SCOPES,
@@ -56,8 +56,9 @@ import {
   toSource,
 } from './blocks/index.js';
 import { applyDocOps, MAX_OPS } from './blocks/ops.js';
-import { plainInline } from './blocks/text.js';
+import { escapeHtml, plainInline } from './blocks/text.js';
 import { ANNOUNCE_TEMPLATE, hasTemplate, STATION_TEMPLATE, templateBlocks, templateList, WIKI_TEMPLATE } from './templates.js';
+import { checkProfile, isProfileCard, profileBlockedMessage, profileSeedBlocks, PROFILE_CARD_APP, PROFILE_CARD_HTML } from './profile-rules.js';
 import { KIND_LABELS, REASON_LABELS, SCOPE_LABELS, shapeDoc, shapeRevision, shapeSettings } from './shape.js';
 
 /** 一条 op 被拒的原因 → 给人看的话（前端直接显示，不再自己映射一遍）。 */
@@ -582,16 +583,271 @@ export function createDocStore({ db, queries, now = () => Date.now() }) {
   /**
    * 把 `source.kind = 'revisions'` 的列表在**渲染前**填成真实内容（FR-TPL-02）。
    * 只影响返回值，不落库 —— 修订记录要永远是"此刻"的。
+   *
+   * 需求 2 追加了三个**个人主页专用**的来源（`profile-posts` / `profile-pinned` /
+   * `profile-tags`）：主页上的「发表过的积木贴 / 置顶推荐 / 我的标签」也是块，
+   * 但块里存的是「我都要哪些」，条数是渲染时现查的 —— 这样主页上看到的条数
+   * 天然等于点进去的条数（需求 3 的统一口径）。
    */
   function materializeSources(blocks, documentId) {
-    return blocks.map((block) => {
+    const out = blocks.map((block) => {
       const source = block.props?.source;
-      if (!source || typeof source !== 'object' || source.kind !== 'revisions') return block;
-      const limit = Math.min(Math.max(Number(source.limit) || 10, 1), 50);
-      const rows = queries.listRevisions(documentId, limit);
-      const text = rows.map((row) => `- r${row.revision} · ${stamp(row.created_at)} · ${row.display_name || row.username || '—'} · ${REASON_LABELS[row.reason] ?? row.reason}`).join('\n');
-      return { ...block, props: { ...block.props, text } };
+      if (!source || typeof source !== 'object') return block;
+      if (source.kind === 'revisions') {
+        const limit = Math.min(Math.max(Number(source.limit) || 10, 1), 50);
+        const rows = queries.listRevisions(documentId, limit);
+        const text = rows.map((row) => `- r${row.revision} · ${stamp(row.created_at)} · ${row.display_name || row.username || '—'} · ${REASON_LABELS[row.reason] ?? row.reason}`).join('\n');
+        return { ...block, props: { ...block.props, text } };
+      }
+      if (!String(source.kind ?? '').startsWith('profile-')) return block;
+      const row = db.prepare('SELECT user_id FROM documents WHERE id = ? AND deleted = 0').get(documentId);
+      if (!row) return { ...block, props: { ...block.props, text: '' } };
+      const limit = Math.min(Math.max(Number(source.limit) || 20, 1), 50);
+      return { ...block, props: { ...block.props, text: profileSourceText(source.kind, Number(row.user_id), limit) } };
     });
+    return out;
+  }
+
+  /**
+   * 个人主页的来源块渲染成什么（只出 Markdown 列表/段落文字，交给 `list` 块自己的渲染）。
+   *
+   * 口径与个人主页列表**完全同源**：`deleted = 0` + `hidden = 0` + 登记在案的排除条件
+   * （wiki 页、profile 文档的影子行），所以「块里数出来的条数」= 「主页列表里的条数」。
+   */
+  function profileSourceText(kind, userId, limit) {
+    const parts = ['p.deleted = 0', 'p.hidden = 0', 'p.user_id = ?'];
+    const params = [userId];
+    const excluded = postListExclude();
+    if (excluded) {
+      if (!excluded.params.length) parts.push(excluded.clause);
+      else throw new Error('帖子列出的排除条件不能带参数：来源块会把它拼进预编译语句');
+    }
+    if (kind === 'profile-tags') {
+      const rows = db
+        .prepare(
+          `SELECT t.tag AS tag, COUNT(*) AS count FROM posts p JOIN doc_tags t ON t.document_id = p.id
+           WHERE ${parts.join(' AND ')} GROUP BY t.tag COLLATE NOCASE ORDER BY count DESC, t.tag COLLATE NOCASE ASC LIMIT ${limit}`,
+        )
+        .all(...params);
+      return rows.map((tag) => `- 🏷 ${tag.tag}（${tag.count}）`).join('\n');
+    }
+    if (kind === 'profile-pinned') parts.push('p.profile_pinned = 1');
+    const pinnedFirst = kind === 'profile-pinned' ? '' : 'p.profile_pinned DESC, ';
+    const rows = db
+      .prepare(
+        `SELECT p.id, p.title, p.updated_at, p.profile_pinned FROM posts p
+         WHERE ${parts.join(' AND ')} ORDER BY ${pinnedFirst}p.updated_at DESC, p.id DESC LIMIT ${limit}`,
+      )
+      .all(...params);
+    return rows.map((post) => `- [${plainInline(String(post.title ?? '') || '（无标题）')}](#/post/${post.id})${post.profile_pinned ? ' 📌' : ''}`).join('\n');
+  }
+
+  /**
+   * 需求 2 的「不可删除 / 不可移动」：个人主页的**名片块**必须在第一位。
+   *
+   * 为什么在**读**的时候补而不是只在写的时候拦：老用户早就有主页文档了
+   * （本机上站长那份 id=15 是上一轮建的，只有普通块），一次「缺失就补」比
+   * 逼所有人手动加一块体验好得多，也不会把老主页判成非法。
+   * 幂等：块还在就什么都不做。
+   */
+  function ensureProfileCard(row, viewer) {
+    // 返回值只有两种：`undefined`（什么都没做），或**名片那一块的新形状**。
+    // 不能回整份块序列 —— 调用方还要用 `readBlocksFor()` 拿到「读者该看哪一版」
+    // （有未发布草稿时，读者只能看发布出去的那一份），回整份会把草稿感知短路掉。
+    if (String(row.kind ?? '') !== 'profile') return undefined;
+    if (!canEdit(row, viewer)) return undefined;
+    // `readBlocks()` 已经过了一遍 `blockFromRow()`（props 就挂在 `block.props` 上），
+    // 这里**不能**再套一次 —— 第二次解析时 `props_json` 早就被换成 `props` 了，
+    // 解析出来是空对象，`isProfileCard()` 永远为假，名片就永远补不上（踩过的坑）。
+    const blocks = readBlocks(row.id);
+    const existing = blocks.find((item) => isProfileCard(item));
+    // 已经有一张名片的，只做一件事：把它的内容对齐成**宿主占位**。
+    // 上一轮的种子把名片写成一整段沙箱脚本（自己画头像和昵称），那一份渲染出来既没有
+    // 关注 / 私信 / 拉黑，也没法做到「不允许编辑」。对齐是**单调的**：它要么本来就是占位
+    //（什么都不做），要么是我们自己上一轮写的脚本（换成占位）。用户自己写进名片块的代码
+    // 不会被覆盖 —— 那条分支见 `materializeProfileCard`。
+    if (existing) {
+      const current = String(existing.props?.code ?? '');
+      if (current.trim() !== PROFILE_CARD_HTML && current.includes('data-profile-card')) {
+        const at = now();
+        // 名字也**对齐**成识别标记：老名片是上一轮的种子写出来的（app 名就是这一串），
+        // 但万一有人改过它，就以内容为准把它纠回来 —— 否则「只能有一张名片」的判定会漏。
+        const props = { ...existing.props, app: PROFILE_CARD_APP, code: PROFILE_CARD_HTML };
+        const typeDef = getBlockType(existing.type);
+        if (typeDef) {
+          const shaped = serializeBlock({ block_id: existing.block_id, type: existing.type, version: typeDef.version, props });
+          queries.updateBlockRow({
+            documentId: row.id,
+            blockId: existing.block_id,
+            type: shaped.type,
+            version: shaped.version,
+            propsJson: shaped.propsJson,
+            now: at,
+          });
+          snapshot(row.id, 'edit', viewer.id, at);
+          syncDocumentAnchor(mustExist(row.id), at);
+          // 就地返回**对齐后**的那一块：`present()` 随后会拿它替换掉同名块，
+          // 不然这次读到的还是对齐前那份旧代码（会渲染成一大块白框）。
+          return blockFromRow({ ...existing, props_json: shaped.propsJson });
+        }
+      }
+      return undefined;
+    }
+    if (blocks.length >= MAX_DOC_BLOCKS) return undefined;
+    const block = profileSeedBlocks().find(isProfileCard);
+    if (!block) return undefined;
+    const typeDef = getBlockType(block.type);
+    if (!typeDef) return undefined;
+    const at = now();
+    const blockId = `b${queries.nextBlockNumber(row.id)}`;
+    const place = blocks.length ? Math.min(...blocks.map((item) => Number(item.position) || 0)) - 1 : 0;
+    const shaped = serializeBlock({ block_id: blockId, type: block.type, version: typeDef.version, props: block.props });
+    queries.insertBlockRow({
+      documentId: row.id,
+      blockId,
+      type: shaped.type,
+      version: shaped.version,
+      position: place,
+      propsJson: shaped.propsJson,
+      now: at,
+    });
+    snapshot(row.id, 'edit', viewer.id, at);
+    syncDocumentAnchor(mustExist(row.id), at);
+    // 补出来的名片块必须是**第一块**：它的 position 比谁都小。
+    // 只回这一块的新形状（`undefined` 之外的唯一返回值），由 `present()` 合进正文。
+    return blockFromRow({ document_id: row.id, block_id: blockId, type: shaped.type, type_version: shaped.version, position: place, props_json: shaped.propsJson });
+  }
+
+  /**
+   * 需求 2 的「不允许删除、编辑、移动位置」：名片块的内容**由宿主渲染**。
+   *
+   * 块里存的是占位 `PROFILE_CARD_HTML`，渲染前把它换成真正的卡片 —— 头像、昵称、
+   * 角色、加入时间、个性签名，以及关注 / 私信 / 拉黑三个按钮。为什么不让沙箱脚本自己画：
+   * 这三个按钮的动作与**看客相对**的状态（我关注他了吗 / 我拉黑他了吗 / 今天私信还剩几条）
+   * 早就由页面实现了，沙箱里重写一遍既拿不到这些状态，还要把关注、拉黑逻辑抄第二遍。
+   *
+   * 老主页（上一轮建的那份只有普通块的文档）走同一条路：`ensureProfileCard` 补块时写的就是
+   * 这个占位，所以「主页上那张卡片」在翻新前后长得一模一样，用户不需要手动迁移。
+   */
+  function profileCardHtml(docRow, viewer) {
+    const user = db
+      .prepare('SELECT id, username, display_name, bio, avatar, role, created_at FROM users WHERE id = ?')
+      .get(Number(docRow.user_id));
+    if (!user) return PROFILE_CARD_HTML;
+    const me = viewer ? Number(viewer.id) : 0;
+    const isMe = me !== 0 && me === Number(user.id);
+    const display = String(user.display_name ?? user.username ?? '');
+    const first = display.trim().slice(0, 1).toUpperCase() || '?';
+    let hash = 0;
+    for (const char of display || '?') hash = (hash * 31 + char.codePointAt(0)) % 360;
+    const avatar = String(user.avatar ?? '').trim();
+    let avatarHtml = `<span class="avatar avatar-lg" style="--hue:${hash}" aria-hidden="true">${escapeHtml(first)}</span>`;
+    if (/^emoji:[^:]+:\d+$/.test(avatar)) {
+      const [, emoji, hue] = avatar.split(':');
+      avatarHtml = `<span class="avatar avatar-emoji avatar-lg" style="--hue:${Number(hue) || 210}" aria-hidden="true">${escapeHtml(emoji)}</span>`;
+    } else if (avatar.startsWith('file:/avatars/')) {
+      avatarHtml = `<span class="avatar avatar-img avatar-lg" aria-hidden="true"><img src="${escapeHtml(avatar.slice(5))}" alt="" loading="lazy" /></span>`;
+    }
+    const roleTag =
+      user.role === 'owner'
+        ? '<span class="tag tag-owner">👑 站长</span>'
+        : user.role === 'admin'
+          ? '<span class="tag tag-admin">🛡️ 管理员</span>'
+          : '';
+    let actions = '';
+    if (isMe) {
+      actions =
+        '<a class="btn btn-sm" href="#/settings">⚙️ 账号设置</a>' +
+        '<a class="btn btn-sm" href="#/bookmarks">⭐ 我的收藏</a>' +
+        '<a class="btn btn-sm btn-primary" href="#/docs">🧩 去积木广场写作</a>' +
+        // 「翻新我的主页」就长在名片块上：这一块是主页的第一块，入口放在这里最顺手
+        // （旧主页的模板里也有一个同样的按钮，那份在没有积木主页时才出现）。
+        `<a class="btn btn-sm" href="#/doc/${Number(docRow.id)}/edit?mode=blocks" title="个人主页是一篇积木文档：块可以自由增删改，只有这一块锁着">✏️ 翻新我的主页</a>`;
+    } else {
+      // 未登录的看客与登录的看客看到的是**同一排按钮**（关注 / 私信 / 拉黑），
+      // 与旧主页那张硬编码卡片完全一致 —— 需求 5「对目前的用户个人主页做最小修改」。
+      // 没登录时三个状态一律按「未关注 / 未拉黑」算，点下去由事件总线引导登录。
+      const following = me !== 0 ? db.prepare('SELECT 1 AS hit FROM follows WHERE follower_id = ? AND followee_id = ?').get(me, Number(user.id)) : null;
+      const blocked = me !== 0 ? db.prepare('SELECT 1 AS hit FROM blocks WHERE blocker_id = ? AND blocked_id = ?').get(me, Number(user.id)) : null;
+      const mutual = me !== 0 && Boolean(following) && Boolean(db.prepare('SELECT 1 AS hit FROM follows WHERE follower_id = ? AND followee_id = ?').get(Number(user.id), me));
+      // 类名先算好再拼进模板：`class="…${…'…'…}…"` 这种写法会让 `scripts/check-ui-contract.mjs`
+      // 的「服务端产出的类名也都有 CSS」扫描器把引号当成类名的一部分（扫出 `btn-danger'` 这类垃圾）。
+      const followCls = following ? 'btn' : 'btn btn-primary';
+      const dmCls = mutual ? 'btn btn-sm btn-primary' : 'btn btn-sm';
+      const blockCls = blocked ? 'btn btn-sm btn-danger' : 'btn btn-sm';
+      actions =
+        `<button class="${followCls}" data-action="follow" data-user="${Number(user.id)}" data-name="${escapeHtml(display)}" ${blocked ? 'disabled' : ''}>${following ? '✓ 已关注' : '＋ 关注'}</button>` +
+        `<a class="${dmCls}" href="#/messages/${encodeURIComponent(String(user.username))}">✉️ 私信</a>` +
+        `<button class="${blockCls}" data-action="block-user" data-id="${Number(user.id)}" data-blocked="${blocked ? '1' : '0'}" data-name="${escapeHtml(display)}">${blocked ? '🚫 解除拉黑' : '🚫 拉黑'}</button>`;
+    }
+    return [
+      '<div class="profile-head" data-profile-card>',
+      `  ${avatarHtml}`,
+      '  <div class="profile-info">',
+      `    <h1 style="font-size:21px">${escapeHtml(display)} ${roleTag}</h1>`,
+      `    <div class="page-sub">@${escapeHtml(String(user.username))} · 加入于 ${timeAgoText(Number(user.created_at ?? 0))}</div>`,
+      user.bio ? `    <p class="profile-bio">${escapeHtml(String(user.bio))}</p>` : '    <p class="profile-bio hint">这位用户还没有写个性签名</p>',
+      '  </div>',
+      `  <div class="profile-actions">${actions}</div>`,
+      '</div>',
+    ].join('\n');
+  }
+
+  /**
+   * 渲染**之前**把名片块的占位换成真正的卡片（只换这一个块的 code，其余块一个字节都不动）。
+   *
+   * 关键：**存进库的、以及交给编辑器的 `blocks` 永远是占位那一份**。
+   * 只有 `renderBlocks()` 拿到的这一份才带真卡片。这样做有两个理由：
+   *   1. 名片块「不允许编辑」才立得住 —— 编辑器里若看到真卡片，用户一保存就把这段
+   *      宿主 HTML 写回块里，`updateBlock` 的名片锁会直接 400，好好的保存被卡住；
+   *   2. 卡片里的「我关注他了吗 / 我拉黑他了吗」是**跟着看客变的**，绝不能落库。
+   */
+  function materializeProfileCard(blocks, docRow, viewer) {
+    if (String(docRow.kind ?? '') !== 'profile') return blocks;
+    let index = -1;
+    for (let i = 0; i < blocks.length; i += 1) {
+      if (isProfileCard(blocks[i])) { index = i; break; }
+    }
+    if (index < 0) return blocks;
+    const card = blocks[index];
+    const code = String(card?.props?.code ?? '');
+    // 只认占位那一份：用户（或旧版本）写进别的代码时原样保留，不偷偷覆盖人家的东西。
+    if (code.trim() !== PROFILE_CARD_HTML) return blocks;
+    const next = blocks.slice();
+    next[index] = { ...card, props: { ...card.props, code: profileCardHtml(docRow, viewer) } };
+    return next;
+  }
+
+  /** 短时间的「加入于」文案（服务端这一份不引前端模块，8 个档位够主页用）。 */
+  function timeAgoText(at) {
+    if (!at) return '很久以前';
+    const days = Math.floor((Date.now() - at) / 86400000);
+    if (days <= 0) return '今天';
+    if (days < 30) return `${days} 天前`;
+    if (days < 365) return `${Math.floor(days / 30)} 个月前`;
+    return `${Math.floor(days / 365)} 年前`;
+  }
+
+  /** 保存前的判定（需求 2）：不合法就 400，一个字节都不写。 */
+  function assertProfileBlocks(row, blocks) {
+    if (String(row.kind ?? '') !== 'profile') return;
+    const result = checkProfile({ blocks, title: row.title });
+    if (!result.ok) throw badRequest(profileBlockedMessage(result));
+  }
+
+  /**
+   * 名片块必须在第一位（需求 2 的「不许移动位置」）。
+   *
+   * 已有的名片块**本身**不许挪（`moveBlock` 在写之前就拦了）；这条拦的是另一半：
+   * 别的块不许插到它前面。它只读一次块表，所以是**写之前的**判定 —— 没有事务可用
+   * （`queries.js` 这一层压根没有事务），所以规则一律在写之前挡。
+   */
+  function assertCardFirst(row) {
+    if (String(row.kind ?? '') !== 'profile') return;
+    const blocks = readBlocks(row.id);
+    if (!blocks.some((item) => isProfileCard(blockFromRow(item)))) return;   // 还没名片的（老主页）交给 ensureProfileCard 补
+    if (isProfileCard(blockFromRow(blocks[0]))) return;
+    throw badRequest(`「${PROFILE_CARD_APP}」块必须在第一位，别的块不能插到它前面`);
   }
 
   /**
@@ -697,17 +953,34 @@ export function createDocStore({ db, queries, now = () => Date.now() }) {
 
   /** 详情形状（列表、创建、更新、回滚共用这一个出口）。 */
   function present(docRow, viewer) {
+    // 需求 2：个人主页的名片块「缺失就补 / 老名片对齐成占位」（幂等，只对改得动这篇的人动手）。
+    // 它只回**名片那一块**的新形状（或 `undefined`），正文走下面那条草稿感知的读法。
+    const ensured = ensureProfileCard(docRow, viewer);
     const settingsRow = readSettings(docRow.id);
     // 注意：这里的 `blocks` 是**没被 materialize 过**的原始块。
     // 源码要的是作者写下的东西，不是「此刻渲染出来的修订列表」。
     // 读哪一份由身份决定（有未发布的改动时，读者只能看见发布出去的那一份）。
-    const blocks = readBlocksFor(docRow, viewer);
+    // 名片那块（`ensured`）是补/对齐出来的单块，合进来即可 —— 不能拿它短路这一行。
+    let blocks = readBlocksFor(docRow, viewer);
+    if (ensured) {
+      const at = blocks.findIndex((item) => String(item.block_id) === String(ensured.block_id));
+      if (at >= 0) {
+        const next = blocks.slice();
+        next[at] = ensured;
+        blocks = next;
+      } else {
+        blocks = [ensured, ...blocks];
+      }
+    }
     const materialized = materializeSources(blocks, docRow.id);
     // 脚本产出的派生块**接在真块之后**：真块序列一个字节都不动，派生层是叠加物（§4.4）。
     const derived = derivedRows(docRow.id, viewer);
     const living = derived.length ? [...materialized, ...derived] : materialized;
+    // 需求 2：名片块在**渲染时**才被换成真正的卡片（头像 / 昵称 / 签名 / 关注 / 私信 / 拉黑）。
+    // 注意顺序：`blocks`（给编辑器和 API 的那一份）里始终是占位 —— 见 `materializeProfileCard`。
+    const forRender = materializeProfileCard(living, docRow, viewer);
     // `sandboxDisabled` 要交给渲染层：沙箱块据此**连 iframe 都不建**（§6.4）。
-    const rendered = renderBlocks(living, renderOptions(docRow, viewer, living));
+    const rendered = renderBlocks(forRender, renderOptions(docRow, viewer, living));
     const abilities = abilitiesOf(docRow, viewer);
     const data = {
       doc: shapeDoc(docRow, queries.tagsOf(docRow.id)),
@@ -789,7 +1062,7 @@ export function createDocStore({ db, queries, now = () => Date.now() }) {
    * 优先取中点（1 和 2 之间写 1.5），这样插入一块不必重排整篇；
    * 但反复往同一个缝里插会把浮点差值磨到精度以下，那时就重排一次 1..n。
    */
-  function computePosition(documentId, { after = null, before = null, position = null } = {}) {
+  function computePosition(documentId, { after = null, before = null, position = null, kind = '' } = {}) {
     const rows = queries.blocksOf(documentId);
     if (typeof position === 'number' && Number.isFinite(position)) return position;
 
@@ -810,13 +1083,22 @@ export function createDocStore({ db, queries, now = () => Date.now() }) {
       target = rows.length ? rows[rows.length - 1].position + 1 : 1;
     }
 
+    // 需求 2：个人主页放新块时，谁都不许排到名片块前面（名片永远第一位）。
+    // 拦截放在这里而不是每个调用点：`addBlock` / `moveBlock` 都走这一个算位置的函数。
+    if (kind === 'profile' && rows.length) {
+      const card = rows.find((row) => isProfileCard(blockFromRow(row)));
+      if (card && target <= Number(card.position)) {
+        throw badRequest(`「${PROFILE_CARD_APP}」块必须在第一位，别的块不能插到它前面`);
+      }
+    }
+
     const collides = rows.some((row) => Math.abs(Number(row.position) - target) < 1e-9);
     if (!collides) return target;
 
     // 浮点被磨平了：整篇重排成 1..n，再算一次。
     const at = now();
     rows.forEach((row, index) => queries.setBlockPosition({ documentId, blockId: row.block_id, position: index + 1, now: at }));
-    return computePosition(documentId, { after, before, position });
+    return computePosition(documentId, { after, before, position, kind });
   }
 
   /* ---------------- 文档 ---------------- */
@@ -951,6 +1233,11 @@ export function createDocStore({ db, queries, now = () => Date.now() }) {
       }));
     } else if (cleanTemplate) {
       list = templateBlocks(cleanTemplate).map((block, index) => ({ ...block, block_id: `b${index + 1}` }));
+    } else if (cleanKind === 'profile') {
+      // 需求 1/2：个人主页的**初始块**（名片 + 统计 + 标签 + 置顶 + 帖子 + 动态）。
+      // 老客户端建 profile 文档不带 `template`，上面那条分支会给出空列表 ——
+      // 一个空白主页是「合法」的，但对用户等于什么都没有，所以在这里 seed。
+      list = profileSeedBlocks().map((block, index) => ({ ...block, block_id: `b${index + 1}` }));
     } else {
       list = [];
     }
@@ -1644,7 +1931,7 @@ export function createDocStore({ db, queries, now = () => Date.now() }) {
     assertBudget(queries.countBlocks(row.id) + 1);
     const at = now();
     const blockId = `b${queries.nextBlockNumber(row.id)}`;
-    const place = computePosition(row.id, { after, before, position });
+    const place = computePosition(row.id, { after, before, position, kind: row.kind });
     const shaped = serializeBlock({ block_id: blockId, type, version: typeDef.version, props });
     queries.insertBlockRow({
       documentId: row.id,
@@ -1668,7 +1955,24 @@ export function createDocStore({ db, queries, now = () => Date.now() }) {
     const typeDef = getBlockType(nextType);
     if (!typeDef) throw badRequest(`不认识的块类型：${nextType}`);
     const nextProps = props === undefined ? JSON.parse(existing.props_json || '{}') : props;
+    // 需求 2：「个人主页名片」块**不允许编辑** —— 它的内容由宿主（页面）渲染。
+    // 改它只允许一种情况：把内容写成/保持成那个占位标记（幂等的保存不该被拒）。
+    if (isProfileCard(blockFromRow(existing))) {
+      const nextApp = String(nextProps?.app ?? '');
+      const nextCode = String(nextProps?.code ?? '').trim();
+      if (nextApp !== PROFILE_CARD_APP || (nextCode && nextCode !== PROFILE_CARD_HTML)) {
+        throw badRequest(`「${PROFILE_CARD_APP}」块由主页自己渲染（头像 / 昵称 / 签名 / 关注 / 私信 / 拉黑），不许编辑；要改个人信息请去账号设置`);
+      }
+    }
     const shaped = serializeBlock({ block_id: blockId, type: nextType, version: typeDef.version, props: nextProps });
+    // 需求 2：主页改**一块**也要过判定 —— 否则把别的块改成 `props.app='个人主页名片'`
+    // 就会绕开「名片只能有一个」，整页判定（`assertProfileBlocks`）只在建/删/挪时跑。
+    if (String(row.kind ?? '') === 'profile') {
+      const after = readBlocks(row.id)
+        .map((item) => blockFromRow(item))
+        .map((item) => (String(item.block_id) === String(blockId) ? { ...item, type: shaped.type, props: JSON.parse(shaped.propsJson || '{}') } : item));
+      assertProfileBlocks(row, after);
+    }
     const at = now();
     queries.updateBlockRow({ documentId: row.id, blockId, type: shaped.type, version: shaped.version, propsJson: shaped.propsJson, now: at });
     snapshot(row.id, 'edit', viewer.id, at);
@@ -1682,6 +1986,10 @@ export function createDocStore({ db, queries, now = () => Date.now() }) {
     const row = mustEditBody(id, viewer);
     const existing = queries.blockRow(row.id, blockId);
     if (!existing) throw new HttpError(404, 'not_found', `找不到块 ${blockId}`);
+    // 需求 2：个人主页的名片块不许删（它是"头像 / 昵称 / 签名 / 关注"那一框，锁着的）。
+    if (String(row.kind ?? '') === 'profile' && isProfileCard(blockFromRow(existing))) {
+      throw badRequest(`「${PROFILE_CARD_APP}」块不许删除 —— 主页靠它显示你是谁`);
+    }
     const at = now();
     queries.deleteBlockRow(row.id, blockId);
     snapshot(row.id, 'edit', viewer.id, at);
@@ -1697,9 +2005,15 @@ export function createDocStore({ db, queries, now = () => Date.now() }) {
     const existing = queries.blockRow(row.id, blockId);
     if (!existing) throw new HttpError(404, 'not_found', `找不到块 ${blockId}`);
     if (after === blockId || before === blockId) throw badRequest('不能把块挪到自己旁边');
+    // 需求 2：名片块的**位置**也不许动（它可以编辑，但永远在第一位）。
+    if (String(row.kind ?? '') === 'profile' && isProfileCard(blockFromRow(existing))) {
+      throw badRequest(`「${PROFILE_CARD_APP}」块必须在第一位，位置不能移动`);
+    }
     const at = now();
-    const place = computePosition(row.id, { after, before, position });
+    const place = computePosition(row.id, { after, before, position, kind: row.kind });
     queries.setBlockPosition({ documentId: row.id, blockId, position: place, now: at });
+    // 挪完之后名片块如果不在第一位，说明是**别的块**插到了它前面 —— 也不许（规则是"名片在第一位"）。
+    assertCardFirst(row, viewer);
     snapshot(row.id, 'edit', viewer.id, at);
     syncDocumentAnchor(mustExist(row.id), at);
     return { blockId, position: place, blocks: present(mustExist(row.id), viewer).blocks };
@@ -1716,6 +2030,13 @@ export function createDocStore({ db, queries, now = () => Date.now() }) {
       if (!known.has(blockId)) throw badRequest(`找不到块 ${blockId}`);
       if (seen.has(blockId)) throw badRequest(`order 里重复了块 ${blockId}`);
       seen.add(blockId);
+    }
+    // 需求 2：整篇重排时名片块也必须留在第一位（写之前挡，免得排完了再回滚）。
+    if (String(row.kind ?? '') === 'profile') {
+      const card = rows.find((item) => isProfileCard(blockFromRow(item)));
+      if (card && order.includes(card.block_id) && order[0] !== card.block_id) {
+        throw badRequest(`「${PROFILE_CARD_APP}」块必须在第一位，位置不能移动`);
+      }
     }
     const at = now();
     let cursor = 1;
@@ -2005,6 +2326,8 @@ export function createDocStore({ db, queries, now = () => Date.now() }) {
     if (name === 'doc-blocks') return { capability: name, value: blocksPayload(row) };
     if (name === 'state') return { capability: name, value: sandboxState({ row, blockId: block.block_id, viewer, payload, at }) };
     if (name === 'blocks.derived') return { capability: name, value: derivedPayload({ row, viewer, payload, at }) };
+    // 需求 2：个人主页的「个人信息 API」—— `Sandbox.profile()` 走这条。
+    if (name === 'profile') return { capability: name, value: profilePayload(row, viewer) };
     return {
       capability: name,
       value: {
@@ -2015,6 +2338,136 @@ export function createDocStore({ db, queries, now = () => Date.now() }) {
         updatedAt: Number(row.updated_at),
       },
     };
+  }
+
+  /**
+   * `profile` 能力（需求 2）：把**主页所属那个人**的公开信息递进沙箱。
+   *
+   * 为什么按「文档的主人」而不是「正在看的人」：主页上的块说的是这个人的事，
+   * 读者换了不该让数字跟着换。数据与 `GET /api/docs/profile/:username/stats`
+   * 走同一个 `profilePayload`，所以「接口看到的」与「块里看到的」永远一致。
+   */
+  function profilePayload(row, viewer) {
+    const owner = db.prepare('SELECT user_id FROM documents WHERE id = ? AND deleted = 0').get(row.id);
+    const userId = Number(owner?.user_id ?? row.user_id ?? 0);
+    if (!userId) return { found: false };
+    const stats = profileStatsOf(userId, viewer);
+    if (!stats) return { found: false };
+    return { found: true, ...stats };
+  }
+
+  /**
+   * 计数口径（「这个人有多少篇帖子」）里那两项人不在的排除条件。
+   *
+   * 与 `src/store.js` 的 `countFilter` 是同一个意思，但那一个是 core 的私有函数
+   * （本模块 import 不到）；这里的条件全是**无参数**的常量子句，所以能直接拼。
+   * 记着：条件式计数必须 `SUM(CASE WHEN … THEN 1 ELSE 0 END)`，`COUNT(*)` 数的是行存在。
+   */
+  function profileCountFilter(alias = 'p') {
+    const parts = [`${alias}.deleted = 0`, `${alias}.hidden = 0`];
+    const excluded = postListExclude();
+    if (excluded && !excluded.params.length) {
+      parts.push(alias === 'p' ? excluded.clause : excluded.clause.replace(/\bp\./g, ''));
+    }
+    return parts.join(' AND ');
+  }
+
+  /** `profile` 能力与 `GET /api/docs/profile/:username/stats` 共用的那份数据。 */
+  function profileStatsOf(userId, viewer) {
+    const gated = profileVisibleSql(viewer);
+    const row = db
+      .prepare(
+        `SELECT u.id, u.username, u.display_name, u.bio, u.avatar, u.role, u.created_at,
+                (SELECT COALESCE(SUM(CASE WHEN ${profileCountFilter('p')} THEN 1 ELSE 0 END), 0) FROM posts p WHERE p.user_id = u.id) AS post_count,
+                (SELECT COUNT(*) FROM follows f WHERE f.followee_id = u.id) AS follower_count,
+                (SELECT COUNT(*) FROM follows f WHERE f.follower_id = u.id) AS following_count
+         FROM users u WHERE u.id = ?`,
+      )
+      .get(userId);
+    if (!row) return null;
+    const posts = profileListOf(userId, gated, { limit: 20, pinned: false });
+    const reposts = profileRepostsOf(userId, 20);
+    const tags = db
+      .prepare(
+        `SELECT t.tag AS tag, COUNT(*) AS count FROM posts p JOIN doc_tags t ON t.document_id = p.id
+         WHERE p.user_id = ? AND p.deleted = 0 AND p.hidden = 0 GROUP BY t.tag COLLATE NOCASE ORDER BY count DESC, t.tag COLLATE NOCASE ASC LIMIT 30`,
+      )
+      .all(userId);
+    return {
+      id: Number(row.id),
+      username: row.username,
+      displayName: row.display_name ?? row.username,
+      bio: row.bio ?? '',
+      avatar: row.avatar ?? '',
+      role: row.role,
+      createdAt: Number(row.created_at ?? 0),
+      postCount: Number(row.post_count ?? 0),
+      repostCount: reposts.length,
+      followerCount: Number(row.follower_count ?? 0),
+      followingCount: Number(row.following_count ?? 0),
+      pinnedCount: posts.filter((post) => post.pinned).length,
+      tags: tags.map((tag) => ({ name: tag.tag, postCount: Number(tag.count) })),
+      posts,
+    };
+  }
+
+  /**
+   * 读者能看见的积木贴（与 `visibility.js` 的 `canView` 同一口径）。
+   *
+   * 为什么不复用 `visibilityConditions()`：那一条拼的是 `d.scope`，是给
+   * `listDocuments` 的 `documents d` 用的；这里查的是影子行 `posts p`，
+   * 文档只用来当「公开了没有」的判断依据。
+   */
+  function profileVisibleSql(viewer) {
+    if (isStaff(viewer)) return { where: '', params: [] };
+    if (!viewer) return { where: "EXISTS (SELECT 1 FROM documents d WHERE d.anchor_post_id = p.id AND d.scope = 'public')", params: [] };
+    return {
+      where: "EXISTS (SELECT 1 FROM documents d WHERE d.anchor_post_id = p.id AND (d.scope = 'public' OR d.user_id = ?))",
+      params: [viewer.id],
+    };
+  }
+
+  /** 主页列出的积木贴（`pinned: true` 只取置顶那几篇）。 */
+  function profileListOf(userId, gated, { limit = 20, pinned = false } = {}) {
+    const params = [userId, ...gated.params];
+    const parts = ['p.user_id = ?', 'p.deleted = 0', 'p.hidden = 0'];
+    if (gated.where) parts.push(gated.where);
+    const excluded = postListExclude();
+    if (excluded && !excluded.params.length) parts.push(excluded.clause);
+    if (pinned) parts.push('p.profile_pinned = 1');
+    const rows = db
+      .prepare(
+        `SELECT p.id, p.title, p.updated_at, p.profile_pinned, d.title AS doc_title
+         FROM posts p LEFT JOIN documents d ON d.anchor_post_id = p.id
+         WHERE ${parts.join(' AND ')} ORDER BY p.profile_pinned DESC, p.updated_at DESC, p.id DESC LIMIT ${Math.min(Math.max(limit, 1), 50)}`,
+      )
+      .all(...params);
+    return rows.map((row) => ({
+      id: Number(row.id),
+      title: plainInline(String(row.doc_title ?? row.title ?? '')) || '（无标题）',
+      updatedAt: Number(row.updated_at ?? 0),
+      pinned: Boolean(row.profile_pinned),
+      url: `#/post/${Number(row.id)}`,
+    }));
+  }
+
+  /** 主页列出的动态（转发）。`reposts` 表不在本模块名下，所以只出 id 与时间。 */
+  function profileRepostsOf(userId, limit) {
+    const table = db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'reposts'").get();
+    if (!table) return [];
+    const rows = db
+      .prepare(`SELECT post_id, created_at FROM reposts WHERE user_id = ? ORDER BY created_at DESC LIMIT ${Math.min(Math.max(limit, 1), 50)}`)
+      .all(userId);
+    return rows.map((row) => ({ id: Number(row.post_id), updatedAt: Number(row.created_at ?? 0), url: `#/post/${Number(row.post_id)}` }));
+  }
+
+  /** `GET /api/docs/profile/:username/stats` 的出口（需求 2 的「个人信息 API」）。 */
+  function getProfileStats({ username, viewer } = {}) {
+    const row = db.prepare('SELECT id FROM users WHERE username = ? COLLATE NOCASE').get(String(username ?? ''));
+    if (!row) throw new HttpError(404, 'not_found', '这个人不存在');
+    const stats = profileStatsOf(Number(row.id), viewer);
+    if (!stats) throw new HttpError(404, 'not_found', '这个人不存在');
+    return stats;
   }
 
   /** `viewer` 能力：不透明源里连「我登录了吗」都读不到，所以要把答案递进去。 */
@@ -2343,6 +2796,7 @@ export function createDocStore({ db, queries, now = () => Date.now() }) {
     importNote,
     getNoteDocument,
     getProfileDocument,
+    getProfileStats,
     getWikiPage,
     openWikiPage,
     wikiNav,

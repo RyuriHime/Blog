@@ -155,6 +155,10 @@ const CAPABILITY_ROWS = [
   ['Sandbox.render.canWrite(scope?)', '这个块能不能画别的块（作者打开开关、并且你登录了才是 true）'],
   ['Sandbox.render.put(id, type, props, scope?)', '画一个块'],
   ['Sandbox.render.remove(id, scope?)', '删掉画出来的一个块'],
+  // 需求 2：个人主页把自己的信息也交给用户（统计数字、标签、置顶、发过的积木贴与动态）。
+  // `Sandbox.profile()` 就是 `GET /api/docs/profile/<用户名>/stats` 的那份数据 ——
+  // 主页里的「数据统计」块就是这么写的，「发过的文章数」与列表条数永远同源。
+  ['Sandbox.profile()', '看谁的主页就取谁的信息：postCount / repostCount / followerCount / followingCount / pinnedCount / tags / posts'],
   ['Sandbox.request(name, payload?)', '上面这些都是它的简写；名字不在允许清单里就失败'],
 ];
 
@@ -401,6 +405,39 @@ export async function viewGuide() {
       <div class="doc-actions">
         <a class="btn btn-sm btn-primary" href="#/wiki">去建一个自己的 wiki</a>
         <a class="btn btn-sm" href="#/wiki/OI%20Wiki">看现成的 OI Wiki 站</a>
+      </div>
+    </div>
+
+    <div class="card doc-panel doc-guide">
+      <div class="card-head"><span class="card-title">19. 个人主页就是一篇积木</span><span class="hint">自己的信息，自己排版</span></div>
+      <p class="doc-hint">个人主页的底层和积木帖子是<strong>同一套东西</strong>：一份
+        <code class="doc-code">kind='profile'</code> 的文档。主页上的每一段——名片、统计、标签、
+        置顶推荐、发过的积木贴、发过的动态——都是<strong>块</strong>，可以自由增删改与移动。
+        在主页右上角点「✏️ 翻新我的主页（🧩 把主页变成积木）」就进积木编辑器；
+        主页<strong>不会</strong>出现在积木广场里。</p>
+      <ol class="doc-guide-list">
+        <li><strong>锁着的那一块</strong>：「个人主页名片」块（头像 / 昵称 / 签名 / 关注、私信、拉黑）。
+          内容能改，但<strong>不许删、不许挪</strong>——它永远在第一位。别的块随便加、随便删。</li>
+        <li><strong>保存前会判定</strong>：不合法的个人主页存不下去。规则就三条：至少留一块、
+          块数与标题不超上限、名片块有且只有一个且在第一位。判定的代码前后端同源，浏览器里先算一遍，
+          服务端再算一遍（服务端那次是权威）。</li>
+        <li><strong>你自己的信息，用户可以自己取</strong>：脚本块里调
+          <code class="doc-code">Sandbox.profile()</code> 就拿到主页主人的信息 ——
+          <code class="doc-code">postCount</code>（发过的积木贴数）、<code class="doc-code">repostCount</code>（发过的动态数）、
+          <code class="doc-code">followerCount</code> / <code class="doc-code">followingCount</code>（关注者 / 关注中）、
+          <code class="doc-code">pinnedCount</code>、<code class="doc-code">tags</code>、<code class="doc-code">posts</code>。
+          它和 <code class="doc-code">GET /api/docs/profile/&lt;用户名&gt;/stats</code> 返回的是同一份数据。</li>
+        <li><strong>数字和列表永远对得上</strong>：主页上「发过的文章数」是按同一套可见性规则数出来的，
+          和下面列出来的条数<strong>相等</strong>——一个 wiki 站无论里面多少页，在主页上只算一篇。</li>
+        <li><strong>想换回旧排版</strong>：删掉主页文档里的块不影响你发过的帖子；
+          「✏️ 翻新」只是一次性把主页变成积木，随时在编辑器里改回来。</li>
+      </ol>
+      <div class="doc-hint">例子：统计块里写
+        <code class="doc-code">const me = await Sandbox.profile(); document.getElementById('n').textContent = me.postCount;</code>
+        —— 这就是种子块「数据统计」的做法，复制一份改成你想要的排版就行。</div>
+      <div class="doc-actions">
+        <a class="btn btn-sm btn-primary" href="#/docs">去积木广场</a>
+        <a class="btn btn-sm" href="#/dev">块类型表</a>
       </div>
     </div>
 

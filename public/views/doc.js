@@ -38,6 +38,7 @@ import { reactionBarHtml, replyHtml, repostSectionHtml } from './post.js';
 import { attachSandbox, unmountSandboxes } from '../core/sandbox.js';
 import { ntRenderMath } from './notes.js';
 import * as DocAi from './doc-ai.js';
+import { checkProfile, isProfileCard, profileBlockedMessage, PROFILE_CARD_APP } from '../core/profile-rules.js';
 
 /** 元数据只拉一次：块类型表 / 模板表 / 两个枚举，整个会话里不会变。 */
 const docState = {
@@ -1269,7 +1270,7 @@ async function createStationPageIn(stationId, title) {
 /* 编辑器                                                              */
 /* ------------------------------------------------------------------ */
 
-function blockCardHtml(block, index, blocks) {
+function blockCardHtml(block, index, blocks, locked = false) {
   const def = typeDef(block.type);
   const prev = blocks[index - 1]?.blockId ?? null;
   const next = blocks[index + 1]?.blockId ?? null;
@@ -1277,15 +1278,20 @@ function blockCardHtml(block, index, blocks) {
   const fields = def
     ? Blocks.formHtml(def, block.props, `doc-${block.blockId}`)
     : `<div class="doc-hint">这种块类型（${esc(block.type)}）现在不在注册表里，填什么都不会被渲染。</div>`;
-  return `<div class="doc-block-card" data-doc-card="${id}">
-    <div class="doc-block-head">
-      <span class="doc-block-title">${esc(def?.icon ?? '▢')} ${esc(Blocks.summarize(block, def))} <code class="doc-code">${id}</code></span>
-      <span class="doc-actions">
-        <button class="btn btn-sm btn-ghost" type="button" data-doc-action="up" data-block-id="${id}"${prev ? '' : ' disabled'}>↑</button>
+  // 需求 2：「个人主页名片」块（头像 / 昵称 / 签名 / 关注 / 私信 / 拉黑）**锁着** ——
+  // 内容可以编辑，但**删除**与**上下移动**都不给按钮。服务端同样会 400，这里只是
+  // 不画那颗点了一定失败的按钮（前端不靠它兜底，双保险）。
+  const actions = locked
+    ? `<span class="doc-lock" title="这一块是主页名片，锁着：内容可以改，位置固定在第一，也不许删">🔒 锁定</span>
+        <button class="btn btn-sm btn-primary" type="button" data-doc-action="block-save" data-block-id="${id}">保存本块</button>`
+    : `<button class="btn btn-sm btn-ghost" type="button" data-doc-action="up" data-block-id="${id}"${prev ? '' : ' disabled'}>↑</button>
         <button class="btn btn-sm btn-ghost" type="button" data-doc-action="down" data-block-id="${id}"${next ? '' : ' disabled'}>↓</button>
         <button class="btn btn-sm btn-ghost" type="button" data-doc-action="block-delete" data-block-id="${id}">删除</button>
-        <button class="btn btn-sm btn-primary" type="button" data-doc-action="block-save" data-block-id="${id}">保存本块</button>
-      </span>
+        <button class="btn btn-sm btn-primary" type="button" data-doc-action="block-save" data-block-id="${id}">保存本块</button>`;
+  return `<div class="doc-block-card${locked ? ' is-locked' : ''}" data-doc-card="${id}"${locked ? ' data-doc-locked="1"' : ''}>
+    <div class="doc-block-head">
+      <span class="doc-block-title">${esc(def?.icon ?? '▢')} ${esc(Blocks.summarize(block, def))} <code class="doc-code">${id}</code></span>
+      <span class="doc-actions">${actions}</span>
     </div>
     ${fields}
     ${Blocks.sourceHtml(block)}
@@ -1296,8 +1302,10 @@ function blockCardHtml(block, index, blocks) {
   </div>`;
 }
 
-function blocksEditorHtml(blocks) {
-  const cards = blocks.map((block, index) => blockCardHtml(block, index, blocks)).join('');
+function blocksEditorHtml(blocks, kind = '') {
+  const cards = blocks
+    .map((block, index) => blockCardHtml(block, index, blocks, String(kind) === 'profile' && isProfileCard(block)))
+    .join('');
   return `<div class="card doc-panel doc-howto">
       <div class="card-head"><span class="card-title">🧱 积木模式：四步</span><span class="hint">这张卡是说明书，不参与正文</span></div>
       <ol class="doc-steps">
@@ -2043,7 +2051,7 @@ function renderEditor() {
     ${
       editor.mode === 'source'
         ? sourceEditorHtml(editor.data.source ?? '')
-        : `${blocksEditorHtml(blocks)}${templatePanelHtml()}`
+        : `${blocksEditorHtml(blocks, editor.data?.doc?.kind)}${templatePanelHtml()}`
     }
     ${toolboxHtml(doc)}
     <div class="card doc-revisions" data-doc-revisions hidden></div>`;
@@ -2148,6 +2156,33 @@ async function saveAll(options = {}) {
       renderEditor();
     }
     return { changed: false, skipped: `有块没填完 —— ${dirty.problem}` };
+  }
+  // 需求 2「保存前先做判定」的前端半边：主页的块规则与服务端同源
+  // （`public/core/profile-rules.js`），在这里先把不合法的形态挡掉 —— 用户不用
+  // 等一个 400 才知道「名片块不能删 / 不能挪到后面」。服务端那次判定依然是**唯一权威**，
+  // 这里只是把同一份规则提前算一遍。
+  {
+    const kind = String(doc.kind ?? '');
+    const current = editor.data?.blocks ?? [];
+    const next = Array.isArray(current)
+      ? current.map((block) => {
+          const change = dirty.queued.find((item) => item.blockId === block.blockId);
+          return change ? { ...block, props: change.props } : block;
+        })
+      : [];
+    const order = [...document.querySelectorAll('[data-doc-card]')].map((card) => card.dataset.docCard).filter(Boolean);
+    const ordered = order.length
+      ? order.map((blockId) => next.find((block) => block.blockId === blockId)).filter(Boolean)
+      : next;
+    const verdict = checkProfile({ blocks: ordered, hasDoc: kind === 'profile', title });
+    if (!verdict.ok) {
+      const message = profileBlockedMessage(verdict);
+      if (!quiet) {
+        toast(message, 'error');
+        renderEditor();
+      }
+      return { changed: false, skipped: message };
+    }
   }
 
   // 1) 文档级属性。**改了才发** —— 每次都发一遍会平白多出修订记录（修订列表是给人看的）。

@@ -619,4 +619,16 @@ export function registerDocRoutes(ctx, { store }) {
     const payload = store.getProfileDocument({ username, viewer: reqCtx.user });
     ok(reqCtx.res, payload ? { found: true, ...payload } : { found: false });
   });
+
+  // 需求 2：个人主页的「个人信息 API」给开发者用。
+  //
+  // 为什么要有它（而不是让脚本自己拼 `/api/users/:name`）：主页上的块运行在**不透明源
+  // 的沙箱**里，它连 cookie 都带不出去，唯一能拿数据的路是宿主递进去的能力。
+  // 所以这一条既是「给用户看的调用方式」，也是 `Sandbox.profile()` 的兜底说明
+  // （能力本身在 store.js 的 `profilePayload` 里实现，两边用的是同一份口径）。
+  add('GET', '/api/docs/profile/:username/stats', async (reqCtx) => {
+    const username = String(reqCtx.params.username ?? '').trim();
+    ensure(username.length > 0 && username.length <= 32, 404, 'not_found', '这个人不存在');
+    ok(reqCtx.res, store.getProfileStats({ username, viewer: reqCtx.user }));
+  });
 }

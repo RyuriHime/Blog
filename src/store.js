@@ -28,6 +28,42 @@ const BLOCKED_COMMENTER_SQL = `r.user_id NOT IN (
 )`;
 
 /* 单项计数的子查询（列表、详情共用，保证口径一致） */
+
+/**
+ * 「这个人 / 这个板块到底有多少篇帖子」——**口径必须跟列表一致**。
+ *
+ * 原来的写法只有 `deleted = 0`，于是计数器把两样根本不该露面的行也数了进去：
+ *   1. wiki 站里的**页**（`template = 'page'`）：每一页都有自己的影子行，
+ *      于是一个 522 页的 OI Wiki 让站长的主页计数变成 538 篇，而列表里只有 12 篇
+ *      —— 这正是用户报的「发过的帖子数量和实际能显示的数量不一致」；
+ *   2. 站务隐藏的帖子（`hidden = 1`）。
+ * 列表那边早就修过了（`buildFilter` 里 `p.hidden = 0` + `postListExclude()`），
+ * 计数器是漏网的第三条路。这里把三条子句拼出来复用，四张列表口径一次对齐。
+ *
+ * ⚠️ 为什么把 SQL 拼成字符串、而不是像 `buildFilter` 那样传参数：
+ * 这些计数子查询挂在**每篇帖子都要 JOIN 一次**的用户表上，
+ * 而登记的那条排除条件（`src/modules/doc/index.js` 注册）本来就不带参数
+ * （`params: []`），拼成常量 SQL 才能让 sqlite 复用同一条预编译语句。
+ * 将来若有人登记了带参数的排除条件，`postListExclude().params` 非空，
+ * 会在这里被 `throw` 挡住，而不是悄悄把参数错位。
+ */
+function countFilter(alias = 'p') {
+  // ⚠️ 调用方要用 `SUM(CASE WHEN ${countFilter()} THEN 1 ELSE 0 END)`，**不能**用
+  // `COUNT(*) ... AND <排除条件>`：`COUNT(*)` 会把条件为假的行也数进去
+  // （它数的是「行存在」而不是「条件为真」），排除条件写了等于没写。
+  const parts = [`${alias}.deleted = 0`, `${alias}.hidden = 0`];
+  const excluded = postListExclude();
+  if (excluded) {
+    if (excluded.params.length) {
+      throw new Error('帖子计数的排除条件不能带参数：计数子查询会拼进多条预编译语句');
+    }
+    // 登记方写的 `p.xxx` 要跟着别名走：`p` 用原样，其它别名去掉前缀
+    // （子查询里没有外层 `posts` 行可关联，只能把条件内联成自足的形式）。
+    parts.push(alias === 'p' ? excluded.clause : excluded.clause.replace(/\bp\./g, ''));
+  }
+  return parts.join(' AND ');
+}
+
 const LIKE_COUNT_SQL = "(SELECT COUNT(*) FROM reactions rx WHERE rx.post_id = p.id AND rx.kind = 'like')";
 const DISLIKE_COUNT_SQL = "(SELECT COUNT(*) FROM reactions rx WHERE rx.post_id = p.id AND rx.kind = 'dislike')";
 const BOOKMARK_COUNT_SQL = '(SELECT COUNT(*) FROM bookmarks bm2 WHERE bm2.post_id = p.id)';
@@ -83,7 +119,7 @@ export function createStore(db) {
     deleteOtherSessions: db.prepare('DELETE FROM sessions WHERE user_id = ? AND token <> ?'),
     listUsers: db.prepare(
       `SELECT u.id, u.username, u.display_name, u.role, u.bio, u.avatar, u.banned, u.created_at,
-              (SELECT COUNT(*) FROM posts p WHERE p.user_id = u.id AND p.deleted = 0) AS post_count,
+              (SELECT COALESCE(SUM(CASE WHEN ${countFilter()} THEN 1 ELSE 0 END), 0) FROM posts p WHERE p.user_id = u.id) AS post_count,
               (SELECT COUNT(*) FROM replies r WHERE r.user_id = u.id AND r.deleted = 0) AS reply_count,
               (SELECT COUNT(*) FROM follows f WHERE f.followee_id = u.id) AS follower_count
        FROM users u ORDER BY u.banned ASC, u.id ASC`,
@@ -110,7 +146,7 @@ export function createStore(db) {
     countUsers: db.prepare('SELECT COUNT(*) AS count FROM users'),
     userProfile: db.prepare(
       `SELECT u.id, u.username, u.display_name, u.role, u.bio, u.avatar, u.created_at, u.banned,
-              (SELECT COUNT(*) FROM posts p WHERE p.user_id = u.id AND p.deleted = 0) AS post_count,
+              (SELECT COALESCE(SUM(CASE WHEN ${countFilter()} THEN 1 ELSE 0 END), 0) FROM posts p WHERE p.user_id = u.id) AS post_count,
               (SELECT COUNT(*) FROM replies r WHERE r.user_id = u.id AND r.deleted = 0) AS reply_count,
               (SELECT COUNT(*) FROM follows f WHERE f.followee_id = u.id) AS follower_count,
               (SELECT COUNT(*) FROM follows f WHERE f.follower_id = u.id) AS following_count,
@@ -201,7 +237,7 @@ export function createStore(db) {
     // 「你已经关注了 TA」的时候还显示「＋ 关注」，点下去反而把人取消了关注。
     listFollowing: db.prepare(
       `SELECT u.id, u.username, u.display_name, u.role, u.bio, u.avatar, f.created_at AS followed_at,
-              (SELECT COUNT(*) FROM posts p WHERE p.user_id = u.id AND p.deleted = 0) AS post_count,
+              (SELECT COALESCE(SUM(CASE WHEN ${countFilter()} THEN 1 ELSE 0 END), 0) FROM posts p WHERE p.user_id = u.id) AS post_count,
               (SELECT COUNT(*) FROM follows f2 WHERE f2.followee_id = u.id) AS follower_count,
               EXISTS (SELECT 1 FROM follows f3 WHERE f3.follower_id = ? AND f3.followee_id = u.id) AS viewer_follows
        FROM follows f JOIN users u ON u.id = f.followee_id
@@ -209,7 +245,7 @@ export function createStore(db) {
     ),
     listFollowers: db.prepare(
       `SELECT u.id, u.username, u.display_name, u.role, u.bio, u.avatar, f.created_at AS followed_at,
-              (SELECT COUNT(*) FROM posts p WHERE p.user_id = u.id AND p.deleted = 0) AS post_count,
+              (SELECT COALESCE(SUM(CASE WHEN ${countFilter()} THEN 1 ELSE 0 END), 0) FROM posts p WHERE p.user_id = u.id) AS post_count,
               EXISTS (SELECT 1 FROM follows f2 WHERE f2.follower_id = ? AND f2.followee_id = u.id) AS viewer_follows
        FROM follows f JOIN users u ON u.id = f.follower_id
        WHERE f.followee_id = ? ORDER BY f.created_at DESC`,
@@ -373,6 +409,7 @@ export function createStore(db) {
     followingBy,
     categoryId,
     uncategorized,
+    tag,
     includeHidden = false,
     hideBlockedFor = ANON,
   } = {}) {
@@ -406,6 +443,13 @@ export function createStore(db) {
       params.push(categoryId);
     } else if (uncategorized) {
       where.push('p.category_id IS NULL');
+    }
+    // 个人主页按**标签**筛：标签住在 `doc_tags`（积木底层），一篇积木可以贴几个，
+    // 所以这里要 EXISTS 而不是 JOIN —— JOIN 会让一篇文章在列表里出现 N 次。
+    // COLLATE NOCASE：标签自己不做大小写规范化，筛选时按不区分大小写找。
+    if (tag) {
+      where.push('EXISTS (SELECT 1 FROM doc_tags dt WHERE dt.document_id = p.id AND dt.tag = ? COLLATE NOCASE)');
+      params.push(String(tag));
     }
     if (bookmarkedBy) {
       where.push('EXISTS (SELECT 1 FROM bookmarks bm WHERE bm.post_id = p.id AND bm.user_id = ?)');
@@ -932,6 +976,31 @@ export function createStore(db) {
     profilePinCount: (userId) => Number(statements.countProfilePinned.get(userId).count),
     profilePinLimit: () => PROFILE_RULES.pinLimit,
     profileCategoryLimit: () => PROFILE_RULES.categoryLimit,
+
+    /**
+     * 个人主页的**标签筛选项**：这位用户公开积木里贴过的标签，各自挂了多少篇。
+     *
+     * 为什么不在 `documents` 上加一列、也不用新表：标签本来就住在积木底层的
+     * `doc_tags`（`(document_id, tag)` 主键，见 `src/modules/doc/schema.js`），
+     * 而影子行 `posts.id` 就是 `documents.id` —— 一次 JOIN 就能按作者聚合出来。
+     * 口径跟主页列表/计数完全一样（`deleted = 0` + `hidden = 0` + wiki 页排除），
+     * 所以「标签上的数字」和点进去看到的条数必然相等。
+     */
+    profileTags(userId) {
+      const parts = ['p.deleted = 0', 'p.hidden = 0'];
+      const excluded = postListExclude();
+      if (excluded && !excluded.params.length) parts.push(excluded.clause);
+      return db
+        .prepare(
+          `SELECT t.tag AS tag, COUNT(*) AS count
+             FROM posts p JOIN doc_tags t ON t.document_id = p.id
+            WHERE p.user_id = ? AND ${parts.join(' AND ')}
+            GROUP BY t.tag COLLATE NOCASE
+            ORDER BY count DESC, t.tag COLLATE NOCASE ASC`,
+        )
+        .all(userId)
+        .map((row) => ({ name: String(row.tag), postCount: Number(row.count) }));
+    },
     setPostCategory: (postId, categoryId) => statements.setPostCategory.run(categoryId, postId),
     setProfilePin: (postId, pinned) => statements.setProfilePin.run(pinned ? 1 : 0, pinned ? Date.now() : null, postId),
 

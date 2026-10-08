@@ -6,32 +6,56 @@ import { PROFILE_LAYOUTS } from '../core/state.js';
 import * as Avatar from '../core/avatar.js';
 import * as Fmt from '../core/format.js';
 import * as Prefs from '../core/preferences.js';
+import * as ProfileRules from '../core/profile-rules.js';
 import * as Widgets from '../core/widgets.js';
 
 async function viewUser(username, query) {
   ui.app.innerHTML = loadingHtml();
-  const filter = query.get('category') || 'all';
-  const suffix = filter === 'all' ? '' : `?category=${encodeURIComponent(filter)}`;
+  // 分类功能已下线（需求 4：改为积木标签）。筛选项只剩「全部 / 转发」，
+  // 点标签筛的是 `?tag=`，由后端在影子行上按 `doc_tags` 过滤。
+  const filter = query.get('category') === 'reposts' ? 'reposts' : 'all';
+  const activeTag = query.get('tag') || '';
+  const suffix = activeTag
+    ? `?tag=${encodeURIComponent(activeTag)}`
+    : filter === 'reposts'
+      ? '?category=reposts'
+      : '';
   const data = await api(`/api/users/${encodeURIComponent(username)}${suffix}`);
-  const { user, followers, following, posts, categories, uncategorizedCount, pinnedCount } = data;
+  const { user, followers, following, posts, tags, pinnedCount } = data;
   const layout = Prefs.profileLayout();
   const isOwner = Boolean(user.isMe);
   const basePath = `/u/${encodeURIComponent(user.username)}`;
-  const toolsFor = isOwner ? (post) => Widgets.ownerToolsHtml(post, categories) : null;
-  const categoryLimit = data.categoryLimit ?? Fmt.profileRules().categoryLimit;
+  // 作者自己在列表上能做的事只剩「置顶推荐」（归入分类已随分类功能下线，
+  // 标签请到积木编辑器里改 —— 那里才是标签的家）。
+  const toolsFor = isOwner ? (post) => Widgets.ownerToolsHtml(post) : null;
 
   // §8.2 积木优先：这位用户如果有一份 kind='profile' 的文档，主页正文就用它渲染。
   // 任何一步失败都退回原来的「签名 + 帖子列表」—— 接线是「优先」，不是「替代」。
-  let profileDocHtml = '';
+  // 需求 1/2：这一份文档就是**本页的底层** —— 作者点「翻新个人主页」进积木编辑器改它，
+  // 块规则（哪块不许删、保存前要满足什么）与编辑器共用同一份 `profile-rules.js`。
+  let profileDoc = null;
   try {
     const found = await api(`/api/docs/profile/${encodeURIComponent(user.username)}`);
     if (found && found.found === true && found.html && !(found.doc && found.doc.deleted === true) && !(found.abilities && found.abilities.canView === false)) {
-      profileDocHtml = found.html;
+      profileDoc = found;
     }
   } catch (error) {
-    profileDocHtml = '';
+    profileDoc = null;
   }
+  const profileDocHtml = profileDoc ? profileDoc.html : '';
   const hasProfileDoc = Boolean(profileDocHtml);
+  // 需求 2：名片（头像 / 昵称 / 签名 / 关注 / 私信 / 拉黑）**是主页的第一块** ——
+  // 服务端已经把它渲染进 `profileDocHtml` 里（块里存的是占位，渲染时换成真卡片）。
+  // 它出现的时候，页面上那份硬编码的旧头像卡就必须让位，否则会看到两张。
+  const hasProfileHead = hasProfileDoc && profileDocHtml.includes('data-profile-card');
+  // 统计那 6 格在**有积木主页时挪到正文下面**：主页的第一块就是名片（头像 / 昵称 / 签名 /
+  // 关注 / 私信 / 拉黑），它必须出现在页面最上面 —— 统计再抢在最前，头像和签名就被挤下去了。
+  // 只有还没块化的老主页（没有 seed 出来的 `profile-*` 块）才需要这一排兜底统计，
+  // 块化的主页里统计是「数据统计」块自己的事（需求 2）。
+  const profileSeeded = hasProfileDoc && (Array.isArray(profileDoc.blocks) ? profileDoc.blocks : []).some((block) => String(block.props?.source?.kind ?? '').startsWith('profile-'));
+  // 编辑器保存前的判定与主页共用同一份规则（`public/core/profile-rules.js` 是服务端
+  // `src/modules/doc/profile-rules.js` 的同源副本），所以这里算出来的结论和服务端 400 一致。
+  const profileCheck = isOwner ? ProfileRules.checkProfile({ blocks: profileDoc?.blocks ?? null, hasDoc: hasProfileDoc }) : null;
 
   const stats = [
     ['文章', user.postCount],
@@ -46,27 +70,26 @@ async function viewUser(username, query) {
         `<div class="stat"><div class="stat-value">${Fmt.fmtNum(value)}</div><div class="stat-label">${label}</div></div>`,
     )
     .join('');
+  const statsHtml = `<div class="stat-grid stat-grid-wide">${stats}</div>`;
 
-  // 第 4 个参数 rawName 是分类的**原始**名字。data-name 必须放它，不能放 label ——
-  // label 是显示文案（带 `🗂 ` 前缀且已经过 esc），回填进重命名对话框后用户一保存，
-  // `🗂 ` 和 `&amp;` 这种转义残渣就原样写进数据库了。
-  const chip = (key, label, count, rawName = '') => {
-    const active = filter === key ? 'is-active' : '';
-    const inner = `<a class="chip-label" href="#${basePath}${key === 'all' ? '' : `?category=${encodeURIComponent(key)}`}">${label} <span class="chip-count">${count}</span></a>`;
-    // rawName 只有真分类才传（「全部 / 未分类 / 转发」不是分类），那几个退回 label 本身，
-    // 免得 data-name 空着被重命名/删除对话框当成空名字用。
-    const name = esc(rawName || label);
-    const tools = isOwner && key !== 'all' && key !== 'none' ? `
-      <button class="chip-x" data-action="rename-category" data-id="${key}" data-name="${name}" title="重命名">✎</button>
-      <button class="chip-x" data-action="delete-category" data-id="${key}" data-name="${name}" title="删除分类（文章会回到未分类）">✕</button>` : '';
-    return `<span class="chip ${active}">${inner}${tools}</span>`;
-  };
+  // 筛选条：全部 / 该用户用过的标签 / 转发。
+  // 分类那套（🗂 新建/重命名/删除分类、📭 未分类）已经整条下线 —— 需求 4「删除被弃用的
+  // 分类功能，改为 Tag 功能」。标签不是用户自己维护的列表，而是**从积木用法里长出来的**：
+  // 作者在自己的积木上贴了什么标签，这里就出现什么，点一下筛出贴了它的那几篇。
+  const chip = (href, label, count, active, tools = '') =>
+    `<span class="chip ${active ? 'is-active' : ''}"><a class="chip-label" href="${href}">${label} <span class="chip-count">${count}</span></a>${tools}</span>`;
 
   const chips = [
-    chip('all', '📚 全部', user.postCount),
-    ...categories.map((category) => chip(String(category.id), `🗂 ${esc(category.name)}`, category.postCount, category.name)),
-    chip('none', '📭 未分类', uncategorizedCount),
-    data.repostCount ? chip('reposts', '🔁 转发', data.repostCount) : '',
+    chip(`#${basePath}`, '📚 全部', user.postCount, !activeTag && filter !== 'reposts'),
+    ...(tags ?? []).map((tag) =>
+      chip(
+        `#${basePath}?tag=${encodeURIComponent(tag.name)}`,
+        `🏷 ${esc(tag.name)}`,
+        tag.postCount,
+        activeTag.toLowerCase() === tag.name.toLowerCase(),
+      ),
+    ),
+    data.repostCount ? chip(`#${basePath}?category=reposts`, '🔁 转发', data.repostCount, filter === 'reposts') : '',
   ]
     .filter(Boolean)
     .join('');
@@ -112,7 +135,10 @@ async function viewUser(username, query) {
     </section>`;
 
   ui.app.innerHTML = `
-    <section class="card">
+    <!-- 需求 2：头像 / 昵称 / 签名 / 关注 / 私信 / 拉黑这一框**是一个积木块**
+         （服务端渲染时把它放进积木主页的第一块位置）。所以这一份硬编码的头像卡
+         只在没有积木主页、或积木主页里没有名片块时才出现 —— 否则页面上会出现两张卡片。 -->
+    ${hasProfileHead ? '' : `<section class="card" data-role="profile-head-fallback">
       <div class="profile-head">
         ${Avatar.avatarHtml(user, 'avatar-lg')}
         <div class="profile-info">
@@ -153,24 +179,28 @@ async function viewUser(username, query) {
              </div>`
           : ''
       }
-      <div class="stat-grid stat-grid-wide">${stats}</div>
-    </section>
+      ${
+        isOwner
+          ? `<div class="profile-actions">
+               ${
+                 hasProfileDoc
+                   ? `<a class="btn btn-sm" href="#/doc/${profileDoc.doc.id}/edit?mode=blocks" title="个人主页还是一篇积木文档：块可以自由增删改，只有「${ProfileRules.PROFILE_CARD_APP}」块锁着">✏️ 翻新我的主页</a>`
+                   : `<button class="btn btn-sm" data-action="profile-create" title="把主页翻新成一篇积木文档：头像 / 昵称 / 统计数据 / 标签 / 置顶推荐 / 发过的积木贴与动态都是块">🧩 把主页变成积木</button>`
+               }
+             </div>`
+          : ''
+      }
+    </section>`}
+
+    ${hasProfileDoc ? '' : statsHtml}
 
     ${
       isOwner
         ? `<section class="card">
-             <div class="card-head">
-               <span class="card-title">🗂 我的分类（${categories.length}/${categoryLimit}）</span>
-               <button class="btn btn-sm" type="button" data-action="toggle-category-form">＋ 新建分类</button>
-             </div>
-             <form class="form" data-action="create-category" hidden>
-               <div class="form-row">
-                 <input name="name" type="text" maxlength="12" placeholder="分类名称，例如「前端笔记」" required />
-                 <button class="btn btn-primary" type="submit">创建</button>
-               </div>
-               <div class="form-error" data-error hidden></div>
-             </form>
-             <div class="hint">分类只影响你的个人主页；删除分类不会删除文章，文章会回到「未分类」。置顶推荐最多 ${data.pinLimit} 篇（已置顶 ${pinnedCount} 篇）。</div>
+             <div class="card-head"><span class="card-title">🏷 我的标签</span></div>
+             <div class="hint">标签不再是需要你单独维护的「分类」：它长在你的积木上 —— 到
+               <a href="#/docs">积木编辑器</a>里给一篇积木贴上标签，这里就会多出一项，
+               点它就能筛出贴了同一个标签的积木。置顶推荐最多 ${data.pinLimit} 篇（已置顶 ${pinnedCount} 篇）。</div>
            </section>`
         : ''
     }
@@ -198,6 +228,8 @@ async function viewUser(username, query) {
       </div>
     </section>`
     }
+
+    ${hasProfileDoc && !profileSeeded ? statsHtml : ''}
 
     ${isOwner ? '' : followCards}`;
 }

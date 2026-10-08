@@ -1,7 +1,7 @@
 // core 路由：分类与置顶 / 收藏 / 关注 / 黑名单 / 私信
 // // 搬运自 src/server.js 的固定行区间（预铺骨架，逐字未改），见 docs/tools/extract-server-modules.mjs。
 import { HttpError, ensure, field, ok, rateLimit, res_ } from '../../core/http.js';
-import { assertPinAllowed, notifyMentions, resolveOwnCategory, shapeAuthor, shapeCategory, shapeConversation, shapeMessage, shapeNotification, shapePerson, shapePostDetail, shapePostListRow, shapeProfile, shapeReply, shapeReposter, shapeUser } from '../../core/shape.js';
+import { assertPinAllowed, notifyMentions, shapeAuthor, shapeConversation, shapeMessage, shapeNotification, shapePerson, shapePostDetail, shapePostListRow, shapeProfile, shapeReply, shapeReposter, shapeUser } from '../../core/shape.js';
 import { assertPostVisible, isOwner, isStaff, requireOwner, requireStaff, requireUser } from '../../core/guards.js';
 import { issueSession, removeAvatarFile, saveAvatarFile, sessionCookie } from '../../core/sessions.js';
 import { store } from '../../core/store.js';
@@ -12,22 +12,10 @@ import { hashPassword, verifyPassword } from '../../password.js';
 
 /** 登记本文件负责的路由。 */
 export function registerRoutesC(route) {
-  /* ---------------- 个人主页：文章分类与置顶 ---------------- */
+  /* ---------------- 个人主页：置顶（归类已随分类功能下线） ---------------- */
 
-  route('POST', '/api/posts/:id/category', async (ctx) => {
-    const user = requireUser(ctx);
-    const id = Number(ctx.params.id);
-    const post = store.postById(id, user.id);
-    ensure(post, 404, 'post_not_found', '帖子不存在');
-    ensure(post.author_id === user.id, 403, 'forbidden', '只能整理自己的文章');
-    const categoryId = resolveOwnCategory(user, ctx.body.categoryId ?? null);
-    store.setPostCategory(id, categoryId);
-    ok(res_(ctx), {
-      postId: id,
-      category: categoryId ? shapeCategory(store.profileCategoryById(categoryId)) : null,
-      uncategorizedCount: store.uncategorizedCount(user.id),
-    });
-  });
+  // `POST /api/posts/:id/category` 已随需求 4（分类 → Tag）删除：归类改在积木编辑器里
+  // 用标签完成。留一条注释而不是空壳，免得以后有人以为漏了一行。
 
   route('POST', '/api/posts/:id/profile-pin', async (ctx) => {
     const user = requireUser(ctx);
@@ -284,18 +272,13 @@ export function registerRoutesC(route) {
     }
     const mutualFollow = viewerId !== ANON && !isMe ? store.areMutualFollowers(viewerId, row.id) : false;
 
-    // 个人主页的文章筛选：?category=<id> | none | reposts
-    const categoryParam = ctx.query.get('category');
+    // 个人主页的文章筛选：?tag=<标签>（分类功能已下线，改用积木标签）
+    const tagParam = ctx.query.get('tag');
+    // `?category=reposts` 这个**旧参数名**刻意留着：它跟已下线的「个人主页分类」无关，
+    // 只是「看转发」这个视图的历史地址（前端 `#/u/:name?category=reposts` 还在用）。
+    const showReposts = ctx.query.get('category') === 'reposts';
     const filter = {};
-    const showReposts = categoryParam === 'reposts';
-    if (categoryParam === 'none') {
-      filter.uncategorized = true;
-    } else if (categoryParam && !showReposts) {
-      const categoryId = Number(categoryParam);
-      const category = store.profileCategoryById(categoryId);
-      ensure(category && category.user_id === row.id, 404, 'category_not_found', '分类不存在');
-      filter.categoryId = categoryId;
-    }
+    if (tagParam) filter.tag = tagParam;
 
     // 我拉黑了对方：主页能看到（方便解除），但内容一律不展示
     const posts = blockedByMe
@@ -315,8 +298,16 @@ export function registerRoutesC(route) {
             perPage: 50,
             sort: 'profile',
             viewerId,
-            // 被隐藏的文章只有作者本人和管理团队能看到
-            includeHidden: isMe || isStaff(ctx.user),
+            // 个人主页**只列公开的积木帖子** —— 这一行必须和上面 `post_count` 的口径一致。
+            //
+            // 原来这里是 `includeHidden: isMe || isStaff(ctx.user)`（v1 的语义：帖子被站务
+            // 隐藏时作者自己还看得见）。v2 里 `hidden = 1` 的含义变了：**非公开的文档**
+            //（草稿、私有笔记、wiki 站里的每一页）的影子行都是 `hidden = 1`，于是作者打开
+            // 自己的主页会看见「未命名」「私密」这类一直藏着的东西，而计数只数公开的 ——
+            // 这正是用户报的「发过的帖子数量和实际能显示的数量统一」差出来的那几篇
+            //（生产库实测：站长 15 篇 vs 12 篇）。
+            // 现在列表与计数都按「公开 + 非 wiki 页」算，两边必然相等。
+            includeHidden: false,
             ...filter,
           })
           .map(shapePostListRow);
@@ -333,12 +324,14 @@ export function registerRoutesC(route) {
         ? {}
         : { messageAvailability: store.messageAvailability(viewerId, row) }),
       repostCount: store.repostCountByUser(row.id),
-      categories: store.listProfileCategories(row.id).map(shapeCategory),
-      uncategorizedCount: store.uncategorizedCount(row.id),
+      // 分类（categories / uncategorizedCount / categoryLimit）已随「删除分类功能」下线。
+      // 只在线上老客户端还会读 `categories` 时硬给一个空数组，避免前端炸掉；
+      // 主页的筛选条改读 `tags`（积木底层 doc_tags 聚合出来，见 store.profileTags）。
+      categories: [],
+      tags: store.profileTags(row.id),
       pinnedCount: store.profilePinCount(row.id),
       pinLimit: store.profilePinLimit(),
-      categoryLimit: store.profileCategoryLimit(),
-      filter: categoryParam ?? 'all',
+      filter: tagParam ?? (showReposts ? 'reposts' : 'all'),
       followers: store.listFollowers(row.id, viewerId).map(shapePerson),
       following: store.listFollowing(row.id, viewerId).map(shapePerson),
       posts,

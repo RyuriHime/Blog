@@ -1283,24 +1283,15 @@ try {
   const preview = (await admin('/api/markdown/preview', { method: 'POST', body: { content: '**x**' } })).json.data;
   check('预览返回 html', typeof preview.html === 'string');
 
-  /* ---------- v1.2：主页分类与置顶 / 账号设置 ---------- */
+  /* ---------- v1.2：主页标签与置顶 / 账号设置 ---------- */
 
   check('site.profileRules 下发主页规则', has(site, 'profileRules.pinLimit') && has(site, 'profileRules.categoryLimit'));
   check('site 不再下发签到 / 价值权重（签到与排行榜已下线）', !('checkinRules' in site) && !('valueWeights' in site));
 
-  const categoryList = (await admin('/api/me/categories')).json.data;
-  check('分类列表返回 items/limit/uncategorizedCount', Array.isArray(categoryList.items) && has(categoryList, 'limit') && has(categoryList, 'uncategorizedCount'));
-  const categoryCreated = (await admin('/api/me/categories', { method: 'POST', body: { name: '契约分类' } })).json.data;
-  check(
-    '创建分类返回 id/name/postCount',
-    hasAll(categoryCreated.category ?? {}, ['id', 'name', 'postCount']),
-    JSON.stringify(categoryCreated),
-  );
-  const categoryId = categoryCreated.category.id;
-  check('重命名分类返回新名称', (await admin(`/api/me/categories/${categoryId}`, { method: 'PUT', body: { name: '契约分类2' } })).json.data.category.name === '契约分类2');
-
-  const categorized = (await admin(`/api/posts/${created.id}/category`, { method: 'POST', body: { categoryId } })).json.data;
-  check('设置文章分类返回 category 与未分类计数', hasAll(categorized, ['postId', 'category', 'uncategorizedCount']) && categorized.category.id === categoryId);
+  // 分类功能已下线（需求 4：改为 Tag）：接口不再提供用户自建的分类列表，
+  // `categories` 只作为老客户端的兼容空数组；主页筛选项改由积木标签聚合而来。
+  const categoryList = await admin('/api/me/categories');
+  check('分类接口已随功能下线（不再返回列表）', categoryList.json.ok !== true, JSON.stringify(categoryList.json).slice(0, 120));
 
   const pinned = (await admin(`/api/posts/${created.id}/profile-pin`, { method: 'POST', body: { pinned: true } })).json.data;
   check(
@@ -1311,15 +1302,13 @@ try {
 
   const profileV12 = (await admin(`/api/users/${target.author.username}`)).json.data;
   check(
-    '个人主页返回分类/置顶/筛选字段',
-    Array.isArray(profileV12.categories) &&
-      hasAll(profileV12, ['uncategorizedCount', 'pinnedCount', 'pinLimit', 'categoryLimit', 'filter']) &&
-      hasAll(profileV12.categories[0] ?? {}, ['id', 'name', 'postCount']),
-    JSON.stringify({ categories: profileV12.categories, pinned: profileV12.pinnedCount }).slice(0, 200),
+    '个人主页返回标签/置顶/筛选字段',
+    Array.isArray(profileV12.categories) && Array.isArray(profileV12.tags) && hasAll(profileV12, ['pinnedCount', 'pinLimit', 'filter']),
+    JSON.stringify({ categories: profileV12.categories, tags: profileV12.tags, pinned: profileV12.pinnedCount }).slice(0, 200),
   );
-  const profileFiltered = (await admin(`/api/users/${target.author.username}?category=none`)).json.data;
-  check('个人主页支持按分类筛选', profileFiltered.filter === 'none' && profileFiltered.posts.every((row) => row.category === null));
-  check('个人主页文章带分类与置顶字段', hasAll((await admin(`/api/users/${target.author.username}`)).json.data.posts[0] ?? {}, ['category', 'profilePinned']));
+  const profileFiltered = (await admin(`/api/users/${target.author.username}?tag=${encodeURIComponent('不可能存在的标签')}`)).json.data;
+  check('个人主页支持按标签筛选', profileFiltered.filter === '不可能存在的标签' && profileFiltered.posts.length === 0);
+  check('个人主页文章带置顶字段', hasAll((await admin(`/api/users/${target.author.username}`)).json.data.posts[0] ?? {}, ['profilePinned']));
 
   const profileSaved = (await admin('/api/me/profile', { method: 'POST', body: { displayName: '站长', bio: '契约检查签名' } })).json.data;
   check('保存资料返回新的 user', profileSaved.user.bio === '契约检查签名' && profileSaved.user.displayName === '站长');

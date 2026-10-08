@@ -30,13 +30,6 @@ async function viewCompose(postId) {
     }
   }
 
-  let categories = [];
-  try {
-    categories = (await api('/api/me/categories')).items;
-  } catch {
-    categories = [];
-  }
-
   ui.app.innerHTML = `
     <section class="card">
       <div class="card-head">
@@ -49,17 +42,9 @@ async function viewCompose(postId) {
           <select id="boardId" name="boardId" required>${Widgets.boardOptions(post?.board.id)}</select>
         </div>
         <div class="field">
-          <label for="categoryId">个人主页分类（可选）</label>
-          <select id="categoryId" name="categoryId">
-            <option value="">未分类</option>
-            ${categories
-              .map(
-                (category) =>
-                  `<option value="${category.id}" ${post?.category?.id === category.id ? 'selected' : ''}>🗂 ${esc(category.name)}</option>`,
-              )
-              .join('')}
-          </select>
-          <span class="hint">分类只影响你个人主页的归类，去 <a href="#/u/${encodeURIComponent(state.me.username)}">我的主页</a> 可以新建或整理分类。</span>
+          <span class="hint">归类改用<strong>积木标签</strong>：帖子写成积木后，在
+            <a href="#/docs">积木编辑器</a>的「标签」框里贴词，个人主页的筛选条就会多出这一项。
+            「个人主页分类」这个功能已经下线。</span>
         </div>
         <label class="checkbox-row">
           <input type="checkbox" name="profilePinned" value="1" ${post?.profilePinned ? 'checked' : ''} />

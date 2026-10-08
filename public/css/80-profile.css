@@ -76,5 +76,67 @@
   background: rgba(124, 91, 255, 0.12);
 }
 
+/* ================= 需求 1/2：个人主页 = 积木页面 ================= */
+
+/* 编辑器里那块锁着的「个人主页名片」（内容可编辑，位置与存在性锁死）。 */
+.doc-block-card.is-locked {
+  border-left: 3px solid var(--accent);
+  background: linear-gradient(90deg, var(--accent-soft) 0%, transparent 120px);
+}
+
+.doc-lock {
+  font-size: 12px;
+  color: var(--accent-fg);
+  background: var(--accent-soft);
+  border-radius: 999px;
+  padding: 3px 9px;
+  margin-right: 6px;
+}
+
+/* 主页渲染出来的名片与统计（种子块里的 `app` 块画的就是这两个类名）。 */
+/* 名片块里存的占位（host 渲染前 / 拿不到用户时退化成它，见 `PROFILE_CARD_HTML`）。 */
+.profile-head-slot {
+  min-height: 72px;
+}
+
+.pf-card {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 4px 0 10px;
+}
+
+.pf-card h2 {
+  margin: 0 0 4px;
+  font-size: 20px;
+}
+
+.pf-card p {
+  margin: 0;
+  color: var(--text-dim);
+}
+
+.pf-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 18px;
+  padding: 8px 0;
+}
+
+.pf-stat {
+  display: flex;
+  flex-direction: column;
+  min-width: 64px;
+}
+
+.pf-stat b {
+  font-size: 18px;
+}
+
+.pf-stat span {
+  font-size: 12px;
+  color: var(--muted);
+}
+
 
 /* @hand-written */

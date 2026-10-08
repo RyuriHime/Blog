@@ -1,7 +1,7 @@
 // core 路由：认证 / 资料 / 头像 / 密码 / 个人主页分类
 // // 搬运自 src/server.js 的固定行区间（预铺骨架，逐字未改），见 docs/tools/extract-server-modules.mjs。
 import { HttpError, ensure, field, ok, rateLimit, res_ } from '../../core/http.js';
-import { assertPinAllowed, notifyMentions, resolveOwnCategory, shapeAuthor, shapeCategory, shapeConversation, shapeMessage, shapeNotification, shapePerson, shapePostDetail, shapePostListRow, shapeProfile, shapeReply, shapeReposter, shapeUser } from '../../core/shape.js';
+import { assertPinAllowed, notifyMentions, shapeAuthor, shapeConversation, shapeMessage, shapeNotification, shapePerson, shapePostDetail, shapePostListRow, shapeProfile, shapeReply, shapeReposter, shapeUser } from '../../core/shape.js';
 import { isOwner, isStaff, requireOwner, requireStaff, requireUser } from '../../core/guards.js';
 import { issueSession, removeAvatarFile, saveAvatarFile, sessionCookie } from '../../core/sessions.js';
 import { store } from '../../core/store.js';
@@ -128,44 +128,12 @@ export function registerRoutesA(route) {
     ok(res_(ctx), { changed: true, revokedSessions });
   });
 
-  /* ---------------- 个人主页分类 ---------------- */
+  /* ---------------- 个人主页分类：功能已下线 ---------------- */
 
-  route('GET', '/api/me/categories', async (ctx) => {
-    const user = requireUser(ctx);
-    ok(res_(ctx), {
-      items: store.listProfileCategories(user.id).map(shapeCategory),
-      limit: store.profileCategoryLimit(),
-      uncategorizedCount: store.uncategorizedCount(user.id),
-    });
-  });
-
-  route('POST', '/api/me/categories', async (ctx) => {
-    const user = requireUser(ctx);
-    const name = field(ctx.body.name, { label: '分类名称', min: 1, max: 12 });
-    const result = store.createProfileCategory(user.id, name);
-    if (result.error === 'category_limit') {
-      throw new HttpError(400, 'category_limit', `最多只能建 ${store.profileCategoryLimit()} 个分类`);
-    }
-    if (result.error === 'category_exists') throw new HttpError(409, 'category_exists', '已经有同名分类了');
-    ensure(!result.error, 400, 'category_failed', '创建失败');
-    ok(res_(ctx), { category: shapeCategory({ ...result.category, post_count: 0 }) });
-  });
-
-  route('PUT', '/api/me/categories/:id', async (ctx) => {
-    const user = requireUser(ctx);
-    const name = field(ctx.body.name, { label: '分类名称', min: 1, max: 12 });
-    const result = store.renameProfileCategory(user.id, Number(ctx.params.id), name);
-    if (result.error === 'not_found') throw new HttpError(404, 'category_not_found', '分类不存在');
-    if (result.error === 'category_exists') throw new HttpError(409, 'category_exists', '已经有同名分类了');
-    ok(res_(ctx), { category: shapeCategory(result.category) });
-  });
-
-  route('DELETE', '/api/me/categories/:id', async (ctx) => {
-    const user = requireUser(ctx);
-    const result = store.deleteProfileCategory(user.id, Number(ctx.params.id));
-    if (result.error === 'not_found') throw new HttpError(404, 'category_not_found', '分类不存在');
-    ok(res_(ctx), { deleted: true, uncategorizedCount: store.uncategorizedCount(user.id) });
-  });
+  // 需求 4「删除被弃用的分类功能，改为 Tag」：分类的四条接口（列表 / 新建 / 重命名 / 删除）
+  // 整组撤掉，改用积木标签 —— 标签住在积木底层的 `doc_tags`，筛选走 `GET /api/users/:u?tag=`。
+  // 这里刻意**不**留空壳路由：留着空壳会让前端以为功能还在，直接 404 更诚实。
+  // 数据库里的 `profile_categories` 表与 `posts.category_id` 列保留不删（存档，不再读写）。
 
   /* ---------------- Markdown 预览 ---------------- */
 

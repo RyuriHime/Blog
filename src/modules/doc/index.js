@@ -23,6 +23,28 @@ import { autoImportOiwiki } from './oiwiki-autoseed.js';
 // 副作用：登记本模块的十六张表（必须在开库之前，见文件头注释）。
 schemas.addScript(DOC_SCHEMA, 'doc');
 
+// wiki 站的**页**不是帖子：一个 wiki 是一篇帖子，页是站里的内容。
+//
+// 页照样留影子行（赞 / 收藏 / 通知全认 `posts.id`），它也被 `hidden = 1` 藏进了
+// 积木板块 —— 但 `hidden` 挡不住带 `includeHidden` 的列表：作者打开**自己的**
+// 个人主页就能看见 wiki 的每一页（staff 视角同理），看起来像「一个 wiki 发了一堆帖子」。
+// 所以这里给 core 的列表再上一把锁：模板是 `page` 的文档，它的影子行**谁都别列**。
+// 站本身（`template = 'station'`）不在此列 —— 它就该以一篇帖子的身份出现在主页上。
+//
+// ⚠️ 登记放在**模块顶层**（而不是 `install()` 里和别的登记挤在一起），因为
+// `src/store.js` 要在建表时就把这条条件拼进「这个人有多少篇帖子」的计数子查询里，
+// 而 `src/server.js` 的顺序是「开库 → createStore → installModules」：
+// 放 install 里就晚了半步 —— 列表（请求期读登记处）对、计数（建 store 期读一次）不对，
+// 于是主页显示 12 篇、计数写 15 篇。顶层登记和 `schemas.addScript` 同一个套路。
+//
+// 需求 1：`kind = 'profile'` 的个人主页文档**也不是帖子** —— 它是"这个人的主页"，
+// 更不该出现在动态流 / 板块列表里（广场列表本来就带 `d.kind <> 'profile'`，
+// 但那是「文档列表」；影子行还得靠这条一起挡掉）。同一把锁，一起上。
+addPostListExclude(() => ({
+  sql: `NOT EXISTS (SELECT 1 FROM documents d WHERE d.anchor_post_id = p.id AND (d.template = '${WIKI_TEMPLATE}' OR d.kind = 'profile'))`,
+  params: [],
+}))
+
 export default {
   name: 'doc',
   /** 新前缀。写完在这里登记路由，不要往 /api/posts 上加东西。 */

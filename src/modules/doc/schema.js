@@ -163,8 +163,13 @@ export function siteStateNamespace({ type = '', documentId = 0 } = {}) {
  *                    其余三个只在文档的 `allow_script_write=1` 时放行。
  *   `site.read`      读站内其它内容的**只读**出口：只回 `scope='public'` 且未删除的行，
  *                    分页 ≤ 50，绝不含邮箱等私密字段。这是本轮唯一新增的信息暴露面。
+ *
+ * 需求 2 新增的一个（个人主页）：
+ *   `profile`        主页**所属那个人**的公开信息：文章数 / 动态数 / 关注数 / 标签 /
+ *                    最近公开的帖子。与 `GET /api/docs/profile/:username/stats` 同源，
+ *                    只出本来就挂在主页上的那些字段（没有邮箱、没有私信）。
  */
-export const SANDBOX_CAPABILITIES = ['doc-meta', 'doc-blocks', 'viewer', 'state', 'blocks.derived', 'site.read'];
+export const SANDBOX_CAPABILITIES = ['doc-meta', 'doc-blocks', 'viewer', 'state', 'blocks.derived', 'site.read', 'profile'];
 
 /**
  * 沙箱 → 宿主可以发的消息类型白名单（§6.2）。其余一律丢弃并计数。

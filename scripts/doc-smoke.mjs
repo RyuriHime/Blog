@@ -1746,6 +1746,22 @@ try {
     check('user.js 保留了老的帖子列表渲染', userView.includes('profile-posts') && userView.includes('Widgets.profilePostsHtml'), '');
     check('user.js 的积木分支有 hasProfileDoc 开关', userView.includes('hasProfileDoc'), '');
 
+    /* 需求 1/2：主页 = 积木文档，且「保存前判定」的前后两份规则必须同源。 */
+    check('user.js 引了主页规则表 profile-rules.js', userView.includes("from '../core/profile-rules.js'"), '');
+    check('user.js 给作者留了进积木编辑器的入口', userView.includes('/edit?mode=blocks'), '');
+    const rulesServer = readText('src/modules/doc/profile-rules.js');
+    const rulesClient = readText('public/core/profile-rules.js');
+    const pick = (text, name) => (text.match(new RegExp(`export const ${name} = ([^;]+);`)) ?? [])[1];
+    for (const name of ['MAX_PROFILE_BLOCKS', 'MAX_PROFILE_TITLE', 'MAX_PROFILE_TEXT', 'PROFILE_CARD_APP']) {
+      check(`前后端规则同源：${name}`, Boolean(pick(rulesServer, name)) && pick(rulesServer, name) === pick(rulesClient, name), `${pick(rulesServer, name)} vs ${pick(rulesClient, name)}`);
+    }
+    check('前后端规则同源：checkProfile 的文案一字不差', rulesServer.includes('块必须在第一位（它可以编辑，但位置不许动）') && rulesClient.includes('块必须在第一位（它可以编辑，但位置不许动）'), '');
+    const docEditorJs = readText('public/views/doc.js');
+    check('积木编辑器给名片块上了锁（不画删除 / 上下移动）', docEditorJs.includes('isProfileCard(block)') && docEditorJs.includes('is-locked'), '');
+    check('积木编辑器保存前会跑一次主页判定', docEditorJs.includes('checkProfile({ blocks: ordered, hasDoc: kind === \'profile\', title })'), '');
+    const guideView = readText('public/views/guide.js');
+    check('积木教程写了个人信息 API（Sandbox.profile）', guideView.includes('Sandbox.profile()'), '');
+
     const css = readText('public/css/41-doc.css');
     check('主页文档复用的 doc-panel / doc-body 有样式', css.includes('.doc-panel') && css.includes('.doc-body'), '');
   }
@@ -2315,7 +2331,7 @@ try {
         '',
       );
       check('8.9 建完直接进编辑器（跳转那一行还在）', editorJs.includes('return navigate(`/doc/${created.doc.id}/edit`)'), '');
-      check('8.9 模板搬到了积木模式那一栏（模板栏只在积木视图里渲染）', editorJs.includes('function templatePanelHtml()') && editorJs.includes('${blocksEditorHtml(blocks)}${templatePanelHtml()}'), '');
+      check('8.9 模板搬到了积木模式那一栏（模板栏只在积木视图里渲染）', editorJs.includes('function templatePanelHtml()') && editorJs.includes('${blocksEditorHtml(blocks, editor.data?.doc?.kind)}${templatePanelHtml()}'), '');
       /* 用户在浏览器里报的四个 bug（m01284 / m01317）的回归钉：
          ① 默认是源码（支持 Markdown/LaTeX）；② 两个视图共用一份草稿（切之前先存）；
          ③ 保存之后编辑区不能被清空。纯 Markdown 那一种编辑方式已经整条删掉（本轮需求）。 */

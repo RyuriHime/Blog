@@ -461,130 +461,67 @@ try {
   check('签到 POST 也下线了（404，而不是 405 / 401）', (await member.call('/api/checkin', { method: 'POST' })).status === 404);
   check('未登录访问签到同样是 404（路由整条没了）', (await anon.call('/api/checkin')).status === 404);
 
-  console.log('\n▶ 个人主页分类与置顶');
+  console.log('\n▶ 个人主页标签与置顶（分类功能已下线，需求 4）');
   const memberName = `smoke_${unique}`;
-  const categoryList = await member.call('/api/me/categories');
-  check(
-    '分类列表接口可用（新用户从零开始）',
-    categoryList.status === 200 && Array.isArray(categoryList.data.items) && categoryList.data.items.length === 0 && categoryList.data.limit >= 3,
-    JSON.stringify(categoryList.data).slice(0, 140),
-  );
+  // 分类那五条接口整组撤掉了：断言 404 而不是「返回空列表」——空列表说明功能还在，
+  // 只是没数据；404 才说明路由真的没了。
+  check('分类列表接口已下线（404）', (await member.call('/api/me/categories')).status === 404);
+  check('创建分类接口已下线（404）', (await member.call('/api/me/categories', { method: 'POST', body: { name: '前端笔记' } })).status === 404);
+  check('重命名分类接口已下线（404）', (await member.call('/api/me/categories/1', { method: 'PUT', body: { name: 'x' } })).status === 404);
+  check('删除分类接口已下线（404）', (await member.call('/api/me/categories/1', { method: 'DELETE' })).status === 404);
+  check('给帖子设分类的接口已下线（404）', (await member.call('/api/posts/1/category', { method: 'POST', body: { categoryId: null } })).status === 404);
+  check('接口没了但字段还在（老客户端不会炸）', Array.isArray((await member.call(`/api/users/${encodeURIComponent(memberName)}`)).data.categories));
 
-  const newCategory = await member.call('/api/me/categories', { method: 'POST', body: { name: '前端笔记' } });
-  check(
-    '创建分类成功',
-    newCategory.status === 200 && newCategory.data.category.name === '前端笔记' && newCategory.data.category.postCount === 0,
-    JSON.stringify(newCategory.data),
-  );
-  const categoryId = newCategory.data.category.id;
-  check('同名分类被拒绝（409）', (await member.call('/api/me/categories', { method: 'POST', body: { name: '前端笔记' } })).status === 409);
-  const renamedCategory = await member.call(`/api/me/categories/${categoryId}`, { method: 'PUT', body: { name: '前端手记' } });
-  check('重命名分类成功', renamedCategory.status === 200 && renamedCategory.data.category.name === '前端手记');
-
-  let categoryLimitHit = false;
-  for (let index = 0; index < 12; index += 1) {
-    const result = await member.call('/api/me/categories', { method: 'POST', body: { name: `分类${index}` } });
-    if (result.status === 400 && result.error?.code === 'category_limit') {
-      categoryLimitHit = true;
-      break;
-    }
-  }
-  check('分类数量达到上限后拒绝创建', categoryLimitHit);
-
-  const adminCategory = await admin.call('/api/me/categories', { method: 'POST', body: { name: '站长专栏' } });
-  check('（准备）管理员也有自己的分类', adminCategory.status === 200);
-
-  /* 帖子不能新建了，但「放进我的分类 + 个人主页置顶」这两件事还活着：它们照打在
-     积木的影子锚点帖上，断言含义不变（旧代码只是顺手在建帖那一次带上这两个字段）。 */
-  const categorizedAnchor = await newAnchorPost(member, `分类测试帖 ${unique}`);
-  const categorizedId = categorizedAnchor.postId;
-  const setCategory = await member.call(`/api/posts/${categorizedId}/category`, { method: 'POST', body: { categoryId } });
-  const setPinned = await member.call(`/api/posts/${categorizedId}/profile-pin`, { method: 'POST', body: { pinned: true } });
-  check(
-    '锚点帖可设分类并置顶',
-    setCategory.status === 200 &&
-      setCategory.data.category?.id === categoryId &&
-      setPinned.status === 200 &&
-      setPinned.data.profilePinned === true,
-    JSON.stringify({ setCategory: setCategory.body, setPinned: setPinned.body }),
-  );
-
-  const categorizedDetail = await member.call(`/api/posts/${categorizedId}`);
-  check(
-    '帖子详情带分类与置顶标记',
-    categorizedDetail.data.post.category?.id === categoryId &&
-      categorizedDetail.data.post.category.name === '前端手记' &&
-      categorizedDetail.data.post.profilePinned === true,
-    JSON.stringify(categorizedDetail.data.post.category),
-  );
-
-  const stealCategory = await member.call(`/api/posts/${categorizedId}/category`, {
-    method: 'POST',
-    body: { categoryId: adminCategory.data.category.id },
-  });
-  check('不能把文章放进别人的分类（400）', stealCategory.status === 400 && stealCategory.error?.code === 'bad_category');
-
-  const clearCategory = await member.call(`/api/posts/${categorizedId}/category`, { method: 'POST', body: { categoryId: null } });
-  check(
-    '可以取消分类（文章回到未分类）',
-    clearCategory.status === 200 && clearCategory.data.category === null && clearCategory.data.uncategorizedCount >= 1,
-    JSON.stringify(clearCategory.data),
-  );
-  const restoreCategory = await member.call(`/api/posts/${categorizedId}/category`, { method: 'POST', body: { categoryId } });
-  check('可以重新设置分类', restoreCategory.status === 200 && restoreCategory.data.category.id === categoryId);
-
-  const profileView = await anon.call(`/api/users/${encodeURIComponent(memberName)}`);
-  check(
-    '个人主页返回分类、置顶计数与上限',
-    Array.isArray(profileView.data.categories) &&
-      profileView.data.categories.some((item) => item.id === categoryId && item.postCount >= 1) &&
-      profileView.data.pinnedCount >= 1 &&
-      profileView.data.pinLimit === 3,
-    JSON.stringify({ categories: profileView.data.categories, pinned: profileView.data.pinnedCount }),
-  );
-  check(
-    '置顶文章排在个人主页第一位',
-    profileView.data.posts[0].id === categorizedId && profileView.data.posts[0].profilePinned === true,
-    JSON.stringify(profileView.data.posts.slice(0, 3).map((item) => ({ id: item.id, pinned: item.profilePinned }))),
-  );
-  check(
-    '可按分类筛选个人主页文章',
-    (await anon.call(`/api/users/${encodeURIComponent(memberName)}?category=${categoryId}`)).data.posts.every(
-      (item) => item.category?.id === categoryId,
-    ),
-  );
-  check(
-    '可筛选「未分类」文章',
-    (await anon.call(`/api/users/${encodeURIComponent(memberName)}?category=none`)).data.posts.every((item) => item.category === null),
-  );
-
-  // 置顶上限：再补两篇置顶后，第四篇应当被拒绝
+  // 置顶上限：先把名额占满（先数一下已经有几篇，别硬编码），再尝试第 4 篇。
+  // 硬编码「补两篇」会在前面多置一篇时变成假失败。
+  const pinnedNow = Number((await member.call(`/api/users/${encodeURIComponent(memberName)}`)).data.pinnedCount);
   const extraPosts = [];
-  for (let index = 0; index < 3; index += 1) {
+  for (let index = pinnedNow; index < 3; index += 1) {
     const anchor = await newAnchorPost(member, `置顶测试 ${index} ${unique}`);
     extraPosts.push(anchor.postId);
+    await member.call(`/api/posts/${anchor.postId}/profile-pin`, { method: 'POST', body: { pinned: true } });
   }
-  await member.call(`/api/posts/${extraPosts[0]}/profile-pin`, { method: 'POST', body: { pinned: true } });
-  await member.call(`/api/posts/${extraPosts[1]}/profile-pin`, { method: 'POST', body: { pinned: true } });
-  const overflowPin = await member.call(`/api/posts/${extraPosts[2]}/profile-pin`, { method: 'POST', body: { pinned: true } });
+  const overflowAnchor = await newAnchorPost(member, `置顶溢出 ${unique}`);
+  const overflowPin = await member.call(`/api/posts/${overflowAnchor.postId}/profile-pin`, { method: 'POST', body: { pinned: true } });
   check('超过置顶上限被拒绝（400）', overflowPin.status === 400 && overflowPin.error?.code === 'pin_limit', JSON.stringify(overflowPin.body));
 
-  const unpin = await member.call(`/api/posts/${extraPosts[0]}/profile-pin`, { method: 'POST', body: { pinned: false } });
-  check('可以取消置顶', unpin.status === 200 && unpin.data.profilePinned === false && unpin.data.pinnedCount === 2);
   check(
     '不能置顶别人的文章（403）',
     (await member.call(`/api/posts/${adminPost.id}/profile-pin`, { method: 'POST', body: { pinned: true } })).status === 403,
   );
+  // 取消一篇，名额就还回来了（顺带证明「上限」算的是当前挂着几篇，不是累计置顶过几次）
+  const freedPost = extraPosts[0] ?? overflowAnchor.postId;
+  const unpin = await member.call(`/api/posts/${freedPost}/profile-pin`, { method: 'POST', body: { pinned: false } });
+  check('可以取消置顶', unpin.status === 200 && unpin.data.profilePinned === false && unpin.data.pinnedCount === 2);
+  const repin = await member.call(`/api/posts/${freedPost}/profile-pin`, { method: 'POST', body: { pinned: true } });
+  check('腾出名额后又能置顶', repin.status === 200 && repin.data.profilePinned === true && repin.data.pinnedCount === 3);
 
-  const deletedCategory = await member.call(`/api/me/categories/${categoryId}`, { method: 'DELETE' });
+  // 标签是新的「归类」：贴在积木上，个人主页按标签筛。
+  // 为什么断言「筛选结果条数 == 标签上的计数」：这正是需求 3 那个 bug 的形状 ——
+  // 显示数与计数走两条路就会差；这里两个数都从同一套口径（deleted/hidden/wiki 页排除）来。
+  const taggedAnchor = await newAnchorPost(member, `标签测试帖 ${unique}`, { tags: ['冒烟标签'] });
+  const profileView = await anon.call(`/api/users/${encodeURIComponent(memberName)}`);
+  const tagChip = (profileView.data.tags ?? []).find((item) => item.name === '冒烟标签');
   check(
-    '删除分类后文章回到未分类',
-    deletedCategory.status === 200 && deletedCategory.data.uncategorizedCount >= 1,
-    JSON.stringify(deletedCategory.data),
+    '个人主页返回标签、置顶计数与上限',
+    Array.isArray(profileView.data.tags) && Boolean(tagChip) && tagChip.postCount >= 1 && profileView.data.pinnedCount === 3 && profileView.data.pinLimit === 3,
+    JSON.stringify({ tags: profileView.data.tags, pinned: profileView.data.pinnedCount }),
   );
   check(
-    '删除后分类不再出现在主页',
-    !(await anon.call(`/api/users/${encodeURIComponent(memberName)}`)).data.categories.some((item) => item.id === categoryId),
+    '置顶文章排在个人主页第一位',
+    profileView.data.posts.slice(0, profileView.data.pinnedCount).every((item) => item.profilePinned === true) &&
+      profileView.data.posts.slice(profileView.data.pinnedCount).every((item) => item.profilePinned === false),
+    JSON.stringify(profileView.data.posts.slice(0, 4).map((item) => ({ id: item.id, pinned: item.profilePinned }))),
+  );
+  const tagFiltered = await anon.call(`/api/users/${encodeURIComponent(memberName)}?tag=${encodeURIComponent('冒烟标签')}`);
+  check(
+    '可按标签筛选个人主页文章（条数与标签计数一致）',
+    tagFiltered.data.posts.length === tagChip.postCount && tagFiltered.data.posts.every((item) => item.id === taggedAnchor.postId),
+    JSON.stringify({ posts: tagFiltered.data.posts.length, chip: tagChip.postCount }),
+  );
+  check(
+    '筛一个没人用过的标签就是空（不是全量）',
+    (await anon.call(`/api/users/${encodeURIComponent(memberName)}?tag=${encodeURIComponent('没人用过的标签')}`)).data.posts.length === 0,
   );
 
   console.log('\n▶ 账号设置');
@@ -689,9 +626,11 @@ try {
     JSON.stringify(repostAgain.data),
   );
 
+  // 注意 `?category=reposts` 这个**旧参数名**是刻意留着的：它跟已下线的「个人主页分类」
+  // 无关，只是「看转发」这个视图的历史地址（前端也还用它）。改的是分类功能，不是这里。
   const profileReposts = (await anon.call(`/api/users/${encodeURIComponent(`smoke_${unique}`)}?category=reposts`)).data;
   check(
-    '个人主页「转发」分类可见',
+    '个人主页「看转发」视图可见',
     profileReposts.filter === 'reposts' &&
       profileReposts.posts.some((item) => item.id === adminPost.id && item.repost?.comment === '改一版转发语'),
     JSON.stringify(profileReposts.posts.map((item) => item.id)),
@@ -739,7 +678,7 @@ try {
     JSON.stringify(emojiAvatar.data).slice(0, 140),
   );
   check('会话接口返回新头像', (await member.call('/api/auth/me')).data.user.avatar === 'emoji:🦊:24');
-  const postWithAvatar = await anon.call(`/api/posts/${categorizedId}`);
+  const postWithAvatar = await anon.call(`/api/posts/${taggedAnchor.postId}`);
   check(
     '帖子作者信息带头像（别人也看得到）',
     postWithAvatar.data.post.author.avatar === 'emoji:🦊:24',
@@ -879,14 +818,127 @@ try {
     (await bob.call(`/api/posts/${hideTarget.id}`)).data.post.hidden === true,
   );
   check(
-    '作者主页上也标记为已隐藏',
-    (await bob.call('/api/users/bob')).data.posts.some((row) => row.id === hideTarget.id && row.hidden),
+    // 个人主页的口径是「只列公开的积木帖子」：站务隐藏的那一篇 **对作者本人也不再出现**。
+    // 为什么这么定（而不是「作者还看得见、只是带个隐藏标记」）：
+    // 主页上「文章」那个计数（`user.postCount`）数的是公开帖子，列表要是还漏一行进来，
+    // 用户看到的数字和数出来的条数就对不上 —— 这正是用户报的
+    //「发过的帖子数量和实际能显示的数量统一」。所以列表与计数一起按公开口径算。
+    '作者主页上不再出现被隐藏的文章',
+    !(await bob.call('/api/users/bob')).data.posts.some((row) => row.id === hideTarget.id),
+  );
+  check(
+    '作者主页的「文章」计数与列表条数一致',
+    await (async () => {
+      const mine = (await bob.call('/api/users/bob')).data;
+      return mine.user.postCount === mine.posts.length;
+    })(),
   );
   check(
     '别人看不到作者页面上的隐藏文章',
     !(await anon.call('/api/users/bob')).data.posts.some((row) => row.id === hideTarget.id),
   );
-  check('管理团队仍能打开隐藏文章', (await admin.call(`/api/posts/${hideTarget.id}`)).status === 200);
+
+  /* 个人主页 = 一篇积木文档（需求 1/2）。这里只钉住三条最容易回归的对外行为：
+     ① 名片块锁死（删 / 挪 / 改内容都不许），② 名片由**宿主**渲染，
+     ③ 补名片不能短路「草稿只有作者看得见」。 */
+  console.log('\n▶ 个人主页的积木块');
+  {
+    const alice = createClient();
+    const aliceLogin = await alice.call('/api/auth/login', { method: 'POST', body: { username: 'alice', password: 'demo1234' } });
+    check('示例用户 alice 可登录（验个人主页用）', aliceLogin.status === 200, JSON.stringify(aliceLogin.body).slice(0, 160));
+    // 拿一个**还没有主页**的用户来验种子：`POST /api/docs {kind:'profile'}` 对已有主页的人
+    // 会原样交回旧文档（一个用户至多一份），拿 admin 验不出 seed。
+    const plan = await anon.call('/api/docs/profile/alice');
+    let profileDocId = plan.data?.doc?.id;
+    if (!plan.data?.found) {
+      const created = await alice.call('/api/docs', { method: 'POST', body: { kind: 'profile', title: '我的主页' } });
+      profileDocId = created.data?.doc?.id;
+    }
+    check('可以建出个人主页文档', Boolean(profileDocId), JSON.stringify(plan.body).slice(0, 200));
+    const owned = await alice.call(`/api/docs/${profileDocId}`);
+    check('个人主页文档 kind=profile', owned.data?.doc?.kind === 'profile', JSON.stringify(owned.data?.doc));
+    const homeBlocks = owned.data?.blocks ?? [];
+    check(
+      '第一块是「个人主页名片」（缺失就补）',
+      homeBlocks.length > 0 && homeBlocks[0].props?.app === '个人主页名片',
+      JSON.stringify(homeBlocks.map((row) => row.props?.app ?? row.type)),
+    );
+    check(
+      '名片块里存的是占位（真卡片只在渲染时出现）',
+      homeBlocks[0]?.props?.code === '<div class="profile-head-slot" data-profile-card></div>',
+      JSON.stringify(homeBlocks[0]?.props?.code),
+    );
+    const cardId = homeBlocks[0]?.blockId;
+    if (cardId) {
+      check('删掉名片块被拒绝', (await alice.call(`/api/docs/${profileDocId}/blocks/${cardId}`, { method: 'DELETE' })).status >= 400);
+      check(
+        '把别的块挪到名片前面也被拒绝',
+        (
+          await alice.call(`/api/docs/${profileDocId}/blocks/reorder`, {
+            method: 'POST',
+            body: { order: [...homeBlocks.slice(1).map((row) => row.blockId), cardId] },
+          })
+        ).status >= 400,
+      );
+      check(
+        '改名片块的内容被拒绝（这一块由主页自己渲染）',
+        (
+          await alice.call(`/api/docs/${profileDocId}/blocks/${cardId}`, {
+            method: 'PUT',
+            body: { props: { app: '个人主页名片', config: {}, code: '<b>x</b>' } },
+          })
+        ).status >= 400,
+      );
+    }
+    const homeHtml = String((await anon.call('/api/docs/profile/alice')).data?.html ?? '');
+    check(
+      '主页渲染出来的是宿主画的真卡片',
+      homeHtml.includes('data-profile-card') && homeHtml.includes('profile-actions'),
+    );
+    const plaza = await anon.call('/api/docs?perPage=100');
+    check(
+      '个人主页不进积木广场',
+      Array.isArray(plaza.data?.documents) && !plaza.data.documents.some((row) => row.kind === 'profile'),
+      JSON.stringify({ status: plaza.status, keys: Object.keys(plaza.data ?? {}) }),
+    );
+    const stats = await anon.call('/api/docs/profile/alice/stats');
+    check(
+      '个人信息统计 API 可用且与列表同口径',
+      stats.status === 200 &&
+        typeof stats.data?.postCount === 'number' &&
+        Array.isArray(stats.data?.posts) &&
+        stats.data.posts.length <= stats.data.postCount,
+      JSON.stringify({ status: stats.status, postCount: stats.data?.postCount, posts: stats.data?.posts?.length }),
+    );
+    /* 草稿回归（曾经真的坏过）：`ensureProfileCard` 一度把整份块序列当返回值交给 `present()`，
+       于是「读者只能看见发布出去那一份」被短路 —— 作者刚加进草稿的块，匿名读者也看得见。
+       正确的流程是**先 POST /draft 进草稿箱**，再写块（正文写接口默认直接生效，见 routes.js:303）。 */
+    const beforeDraft = String((await anon.call('/api/docs/profile/alice')).data?.html ?? '');
+    await alice.call(`/api/docs/${profileDocId}/draft`, { method: 'POST' });
+    const draftText = `草稿专用文字-${unique}`;
+    const added = await alice.call(`/api/docs/${profileDocId}/blocks`, {
+      method: 'POST',
+      body: { type: 'paragraph', props: { text: draftText } },
+    });
+    check('作者可以把新块留在草稿里', added.status === 200, `status=${added.status}`);
+    const anonDraft = String((await anon.call('/api/docs/profile/alice')).data?.html ?? '');
+    check(
+      '读者看不到草稿里的块（发布那一份没被补名片短路）',
+      !anonDraft.includes(draftText),
+      JSON.stringify({ draftSeen: anonDraft.includes(draftText) }),
+    );
+    /* 光「看不见草稿」还不够 —— 一份**空**的读者视图也能满足它。补两条：读者那份里
+       名片占位与名片块都还在（也就是说读者拿到的确实是「发布那一份」而不是别的）。 */
+    check(
+      '有草稿时读者拿到的仍是发布那一份（名片还在渲染）',
+      beforeDraft.includes('data-profile-card') && anonDraft.includes('data-profile-card') && anonDraft.includes('profile-actions'),
+      JSON.stringify({ before: beforeDraft.includes('data-profile-card'), after: anonDraft.includes('data-profile-card') }),
+    );
+    check('作者自己看得到', String((await alice.call('/api/docs/profile/alice')).data?.html ?? '').includes(draftText));
+    if (added.data?.blockId) {
+      await alice.call(`/api/docs/${profileDocId}/blocks/${added.data.blockId}`, { method: 'DELETE' });
+    }
+  }  check('管理团队仍能打开隐藏文章', (await admin.call(`/api/posts/${hideTarget.id}`)).status === 200);
   check(
     '管理团队列表里能看到并标记',
     (await admin.call('/api/posts?perPage=30')).data.items.some((row) => row.id === hideTarget.id && row.hidden),

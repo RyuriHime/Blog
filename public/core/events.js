@@ -127,31 +127,6 @@ document.addEventListener('click', async (event) => {
         }
         break;
       }
-      case 'toggle-category-form': {
-        event.preventDefault();
-        const categoryForm = document.querySelector('form[data-action="create-category"]');
-        if (categoryForm) {
-          categoryForm.hidden = !categoryForm.hidden;
-          if (!categoryForm.hidden) categoryForm.querySelector('input')?.focus();
-        }
-        break;
-      }
-      case 'rename-category': {
-        const currentName = actionNode.dataset.name;
-        const nextName = prompt('重命名分类', currentName);
-        if (!nextName || nextName === currentName) break;
-        await api(`/api/me/categories/${actionNode.dataset.id}`, { method: 'PUT', body: { name: nextName } });
-        toast('分类已重命名', 'success');
-        await refreshProfile();
-        break;
-      }
-      case 'delete-category': {
-        if (!confirm(`删除分类「${actionNode.dataset.name}」？文章不会被删除，只是回到「未分类」。`)) break;
-        await withButtonBusy(actionNode, () => api(`/api/me/categories/${actionNode.dataset.id}`, { method: 'DELETE' }));
-        toast('分类已删除，文章回到「未分类」', 'success');
-        await refreshProfile();
-        break;
-      }
       case 'repost-toggle': {
         if (!Session.requireLogin('登录后才能转发')) break;
         // 找的是**当前这一页**的转发区。帖子页和积木页各有一块（`views/post.js` 的
@@ -194,6 +169,18 @@ document.addEventListener('click', async (event) => {
         );
         toast(wantPinned ? `已置顶推荐（${result.pinnedCount}/${result.pinLimit}）` : '已取消置顶', 'success');
         await refreshProfile();
+        break;
+      }
+      case 'profile-create': {
+        // 需求 1/2：把「还没有积木主页」的老主页翻新成一篇 kind='profile' 的积木文档。
+        // 初始块（名片 / 统计 / 标签 / 置顶推荐 / 发表过的积木贴与动态）由服务端 seed，
+        // 这里建完直接跳进积木编辑器 —— 主页从此就是这篇文档。
+        if (!Session.requireLogin('登录后可以翻新自己的主页')) break;
+        if (!confirm('把个人主页翻新成积木页面？\n\n头像 / 昵称 / 签名 / 统计数据 / 标签 / 置顶推荐 / 你发过的积木贴与动态都会变成积木块，可以自由增删改；只有「个人主页名片」那一块锁着。')) break;
+        const created = await withButtonBusy(actionNode, () => api('/api/docs', { method: 'POST', body: { kind: 'profile', title: '我的主页' } }));
+        const newDocId = created?.doc?.id ?? created?.blocks?.[0]?.documentId;
+        if (newDocId) location.hash = `#/doc/${newDocId}/edit?mode=blocks`;
+        else await refreshProfile();
         break;
       }
       case 'profile-layout': {
@@ -563,20 +550,7 @@ document.addEventListener('change', async (event) => {
     return;
   }
 
-  const select = event.target.closest('[data-action="set-category"]');
-  if (!select) return;
-  try {
-    const postId = Number(select.dataset.id);
-    const value = select.value;
-    const result = await api(`/api/posts/${postId}/category`, {
-      method: 'POST',
-      body: { categoryId: value === '' ? null : Number(value) },
-    });
-    toast(result.category ? `已归入「${result.category.name}」` : '已移出分类', 'success');
-    await refreshProfile();
-  } catch (error) {
-    toastError(error);
-  }
+  return;
 });
 document.addEventListener('submit', async (event) => {
   const form = event.target.closest('form[data-action]');
@@ -677,7 +651,6 @@ document.addEventListener('submit', async (event) => {
         boardId: Number(data.boardId),
         title: data.title,
         content: data.content,
-        categoryId: data.categoryId ? Number(data.categoryId) : null,
         profilePinned: Boolean(data.profilePinned),
       };
       const result = postId
@@ -696,15 +669,6 @@ document.addEventListener('submit', async (event) => {
       );
       toast(result.updated ? '转发语已更新' : '转发成功：已经发到动态流，你主页的「🔁 转发」里也有一条', 'success');
       await Post.viewPost(repostPostId);
-      return;
-    }
-
-    if (action === 'create-category') {
-      const result = await withButtonBusy(submitButton, () =>
-        api('/api/me/categories', { method: 'POST', body: { name: data.name } }),
-      );
-      toast(`分类「${result.category.name}」已创建`, 'success');
-      await refreshProfile();
       return;
     }
 

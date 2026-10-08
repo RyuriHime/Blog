@@ -32,19 +32,14 @@ function postMetaStatsHtml(post) {
     ${post.bookmarked ? '<span class="meta-item" title="已收藏">⭐</span>' : ''}`;
 }
 
-/** 作者整理自己主页的小工具：选分类 + 置顶推荐。 */
-function ownerToolsHtml(post, categories) {
-  const options = ['<option value="">未分类</option>']
-    .concat(
-      categories.map(
-        (category) =>
-          `<option value="${category.id}" ${post.category?.id === category.id ? 'selected' : ''}>${esc(category.name)}</option>`,
-      ),
-    )
-    .join('');
+/**
+ * 作者整理自己主页的小工具：只剩置顶推荐。
+ * 「归入我的分类」那个下拉随分类功能一起下线了（需求 4：改为 Tag）——
+ * 标签在积木编辑器里改，作者不必在主页列表上两头维护。
+ */
+function ownerToolsHtml(post) {
   return `
     <div class="owner-tools">
-      <select class="mini-select" data-action="set-category" data-id="${post.id}" title="归入我的分类">${options}</select>
       <button class="btn btn-sm ${post.profilePinned ? 'is-on' : ''}" data-action="profile-pin"
               data-id="${post.id}" data-pinned="${post.profilePinned ? '1' : '0'}"
               title="在个人主页顶部推荐这篇">📌 ${post.profilePinned ? '取消置顶' : '置顶'}</button>
