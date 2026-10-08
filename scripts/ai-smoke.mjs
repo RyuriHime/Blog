@@ -67,6 +67,9 @@ import {
   priceFor,
   priceNote,
 } from '../src/modules/ai/pricing.js';
+// 三源合并那层（`m08120`）：另外两本账的表由别的包建，缺失时不能把面板打崩 ——
+// 这条只有直接调 `foreignUsageRows` 才验得干净（HTTP 那侧永远看不到「表不在」）。
+import { foreignUsageRows } from '../src/modules/ai/usage-sources.js';
 
 const ROOT = resolve(fileURLToPath(new URL('.', import.meta.url)), '..');
 const SERVER = join(ROOT, 'src', 'server.js');
@@ -1957,6 +1960,157 @@ try {
       (usage.data?.me?.today?.tokens?.total ?? -1) === 0 &&
       (usage.data?.me?.today?.cost?.yuan ?? -1) === 0,
     JSON.stringify({ site: usage.data?.site?.today?.tokens ?? null, me: usage.data?.me?.today?.tokens ?? null }),
+  );
+
+  /* ---------- 21b-2. 三源合并：另外两本账也进面板（m08120） ---------- */
+  //
+  // 面板原来只读 `ai_token_usage`，而那张表只有 AI 编辑台会写；论坛 AI 与笔记把账记在
+  // 自己那三张表里（`ai_document_reviews` / `ai_corpus_reports` / `notes_usage`）。
+  // 这三张表由别的包创建：**没装那两个包时它们根本不存在**，所以这里手工建出来，
+  // 塞几行假账，看面板认不认 —— 顺带证明「缺表当 0、不 500」这条兜底真的走得到。
+  //
+  // 断言的核心是**归属**：逐篇解读没有触发者列（只进全站），整理全站与笔记能按人归属
+  // （既进全站、也进「我的用量」）。这两条要是反了，管理员的账会莫名多出来一大块。
+  const foreignDb = new DatabaseSync(KEYED_DB_FILE);
+  foreignDb.exec(`
+    CREATE TABLE IF NOT EXISTS ai_document_reviews (
+      document_id       TEXT PRIMARY KEY,
+      status            TEXT    NOT NULL DEFAULT 'done',
+      category          TEXT    NOT NULL DEFAULT '',
+      difficulty        TEXT    NOT NULL DEFAULT '',
+      summary           TEXT    NOT NULL DEFAULT '',
+      tags_json         TEXT    NOT NULL DEFAULT '[]',
+      prereq_json       TEXT    NOT NULL DEFAULT '[]',
+      recommend_json    TEXT    NOT NULL DEFAULT '[]',
+      model             TEXT    NOT NULL DEFAULT '',
+      content_hash      TEXT    NOT NULL DEFAULT '',
+      prompt_tokens     INTEGER NOT NULL DEFAULT 0,
+      completion_tokens INTEGER NOT NULL DEFAULT 0,
+      error             TEXT    NOT NULL DEFAULT '',
+      error_detail      TEXT    NOT NULL DEFAULT '',
+      created_at        INTEGER NOT NULL,
+      updated_at        INTEGER NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS ai_corpus_reports (
+      id                INTEGER PRIMARY KEY AUTOINCREMENT,
+      status            TEXT    NOT NULL DEFAULT 'done',
+      topics_json       TEXT    NOT NULL DEFAULT '[]',
+      reading_path_json TEXT    NOT NULL DEFAULT '[]',
+      summary           TEXT    NOT NULL DEFAULT '',
+      document_count    INTEGER NOT NULL DEFAULT 0,
+      model             TEXT    NOT NULL DEFAULT '',
+      corpus_hash       TEXT    NOT NULL DEFAULT '',
+      prompt_tokens     INTEGER NOT NULL DEFAULT 0,
+      completion_tokens INTEGER NOT NULL DEFAULT 0,
+      error             TEXT    NOT NULL DEFAULT '',
+      created_by        TEXT,
+      created_at        INTEGER NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS notes_usage (
+      id         INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id    INTEGER NOT NULL,
+      session_id INTEGER,
+      model      TEXT NOT NULL DEFAULT '',
+      prompt     INTEGER NOT NULL DEFAULT 0,
+      completion INTEGER NOT NULL DEFAULT 0,
+      calls      INTEGER NOT NULL DEFAULT 1,
+      created_at INTEGER NOT NULL
+    );
+  `);
+  const foreignAt = Date.now();
+  foreignDb
+    .prepare('INSERT INTO ai_document_reviews (document_id, model, prompt_tokens, completion_tokens, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)')
+    .run('ai-smoke-910001', 'deepseek-flash', 90000, 60000, foreignAt, foreignAt);
+  foreignDb
+    .prepare('INSERT INTO ai_corpus_reports (model, prompt_tokens, completion_tokens, created_by, created_at) VALUES (?, ?, ?, ?, ?)')
+    .run('deepseek-flash', 8840, 5402, String(beforeMe.userId), foreignAt);
+  foreignDb
+    .prepare('INSERT INTO notes_usage (user_id, session_id, model, prompt, completion, calls, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
+    .run(beforeMe.userId, null, 'deepseek-flash', 20000, 10000, 5, foreignAt);
+  foreignDb.close();
+  const merged = await keyedAdmin.call('/api/ai-edit/usage');
+  const mSite = merged.data?.site ?? {};
+  const mMe = merged.data?.me ?? {};
+  const mSources = merged.data?.sources ?? [];
+  const bySource = mSite.bySource ?? [];
+  const sourceOf = (key) => bySource.find((row) => row.key === key) ?? {};
+  // 做**减法**而不是比绝对值：这几张表可能本来就有行（别的小节真的调用过），
+  // 只有「插进去之后多了多少」才是这几条断言说了算的部分。
+  const prevSourceTotal = (key) =>
+    Number((beforeUsage.data?.site?.bySource ?? []).find((row) => row.key === key)?.tokens?.total ?? 0);
+  const prevSourceCalls = (key) =>
+    Number((beforeUsage.data?.site?.bySource ?? []).find((row) => row.key === key)?.tokens?.calls ?? 0);
+  const prevSiteAll = Number(beforeUsage.data?.site?.allTime?.tokens?.total ?? 0);
+  const prevMeMonth = Number(beforeUsage.data?.me?.month?.tokens?.total ?? 0);
+  const prevSiteToday = Number(beforeUsage.data?.site?.today?.tokens?.total ?? 0);
+  const prevMeToday = Number(beforeUsage.data?.me?.today?.tokens?.total ?? 0);
+  const reviewTokens = 90000 + 60000;
+  const corpusTokens = 8840 + 5402;
+  const notesTokens = 20000 + 10000;
+  const added = reviewTokens + corpusTokens + notesTokens;
+  const mine = corpusTokens + notesTokens;
+  check(
+    '三源：面板把另外三张表的账也加进全站合计（解读 + 整理 + 笔记，一行不漏）',
+    Number(mSite.allTime?.tokens?.total ?? 0) === prevSiteAll + added,
+    JSON.stringify({ allTime: mSite.allTime?.tokens?.total, prev: prevSiteAll, added }),
+  );
+  check(
+    '三源：`bySource` 逐路给出本月的账，涨的正好是这一路自己那几行',
+    bySource.length === 4 &&
+      Number(sourceOf('forum_review').tokens?.total ?? 0) === prevSourceTotal('forum_review') + reviewTokens &&
+      Number(sourceOf('forum_corpus').tokens?.total ?? 0) === prevSourceTotal('forum_corpus') + corpusTokens &&
+      Number(sourceOf('notes').tokens?.total ?? 0) === prevSourceTotal('notes') + notesTokens &&
+      Number(sourceOf('notes').tokens?.calls ?? 0) === prevSourceCalls('notes') + 5,
+    JSON.stringify(bySource.map((row) => [row.key, row.tokens?.total, row.tokens?.calls])),
+  );
+  check(
+    '三源：响应带出「这份账是哪几路拼的」清单（key / 标签 / 能不能按人归属）',
+    mSources.length === 4 &&
+      mSources.map((item) => item.key).join(',') === 'ai_edit,forum_review,forum_corpus,notes' &&
+      mSources.some((item) => item.key === 'forum_review' && item.perUser === false) &&
+      mSources.every((item) => typeof item.label === 'string' && item.label !== ''),
+    JSON.stringify(mSources.map((item) => [item.key, item.perUser])),
+  );
+  check(
+    '三源：逐篇解读没有触发者列 ⇒ 只进全站，不进「我自己的用量」；整理/笔记两边都进',
+    Number(mMe.month?.tokens?.total ?? 0) === prevMeMonth + mine,
+    JSON.stringify({ meMonth: mMe.month?.tokens?.total, prev: prevMeMonth, expect: prevMeMonth + mine }),
+  );
+  check(
+    '三源：按各表自己的记账时刻分桶（今天插的账，今天的格子就该看见）',
+    Number(mSite.today?.tokens?.total ?? 0) === prevSiteToday + added &&
+      Number(mMe.today?.tokens?.total ?? 0) === prevMeToday + mine,
+    JSON.stringify({ siteToday: mSite.today?.tokens?.total, meToday: mMe.today?.tokens?.total }),
+  );
+  const todayRow = (mSite.days ?? []).find((day) => Number(day.tokens?.calls ?? 0) >= 3) ?? {};
+  check(
+    '三源：每天的明细里「记账调用」与「配额次数」是两个独立的数（面板那张表两列都要画）',
+    // 这两个数**没有大小关系**：配额次数含 apply 这类不打模型的操作，记账调用含别的包那几路。
+    // 所以只断言「两个都有值、且确实是两个字段」，不比大小 —— 比错了就会像刚才那样假红。
+    Number(todayRow.tokens?.calls ?? 0) >= 3 && Number.isFinite(Number(todayRow.billed)),
+    JSON.stringify({ date: todayRow.date, calls: todayRow.tokens?.calls, billed: todayRow.billed }),
+  );
+  const cleanDb = new DatabaseSync(KEYED_DB_FILE);
+  cleanDb.prepare('DELETE FROM ai_document_reviews WHERE document_id = ?').run('ai-smoke-910001');
+  cleanDb.prepare('DELETE FROM ai_corpus_reports WHERE created_at = ? AND created_by = ?').run(foreignAt, String(beforeMe.userId));
+  cleanDb.prepare('DELETE FROM notes_usage WHERE created_at = ? AND user_id = ?').run(foreignAt, beforeMe.userId);
+  cleanDb.close();
+  // 缺表兜底：那三张表由别的包创建，没装就没有 —— 面板不能因此 500。
+  // 这里用一个空库直接验函数本身（真服务器上那三张表是有的，删它们会连累后面的小节）。
+  const emptyDb = new DatabaseSync(':memory:');
+  const noneRows = foreignUsageRows(emptyDb, {});
+  const noneMine = foreignUsageRows(emptyDb, { userId: beforeMe.userId });
+  emptyDb.close();
+  check(
+    '三源：那三张表不存在时（没装论坛 AI / 笔记）既不抛错也当 0 算，面板不会 500',
+    Array.isArray(noneRows) && noneRows.length === 0 && Array.isArray(noneMine) && noneMine.length === 0,
+    JSON.stringify({ site: noneRows.length, me: noneMine.length }),
+  );
+  const reverted = await keyedAdmin.call('/api/ai-edit/usage');
+  check(
+    '三源：假账删干净以后，面板回到插入前的数（这几条断言没给后面的小节留脏数据）',
+    Number(reverted.data?.site?.allTime?.tokens?.total ?? -1) === prevSiteAll,
+    JSON.stringify({ allTime: reverted.data?.site?.allTime?.tokens?.total, prev: prevSiteAll }),
   );
 
   /* ---------- 21c. 计价器（src/modules/ai/pricing.js）的纯函数 ---------- */

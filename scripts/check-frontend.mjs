@@ -821,8 +821,10 @@ const EXTRA = {
         },
         {
           date: '2026-10-06',
+          // `billed`（配额口径：含 apply 这类不打模型的操作）与 `tokens.calls`（真打了模型几次）
+          // **故意不一样**：这两列并排以后，一边改了另一边没改，光看数字对不上是看不出来的。
           billed: 4,
-          tokens: { prompt: 16000, cached: 5000, completion: 4000, total: 20000, calls: 4, missing: 0 },
+          tokens: { prompt: 16000, cached: 5000, completion: 4000, total: 20000, calls: 2, missing: 0 },
           cost: { yuan: 0.0268, peakYuan: 0, offPeakYuan: 0.0268, currency: 'CNY', unit: '元/百万 tokens' },
         },
         {
@@ -837,6 +839,42 @@ const EXTRA = {
         tokens: { prompt: 300000, cached: 90000, completion: 50000, total: 350000, calls: 42, missing: 0 },
         cost: { yuan: 0.8236, peakYuan: 0.4, offPeakYuan: 0.4236, currency: 'CNY', unit: '元/百万 tokens' },
       },
+      // 每一路**本月**自己的账（合计 = 这四行相加）：面板靠它把「钱是哪一路花的」摊开。
+      // 四路都必须出现在夹具里，否则「有来源没金额」那条分支永远渲染不到。
+      bySource: [
+        {
+          key: 'ai_edit',
+          label: 'AI 编辑台',
+          perUser: true,
+          calls: 12,
+          tokens: { prompt: 48000, cached: 14000, completion: 12000, total: 60000, calls: 12, missing: 1 },
+          cost: { yuan: 0.08036, peakYuan: 0, offPeakYuan: 0.08036, currency: 'CNY', unit: '元/百万 tokens' },
+        },
+        {
+          key: 'forum_review',
+          label: '论坛 AI · 逐篇解读',
+          perUser: false,
+          calls: 30,
+          tokens: { prompt: 90000, cached: 0, completion: 60000, total: 150000, calls: 30, missing: 0 },
+          cost: { yuan: 0.66, peakYuan: 0.66, offPeakYuan: 0, currency: 'CNY', unit: '元/百万 tokens' },
+        },
+        {
+          key: 'forum_corpus',
+          label: '论坛 AI · 整理全站',
+          perUser: true,
+          calls: 1,
+          tokens: { prompt: 8840, cached: 0, completion: 5402, total: 14242, calls: 1, missing: 0 },
+          cost: { yuan: 0.0609, peakYuan: 0.0609, offPeakYuan: 0, currency: 'CNY', unit: '元/百万 tokens' },
+        },
+        {
+          key: 'notes',
+          label: '笔记',
+          perUser: true,
+          calls: 5,
+          tokens: { prompt: 20000, cached: 0, completion: 10000, total: 30000, calls: 5, missing: 0 },
+          cost: { yuan: 0.12, peakYuan: 0, offPeakYuan: 0.12, currency: 'CNY', unit: '元/百万 tokens' },
+        },
+      ],
       budget: { envKey: 'AI_DAILY_TOTAL_LIMIT', unlimited: false, limit: 200, used: 3, remaining: 197 },
     },
     pricing: {
@@ -858,7 +896,16 @@ const EXTRA = {
       },
       note: '按官方价目表算（DeepSeek-V4.1-Flash）：缓存未命中输入 2、缓存命中输入 0.04、输出 8 元/百万 tokens（高峰价，空闲时段减半）；此刻是空闲时段。',
     },
-    note: '次数是配额闸门的口径（UTC 自然日）；金额 = token × 单价，按北京时间自然日/周/月汇总，每次调用按当时的档位估算（单价抄自官方价目表）。',
+    note: '次数是配额闸门的口径（UTC 自然日，只数 AI 编辑台的操作）；金额 = token × 单价，按北京时间自然日/周/月汇总，覆盖 AI 编辑台、论坛 AI、笔记三路（来源与已知的不精确见 sources）；每次调用按当时的档位估算（单价抄自官方价目表）。',
+    // 三路来源的清单由**后端**给（文案跟着数据层的实现走）：面板照抄渲染，来源多一路/少一路、
+    // 或者哪一路不能按人归属，都靠这里驱动。`perUser: false` 那一路必须留着 ——
+    // 它触发「逐篇解读不进我的用量」那句说明，删了就没人盯着这条分支。
+    sources: [
+      { key: 'ai_edit', label: 'AI 编辑台', detail: '这一页的每次调用都逐条记账（有模型、档位）。', perUser: true, caveat: '' },
+      { key: 'forum_review', label: '论坛 AI · 逐篇解读', detail: '从每篇解读结果里读 token。', perUser: false, caveat: '同一篇重复解读只留最后一次的用量；也没记是谁触发的，只进全站合计。' },
+      { key: 'forum_corpus', label: '论坛 AI · 整理全站', detail: '从每次整理的报告里读 token。', perUser: true, caveat: '一次整理是多轮调用之和，只能按这次整理的时刻判一次高峰/空闲。' },
+      { key: 'notes', label: '笔记', detail: '从笔记的用量表里读。', perUser: true, caveat: '没有缓存命中数，输入整段按未命中价算（偏高）。' },
+    ],
   },
   // 团队（P4）的路由是 `#/teams`（列表）与 `#/team/<slug>`（主页）。
   // 采集器还没采这几条，先手工给真形状 —— 接口形状改了就跟着改这里。
@@ -1529,6 +1576,13 @@ for (const [label, file, fn, argv] of CASES) {
         ['本月合计那行', '本月合计'],
         ['全 0 的日子压暗（不省略）', 'ae-day-idle'],
         ['今天那行加粗', 'ae-day-today'],
+        // 三源合并（m08120）：面板的账不止 AI 编辑台一路，把来源摊开。
+        ['金额来源那一块', 'ae-usage-sources'],
+        ['某一路来源的名字', '论坛 AI'],
+        ['某一路本月自己的钱', 'ae-usage-source-money'],
+        ['「不能按人归属」的说明', '只进全站合计'],
+        // 每天表的表头整行钉死：加列/改列名都得动这里，免得列错位了还全绿。
+        ['每天表的五列表头', '<th>日期</th><th>配额次数</th><th>记账调用</th><th>tokens</th><th>花费（估算）</th>'],
       ];
       for (const [what, marker] of required) {
         if (!pageHtml.includes(marker)) {
@@ -1544,6 +1598,11 @@ for (const [label, file, fn, argv] of CASES) {
       // `ae-usage-row` 至少 5 行：我 3 行 + 全站 2 行汇总。少了就是某一块整段没画出来。
       const rowCount = (pageHtml.match(/ae-usage-row/g) ?? []).length;
       if (rowCount < 5) problems.push(`AI 编辑台：用量面板只有 ${rowCount} 行明细（我 3 行 + 全站 2 行汇总，至少 5 行）`);
+      // 来源是**逐条渲染**的（有 key 就画一行）：夹具给了 4 路，少画一路就是「钱少算一路」。
+      const sourceCount = (pageHtml.match(/class="ae-usage-source"/g) ?? []).length;
+      if (sourceCount < 4) {
+        problems.push(`AI 编辑台：金额来源只列出 ${sourceCount} 路（夹具给了 4 路：编辑台/逐篇解读/整理全站/笔记）—— 三源合并的意义就是一路都不落`);
+      }
     }
   } catch (error) {
     const top = (error.stack ?? '').split('\n').slice(0, 3).join(' | ');

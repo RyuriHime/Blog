@@ -55,6 +55,13 @@ import {
   priceFor,
   priceNote,
 } from './pricing.js';
+import {
+  AI_USAGE_SOURCES,
+  AI_USAGE_SOURCE_KEYS,
+  foreignUsageRows,
+  groupByPeakModel,
+  rowsBySource,
+} from './usage-sources.js';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -250,13 +257,13 @@ function moneyOf(sum) {
 }
 
 /**
- * 一段窗口里的 token 用量（`user_id` 不给就是全站）。
+ * 一段窗口里的 token 用量分组（`user_id` 不给就是全站），形状 = `GROUP BY peak, model`。
  *
- * 按 `(peak, model)` 分组取，汇总时每组按自己的档位与模型单价算钱 —— 分组而不是
- * 「拿总 token 乘一个价」：历史账单里可能混着好几个模型、也可能跨了高峰与空闲两档，
- * 混着乘出来的数看着精确，其实每一段都不对（理由详见 pricing.js）。
+ * 单独抽出来是因为**面板现在的钱有三本账**（见 usage-sources.js 文件头）：AI 编辑台这份
+ * 来自 `ai_token_usage`，论坛 AI 与笔记那两份来自各自的表。三份都要先变成同一种分组，
+ * 再拼起来喂 `summarizeCost`，不然「本月合计」和「本月每天」会各算各的。
  */
-function usageTotals(db, { from = null, userId = null } = {}) {
+function usageGroups(db, { from = null, userId = null } = {}) {
   const where = [];
   const args = [];
   if (from != null) {
@@ -267,7 +274,7 @@ function usageTotals(db, { from = null, userId = null } = {}) {
     where.push('user_id = ?');
     args.push(userId);
   }
-  const rows = db
+  return db
     .prepare(
       `SELECT peak, model,
               SUM(prompt_tokens) AS promptTokens,
@@ -279,11 +286,41 @@ function usageTotals(db, { from = null, userId = null } = {}) {
         ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
         GROUP BY peak, model`,
     )
-    .all(...args);
+    .all(...args)
+    .map((row) => ({ ...row, peak: Number(row.peak) === 1 }));
+}
+
+/**
+ * 一段窗口里的 token 用量（`user_id` 不给就是全站）—— **只有 AI 编辑台这一本账**。
+ *
+ * 面板要用的合计数走 `mergedUsage`（三本账拼起来），这个函数留着是因为它有两个
+ * 精确用途：单本账的金额（`site.bySource` 里的 AI 编辑台那一行），以及测试里
+ * 对「这一路自己记了多少」的断言。
+ */
+function usageTotals(db, { from = null, userId = null } = {}) {
+  return summarizeCost(usageGroups(db, { from, userId }), { env: process.env });
+}
+
+/** 三本账拼起来的一段窗口：AI 编辑台 + 外来用量行（forum-ai / 笔记）。 */
+function mergedUsage(db, { from = null, userId = null, foreign = [] } = {}) {
+  const rows = from == null ? foreign : foreign.filter((row) => row.at >= from);
   return summarizeCost(
-    rows.map((row) => ({ ...row, peak: Number(row.peak) === 1 })),
+    [...usageGroups(db, { from, userId }), ...groupByPeakModel(rows)],
     { env: process.env },
   );
+}
+
+/** 外来用量行按**北京日**分组：`Map<日序号, 该日的 (peak, model) 分组>`。 */
+function foreignByBeijingDay(foreign, { from } = {}) {
+  const buckets = new Map();
+  for (const row of foreign) {
+    if (from != null && row.at < from) continue;
+    const index = beijingDayIndex(row.at);
+    const list = buckets.get(index);
+    if (list) list.push(row);
+    else buckets.set(index, [row]);
+  }
+  return new Map([...buckets].map(([index, list]) => [index, groupByPeakModel(list)]));
 }
 
 /** 按**北京日**分组的 token 用量行：`Map<日序号, 该日的 (peak, model) 分组>`。 */
@@ -1886,8 +1923,13 @@ export function registerAiRoutes(ctx) {
     // 与用户额度、全站预算逐字同口径 —— 跟 `site.today.billed` 用同一个窗口。要是这里跟着
     // 钱用北京日，早上 8 点前后就会出现「面板说今天用了 3 次、闸门说用了 5 次」这种对不上
     // 的账（北京日比 UTC 日晚 8 小时开始）。周/月不在闸门口径里，跟着钱的窗口走。
+    //
+    // 钱这边**只收能归属到本人的行**：编辑台按 `user_id`、整理全站按 `created_by`、笔记按
+    // `user_id`。逐篇解读没有「谁触发的」这一列（见 usage-sources.js），它只进全站合计 ——
+    // 面板上得把这条说出来，不然普通用户会以为自己的账少了。
+    const myForeign = foreignUsageRows(db, { userId: user.id });
     const myBucket = (from, countFrom = from) => {
-      const usage = usageTotals(db, { from, userId: user.id });
+      const usage = mergedUsage(db, { from, userId: user.id, foreign: myForeign });
       return {
         billed: billedIn(db, { from: countFrom, userId: user.id }),
         tokens: tokenCounts(usage),
@@ -1933,7 +1975,14 @@ export function registerAiRoutes(ctx) {
         envKeys: AI_PRICE_ENV_KEYS,
         note: priceNote(price, { peak: peakNow }),
       },
-      note: '次数是配额闸门的口径（UTC 自然日）；金额 = token × 单价，按北京时间自然日/周/月汇总，每次调用按当时的档位估算（单价抄自官方价目表）。',
+      // 面板上「这笔钱是哪几路花的」：标签、口径、已知的不精确都由后端给（前端只管显示）。
+      // 前端不自己编这段文案 —— 三个来源的坑（upsert 覆盖、多调用求和、没有缓存命中数）
+      // 是数据层的事实，抄到前端就会跟实现对不上。
+      sources: AI_USAGE_SOURCES,
+      note:
+        '次数是配额闸门的口径（UTC 自然日，只数 AI 编辑台的操作）；金额 = token × 单价，' +
+        '按北京时间自然日/周/月汇总，覆盖 AI 编辑台、论坛 AI、笔记三路（来源与已知的不精确见 sources）；' +
+        '每次调用按当时的档位估算（单价抄自官方价目表）。',
     };
     // 不是管理团队就到此为止：全站那一块**根本不进响应**。
     if (!staff) return ctx.http.ok(reqCtx.res, payload);
@@ -1976,17 +2025,47 @@ export function registerAiRoutes(ctx) {
     // 每天的窗口由 `beijingMonthDayIndexes` 给出（1 号 → 今天），**没调用的日子也留在
     // 列表里**（全 0 一行）：管理员要的是「这个月每天花了多少」，不是「哪几天花过」——
     // 缺行会让人以为自己看漏了一天。前端把全 0 的行压暗。
-    const monthUsage = usageTotals(db, { from: monthStart });
-    const weekUsage = usageTotals(db, { from: weekStart });
-    const todayUsage = usageTotals(db, { from: dayStart });
-    const allTimeUsage = usageTotals(db, {});
+    //
+    // 全站口径把**三本账都算进来**（AI 编辑台 + 论坛 AI + 笔记）：管理员问的是「这个站
+    // 在 AI 上花了多少」，只报编辑台那一路会低一大截（论坛 AI 的逐篇解读与整理全站
+    // 从来不写 `ai_token_usage`）。每一路自己的金额在 `site.bySource` 里单列。
+    const foreign = foreignUsageRows(db, {});
+    const monthUsage = mergedUsage(db, { from: monthStart, foreign });
+    const weekUsage = mergedUsage(db, { from: weekStart, foreign });
+    const todayUsage = mergedUsage(db, { from: dayStart, foreign });
+    const allTimeUsage = mergedUsage(db, { foreign });
     const dayGroups = usageByBeijingDay(db, { from: monthStart });
+    const foreignDayGroups = foreignByBeijingDay(foreign, { from: monthStart });
     const billedByDay = billedByBeijingDay(db, { from: monthStart });
     const days = beijingMonthDayIndexes(at).map((index) => {
-      const sum = summarizeCost(dayGroups.get(index) ?? [], { env: process.env });
+      const sum = summarizeCost(
+        [...(dayGroups.get(index) ?? []), ...(foreignDayGroups.get(index) ?? [])],
+        { env: process.env },
+      );
       return {
         date: beijingDayKey(index),
+        // 配额口径（只数 AI 编辑台的操作）：它要和闸门看到的数字一模一样。
         billed: billedByDay.get(index) ?? 0,
+        // 记账口径（三本账加起来有 token 记录的调用数）—— 与同一行的 token / 金额同源。
+        calls: Number(sum.calls) || 0,
+        tokens: tokenCounts(sum),
+        cost: moneyOf(sum),
+      };
+    });
+    // 本月这四路各自花了多少（`ai_edit` 是 `ai_token_usage`，另外三路是外来账）。
+    const monthForeign = foreign.filter((row) => row.at >= monthStart);
+    const monthForeignBySource = rowsBySource(monthForeign);
+    const bySource = AI_USAGE_SOURCE_KEYS.map((key) => {
+      const desc = AI_USAGE_SOURCES.find((item) => item.key === key);
+      const sum =
+        key === 'ai_edit'
+          ? usageTotals(db, { from: monthStart })
+          : summarizeCost(groupByPeakModel(monthForeignBySource.get(key) ?? []), { env: process.env });
+      return {
+        key,
+        label: desc?.label ?? key,
+        perUser: desc?.perUser !== false,
+        calls: Number(sum.calls) || 0,
         tokens: tokenCounts(sum),
         cost: moneyOf(sum),
       };
@@ -2010,6 +2089,9 @@ export function registerAiRoutes(ctx) {
       month: { from: monthStart, billed: billedIn(db, { from: monthStart }), tokens: tokenCounts(monthUsage), cost: moneyOf(monthUsage) },
       allTime: { total: allTime, tokens: tokenCounts(allTimeUsage), cost: moneyOf(allTimeUsage) },
       days,
+      // 本月这四路各自的账（顺序同 sources）。管理员要能看出「钱花在哪一路」，
+      // 也是这份面板对自己口径的交代：合计 = 这四行相加。
+      bySource,
       budget: {
         envKey: AI_BUDGET_ENV,
         unlimited: limit <= 0,

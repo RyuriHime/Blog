@@ -466,6 +466,7 @@ function aeSiteDaysHtml(site) {
       return `<tr${classes.length ? ` class="${classes.join(' ')}"` : ''}>
         <td>${esc(day.date)}</td>
         <td>${esc(aeTokens(day.billed ?? 0))}</td>
+        <td>${esc(aeTokens(day.tokens?.calls ?? 0))}</td>
         <td>${esc(aeTokens(day.tokens?.total ?? 0))}</td>
         <td>${esc(aeYuan(day.cost?.yuan ?? 0))}</td>
       </tr>`;
@@ -476,18 +477,52 @@ function aeSiteDaysHtml(site) {
     <div class="ae-usage-line">本月每天（北京时间，${esc(days[days.length - 1]?.date ?? '')} 起）</div>
     <div class="table-wrap">
       <table class="data ae-days-table">
-        <thead><tr><th>日期</th><th>计费次数</th><th>tokens</th><th>花费（估算）</th></tr></thead>
+        <thead><tr><th>日期</th><th>配额次数</th><th>记账调用</th><th>tokens</th><th>花费（估算）</th></tr></thead>
         <tbody>
           ${rows}
           <tr class="ae-day-sum">
             <td>本月合计</td>
             <td>${esc(aeTokens(month.billed ?? 0))}</td>
+            <td>${esc(aeTokens(month.tokens?.calls ?? 0))}</td>
             <td>${esc(aeTokens(month.tokens?.total ?? 0))}</td>
             <td>${esc(aeYuan(month.cost?.yuan ?? 0))}</td>
           </tr>
         </tbody>
       </table>
     </div>
+    <div class="ae-usage-line">「配额次数」是配额闸门的口径（UTC 自然日，只数 AI 编辑台的操作）；「记账调用」「tokens」「花费」按北京时间，含下面列出的三路来源。</div>
+  </div>`;
+}
+
+/**
+ * 这份账是**哪几路拼起来的**：来源清单（含各自已知的不精确）。
+ *
+ * 文案由后端给（`usage.sources`）：三个来源的坑是数据层的事实，抄到前端就会跟实现对不上。
+ * 管理员那边还会带上每一路**本月**自己的钱（`site.bySource`）—— 合计涨上去之后，
+ * 管理员要能看出是哪一路花的。
+ */
+function aeSourcesHtml(usage) {
+  const sources = Array.isArray(usage.sources) ? usage.sources : [];
+  if (!sources.length) return '';
+  const bySource = Array.isArray(usage.site?.bySource) ? usage.site.bySource : [];
+  const money = new Map(bySource.map((row) => [row.key, row]));
+  const rows = sources
+    .map((source) => {
+      const sum = money.get(source.key);
+      const amount = sum
+        ? `${aeYuan(sum.cost?.yuan ?? 0)} · ${aeTokens(sum.tokens?.total ?? 0)} tokens · 记账 ${aeTokens(sum.tokens?.calls ?? 0)} 次`
+        : '';
+      return `<div class="ae-usage-source">
+        <span class="ae-usage-source-name">${esc(source.label ?? source.key)}</span>
+        ${amount ? `<span class="ae-usage-source-money">${esc(amount)}</span>` : ''}
+        <span class="ae-usage-source-detail">${esc(source.detail ?? '')}${source.caveat ? ` ${esc(source.caveat)}` : ''}</span>
+      </div>`;
+    })
+    .join('');
+  const unattributed = sources.some((source) => source.perUser === false);
+  return `<div class="ae-usage-sources">
+    <div class="ae-usage-line">金额来源${bySource.length ? '（各路自己的本月账）' : ''}${unattributed ? '：逐篇解读没记「谁触发的」，那份钱只进全站合计、不进「我自己的用量」' : ''}</div>
+    ${rows}
   </div>`;
 }
 
@@ -580,10 +615,11 @@ function aeUsageHtml() {
         <h2>AI 用量</h2>
         <span class="ae-target-state">金额为估算</span>
       </div>
-      <div class="page-sub">金额 = token × 单价，按每次调用当时的档位估算，按北京时间自然日/周/月汇总；次数是配额闸门的口径（UTC 自然日）。</div>
+      <div class="page-sub">金额 = token × 单价，按每次调用当时的档位估算，按北京时间自然日/周/月汇总，<strong>覆盖 AI 编辑台 / 论坛 AI / 笔记三路</strong>；「配额次数」是配额闸门的口径（UTC 自然日，只数 AI 编辑台的操作）。</div>
       <div class="ae-usage">
         ${aeMyUsageHtml(usage)}
         ${aeSiteUsageHtml(usage)}
+        ${aeSourcesHtml(usage)}
         ${
           priceNote
             ? `<div class="ae-usage-line">${esc(priceNote)}${priceSource ? ` <a href="${esc(priceSource)}" target="_blank" rel="noopener">单价出处</a>` : ''}</div>`
