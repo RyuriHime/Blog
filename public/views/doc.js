@@ -51,6 +51,9 @@ const docState = {
   maxTagLength: 24,
   editor: null,
   viewing: null,
+  /* 当前渲染的这一页自己说了算（`renderDoc` 从载荷的 `abilities` 里抄）——
+     修订记录要用它决定画不画「回滚到这一版」，读者点了只会 403。 */
+  canEdit: false,
   stationId: 0,
   listQuery: null,
 };
@@ -468,6 +471,7 @@ function leaveDocPage() {
   }
   mdAiPanel = null;
   unmountSandboxes();
+  docState.canEdit = false;
   // wiki 站是三栏（左树 / 中正文 / 右目录），再叠上论坛自己的 306px 侧栏
   //（我的账户、热榜）正文就只剩三百来像素 —— 所以站页面挂 `body.doc-wide`
   // 把侧栏让开（规则见 41-doc.css；换页时由 router 统一摘掉）。
@@ -1114,6 +1118,9 @@ function renderDoc(data) {
   const doc = data.doc ?? {};
   const author = doc.author ?? {};
   const abilities = data.abilities ?? {};
+  // 这一页能不能编辑，攒给 `showRevisions()` 用（它只拿得到 `docState`）：
+  // 没权限的人不该看见「回滚到这一版」——服务端 `mustEditBody` 一样会挡，403 提示没有意义。
+  docState.canEdit = Boolean(abilities.canEdit);
   const warnings = data.warnings ?? [];
   // 脚本写完派生块之后要重画正文，靠这个指纹判断「真的改出东西了没有」——
   // 没变就不重画，免得 iframe 里的脚本被反复重建（脚本重跑又会写一次）。
@@ -2324,6 +2331,9 @@ async function showRevisions() {
   const revisions = data.revisions ?? [];
   const panel = $('[data-doc-revisions]');
   if (!panel) return;
+  // 有编辑器（作者在编辑页）→ 一定能改；阅读页则看这一页的权限。
+  // 读者只读历史：画一排按下去必然 403 的按钮，比不画更糟。
+  const canRollback = Boolean(docState.editor) || docState.canEdit === true;
   panel.hidden = false;
   panel.innerHTML = `
     <div class="card-head"><span class="card-title">🕓 修订记录</span><span class="hint">最近 ${revisions.length} 条</span></div>
@@ -2333,20 +2343,41 @@ async function showRevisions() {
           <span class="doc-revision-head">r${esc(item.revision)} · ${esc(item.reasonLabel)} · ${esc(Fmt.timeAgo(item.createdAt))}${
             item.author ? ` · ${esc(item.author.displayName)}` : ''
           }</span>
-          <button class="btn btn-sm btn-ghost" type="button" data-doc-action="rollback" data-revision="${esc(item.revision)}">回滚到这一版</button>
+          ${
+            canRollback
+              ? `<button class="btn btn-sm btn-ghost" type="button" data-doc-action="rollback" data-revision="${esc(item.revision)}">回滚到这一版</button>`
+              : ''
+          }
         </li>`,
       )
       .join('')}</ul>
-    <div class="doc-hint">回滚本身也会记一条修订，所以滚错了还能再滚回来。</div>`;
+    ${canRollback ? '<div class="doc-hint">回滚本身也会记一条修订，所以滚错了还能再滚回来。</div>' : ''}`;
   ensureDelegate();
 }
 
+/**
+ * 回滚到某一条修订。
+ *
+ * 以前这里开头是 `if (!docState.editor) return;`，而阅读页（`viewDoc`）明确把
+ * `docState.editor` 置空 —— 于是阅读页那排「回滚到这一版」点了**一个请求都不发**，
+ * 静默无反应。编辑器里也有「修订记录」时没人发现；编辑页的「工具箱」删掉之后
+ * （m11668）阅读页成了唯一入口，这条死键才露出来（m11909）。
+ */
 async function rollback(revision) {
   const editor = docState.editor;
-  if (!editor) return;
-  const data = await api(`/api/docs/${editor.id}/rollback`, { method: 'POST', body: { revision } });
-  absorb(data);
+  const id = editor ? editor.id : docState.viewing;
+  if (!id) return;
+  const data = await api(`/api/docs/${id}/rollback`, { method: 'POST', body: { revision } });
+  if (editor) {
+    absorb(data);
+    toast(`回到 r${revision} 了`);
+    return;
+  }
+  // 阅读页：`store.rollback` 返回的就是 `present()` 的那份载荷（和 `GET /api/docs/:id` 同形），
+  // 直接原地重画整页；再拉一次修订列表 —— 这次回滚自己也记了一条，列表要跟着长一条。
+  renderDoc(data);
   toast(`回到 r${revision} 了`);
+  await showRevisions();
 }
 
 async function exportDoc(id) {
