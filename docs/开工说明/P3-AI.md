@@ -177,7 +177,7 @@ node scripts/smoke.mjs
 ## 七、验收标准（做到这些才算完成）
 
 - [ ] `ai_capability_grants` / `ai_op_logs` 两张表建起来并登记
-- [ ] **六项能力默认全部关闭**，用户不授权就不能用；授权要能被撤销
+- [ ] **能力默认全部关闭**，用户不授权就不能用；授权要能被撤销（当前目录只有「修改内容」`edit_content` 一项：2026-10 收尾时把五项从来没接线的空开关删了，见 `src/modules/ai/schema.js`）
 - [ ] 每次 AI 操作都落一条 `ai_op_logs`，**能回滚**（改之前存一份旧值）
 - [ ] AI 能按积木块改稿：说「帮我把这块改成投票」，它改的是**块**，不是整篇重写
 - [ ] 支持实时预览（改一步看一步）
@@ -195,7 +195,7 @@ node scripts/smoke.mjs
 
 **坑 2：`ai_post_reviews` / `ai_site_reports` 不是你的表。** 它们是 forum-ai 在运行时自己建的，不在核心建表清单里。你要是把它们写进 `owns`，`check-skeleton.mjs` 会报「重复归属」。
 
-**坑 3：权限不能只靠前端隐藏按钮。** 六项能力默认全关，**服务端**每次调用前都要查授权，而且每次调用落日志。这是需求里的硬要求。
+**坑 3：权限不能只靠前端隐藏按钮。** 能力默认全关，**服务端**每次调用前都要查授权，而且每次调用落日志。这是需求里的硬要求。另外：`src/modules/ai/schema.js` 的能力目录里**只许列真的接上了线的能力** —— 每列一项，就必须在 `src/modules/ai/routes.js` 里有对应的 `requireCapability` / `guardCapability` 调用点，否则它只是个「点得动、拦不住东西」的空开关（面板上白多一行，用户还以为自己开了一项权限）。2026-10 就删掉了五项这样的：`read_post` / `read_site` / `network` / `site_tools` / `publish`，它们当初是照 `docs/01-需求规格说明书.md` 的 FR-CAP-02 抄的，而那份规格书并不在这个仓库里。
 
 **坑 4：AI 改东西必须先存旧值。** 需求写的是「每步可回滚」。最省事的做法是 `ai_op_logs` 里存 `before_json` / `after_json`，回滚就是写回 before。
 

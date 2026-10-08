@@ -364,13 +364,13 @@ function aeHeadHtml() {
         <button class="btn btn-sm" type="button" data-ae-act="refresh">↻ 刷新</button>
       </div>
       <div class="page-sub">
-        六项能力<strong>默认全部关闭</strong>，不开就不许用，随时可以收回。草拟要的是
-        <code>edit_content</code>。
-        每次使用都会留一条审计日志，改过的东西都能回滚。开关在服务端生效，不只是这一页藏个按钮。
+        AI 现在只接了一路能力：<strong>修改内容</strong>（<code>edit_content</code>）。
+        它<strong>默认关闭</strong>，不开就不许用，随时可以收回；开关在服务端生效，不只是这一页藏个按钮。
+        每次使用都会留一条审计日志，改过的东西都能回滚。
       </div>
       <div class="ae-stats">
         <div class="ae-stat">
-          <div class="ae-stat-num">${granted}/6</div>
+          <div class="ae-stat-num">${granted}/${aeState.capabilities.length}</div>
           <div class="ae-stat-label">已授权能力</div>
         </div>
         <div class="ae-stat">

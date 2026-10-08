@@ -930,8 +930,8 @@ export function registerAiRoutes(ctx) {
   // 我这张表负责的是**授权、审计与回滚所需的旧值**。
   //
   // 能力恒为 `edit_content`、动作由 `confirm` 推导 —— **不看 body.capability / body.action**。
-  // 这两个字段以前是客户端说了算：只授权了低风险 `read_post` 的人，把 capability 填成
-  // `read_post` 就能让这条接口落盘一次内容改写；带上 `action: 'grant'` 还能把日志
+  // 这两个字段以前是客户端说了算：随便一个授权（当时目录里还有低风险的能力）的人，把 capability
+  // 填成那项低风险能力就能让这条接口落盘一次内容改写；带上 `action: 'grant'` 还能把日志
   // 伪造成一条授权记录。
   routes.add('POST', '/api/ai-edit/ops', (reqCtx) => {
     const user = viewer(reqCtx);
