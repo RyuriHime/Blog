@@ -205,6 +205,37 @@
   color: var(--muted);
   font-size: 12px;
 }
+/* 金额来源：哪几路拼起来的 + 各路本月自己的账（附各自已知的不精确）。
+   类名带 `-usage-` 前缀是因为这块面板里已经有一个 `.ae-source`（草稿差异的来源折叠块）。 */
+.ae-usage-sources {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.ae-usage-source {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 10px;
+  padding: 6px 10px;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-sm);
+  background: var(--bg-soft);
+  font-size: 12px;
+}
+.ae-usage-source-name {
+  color: var(--text);
+  font-weight: 600;
+}
+.ae-usage-source-money {
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+.ae-usage-source-detail {
+  flex: 1 1 100%;
+  color: var(--muted);
+  line-height: 1.5;
+}
 
 /* 能力授权 -------------------------------------------------------------- */
 /* 目录里现在只有一项能力，所以列宽设上限（不设的话这一张卡会横着拉满整行，
