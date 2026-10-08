@@ -132,9 +132,12 @@
 }
 
 /* 能力授权 -------------------------------------------------------------- */
+/* 目录里现在只有一项能力，所以列宽设上限（不设的话这一张卡会横着拉满整行，
+   几千像素宽的一个小方框里躺着三个字，很难看）。多几项时照样按 260~340px 平铺。 */
 .ae-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(260px, 340px));
+  justify-content: start;
   gap: 12px;
 }
 .ae-cap {

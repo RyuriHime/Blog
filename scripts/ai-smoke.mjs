@@ -88,7 +88,16 @@ const BUDGET_DB_FILE = join(ROOT, 'data', 'ai-smoke-budget.db');
 const BUDGET_LOG_FILE = join(ROOT, 'data', 'ai-smoke-budget-server.log');
 const BUDGET_LIMIT = 2;
 
-const ALL_CAPABILITIES = ['read_post', 'read_site', 'network', 'edit_content', 'site_tools', 'publish'];
+/**
+ * **真的接上了线的**能力清单（`src/modules/ai/schema.js` 的目录必须与它一一对应）。
+ *
+ * 为什么单独抄一份：目录里每多列一项，就必须在 `src/modules/ai/routes.js` 里有对应的
+ * `requireCapability` / `guardCapability` 调用点。2026-10 收尾时发现目录里原来那六项里
+ * 有五项（read_post / read_site / network / site_tools / publish）**从来没有调用点** ——
+ * 授权、配额、收回全都点得动，却什么也拦不住。所以这里当哨兵：谁要是手滑往目录里加一项
+ * 而又没接线，第 3 节就红。
+ */
+const WIRED_CAPABILITIES = ['edit_content'];
 
 /** 整个测试反复用的两块：P2 的块形状就是 `{ type, props }`。 */
 const BLOCK_BEFORE = { type: 'paragraph', props: { text: '旧文案' } };
@@ -290,17 +299,17 @@ try {
   });
   check('普通用户 alice 登录成功', aliceLogin.status === 200, JSON.stringify(aliceLogin.error ?? null));
 
-  /* ---------- 3. 六项能力默认全部关闭 ---------- */
+  /* ---------- 3. 目录只列接上了线的能力，且默认全部关闭 ---------- */
   const caps = await admin.call('/api/ai-edit/capabilities');
   check('能力目录返回 200', caps.status === 200, `实际 ${caps.status}`);
-  check('能力目录里正好是六项', caps.data?.capabilities?.length === 6, String(caps.data?.capabilities?.length));
   check(
-    '六项能力与规格书一致',
-    ALL_CAPABILITIES.every((key) => caps.data.capabilities.some((item) => item.key === key)),
+    '目录里只有接上了线的能力，一项不多一项不少',
+    caps.data?.capabilities?.length === WIRED_CAPABILITIES.length &&
+      WIRED_CAPABILITIES.every((key) => caps.data.capabilities.some((item) => item.key === key)),
     JSON.stringify(caps.data?.capabilities?.map((item) => item.key)),
   );
   check(
-    '六项能力默认全部关闭',
+    '能力默认全部关闭',
     caps.data.capabilities.every((item) => item.granted === false),
     JSON.stringify(caps.data.capabilities.filter((item) => item.granted).map((item) => item.key)),
   );
@@ -328,6 +337,15 @@ try {
   });
   check('授权未知能力返回 400', badCap.status === 400, `实际 ${badCap.status}`);
 
+  // 2026-10 收尾删掉的那五项空开关，现在连授权都授权不了（它们已经不在目录里）。
+  const removedCap = await admin.call('/api/ai-edit/grants', {
+    method: 'POST',
+    body: { capability: 'read_site', confirm: true },
+  });
+  check('已删除的空开关 read_site 授权不了（400）', removedCap.status === 400, `实际 ${removedCap.status}`);
+  const removedRevoke = await admin.call('/api/ai-edit/grants/read_site', { method: 'DELETE' });
+  check('已删除的空开关 read_site 也收不回（400）', removedRevoke.status === 400, `实际 ${removedRevoke.status}`);
+
   const highRiskNoConfirm = await admin.call('/api/ai-edit/grants', {
     method: 'POST',
     body: { capability: 'edit_content' },
@@ -336,7 +354,7 @@ try {
 
   const badQuota = await admin.call('/api/ai-edit/grants', {
     method: 'POST',
-    body: { capability: 'read_post', dailyQuota: 1.5 },
+    body: { capability: 'edit_content', confirm: true, dailyQuota: 1.5 },
   });
   check('非整数 dailyQuota 返回 400', badQuota.status === 400, `实际 ${badQuota.status}`);
 
@@ -350,7 +368,7 @@ try {
   const capsAfter = await admin.call('/api/ai-edit/capabilities');
   const editCap = capsAfter.data.capabilities.find((item) => item.key === 'edit_content');
   check('授权状态在能力目录里可见（FR-CAP-09）', editCap?.granted === true, JSON.stringify(editCap));
-  check('其余五项仍然关闭', capsAfter.data.capabilities.filter((item) => item.granted).length === 1);
+  check('目录里只有这一项能力，没有别的开关可授权', capsAfter.data.capabilities.length === 1);
 
   /* ---------- 7. 预览与落盘（FR-CAP-06：没确认不落盘） ---------- */
   const previewBody = {
@@ -580,14 +598,15 @@ try {
   // 的具体行为，改回去就会红。改动本身都记在 src/modules/ai/routes.js 的注释里。
 
   // —— 用哪项能力由服务端决定，不接受客户端传值
-  //    （原来是客户端说自己是啥就是啥：只授权了 read_post 这种低风险·读能力的人，
-  //     把 capability 填成 read_post 就能落盘一次内容改写。所以这里必须用一个
-  //     「有 read_post、没有 edit_content」的用户来打，否则旧代码也能过、钉不住。）
-  await alice.call('/api/ai-edit/grants', { method: 'POST', body: { capability: 'read_post' } });
-  const forgedCap = await alice.call('/api/ai-edit/ops', {
+  //    （原来是客户端说自己是啥就是啥：没有 edit_content 的人，把 capability 填成
+  //     edit_content 就能落盘一次内容改写。现在目录里只剩这一项，所以拆成两枪打：
+  //     ① 没授权的人自己填 edit_content —— 必须还是 403（自报家门不算授权）；
+  //     ② alice 拿到 edit_content 之后，请求里故意填一个早在目录里删掉的 key ——
+  //        服务端照样按 edit_content 记日志、照样成功（证明它根本不看请求体里的 capability）。）
+  const selfNamed = await alice.call('/api/ai-edit/ops', {
     method: 'POST',
     body: {
-      capability: 'read_post',
+      capability: 'edit_content',
       documentId: 'doc-r1',
       blockId: 'regress-1',
       before: BLOCK_BEFORE,
@@ -595,10 +614,31 @@ try {
       confirm: true,
     },
   });
+  check('没授权的人自己填 capability=edit_content 也改不动（403）', selfNamed.status === 403, `实际 ${selfNamed.status}`);
+
+  await alice.call('/api/ai-edit/grants', {
+    method: 'POST',
+    body: { capability: 'edit_content', confirm: true },
+  });
+  const forgedCap = await alice.call('/api/ai-edit/ops', {
+    method: 'POST',
+    body: {
+      capability: 'read_post',
+      documentId: 'doc-r2',
+      blockId: 'regress-2',
+      before: BLOCK_BEFORE,
+      after: BLOCK_AFTER,
+      confirm: true,
+    },
+  });
+  check('请求里伪造已经删掉的 capability=read_post 也不影响成功', forgedCap.status === 200, `实际 ${forgedCap.status}`);
+  const forgedCapRow = (await alice.call('/api/ai-edit/ops?limit=100')).data?.ops?.find(
+    (row) => row.id === forgedCap.data?.opId,
+  );
   check(
-    '只授权了 read_post 的用户，伪造 capability=read_post 也改不动（403）',
-    forgedCap.status === 403,
-    `实际 ${forgedCap.status}`,
+    '审计里记的是 edit_content（服务端说了算，不看请求体）',
+    forgedCapRow?.capability === 'edit_content',
+    String(forgedCapRow?.capability),
   );
 
   await admin.call('/api/ai-edit/grants', {

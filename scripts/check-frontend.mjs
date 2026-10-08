@@ -699,9 +699,12 @@ const EXTRA = {
   // `TypeError: Fmt.time is not a function`。空夹具下这两行根本渲染不到，渲染测试照样全绿，
   // 所以夹具里必须有「已授权的临时授权」和「已落盘 + 已回滚过」的记录把这两行真的跑一遍。
   '/api/ai-edit/capabilities': {
+    // 真实目录里**只有 `edit_content` 一项**（2026-10 把五项从来没接线的空开关删了，
+    // 加回来必须连服务端调用点一起加）。所以这里用同一个 key 的**两种状态**各渲染一遍：
+    // 已授权（带 expiresAt，跑到「到期时间」那一行）/ 未授权（跑到「授权」按钮与 confirm 勾选框）。
     capabilities: [
-      { key: 'read_post', label: '读帖子', risk: 'low', highRisk: false, granted: true, dailyQuota: 50, usedToday: 3, expiresAt: Date.now() + 86400000 },
-      { key: 'edit_content', label: '改内容', risk: 'high', highRisk: true, granted: false, dailyQuota: 0, usedToday: 0, expiresAt: null },
+      { key: 'edit_content', label: '修改内容', risk: 'high', highRisk: true, granted: true, dailyQuota: 50, usedToday: 3, expiresAt: Date.now() + 86400000 },
+      { key: 'edit_content', label: '修改内容', risk: 'high', highRisk: true, granted: false, dailyQuota: 0, usedToday: 0, expiresAt: null },
     ],
   },
   '/api/ai-edit/ops': {

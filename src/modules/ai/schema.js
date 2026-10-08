@@ -1,4 +1,4 @@
-// AI 能力层（P3）自己**拥有**的两张表，以及六项能力的目录。
+// AI 能力层（P3）自己**拥有**的两张表，以及能力目录。
 //
 // 归属：
 //   ai_capability_grants —— 能力授权（谁、授予哪项能力、何时、有效期、每日配额、是否已收回）
@@ -11,24 +11,29 @@
 // 只读、绝不写：documents / document_blocks（归 P2）、users / posts（归 core）。
 
 /**
- * 六项能力（出处 docs/01-需求规格说明书.md FR-CAP-02）。
+ * 能力目录 —— 服务端唯一的授权白名单。
+ *
+ * **这里只列真的接上了线的能力。** 目录里的每一项都必须有服务端调用点去
+ * `requireCapability` / `guardCapability`（见 routes.js），否则它就是个空开关：
+ * 授权、配额、「收回」全都点得动，却什么也拦不住 —— 面板上多一行，用户就多一份误解。
+ *
+ * 2026-10 收尾时删掉了五项从未接线的能力：`read_post` 读指定帖子 / `read_site` 读全站 /
+ * `network` 联网 / `site_tools` 调用站内工具 / `publish` 代表用户发布。它们当初是按
+ * `docs/01-需求规格说明书.md` 的 FR-CAP-02 抄进来的，但那份规格书**不在这个仓库里**，
+ * P3 真正交付的功能面是 AI 编辑台，只有「修改内容」一路。要加回任何一项，请连同它的
+ * 服务端调用点一起加；加不了调用点就别加进这份目录。
  *
  * **默认全部关闭**：`ai_capability_grants` 里没有对应的有效行 = 没有这项能力。
  * 授权不是前端隐藏按钮，服务端每次调用前都要查这张表（FR-CAP-01 / FR-CAP-03）。
  */
 export const AI_CAPABILITIES = Object.freeze([
-  { key: 'read_post', label: '读指定帖子', risk: 'low' },
-  { key: 'read_site', label: '读全站', risk: 'medium' },
-  { key: 'network', label: '联网', risk: 'medium' },
   { key: 'edit_content', label: '修改内容', risk: 'high' },
-  { key: 'site_tools', label: '调用站内工具', risk: 'medium' },
-  { key: 'publish', label: '代表用户发布', risk: 'high' },
 ]);
 
 export const AI_CAPABILITY_KEYS = Object.freeze(AI_CAPABILITIES.map((item) => item.key));
 
 /** 高风险能力：除了默认关闭，开启时还必须显式 `confirm: true`（FR-CAP-08）。 */
-export const AI_HIGH_RISK = Object.freeze(['edit_content', 'publish']);
+export const AI_HIGH_RISK = Object.freeze(['edit_content']);
 
 /** 审计日志里的动作名。授权/收回也算状态变更，一并留痕。 */
 export const AI_ACTIONS = Object.freeze(['read', 'draft', 'preview', 'apply', 'publish', 'tool', 'grant', 'revoke']);
@@ -51,7 +56,8 @@ export const AI_BLOCKED_STATUS = 'blocked';
 /**
  * `/api/ai-edit/ops` 只处理**块级内容改动**，所以能力恒为 `edit_content`、
  * 动作由 `confirm` 推导，客户端传什么都不改这两项 ——
- * 否则只授权了低风险 `read_post` 的人就能拿它落盘一次内容改写。
+ * 否则只要手里有**任何**一项已授权的能力（当时目录里有五项低/中风险能力可授），
+ * 把请求体里的 `capability` 填成那一项就能拿它落盘一次内容改写。
  */
 export const AI_CONTENT_CAPABILITY = 'edit_content';
 
