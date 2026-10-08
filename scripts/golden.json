@@ -26,11 +26,11 @@
 022 POST   me-avatar-set                              400 {error:{code:string,message:string},ok:boolean}
 023 POST   me-avatar-bad                              400 {error:{code:string,message:string},ok:boolean}
 024 POST   auth-password-wrong                        400 {error:{code:string,message:string},ok:boolean}
-025 POST   post-create                                200 {data:{id:number},ok:boolean}
-026 POST   post-create-validation                     400 {error:{code:string,message:string},ok:boolean}
-027 POST   post-create-anon                           401 {error:{code:string,message:string},ok:boolean}
-028 PUT    post-update                                404 {error:{code:string,message:string},ok:boolean}
-029 PUT    post-update-forbidden                      404 {error:{code:string,message:string},ok:boolean}
+025 POST   post-create                                410 {error:{code:string,message:string},ok:boolean}
+026 POST   post-create-validation                     410 {error:{code:string,message:string},ok:boolean}
+027 POST   post-create-anon                           410 {error:{code:string,message:string},ok:boolean}
+028 PUT    post-update                                410 {error:{code:string,message:string},ok:boolean}
+029 PUT    post-update-forbidden                      410 {error:{code:string,message:string},ok:boolean}
 030 POST   markdown-preview                           200 {data:{html:string},ok:boolean}
 031 POST   post-reaction-like                         404 {error:{code:string,message:string},ok:boolean}
 032 POST   post-reaction-flip                         404 {error:{code:string,message:string},ok:boolean}
@@ -80,8 +80,8 @@
 076 POST   admin-role-change-unauthorized             403 {error:{code:string,message:string},ok:boolean}
 077 POST   admin-ban                                  404 {error:{code:string,message:string},ok:boolean}
 078 POST   admin-unban                                404 {error:{code:string,message:string},ok:boolean}
-079 DELETE post-delete-forbidden                      404 {error:{code:string,message:string},ok:boolean}
-080 DELETE post-delete                                404 {error:{code:string,message:string},ok:boolean}
+079 DELETE post-delete-forbidden                      410 {error:{code:string,message:string},ok:boolean}
+080 DELETE post-delete                                410 {error:{code:string,message:string},ok:boolean}
 081 POST   logout                                     200 {data:{loggedOut:boolean},ok:boolean}
 082 GET    page-root                                  200 no-json
 083 GET    page-app-js                                200 no-json

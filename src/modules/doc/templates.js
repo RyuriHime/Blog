@@ -25,6 +25,19 @@ export const WIKI_TEMPLATE = 'page';
 /** 「这一篇是 wiki 站」的标记模板（一个帖子一个 wiki：站本身是一篇普通帖子）。 */
 export const STATION_TEMPLATE = 'station';
 
+/**
+ * 「这一篇是站务公告」的标记模板。
+ *
+ * 帖子功能下线后，站务公告从「meta 板块的帖子」搬进积木 —— 一条公告 = 一篇
+ * 带这个模板的文档。它有三个和普通积木不同的地方，都在别处实现：
+ *   1. **只有站长和管理员能建、能改**（`visibility.js` 的 `canEdit`、
+ *      `store.js` 的 `createDocument`）；
+ *   2. **不进积木广场**（`queries.js` 的 `listDocuments` 对非 staff 直接排除）；
+ *   3. **首页起始页要读它**（`GET /api/docs?template=announce&sort=created`）。
+ * 它刻意**不出现在模板清单**里（`staffOnly`），普通用户没有地方能挑到它。
+ */
+export const ANNOUNCE_TEMPLATE = 'announce';
+
 export const TEMPLATES = [
   {
     key: 'blank',
@@ -99,6 +112,18 @@ export const TEMPLATES = [
     ],
   },
   {
+    // 站务公告（见上面 ANNOUNCE_TEMPLATE 的注释）。`staffOnly` 让它不出现在
+    // 模板清单里 —— 建它的唯一入口是首页/公告页上那颗只有 staff 看得见的「写公告」。
+    key: ANNOUNCE_TEMPLATE,
+    title: '站务公告',
+    description: '只有站长和管理员能写；首页会显示最近几条。',
+    staffOnly: true,
+    blocks: () => [
+      { type: 'heading', props: { text: '公告', level: 1 } },
+      { type: 'paragraph', props: { text: '正文。' } },
+    ],
+  },
+  {
     key: 'poll',
     title: '投票问卷',
     description: '说明 → 若干投票 → 结果说明。',
@@ -149,9 +174,10 @@ export const TEMPLATES = [
   },
 ];
 
-/** 清单（对外只暴露元信息，不暴露生成函数）。 */
+/** 清单（对外只暴露元信息，不暴露生成函数）。staffOnly 的模板不上清单。 */
 export function templateList() {
-  return TEMPLATES.map((item) => ({ key: item.key, title: item.title, description: item.description }));
+  return TEMPLATES.filter((item) => !item.staffOnly)
+    .map((item) => ({ key: item.key, title: item.title, description: item.description }));
 }
 
 /**

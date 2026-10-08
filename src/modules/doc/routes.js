@@ -251,6 +251,8 @@ export function registerDocRoutes(ctx, { store }) {
       // 默认不列挂在 wiki 站里的页（OI Wiki 一个站就 519 页）；
       // `?wiki=all` 都列、`?wiki=only` 只要站里的页。
       wiki: reqCtx.query.get('wiki') ?? '',
+      // `?template=announce` 是首页/公告页读站务公告的那条路（见 store.listDocuments）。
+      template: reqCtx.query.get('template') ?? '',
       mine: reqCtx.query.get('mine') === '1',
       q: reqCtx.query.get('q') ?? '',
       page: intOrNull(reqCtx.query.get('page')) ?? 1,

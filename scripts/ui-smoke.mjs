@@ -190,8 +190,11 @@ check(
   'router.js 里没有 #/announcements 分支',
 );
 check(
-  '公告页复用现成接口（/api/posts?board=meta + page/perPage），没为新页面加后端',
-  /\/api\/posts\?board=\$\{ANNOUNCE_BOARD\}&perPage=\$\{ANNOUNCE_PER_PAGE\}&page=\$\{page\}/.test(startJs),
+  '公告页复用现成接口（/api/docs?template=announce&sort=created&limit&page），没为新页面加后端',
+  /\/api\/docs\?template=\$\{ANNOUNCE_TEMPLATE\}&sort=created&limit=\$\{limit\}&page=\$\{page\}/.test(startJs)
+    && /const ANNOUNCE_TEMPLATE = 'announce'/.test(startJs)
+    && !/\/api\/announce/.test(startJs),
+  '公告页没走 /api/docs?template=announce（已有的积木接口），或者偷偷加了 /api/announce 这种专用后端',
 );
 check(
   '公告页会翻页，页码走 paginationHtml（团队页同一套零件）',
@@ -233,7 +236,13 @@ check(
   '三块入口分别指向 动态 #/feed · 积木广场 #/docs · 团队 #/teams',
   /href="\$\{href\}"/.test(startJs) && /href: '#\/feed'/.test(startJs) && /href: '#\/docs'/.test(startJs) && /href: '#\/teams'/.test(startJs),
 );
-check('公告取「站务公告」板块（/api/posts?board=meta），不用新后端', /\/api\/posts\?board=meta/.test(startJs));
+check(
+  '首页那块公告取的是同一个积木接口（template=announce），limit 固定 5 条',
+  /safeApi\(announceApi\(FETCH_PER_PAGE, 1\)/.test(startJs)
+    && /const FETCH_PER_PAGE = 5/.test(startJs)
+    && !/\/api\/posts\?board=/.test(startJs),
+  '首页公告没走 /api/docs?template=announce&limit=5（或者还在按板块取帖子）',
+);
 check('公告取不到时有兜底文案（不是空白一块）', /还没有公告|emptyHtml\(/.test(startJs));
 check(
   '三块预览用的都是现成接口：/api/posts · /api/docs · /api/teams',
@@ -267,7 +276,17 @@ check(
   'index.html 里还留着发动态按钮',
 );
 check('顶栏的其它东西没动（主题按钮容器 + 用户区 + 挂载点都还在）', /id="theme-area"/.test(indexHtml) && /id="user-area"/.test(indexHtml) && /id="app"/.test(indexHtml) && /id="sidebar"/.test(indexHtml));
-check('发布入口没丢：用户菜单里仍有 #/new', /menu-item" href="#\/new"/.test(session));
+check(
+  '发布入口改成积木广场：用户菜单里没有了 #/new，改指 #/docs',
+  !/href="#\/new"/.test(session) && /menu-item" href="#\/docs">🧩 积木广场/.test(session),
+  'session.js 的用户菜单里还留着 #/new，或者没挂上 #/docs',
+);
+check(
+  '老地址 #/new 仍然认：router 把它送去 #/docs，并提示「帖子功能已经下线」',
+  /if \(first === 'new'\) \{[\s\S]{0,220}?location\.replace\('#\/docs'\)/.test(routerJs)
+    && /帖子功能已经下线/.test(routerJs),
+  'router.js 里 #/new 没有被重定向到 #/docs',
+);
 check('首页顶部仍有编辑框可发帖（feed-composer）', /feed-composer/.test(read('views/timeline.js')));
 
 /* ================================================================== */

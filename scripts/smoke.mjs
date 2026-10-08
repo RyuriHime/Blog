@@ -61,6 +61,23 @@ function createClient() {
 const typeOf = (items, type, predicate = () => true) =>
   items.find((item) => item.type === type && predicate(item));
 
+/*
+ * 帖子不能新建了（`POST /api/posts` 一律 410 `posts_retired`）；能新建的是积木，
+ * 而每篇积木自带一条「影子锚点帖」：赞 / 踩 / 收藏 / 回复 / 分类 / 置顶 / 隐藏
+ * 仍然认这条锚点的 `posts.id`。所以「造一篇帖子」= 建积木 → 取它的锚点。
+ */
+async function newAnchorPost(actor, title, extra = {}) {
+  const created = await actor.call('/api/docs', { method: 'POST', body: { title, kind: 'post', scope: 'public', ...extra } });
+  if (created.status !== 200 || !created.data?.doc?.id) {
+    throw new Error(`建积木失败（${created.status}）：${JSON.stringify(created.body)}`);
+  }
+  const anchor = await actor.call(`/api/docs/${created.data.doc.id}/anchor`);
+  if (!anchor.data?.post?.id) {
+    throw new Error(`积木 ${created.data.doc.id} 没有影子锚点：${JSON.stringify(anchor.body)}`);
+  }
+  return { docId: created.data.doc.id, postId: anchor.data.post.id };
+}
+
 async function waitForServer(timeoutMs = 20000) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
@@ -141,8 +158,8 @@ try {
   check('未知路径回落 SPA 入口', spa.status === 200);
 
   console.log('\n▶ 注册 / 登录 / 会话');
-  const anonWrite = await anon.call('/api/posts', { method: 'POST', body: { boardId: 1, title: '未登录', content: 'x' } });
-  check('未登录发帖被拒绝（401）', anonWrite.status === 401, `status=${anonWrite.status}`);
+  /* 「未登录发帖被拒绝（401）」搬到了下面的「帖子写入已下线」小节：现在未登录发帖
+     也是 410 —— 写接口整条被短路，认证守卫根本没机会跑（这是刻意的，不是漏判）。 */
 
   const adminLogin = await admin.call('/api/auth/login', { method: 'POST', body: { username: 'admin', password: 'admin123' } });
   check('站长可登录', adminLogin.status === 200 && adminLogin.data.user.role === 'owner', JSON.stringify(adminLogin.data?.user));
@@ -170,20 +187,40 @@ try {
   });
   check('同名注册被拒绝（409）', duplicate.status === 409, `status=${duplicate.status}`);
 
-  console.log('\n▶ 发帖 / 列表 / 分页');
-  const created = await member.call('/api/posts', {
+  console.log('\n▶ 帖子写入已下线');
+  const retiredCreate = await member.call('/api/posts', {
     method: 'POST',
-    body: {
-      boardId: site.data.boards.find((board) => board.slug === 'tech').id,
-      title: `冒烟测试帖 ${unique}`,
-      content: `## 小标题\n\n这是 **粗体** 与 \`行内代码\`。\n\n\`\`\`js\nconst x = 1;\n\`\`\`\n\n<script>alert('xss')</script>`,
-    },
+    body: { boardId: 1, title: `还能发帖吗 ${unique}`, content: '这条必须被拒' },
   });
-  check('发帖成功返回 id', created.status === 200 && Number.isInteger(created.data.id), JSON.stringify(created.body));
-  const postId = created.data.id;
+  check(
+    '登录用户发帖被拒绝（410 posts_retired）',
+    retiredCreate.status === 410 && retiredCreate.error?.code === 'posts_retired',
+    JSON.stringify(retiredCreate.body),
+  );
+  const anonRetired = await anon.call('/api/posts', { method: 'POST', body: { boardId: 1, title: '未登录', content: 'x' } });
+  check(
+    '未登录发帖也是 410（不是 401：路由先短路，认证守卫跑不到）',
+    anonRetired.status === 410 && anonRetired.error?.code === 'posts_retired',
+    JSON.stringify(anonRetired.body),
+  );
+  const retiredUpdate = await member.call('/api/posts/1', { method: 'PUT', body: { title: '改标题' } });
+  check(
+    '改帖被拒绝（410 posts_retired）',
+    retiredUpdate.status === 410 && retiredUpdate.error?.code === 'posts_retired',
+    JSON.stringify(retiredUpdate.body),
+  );
+  const retiredDelete = await member.call('/api/posts/1', { method: 'DELETE' });
+  check(
+    '删帖被拒绝（410 posts_retired）',
+    retiredDelete.status === 410 && retiredDelete.error?.code === 'posts_retired',
+    JSON.stringify(retiredDelete.body),
+  );
 
-  const shortTitle = await member.call('/api/posts', { method: 'POST', body: { boardId: 1, title: 'x', content: 'yy' } });
-  check('过短标题被拒绝（400）', shortTitle.status === 400, `status=${shortTitle.status}`);
+  /* 下面所有「刚建的那篇帖子」都是积木的**影子锚点帖** —— 互动接口照打不误。
+     旧代码那条「过短标题被拒绝（400）」随帖子写入一起下线：标题校验现在归积木的
+     `normalizeTitle`（只拒空标题与超长标题，没有「至少几个字」这条规矩）。 */
+  console.log('\n▶ 积木 / 列表 / 分页');
+  const { docId, postId } = await newAnchorPost(member, `冒烟测试帖 ${unique}`);
 
   /*
    * 恶意 / 手滑的分页参数不能让列表接口 500。
@@ -220,13 +257,27 @@ try {
 
   console.log('\n▶ 详情 / Markdown 安全');
   const detail = await anon.call(`/api/posts/${postId}`);
-  check('详情返回渲染后的 HTML', detail.data.post.contentHtml.includes('<strong>粗体</strong>'));
-  check('代码块被渲染', detail.data.post.contentHtml.includes('md-code'));
-  check('脚本注入被转义', !detail.data.post.contentHtml.includes('<script>'), detail.data.post.contentHtml.slice(0, 120));
+  /* 锚点帖的 content 是积木正文的**纯文本摘要**（`blocksToPlainText`，不是 markdown），
+     所以「正文渲染出 <strong> / md-code」这类断言在锚点帖上不成立。渲染与转义改打在
+     同一根渲染管道 `/api/markdown/preview` 上 —— 安全检查没有降级：同样的 markdown
+     加一段 `<script>`，照样要求粗体、代码块渲染出来，脚本被转义。 */
+  check(
+    '锚点帖详情可用（正文是积木的纯文本摘要）',
+    detail.status === 200 && typeof detail.data.post.contentHtml === 'string',
+    JSON.stringify(detail.body).slice(0, 140),
+  );
   check('浏览数自增', detail.data.post.views >= 1);
 
-  const preview = await member.call('/api/markdown/preview', { method: 'POST', body: { content: '**预览**' } });
-  check('预览接口可用', preview.data.html.includes('<strong>预览</strong>'));
+  const preview = await member.call('/api/markdown/preview', {
+    method: 'POST',
+    body: {
+      content: `## 小标题\n\n这是 **粗体** 与 \`行内代码\`。\n\n\`\`\`js\nconst x = 1;\n\`\`\`\n\n<script>alert('xss')</script>`,
+    },
+  });
+  check('帖子用的那根渲染管道仍可用（预览接口）', preview.status === 200 && typeof preview.data.html === 'string');
+  check('markdown 粗体渲染成 <strong>', preview.data.html.includes('<strong>粗体</strong>'));
+  check('代码块被渲染', preview.data.html.includes('md-code'));
+  check('脚本注入被转义', !preview.data.html.includes('<script>'), preview.data.html.slice(0, 160));
 
   console.log('\n▶ 评价：赞 / 踩');
   const like1 = await member.call(`/api/posts/${postId}/reaction`, { method: 'POST', body: { kind: 'like' } });
@@ -390,32 +441,19 @@ try {
   const anonNotifs = await anon.call('/api/notifications');
   check('未登录访问通知被拒绝（401）', anonNotifs.status === 401);
 
-  // 关注的人发新帖 → 关注者收到通知
-  const adminPost2 = await admin.call('/api/posts', {
-    method: 'POST',
-    body: { boardId: site.data.boards[0].id, title: `关注流测试 ${unique}`, content: '关注我的人应该收到通知' },
-  });
-  const followerNotifs = await member.call('/api/notifications?perPage=50');
-  check(
-    '关注的人发新帖会通知我',
-    Boolean(typeOf(followerNotifs.data.items, 'following_post', (item) => item.post?.id === adminPost2.data.id)),
-    JSON.stringify(followerNotifs.data.items.slice(0, 3).map((item) => item.type)),
-  );
-
-  // 管理员删掉别人的帖子 → 作者收到管理通知
-  const victimPost = await member.call('/api/posts', {
-    method: 'POST',
-    body: { boardId: site.data.boards[0].id, title: `待删除的帖子 ${unique}`, content: '这篇会被管理员删掉' },
-  });
-  await admin.call(`/api/posts/${victimPost.data.id}`, { method: 'DELETE' });
-  const moderationNotifs = await member.call('/api/notifications?perPage=50');
-  check(
-    '帖子被管理员删除时作者收到通知',
-    Boolean(typeOf(moderationNotifs.data.items, 'moderation', (item) => item.post?.id === victimPost.data.id)),
-    JSON.stringify(moderationNotifs.data.items.slice(0, 3).map((item) => item.type)),
-  );
-  const selfDeleteNoNotif = await admin.call('/api/notifications?perPage=50');
-  check('管理员删自己的帖子不会通知自己', !typeOf(selfDeleteNoNotif.data.items, 'moderation'));
+  /*
+   * 两条通知断言随帖子写入一起下线，这里是删掉的理由（不是放宽）：
+   *
+   * 1. 「关注的人发新帖会通知我（following_post）」：产生这条通知的唯一入口是
+   *    `POST /api/posts`（现在一律 410），服务端 `src/` 里已经**没有任何地方**
+   *    再写 following_post 通知（`grep -r following_post src` 只剩前端文案）。
+   *    没有能触发它的路径，这条断言无处可测。
+   *
+   * 2. 「帖子被管理员删除时作者收到通知（moderation）」：`DELETE /api/posts/:id`
+   *    同样 410；现在删的只能是积木（`DELETE /api/docs/:id`），而删积木不发通知。
+   *    同一个通知类型在前面「隐藏」小节里仍然被断言着（admin hide → moderation），
+   *    所以「管理动作会通知作者」这条链路并没有失去覆盖。
+   */
 
   console.log('\n▶ 签到已下线');
   const goneCheckin = await member.call('/api/checkin');
@@ -456,13 +494,20 @@ try {
   const adminCategory = await admin.call('/api/me/categories', { method: 'POST', body: { name: '站长专栏' } });
   check('（准备）管理员也有自己的分类', adminCategory.status === 200);
 
-  const boardId = site.data.boards[0].id;
-  const categorized = await member.call('/api/posts', {
-    method: 'POST',
-    body: { boardId, title: `分类测试帖 ${unique}`, content: '把这篇文章放进我的分类', categoryId, profilePinned: true },
-  });
-  check('发帖时可同时选分类并置顶', categorized.status === 200, JSON.stringify(categorized.body));
-  const categorizedId = categorized.data.id;
+  /* 帖子不能新建了，但「放进我的分类 + 个人主页置顶」这两件事还活着：它们照打在
+     积木的影子锚点帖上，断言含义不变（旧代码只是顺手在建帖那一次带上这两个字段）。 */
+  const categorizedAnchor = await newAnchorPost(member, `分类测试帖 ${unique}`);
+  const categorizedId = categorizedAnchor.postId;
+  const setCategory = await member.call(`/api/posts/${categorizedId}/category`, { method: 'POST', body: { categoryId } });
+  const setPinned = await member.call(`/api/posts/${categorizedId}/profile-pin`, { method: 'POST', body: { pinned: true } });
+  check(
+    '锚点帖可设分类并置顶',
+    setCategory.status === 200 &&
+      setCategory.data.category?.id === categoryId &&
+      setPinned.status === 200 &&
+      setPinned.data.profilePinned === true,
+    JSON.stringify({ setCategory: setCategory.body, setPinned: setPinned.body }),
+  );
 
   const categorizedDetail = await member.call(`/api/posts/${categorizedId}`);
   check(
@@ -516,11 +561,8 @@ try {
   // 置顶上限：再补两篇置顶后，第四篇应当被拒绝
   const extraPosts = [];
   for (let index = 0; index < 3; index += 1) {
-    const created = await member.call('/api/posts', {
-      method: 'POST',
-      body: { boardId, title: `置顶测试 ${index} ${unique}`, content: '用于测试置顶上限' },
-    });
-    extraPosts.push(created.data.id);
+    const anchor = await newAnchorPost(member, `置顶测试 ${index} ${unique}`);
+    extraPosts.push(anchor.postId);
   }
   await member.call(`/api/posts/${extraPosts[0]}/profile-pin`, { method: 'POST', body: { pinned: true } });
   await member.call(`/api/posts/${extraPosts[1]}/profile-pin`, { method: 'POST', body: { pinned: true } });
@@ -944,14 +986,14 @@ try {
   );
 
   console.log('\n▶ 权限');
-  const deleteOwn = await member.call(`/api/posts/${postId}`, { method: 'DELETE' });
-  check('作者可删除自己的帖子', deleteOwn.status === 200);
+  /* `DELETE /api/posts/:id` 已经 410（上面「帖子写入已下线」小节断言过），所以
+     「删除」的权限断言改打在积木上：删积木会把影子锚点同步成 `deleted = 1`。 */
+  const deleteOwn = await member.call(`/api/docs/${docId}`, { method: 'DELETE' });
+  check('作者可删除自己的积木', deleteOwn.status === 200 && deleteOwn.data.deleted === true, JSON.stringify(deleteOwn.body));
   const gone = await anon.call(`/api/posts/${postId}`);
-  check('删除后详情返回 404', gone.status === 404, `status=${gone.status}`);
-
-  const seedPost = (await anon.call('/api/posts?perPage=1')).data.items[0];
-  const anonDelete = await anon.call(`/api/posts/${seedPost.id}`, { method: 'DELETE' });
-  check('未登录删除被拒绝（401）', anonDelete.status === 401, `status=${anonDelete.status}`);
+  check('删除积木后锚点帖详情返回 404', gone.status === 404, `status=${gone.status}`);
+  const anonDelete = await anon.call(`/api/docs/${docId}`, { method: 'DELETE' });
+  check('未登录删除积木被拒绝（401）', anonDelete.status === 401, `status=${anonDelete.status}`);
   const forbidden = await member.call(`/api/admin/overview`);
   check('普通用户访问后台被拒绝（403）', forbidden.status === 403, `status=${forbidden.status}`);
 
@@ -1094,7 +1136,9 @@ try {
     '被拉黑者看不到对方的文章（列表）',
     !(await dmBob.call('/api/posts?perPage=30')).data.items.some((row) => row.author.username === dmAliceName),
   );
-  const dmAlicePost = (await dmAlice.call('/api/posts', { method: 'POST', body: { boardId: 1, title: '黑名单可见性测试', content: '只有没被拉黑的人能看到' } })).data;
+  /* 帖子不能新建了：用 dmAlice 的新积木 + 它的影子锚点帖，做同一条可见性检查。 */
+  const dmAliceAnchor = await newAnchorPost(dmAlice, '黑名单可见性测试');
+  const dmAlicePost = { id: dmAliceAnchor.postId };
   check('被拉黑者通过直链也打不开文章（404）', (await dmBob.call(`/api/posts/${dmAlicePost.id}`)).status === 404);
   // 被拉黑者在第三方帖子下的回复，也对拉黑者不可见
   await dmBob.call(`/api/posts/${adminPost.id}/replies`, { method: 'POST', body: { content: '被拉黑之后的评论' } });
@@ -1130,14 +1174,16 @@ try {
   /* ---------------- 锁定帖子的互动守卫 ---------------- */
   // locked 没有对外接口（只能由数据库置位），所以这里直接改临时库再发请求。
   console.log('\n▶ 锁定帖子的互动守卫');
-  const lockedPost = (
-    await member.call('/api/posts', { method: 'POST', body: { boardId: 1, title: '锁定测试帖', content: '用来验证 locked 守卫' } })
-  ).data;
+  const lockedAnchor = await newAnchorPost(member, '锁定测试帖');
+  const lockedPost = { id: lockedAnchor.postId };
   {
     const { DatabaseSync } = await import('node:sqlite');
     const db = new DatabaseSync(DB_FILE);
     const setLocked = (locked) => db.prepare('UPDATE posts SET locked = ? WHERE id = ?').run(locked, lockedPost.id);
     setLocked(1);
+    console.log('DEBUG 脚本看到 =', JSON.stringify(db.prepare('SELECT id, locked FROM posts WHERE id = ?').get(lockedPost.id)), 'DB_FILE =', DB_FILE);
+    const debugDetail = await anon.call(`/api/posts/${lockedPost.id}`);
+    console.log('DEBUG 服务器看到 locked =', debugDetail.data?.post?.locked, 'status =', debugDetail.status);
     try {
       const reaction = await dmAlice.call(`/api/posts/${lockedPost.id}/reaction`, { method: 'POST', body: { kind: 'like' } });
       check('锁定后不能评价（403 locked）', reaction.status === 403 && reaction.error?.code === 'locked', JSON.stringify(reaction.body));

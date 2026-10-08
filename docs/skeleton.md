@@ -119,7 +119,7 @@ ctx.log       日志
 
 错误代号沿用现有值，**不要新造同义词**：
 `bad_request` 400 · `unauthenticated` 401 · `banned` 403 · `forbidden` 403 · `owner_only` 403 ·
-`not_found` 404 · `method_not_allowed` 405 · `conflict` 409 · `daily_limit` 429 · `rate_limited` 429 ·
+`not_found` 404 · `method_not_allowed` 405 · `conflict` 409 · `posts_retired` 410 · `daily_limit` 429 · `rate_limited` 429 ·
 `ai_not_configured` 503 · `ai_timeout` 504 · `ai_rate_limited` 429 ·
 `ai_unreachable` / `ai_unauthorized` / `ai_bad_json` / `ai_upstream_error` 502。
 
@@ -129,7 +129,7 @@ ctx.log       日志
 
 | 前缀 | 归谁 |
 | --- | --- |
-| `/api/auth` `/api/me` `/api/site` `/api/markdown` `/api/knowledge` `/api/notifications` `/api/admin` `/api/users` `/api/messages` `/api/posts` `/api/replies` | core（现有论坛本体） |
+| `/api/auth` `/api/me` `/api/site` `/api/markdown` `/api/knowledge` `/api/notifications` `/api/admin` `/api/users` `/api/messages` `/api/posts`（**写入已下线：`POST /api/posts`、`PUT /api/posts/:id`、`DELETE /api/posts/:id` 一律 410 `posts_retired`；读接口与互动接口照旧**） `/api/replies` | core（现有论坛本体） |
 | `/api/feed/*` | 🅿️ P1 动态 |
 | `/api/docs/*` | 🅿️ P2 可编程帖子 |
 | `/api/ai/*` | 🅿️ P3 AI（注意：`forum-ai` 已占用 8 条 `/api/ai/...`，别撞） |

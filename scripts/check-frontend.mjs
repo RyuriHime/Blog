@@ -1268,8 +1268,8 @@ const CASES = [
   // 都要照常出页面 —— 正好是「渲染会不会炸」这条检查最该盯的一页。
   ['起始页', 'start.js', 'viewStart', []],
   // 站务公告列表页 `#/announcements`：首页那块只放 5 条（用户明确要求），
-  // 全部公告 + 翻页在这一页。两页吃的是同一个接口（`/api/posts?board=meta`），
-  // 所以首页那块改了要连这一页一起看。
+  // 全部公告 + 翻页在这一页。两页吃的是同一个接口（`/api/docs?template=announce`，
+  // 公告已经是积木的一种），所以首页那块改了要连这一页一起看。
   ['站务公告', 'start.js', 'viewAnnouncements', [new Map()]],
   ['站务公告·第 2 页', 'start.js', 'viewAnnouncements', [new URLSearchParams({ page: '2' })]],
   // 动态流：以前它是 `#/`，m05506 起搬到 `#/feed`（`#/?filter=…` 之类也跟着搬过去）。
@@ -3025,25 +3025,27 @@ if (!state.theme) problems.push('state.theme 没被初始化');
  */
 {
   const Start = await import(pathToFileURL(join(ROOT, 'public', 'views', 'start.js')).href);
-  const postsRequests = () => REQUESTS.filter((item) => item.method === 'GET' && item.url.startsWith('/api/posts?'));
+  // 公告现在是积木（`documents.template = 'announce'`），所以盯的是 `/api/docs?`
+  // 而不是旧的 `/api/posts?board=meta`。
+  const docsRequests = () => REQUESTS.filter((item) => item.method === 'GET' && item.url.startsWith('/api/docs?'));
 
-  const beforeHome = postsRequests().length;
+  const beforeHome = docsRequests().length;
   await Start.viewStart();
-  const homeReqs = postsRequests().slice(beforeHome);
-  const homeAnnounce = homeReqs.find((item) => item.url.includes('board=meta'));
+  const homeReqs = docsRequests().slice(beforeHome);
+  const homeAnnounce = homeReqs.find((item) => item.url.includes('template=announce'));
   if (!homeAnnounce) problems.push('首页根本没去取站务公告 —— 那块会永远是空的');
-  else if (!/\bperPage=5\b/.test(homeAnnounce.url)) {
-    problems.push(`首页取公告时写了 ${homeAnnounce.url} —— 用户要求主页只显示 5 条，perPage 必须是 5`);
+  else if (!/\blimit=5\b/.test(homeAnnounce.url)) {
+    problems.push(`首页取公告时写了 ${homeAnnounce.url} —— 用户要求主页只显示 5 条，limit 必须是 5`);
   }
   // 假 DOM 不解析 innerHTML，所以只能在这一页还挂着的时候从字符串里找入口
   if (!/class="announce-more" href="#\/announcements"/.test(String(app.innerHTML))) {
     problems.push('首页公告块上没有去 #/announcements 的入口 —— 用户点不进「全部」');
   }
 
-  const beforeAll = postsRequests().length;
+  const beforeAll = docsRequests().length;
   await Start.viewAnnouncements(new URLSearchParams({ page: '2' }));
-  const allReqs = postsRequests().slice(beforeAll);
-  const allAnnounce = allReqs.find((item) => item.url.includes('board=meta'));
+  const allReqs = docsRequests().slice(beforeAll);
+  const allAnnounce = allReqs.find((item) => item.url.includes('template=announce'));
   if (!allAnnounce) problems.push('公告页没去取公告');
   else if (!/\bpage=2\b/.test(allAnnounce.url)) {
     problems.push(`公告页第 2 页取的是 ${allAnnounce.url} —— 页码没带上，翻页会一直停在第 1 页`);

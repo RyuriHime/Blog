@@ -127,9 +127,19 @@ async function route() {
     // 并了之后名单页就没了入口（函数还在，只是没有任何地址能到达），
     // 于是「我到底关注了谁」反而没地方看。这个坑真踩过。
     if (first === 'following') return await Feed.viewFollowing();
+    // 帖子功能整体下线：`#/post/:id` 与 `#/edit/:id` 都还认，但两个都只做一次改道
+    //（`views/post.js` 里按锚点反查对应的积木）。旧的收藏、通知、搜索和站外链接
+    // 全落在这两句上，所以只要这两个入口在，就没有一条路能真的打开一张帖子页。
     if (first === 'post' && second) return await Post.viewPost(Number(second));
-    if (first === 'new') return await Compose.viewCompose(null);
-    if (first === 'edit' && second) return await Compose.viewCompose(Number(second));
+    // `#/new` 是老的发帖地址：帖子写接口已经返回 410，这里直接把人送去积木广场，
+    // 那里有「＋ 新建一篇」。不做成「自动建一篇没名字的积木」—— 用户按的是发帖，
+    // 不该凭空在他名下多出一篇空文档。
+    if (first === 'new') {
+      toast('帖子功能已经下线，写作请到积木广场', 'info');
+      location.replace('#/docs');
+      return await Doc.viewDocs(query);
+    }
+    if (first === 'edit' && second) return await Post.viewLegacyEdit(Number(second));
     if (first === 'bookmarks') return await Feed.viewBookmarks(query);
     if (first === 'ai') return await Ai.viewAI();
     // AI 编辑台（P3）：能力授权 / 按块改写 / 审计与回滚。

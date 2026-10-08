@@ -1,7 +1,7 @@
 // core 路由：帖子列表 / 帖子详情 / 发帖 / 互动
 // // 搬运自 src/server.js 的固定行区间（预铺骨架，逐字未改），见 docs/tools/extract-server-modules.mjs。
-import { ensure, field, HttpError, ok, pageParam, rateLimit, res_ } from '../../core/http.js';
-import { assertPinAllowed, notifyMentions, resolveOwnCategory, shapeAuthor, shapeCategory, shapeConversation, shapeMessage, shapeNotification, shapePerson, shapePostDetail, shapePostListRow, shapeProfile, shapeReply, shapeReposter, shapeUser } from '../../core/shape.js';
+import { ensure, field, HttpError, ok, pageParam, res_ } from '../../core/http.js';
+import { shapeAuthor, shapeCategory, shapeConversation, shapeMessage, shapeNotification, shapePerson, shapePostDetail, shapePostListRow, shapeProfile, shapeReply, shapeReposter, shapeUser } from '../../core/shape.js';
 import { assertPostVisible, isOwner, isStaff, requireOwner, requireStaff, requireUser } from '../../core/guards.js';
 import { issueSession, removeAvatarFile, saveAvatarFile, sessionCookie } from '../../core/sessions.js';
 import { store } from '../../core/store.js';
@@ -89,83 +89,25 @@ export function registerRoutesB(route) {
     });
   });
 
-  route('POST', '/api/posts', async (ctx) => {
-    const user = requireUser(ctx);
-    rateLimit(`post:${user.id}`, 15, 10 * 60 * 1000);
-    const boardId = Number(ctx.body.boardId);
-    ensure(store.boardById(boardId), 400, 'bad_board', '请选择要发布到的板块');
-    const title = field(ctx.body.title, { label: '标题', min: 2, max: 80 });
-    const content = field(ctx.body.content, { label: '正文', min: 2, max: 20000 });
-    const categoryId = resolveOwnCategory(user, ctx.body.categoryId);
-    const wantPin = Boolean(ctx.body.profilePinned);
-    if (wantPin) assertPinAllowed(user);
+  /* ---------------- 帖子：写入一律下线（410 Gone） ----------------
+   *
+   * 帖子功能整体废除，一切入口改道积木（`#/doc/:id`）：
+   *   - 读（列表 / 详情 / 回复 / 转发 / 点赞）**照旧** —— 影子帖还在，
+   *     积木页的互动条就是认这些接口工作的，详情页则只被 `#/post/:id`
+   *     的重定向前端用一下；
+   *   - 写（发帖 / 改帖 / 删帖）**关死**，返回 410 而不是 403/404：
+   *     410 是「这个资源曾经在，现在永久没了」，正好是这次的意思，
+   *     也不会让人误以为是权限不够或者帖号敲错了。
+   */
+  const gone = () => {
+    throw new HttpError(410, 'posts_retired', '帖子功能已经下线，请到积木广场写作（#/docs）');
+  };
 
-    const id = store.createPost({ boardId, userId: user.id, title, content });
-    if (categoryId) store.setPostCategory(id, categoryId);
-    if (wantPin) store.setProfilePin(id, true);
+  route('POST', '/api/posts', gone);
 
-    // 通知关注我的人：我发新帖了（同一人对同一帖子只保留一条未读通知）
-    for (const follower of store.listFollowers(user.id)) {
-      store.createNotification({
-        userId: follower.id,
-        actorId: user.id,
-        type: 'following_post',
-        postId: id,
-        excerpt: title,
-      });
-    }
-    notifyMentions({ content, actorId: user.id, postId: id });
+  route('PUT', '/api/posts/:id', gone);
 
-    ok(res_(ctx), { id });
-  });
-
-  route('PUT', '/api/posts/:id', async (ctx) => {
-    const user = requireUser(ctx);
-    const id = Number(ctx.params.id);
-    const row = store.postById(id, user.id);
-    ensure(row, 404, 'post_not_found', '帖子不存在');
-    ensure(row.author_id === user.id || isStaff(user), 403, 'forbidden', '只能编辑自己的帖子');
-    const boardId = ctx.body.boardId ? Number(ctx.body.boardId) : row.board_id;
-    ensure(store.boardById(boardId), 400, 'bad_board', '板块不存在');
-    const title = field(ctx.body.title, { label: '标题', min: 2, max: 80 });
-    const content = field(ctx.body.content, { label: '正文', min: 2, max: 20000 });
-    const pinProvided = ctx.body.profilePinned !== undefined;
-    if (pinProvided && ctx.body.profilePinned) {
-      assertPinAllowed(user, { alreadyPinned: Boolean(row.profile_pinned) });
-    }
-
-    store.updatePost({ id, boardId, title, content });
-    if (ctx.body.categoryId !== undefined) store.setPostCategory(id, resolveOwnCategory(user, ctx.body.categoryId));
-    if (pinProvided) store.setProfilePin(id, Boolean(ctx.body.profilePinned));
-    ok(res_(ctx), { id });
-  });
-
-  route('DELETE', '/api/posts/:id', async (ctx) => {
-    const user = requireUser(ctx);
-    const id = Number(ctx.params.id);
-    const row = store.postById(id, user.id);
-    ensure(row, 404, 'post_not_found', '帖子不存在');
-    ensure(row.author_id === user.id || isStaff(user), 403, 'forbidden', '没有权限删除这个帖子');
-    store.softDeletePost(id);
-    if (row.author_id !== user.id) {
-      const label = isOwner(user) ? '站长' : '管理员';
-      store.createNotification({
-        userId: row.author_id,
-        actorId: user.id,
-        type: 'moderation',
-        postId: id,
-        excerpt: `${label}删除了你的文章：${row.title}`,
-      });
-      store.logModeration({
-        actorId: user.id,
-        action: 'delete_post',
-        targetType: 'post',
-        targetId: id,
-        targetLabel: row.title,
-      });
-    }
-    ok(res_(ctx), { deleted: true });
-  });
+  route('DELETE', '/api/posts/:id', gone);
 
   /* ---------------- 管理：隐藏 / 恢复文章（站长 + 管理员） ---------------- */
 

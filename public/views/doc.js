@@ -387,7 +387,7 @@ async function mountInteraction(doc) {
     if (repostHost) repostHost.innerHTML = '';
     return;
   }
-  if (bar) bar.innerHTML = reactionBarHtml(post);
+  if (bar) bar.innerHTML = reactionBarHtml(post, { docMode: true });
   if (repliesHost) repliesHost.innerHTML = docRepliesHtml(post, data);
   if (repostHost) repostHost.innerHTML = repostSectionHtml(post, data.reposters ?? [], { docMode: true });
   const aiHost = $('[data-doc-interact-ai]');
@@ -432,7 +432,7 @@ async function refreshDocRepost(docId) {
   const data = await api(`/api/docs/${id}/anchor`);
   const post = data?.post ?? null;
   if (!post) return;
-  if (bar) bar.innerHTML = reactionBarHtml(post);
+  if (bar) bar.innerHTML = reactionBarHtml(post, { docMode: true });
   if (host) host.innerHTML = repostSectionHtml(post, data.reposters ?? [], { docMode: true });
 }
 
@@ -1950,7 +1950,9 @@ function toolboxHtml(doc) {
       <button class="btn btn-sm" type="button" data-doc-action="revisions">修订记录</button>
       <button class="btn btn-sm" type="button" data-doc-action="export">导出 JSON</button>
       <button class="btn btn-sm" type="button" data-doc-action="import-toggle">导入 JSON</button>
-      ${doc.anchorPostId ? `<a class="btn btn-sm btn-ghost" href="#/post/${esc(doc.anchorPostId)}">互动锚点</a>` : ''}
+      <!--「互动锚点」那颗按钮去掉了：它指向影子帖页面，而帖子页现在
+          只会把读者送回来（重定向到这一篇），点一次等于原地转一圈。
+          互动（赞 / 收藏 / 回复）本来就长在这一页上。 -->
       <button class="btn btn-sm btn-ghost" type="button" data-doc-action="delete">删除这篇</button>
     </div>
     <form class="doc-new" data-doc-form="import" hidden>

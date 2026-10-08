@@ -125,7 +125,9 @@ async function viewUser(username, query) {
             isOwner
               ? `<a class="btn btn-sm" href="#/settings">⚙️ 账号设置</a>
                  <a class="btn btn-sm" href="#/bookmarks">⭐ 我的收藏</a>
-                 <a class="btn btn-sm btn-primary" href="#/new">✏️ 写文章</a>`
+                 <!-- 帖子功能下线：这条原来是 #/new（发帖）。留着「写」这个动作，
+                      但落点改成积木广场 —— 那里才有新建入口。 -->
+                 <a class="btn btn-sm btn-primary" href="#/docs">🧩 去积木广场写作</a>`
               : `<button class="btn ${user.isFollowing ? '' : 'btn-primary'}" data-action="follow" data-user="${user.id}" data-name="${esc(user.displayName)}" ${user.blockedByMe ? 'disabled' : ''}>
                    ${user.isFollowing ? '✓ 已关注' : '＋ 关注'}
                  </button>

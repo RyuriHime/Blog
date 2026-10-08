@@ -40,7 +40,7 @@
 | `src/` `public/` `scripts/` | 论坛本体：后端（`node:http` + `node:sqlite`）、原生前端、检查脚本 | 1.3.0 | `npm test` |
 | `forum-ai/` | AI 层：站点分析、阅读助手，对接任意 OpenAI 兼容接口 | 1.0.0 | `node forum-ai/selftest.mjs` |
 | `note-studio/` | 学术笔记子系统：Markdown + LaTeX 可视化编辑、拍照转文字、导出 | 1.0.0 | `node note-studio/tests/run.mjs` |
-| `note-agent/` | 挂在写帖页和笔记编辑器上的「AI 工作台」抽屉 | 0.1.0 | `npm run test:notes` |
+| `note-agent/` | 挂在写帖页和笔记编辑器上的「AI 工作台」抽屉（写帖页随发帖下线后再没有地址能到达，见 §10.1 最后一条） | 0.1.0 | `npm run test:notes` |
 
 ### 密钥放哪
 
@@ -387,10 +387,11 @@ forum/
 | `#/` | **起始页**（m05506 起就是网站的默认落点，**不论登录与否**）：左边站务公告，右边三块入口（动态 / 积木广场 / 团队） |
 | `#/feed` | 动态流：全部 / 我关注的 / 我的，`?filter=following`、`?filter=mine`、`?q=关键词`、`?page=`。**以前这是 `#/`，m05506 与起始页对调了地址**（老书签请改用这里） |
 | `#/start` | 起始页的老地址，保留成别名（进的是同一页，不会断链） |
-| `#/announcements` | **站务公告**（`?page=`）：`meta` 板块的全部公告，从新到旧、每页 20 条。起始页那块**只放最近 5 条**，右下角「查看全部」点到这儿。`#/board/meta` 也直接落到这一页 |
+| `#/announcements` | **站务公告**（`?page=`）：全部公告，从新到旧、每页 20 条，读的是 `GET /api/docs?template=announce&sort=created`。公告**已经不是帖子**（`meta` 板块的老公告启动时由 `store.migrateLegacyPosts()` 一次性搬成了这类积木）：只有站长 / 管理员写得动，也**不进积木广场**（普通用户在广场里看不到它们），但首页与这一页人人可见；staff 在起始页和这一页都多一颗「＋ 写公告」。起始页那块**只放最近 5 条**，右下角「查看全部」点到这儿。`#/board/meta` 也直接落到这一页 |
 | `#/board/tech` | 板块页（`general` / `tech` / `qa` / `share` / `meta`） |
-| `#/post/:id` | 帖子详情：Markdown 正文、赞/踩/收藏/关注作者、回复列表与回复框 |
-| `#/new`、`#/edit/:id` | 发帖 / 编辑，带 Markdown 工具栏、分类选择与「主页置顶」开关 |
+| `#/post/:id` | **（已下线，一切指向它的链接都改道）** 老的帖子详情页：路由还认，但**不再渲染帖子** —— `public/views/post.js` 的 `viewPost(id)` 拿 `GET /api/docs/by-anchor/:id` 反查这篇帖子是哪篇积木的影子行，查到就 `location.replace('#/doc/<docId>')`（老收藏、动态流、通知、搜索结果、站外链接全落在这一句上，所以没有哪条路还能真打开一张帖子页）；反查不到（真被删了）显示一张「这篇帖子没有对应的积木」的卡片。**代码没删**：`replyHtml` / `reactionBarHtml` / `repostSectionHtml` 这三样仍被积木阅读页复用，只是那两个通往帖子的「编辑帖子 / 删除帖子」按钮在积木页里不画（`{ docMode: true }`） |
+| `#/new` | **（已下线）** 老的发帖地址：`toast` 一句「帖子功能已经下线，写作请到积木广场」然后落到 `#/docs`。写作入口只剩积木广场那颗「＋ 新建一篇」，`public/core/session.js` 用户菜单里的「✏️ 发布新帖」已经删掉 |
+| `#/edit/:id` | **（已下线）** 老的改帖地址：`viewLegacyEdit(id)` 同样按锚点反查积木，查到就送去 `#/doc/<docId>/edit`（弹一句「帖子已经搬进积木了，这里是它的编辑器」），查不到落回 `#/docs` |
 | `#/settings` | 账号设置：资料、密码、账号信息 |
 | `#/u/:username` | 个人主页：分类筛选、三种排版、置顶推荐、关注者与关注列表 |
 | `#/notifications` | 消息通知（全部 / 只看未读） |
@@ -497,10 +498,10 @@ DB_FILE=/opt/app/data/forum.db node scripts/seed-oiwiki.mjs --user RyuriHime   #
 | DELETE | `/api/me/categories/:id` | 删除分类（文章回到未分类） | 登录 |
 | GET | `/api/site` | 板块列表 + 站点统计 + 主页规则 + 热门帖子 | 公开 |
 | GET | `/api/posts` | 帖子列表，支持 `board` `q` `author` `sort` `page` `perPage` `bookmarked` `following` | 公开 |
-| POST | `/api/posts` | 发帖（可带 `categoryId`、`profilePinned`） | 登录 |
-| GET | `/api/posts/:id` | 帖子详情（含回复、我的评价状态） | 公开 |
-| PUT | `/api/posts/:id` | 编辑帖子 | 作者/管理员 |
-| DELETE | `/api/posts/:id` | 删除帖子（软删除，管理员删他人帖子会通知作者） | 作者/管理员 |
+| POST | `/api/posts` | **（已下线）** 发帖 —— 一律 `410` + 错误码 `posts_retired`（响应体那句「帖子功能已经下线，请到积木广场写作（#/docs）」）；写作改走 `POST /api/docs`。**为什么是 410 而不是 401 / 403 / 404**：410 Gone 的语义是「这个资源曾经在、现在永久没了」，正好是这次的意思 —— 它不是权限不够（403）、也不是帖号敲错（404），**重试、换账号、换 token 都没用**；而 404 会让人以为 URL 写错了、去翻文档找正确写法 | 公开（谁调都是 410） |
+| GET | `/api/posts/:id` | 帖子详情（含回复、我的评价状态）—— 对影子帖照旧可用，但帖子详情页已经不渲染它：`#/post/:id` 只拿 `GET /api/docs/by-anchor/:id` 反查积木 | 公开 |
+| PUT | `/api/posts/:id` | **（已下线）** 编辑帖子 —— 一律 `410` `posts_retired`（同上一行的「为什么」）。改内容请改它对应的积木：`#/edit/:id` 会把你送进 `#/doc/<id>/edit` | 公开（谁调都是 410） |
+| DELETE | `/api/posts/:id` | **（已下线）** 删除帖子 —— 一律 `410` `posts_retired`。删积木走 `DELETE /api/docs/:id`（它会连影子行一起收拾） | 公开（谁调都是 410） |
 | POST | `/api/posts/:id/reaction` | 赞 / 踩，body `{ kind: 'like' \| 'dislike' }` | 登录 |
 | POST | `/api/posts/:id/bookmark` | 收藏 / 取消收藏 | 登录 |
 | POST | `/api/posts/:id/repost` | 转发（带评语，同一篇只留一条，重复转发=更新评语） | 登录 |
@@ -527,7 +528,7 @@ DB_FILE=/opt/app/data/forum.db node scripts/seed-oiwiki.mjs --user RyuriHime   #
 | POST | `/api/messages/:username` | 发私信（互关不限量 / 单向每天 1 条） | 登录 |
 | POST | `/api/admin/users/:id/role` | 任命 / 收回管理员（`role: 'admin'\|'member'`） | **仅站长** |
 | POST | `/api/admin/users/:id/ban` | 封禁 / 解封（立即踢掉该用户全部会话；不能封禁站长） | 站长/管理员 |
-| GET | `/api/docs` | 积木文档列表，支持 `kind` `scope` `mine=1` `q` `tag`（按标签筛，大小写不敏感）`page` `limit` `sort` | 公开（按可见范围过滤） |
+| GET | `/api/docs` | 积木文档列表，支持 `kind` `scope` `mine=1` `q` `tag`（按标签筛，大小写不敏感）`template`（点名 `template=announce` 就是首页 / 公告页读站务公告那条路）`page` `limit` `sort` | 公开（按可见范围过滤；**不点名 `template` 时对非 staff 隐藏 `announce`**，所以公告不会混进积木广场） |
 | POST | `/api/docs` | 新建积木文档，body `{ title, kind, scope, template, tags }`（标签最多 5 个、每个 24 字）；`kind='profile'` 一个用户至多一份 | 登录 |
 | GET | `/api/docs/:id` | 文档详情：`{ doc, blocks, html, warnings, abilities }`（`doc.tags` 是字符串数组） | 按 scope |
 | PUT | `/api/docs/:id` | 改标题 / 可见范围 / 模板名 / 标签（`tags` 不传 = 不动，传 `[]` = 清空） | 作者/管理员 |
@@ -549,8 +550,8 @@ DB_FILE=/opt/app/data/forum.db node scripts/seed-oiwiki.mjs --user RyuriHime   #
 | GET | `/api/docs/:id/polls` | 这篇文档里每个 `poll` 块的票数：`{ polls: { bN: { counts, total, voters, mine, multiple } } }`（0 票的块也有桶） | 读按 scope |
 | POST | `/api/docs/:id/blocks/:blockId/vote` | 投票，body `{ options: [...] }`（**提交完整选择集合**，不是增量）；再投即改票 | 登录 |
 | GET | `/api/docs/:id/anchor` | 这篇的**互动锚点帖**：`{ post }`（帖子列表形状），还没同步出锚点就是 `{ post: null }`；**不涨浏览量**（阅读页的互动条用它，而不是去调 `/api/posts/:id`） | 按 scope |
-| GET | `/api/docs/by-anchor/:postId` | 反查：这条帖子是哪篇积木的影子行？`{ doc: { id, title, scope } }`，看不见就是 `{ doc: null }`（帖子页用它挂「已经搬进积木」横幅） | 按 scope |
-| GET | `/api/docs/meta/templates` | 模板清单 + `kinds` + `scopes` 枚举（唯一真相） | 公开 |
+| GET | `/api/docs/by-anchor/:postId` | 反查：这条帖子是哪篇积木的影子行？`{ doc: { id, title, scope } }`，看不见就是 `{ doc: null }`（`#/post/:id` 与 `#/edit/:id` 的改道都靠它反查） | 按 scope |
+| GET | `/api/docs/meta/templates` | 模板清单 + `kinds` + `scopes` 枚举（唯一真相）。对外永远只有 **8 个** —— 注册表里其实还躺着第 9 个 `announce`（`staffOnly: true`），`templateList()` 会把它滤掉，只给站务公告用，新建积木时看不见它 | 公开 |
 | GET | `/api/docs/meta/block-types` | 块类型清单（内置 15 种 ∪ 库里注册的），含声明式 schema | 公开 |
 | POST | `/api/docs/meta/block-types` | 注册自定义块类型（名字 `^[a-z][a-z0-9_]{0,31}$`，内置名与重名 409）；`rendererKind:'declarative'` 可带 `renderer:{html:'…{{字段}}…'}`（会剥掉 script/内联事件/`javascript:`），`'sandbox'` 则用 schema 里的 `code` 走玻璃房 | 登录 |
 | POST | `/api/docs/meta/import` | 按 `forum-doc/1` 格式导入一份新文档 | 登录 |
@@ -867,9 +868,11 @@ npm run test:notes                    # AI 工作台抽屉：32 个文件 / 724 
 重构、搬家、改前端时先跑它 —— 绿了才说明「用户能感知到的行为一个字都没变」。
 真的有意改了行为，用 `--write` 重采指纹，并在提交信息里说明为什么。
 （`--dump` 只打印不比对；指纹文件不存在时它会**直接报错退出**，因为「改造完再补采」等于没测。）
+「帖子写入下线」就是这么办的一次：88 条里只有 7 条指纹重采 —— `post-create` 系列
+025 / 026 / 027 从 200 / 400 / 401 变成 410，`post-update` 的 028 / 029 从 404 变成 410，
+`post-delete` 的 079 / 080 从 404 变成 410；其余 81 条（读接口、互动接口、后台接口）一字未动。
 
-
-覆盖范围：静态资源与 SPA 回落、注册登录登出、**投币已下线（`POST /api/posts/:id/coin` 一律 404，`/api/site` 不再下发 `coinRules`，帖子形状里没有 `coinCount` / `myCoins` / `coinBalance`）**、主页分类（增删改查、上限、归属校验、按分类/未分类筛选）、主页置顶（上限 3 篇、取消置顶、越权 403）、**转发（成功计数、重复转发只改评语、撤销、自己的也能转、不能未登录转发、转发者列表、主页转发分类、通知原作者且自己转自己不发通知；动态转发与「帖子转发也发到动态」见 `feed-smoke.mjs`）**、**签到与价值排行已下线（`/api/checkin`、`/api/ranking` 一律 404，`/api/site` 不再下发签到规则与价值权重，帖子形状里没有 `baseScore` / `valueScore`，个人主页没有 `coinsReceived`）**、账号设置（昵称签名校验、改密校验旧密码、改密后其它会话失效 / 当前会话保留 / 新旧密码登录）、重复用户名、会话保持、分页、全文搜索、Markdown 转义、赞踩互斥、收藏、关注与关注流、消息通知的收件人与去重、越权访问后台、封禁等。
+覆盖范围：静态资源与 SPA 回落、注册登录登出、**发帖 / 改帖 / 删帖接口已下线（`POST /api/posts`、`PUT /api/posts/:id`、`DELETE /api/posts/:id` 一律 410 `posts_retired`，读接口与互动接口照旧；互动那些断言现在打在**积木的影子锚点帖**上 —— 赞 / 踩 / 收藏 / 回复 / 转发走的还是影子行的 `posts.id`，所以用例照旧跑绿）**、**投币已下线（`POST /api/posts/:id/coin` 一律 404，`/api/site` 不再下发 `coinRules`，帖子形状里没有 `coinCount` / `myCoins` / `coinBalance`）**、主页分类（增删改查、上限、归属校验、按分类/未分类筛选）、主页置顶（上限 3 篇、取消置顶、越权 403）、**转发（成功计数、重复转发只改评语、撤销、自己的也能转、不能未登录转发、转发者列表、主页转发分类、通知原作者且自己转自己不发通知；动态转发与「帖子转发也发到动态」见 `feed-smoke.mjs`）**、**签到与价值排行已下线（`/api/checkin`、`/api/ranking` 一律 404，`/api/site` 不再下发签到规则与价值权重，帖子形状里没有 `baseScore` / `valueScore`，个人主页没有 `coinsReceived`）**、账号设置（昵称签名校验、改密校验旧密码、改密后其它会话失效 / 当前会话保留 / 新旧密码登录）、重复用户名、会话保持、分页、全文搜索、Markdown 转义、赞踩互斥、收藏、关注与关注流、消息通知的收件人与去重、越权访问后台、封禁等。
 
 `check-ui-contract` 另有 15 条**静态守卫**钉住「删干净了」：签到与价值排行那边 7 条 —— 签到页文件不存在、服务端没有那两条路由、`CHECKIN_*` / `VALUE_WEIGHTS` / `rankPosts` / `checkin_bonuses` 等名字一个都不剩、样式分片只剩 `78-repost.css` 与 `80-profile.css`；币这边 8 条 —— 投币路由不存在、`COIN_RULES` / `COIN_SIGNUP_GRANT` / `COIN_PER_POST_LIMIT` / `coinAvailability` / `coinState` / `giveCoin` / `coinByUserPost` / `upsertCoin` / `addCoins` / `spendCoins` / `totalCoins` / `coin_count` 这些名字一个都不剩、`tables.sql.js` 不建 `coins` 表且它不在 core 的 `owns` 清单里、帖子与用户形状里没有 `coinCount` / `myCoins` / `coinBalance` / `canCoin`、`/api/site` 不下发 `coinRules`、通知类型里没有 `post_coin`、前端没有 `data-action="coin"` 与「我的资产」卡、样式里没有 `.coin-chip`。想把这套东西加回来的人，先得来改这几条断言。（这 15 条都匹配**去掉注释后**的源码，所以注释里写「旧库的 `coins` 表不主动删」不会把它们弄红。）
 
@@ -922,19 +925,35 @@ Windows 上如果报文件被占用，说明服务或测试脚本还在跑，关
 
 这一节是**诚实的缺口清单**，不是路线图承诺。每条都写清现象和根因，方便想接手的人直接定位。
 
-### 10.1 积木与帖子：互动已经搬进积木页，帖子退成影子（本条已修，留档）
+### 10.1 帖子已经退成纯粹的互动锚点（写入下线，留档）
+
+**一句话**：帖子功能整体废除 —— 站内**一切**通往 `#/post/:id` 的链接都改道它对应的积木
+（`public/views/post.js` 的 `viewPost(id)` 用 `GET /api/docs/by-anchor/:id` 反查，查到就
+`location.replace('#/doc/<docId>')`；`#/edit/:id` 同理送去 `#/doc/<docId>/edit`），
+`POST /api/posts`、`PUT /api/posts/:id`、`DELETE /api/posts/:id` 一律 `410` `posts_retired`，
+而正文、回复、评价、AI 面板**全部只在积木页上**。这一节解释的是**为什么 `posts` 这张表和它的
+「影子行」还留着** —— 留着不是「还没搬完」，是互动数据本来就长在那儿。
+
+**为什么不删 `posts`**：所有互动认的都是 `posts.id`，不是 `documents.id` ——
+赞 / 踩（`reactions.post_id`）、收藏（`bookmarks.post_id`）、回复（`replies.post_id`）、
+转发（`reposts.post_id`）、通知（`notifications.post_id`）、个人主页置顶
+（`posts.profile_pinned` / `profile_pinned_at`）全是挂在它上面的列或外键
+（`src/modules/core/tables.sql.js`，清一色 `REFERENCES posts(id) ON DELETE CASCADE`）。
+所以建文档时会顺手插一条「影子行」当互动锚点（`src/modules/doc/anchor.js` 的 `createAnchor`）；
+**文档 → 影子帖**那根线记在 `documents.anchor_post_id` 上，反向（拿到 `postId` 问「这是哪篇积木」）
+只能靠 `GET /api/docs/by-anchor/:postId` 反查 —— 两个老地址的改道靠的就是它。
 
 **以前的现象**：`#/doc/:id` 阅读页上**没有点赞 / 踩 / 收藏 / 转发**的按钮，
 只有一张卡片写着「去帖子里互动」，点过去跳到 `#/post/:anchorPostId` —— 同一条内容两个地址，
 一个是积木页（只能读），一个是帖子页（才能互动）。
 
 **现在**：阅读页自己就有一条互动条。它向 `GET /api/docs/:id/anchor` 要「这一篇的互动锚点帖」
-（帖子列表形状），然后把帖子页那套按钮原样画出来
-（`public/views/post.js` 导出的 `reactionBarHtml`，连提交后**就地改 DOM** 的事件处理都不用改，
-见 `public/core/events.js` 的 `reaction` / `bookmark` 两段），
-AI 解读面板（`public/views/ai.js` 的 `aiPostPanelHtml`）也一起搬了过来。
-反过来，帖子页顶上会挂一条「这一篇已经搬进积木了」的横幅 —— 它用
-`GET /api/docs/by-anchor/:postId` 反查自己是不是某篇积木的影子行。
+（帖子列表形状，回复也一趟带回来），然后把帖子页那套按钮原样画出来
+（`public/views/post.js` 导出的 `reactionBarHtml(post, { docMode: true })`，连提交后
+**就地改 DOM** 的事件处理都不用改，见 `public/core/events.js` 的 `reaction` / `bookmark` 两段），
+转发区（`repostSectionHtml`）与 AI 解读面板（`public/views/ai.js` 的 `aiPostPanelHtml`）
+也一起搬了过来。帖子页那边**没有横幅了** —— 页面整个不渲染，只剩一次改道（`viewPost()`）；
+反查不到积木时才显示一张「这篇帖子没有对应的积木」的卡片，请人去积木广场。
 
 **根因**：`documents` 和 `posts` 是两张表。所有互动（赞/踩/收藏/通知）都认 `posts.id`，
 所以建文档时会顺手插一条「影子行」当互动锚点（`src/modules/doc/anchor.js`）。
@@ -942,7 +961,7 @@ AI 解读面板（`public/views/ai.js` 的 `aiPostPanelHtml`）也一起搬了�
 
 1. 它必须 `deleted = 0` —— 赞/踩走 `src/store.js` 的 `WHERE p.id = ? AND p.deleted = 0`，
    `deleted = 1` 就找不到这条影子行，互动全部 404；
-2. 而 `deleted = 0` 的行**必然**被所有帖子列表收录（`src/store.js:412` 的 `buildFilter()` 第一句就是 `p.deleted = 0`），
+2. 而 `deleted = 0` 的行**必然**被所有帖子列表收录（`src/store.js:379` 的 `buildFilter()` 第一句就是 `p.deleted = 0`），
    只能靠 `hidden` 把自己藏起来，而 `hidden` 的语义是「非 staff 非作者 404」（`src/core/guards.js` 的 `assertPostVisible`）。
 
 于是 `src/modules/doc/anchor.js` 的 `anchorHidden(scope)` 只对 `scope === 'public'` 返回 0。
@@ -950,7 +969,7 @@ AI 解读面板（`public/views/ai.js` 的 `aiPostPanelHtml`）也一起搬了�
 
 **修法（都做了，而且没碰 `buildFilter()`）**：
 
-- **前端**：阅读页的互动条 + 帖子页的横幅（见上）。
+- **前端**：阅读页的互动条（那一摊 UI 现在只剩积木页这一处 —— 帖子页那道横幅随页面一起没了，见上）。
 - **core 只开一个注入口**：`src/core/guards.js` 新增 `addPostVisibility(fn)`，
   `assertPostVisible()` 在原来的 staff/作者放行之后，再问一遍注册进来的判定 ——
   **它只能放行，不能拦**（谁都不认还是 404）。
@@ -960,15 +979,34 @@ AI 解读面板（`public/views/ai.js` 的 `aiPostPanelHtml`）也一起搬了�
 - **`abilities` 跟着走**：`src/modules/doc/store.js` 的 `abilitiesOf` 里 `canReact`
   改成复用同一条 `canView`（改一处必须改另一处，注释写在那儿了），否则前端还会把按钮藏起来。
 
+**这一摊现在的样子**：上面那几条修法一条都没拆（`addPostVisibility` 注入口、doc 模块登记的
+`canView`、`abilitiesOf` 里 `canReact` 与它同规则），只是守的从「帖子页」换成了「积木页」。
+回复**也已经搬进积木页**：`public/views/doc.js` 的 `interactHtml()` 铺出
+`<div class="doc-interact-replies" data-doc-replies>` 这个容器，`mountInteraction()` 用
+`GET /api/docs/:id/anchor` 拿回 `replies` / `replyCount` / `canReply` 之后交给
+`docRepliesHtml(post, data)` 渲染（每条回复复用 `views/post.js` 的 `replyHtml`，
+`deleteAction` 换成 `reply-delete`）；发帖框是 `data-doc-form="reply"` 的表单，
+提交仍打 core 那条 `POST /api/posts/:id/replies`（回复在库里还是长在影子行上），
+删回复走 `data-doc-action="reply-delete"` → `DELETE /api/replies/:id`，删完只重画讨论区、
+留在积木页。帖子页没有回复框了 —— 它整个不渲染。
+
 **还剩什么**：
 
-- **回复（评论）没搬**：阅读页还没有回复框，讨论仍然在 `#/post/:anchorPostId` 上 ——
-  这也是帖子页那条横幅写着「留着的只是它的影子」而不是直接重定向的原因。
 - 影子行的 `views` / `pinned` 是旧链路的财产，`syncAnchor` 刻意不重写这两列，
-  所以「积木页的阅读数」和「帖子页的阅读数」仍是两个不同的东西；
-  新加的 `GET /api/docs/:id/anchor` 也**故意不 `bumpViews`** —— 看一遍积木不该涨帖子浏览量。
-- 公开的积木帖子仍然会以「影子帖」的形态出现在**首页动态流和全文搜索**里（这是有意的：
-  内容能被搜到），点进去是帖子页，顶上那条横幅负责把人送到积木页。
+  所以「积木页的阅读数」和「影子帖的阅读数」仍是两个不同的东西；
+  `GET /api/docs/:id/anchor` 也**故意不 `bumpViews`** —— 看一遍积木不该涨影子帖的浏览量。
+- 公开的积木仍然会以「影子帖」的形态出现在**首页动态流和全文搜索**里（这是有意的：
+  内容能被搜到），点进去落到 `#/post/:id`，那里再把你改道到积木页 ——
+  帖子页上那条「已经搬进积木」的横幅随着页面一起没了，改道本身就是横幅要干的事。
+- **老帖的搬家**：`POST /api/posts` 关死之后，库里早就存在的老帖靠启动时那一次
+  `store.migrateLegacyPosts()` 补成积木（幂等，`src/modules/doc/index.js` 启动时调一次，
+  生产库实测 8 篇；`template = 'meta'` 板块的帖子迁成 `announce`，也就是站务公告）。
+- **老的写作页没地址了**：`public/views/compose.js` 的 `viewCompose()` 还在 —— 发帖表单、
+  图片上传、实时预览，以及挂在 `#composeForm` 上的 `window.NotesAgent`「AI 笔记整理」抽屉 ——
+  但 `#/new` 已经不再渲染它，`public/core/router.js` 里也没有第二个路由调这个函数，
+  全站只剩 `Compose.destroyComposeNotesPanel()` 这一处引用（换页时收干净）。
+  也就是说 `note-agent/` 那套抽屉目前没有可达的宿主页 —— 积木的 Markdown 模式现在挂的是
+  `public/views/doc-ai.js` 那个抽屉（见 §10.2），重新接一遍是另一件事，这里先记一笔。
 
 ### 10.2 积木这一摊还没开发的
 

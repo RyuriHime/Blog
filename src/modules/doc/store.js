@@ -57,7 +57,7 @@ import {
 } from './blocks/index.js';
 import { applyDocOps, MAX_OPS } from './blocks/ops.js';
 import { plainInline } from './blocks/text.js';
-import { hasTemplate, STATION_TEMPLATE, templateBlocks, templateList, WIKI_TEMPLATE } from './templates.js';
+import { ANNOUNCE_TEMPLATE, hasTemplate, STATION_TEMPLATE, templateBlocks, templateList, WIKI_TEMPLATE } from './templates.js';
 import { KIND_LABELS, REASON_LABELS, SCOPE_LABELS, shapeDoc, shapeRevision, shapeSettings } from './shape.js';
 
 /** 一条 op 被拒的原因 → 给人看的话（前端直接显示，不再自己映射一遍）。 */
@@ -749,7 +749,7 @@ export function createDocStore({ db, queries, now = () => Date.now() }) {
 
   /* ---------------- 文档 ---------------- */
 
-  function listDocuments({ viewer, kind = '', scope = '', tag = '', wiki = '', mine = false, q = '', page = 1, limit = 20, sort = 'updated' } = {}) {
+  function listDocuments({ viewer, kind = '', scope = '', tag = '', wiki = '', template = '', mine = false, q = '', page = 1, limit = 20, sort = 'updated' } = {}) {
     const visible = visibilityConditions(viewer, hasTeams);
     const { rows, total } = queries.listDocuments({
       viewerId: viewer?.id ?? null,
@@ -759,6 +759,8 @@ export function createDocStore({ db, queries, now = () => Date.now() }) {
       tag: singleLineText(String(tag ?? '')).replace(/^#+/, ''),
       // `wiki` 三态：`''`（默认）不列站里的页、`all` 都列、`only` 只要站里的页。
       wiki: wiki === 'all' || wiki === 'only' ? wiki : '',
+      // 点名要某一类模板：首页/公告页靠 `template=announce` 找站务公告。
+      template: String(template ?? ''),
       mine: Boolean(mine),
       q: String(q ?? ''),
       page,
@@ -809,6 +811,10 @@ export function createDocStore({ db, queries, now = () => Date.now() }) {
     const cleanTags = normalizeTags(tags);
     const cleanTemplate = String(template ?? '');
     if (cleanTemplate && !hasTemplate(cleanTemplate)) throw badRequest(`不认识的模板：${cleanTemplate}`);
+    // 站务公告只有站长和管理员能建（`visibility.js` 的 canEdit 管改，这里管建）。
+    if (cleanTemplate === ANNOUNCE_TEMPLATE && !isStaff(viewer)) {
+      throw new HttpError(403, 'owner_only', '站务公告只有站长和管理员能写');
+    }
     // 一个用户至多一份 profile 文档（§8.2）：已经有了就把那一篇原样交回去，
     // 而不是再建一份 —— 否则 `#/u/:name` 每次刷新可能渲染出不同的主页。
     if (cleanKind === 'profile') {
@@ -2085,6 +2091,70 @@ export function createDocStore({ db, queries, now = () => Date.now() }) {
     return { deleted: Number(id) };
   }
 
+  /* ---------------- 帖子功能下线：一次性迁移 ---------------- */
+
+  /** 站务公告原来挂在哪个板块上（`src/core/open-db-support.js` 的种子数据）。 */
+  const ANNOUNCE_BOARD_SLUG = 'meta';
+
+  /**
+   * 给「还没有积木的活帖」各补一篇积木（幂等：补过一次下次就查不到了）。
+   *
+   * 帖子功能下线后，`#/post/:id` 一律重定向到对应积木 —— 那么没有积木的老帖
+   * 就没有去处了。这个函数把这类帖子一次性补成积木：**帖子本身不动**，
+   * 只在上头挂一篇文档（`anchor_post_id` 指着它），于是：
+   *   - 旧的点赞 / 收藏 / 回复仍然认那篇影子帖，一样能点；
+   *   - `#/post/:id` 反查到文档，把人送到 `#/doc/:id`。
+   *
+   * 几处刻意的选择：
+   *   - **不调 `createAnchor` / `syncAnchor`**：帖子就是锚点本身，再建一条影子帖
+   *     会多出一篇空帖；`syncAnchor` 还会拿积木正文覆盖原帖正文。
+   *   - `hidden` 的帖子迁成 `scope='private'`：那是版务藏起来的内容，
+   *     不能因为换了个壳就又出现在广场上。
+   *   - `meta` 板块的帖子（站务公告）迁成 `template='announce'`，
+   *     从此一条公告 = 一篇积木，且只有站长和管理员能改。
+   *   - 时间沿用原帖的，公告列表的「按发布时间」才不会乱。
+   *
+   * 单篇失败只跳过它自己（在启动路径上，一条坏数据不该拦住整个服务起来）。
+   */
+  function migrateLegacyPosts() {
+    const posts = queries.postsMissingDocument();
+    const skipped = [];
+    let created = 0;
+    for (const post of posts) {
+      try {
+        const createdAt = Number(post.created_at) || now();
+        const at = Number(post.updated_at) || createdAt;
+        const source = String(post.content ?? '');
+        const list = markdownToBlocks(source).map((block, index) => ({ ...block, block_id: `b${index + 1}` }));
+        assertBudget(list.length);
+        const title = normalizeTitle(post.title) || `帖子 #${post.id}`;
+        const isAnnounce = String(post.board_slug ?? '') === ANNOUNCE_BOARD_SLUG;
+        const id = queries.insertDocument({
+          userId: Number(post.user_id),
+          kind: 'post',
+          title,
+          scope: post.hidden ? 'private' : 'public',
+          template: isAnnounce ? ANNOUNCE_TEMPLATE : '',
+          anchorPostId: Number(post.id),
+          now: at,
+          createdAt,
+          updatedAt: at,
+        });
+        writeBlocks(id, list, at);
+        // `reason: 'import'` —— 这不是人写的修订，是搬过来的。
+        snapshot(id, 'import', Number(post.user_id), at);
+        created += 1;
+      } catch (error) {
+        skipped.push({ postId: Number(post.id), message: error?.message ?? String(error) });
+      }
+    }
+    if (created || skipped.length) {
+      console.log(`[doc] 老帖迁移：新建 ${created} 篇积木${skipped.length ? `，跳过 ${skipped.length} 篇` : ''}`);
+      for (const item of skipped) console.warn(`[doc] 老帖 #${item.postId} 迁移失败：${item.message}`);
+    }
+    return { created, skipped };
+  }
+
   return {
     listDocuments,
     getDocument,
@@ -2138,5 +2208,6 @@ export function createDocStore({ db, queries, now = () => Date.now() }) {
     listScriptTemplates,
     saveScriptTemplate,
     deleteScriptTemplate,
+    migrateLegacyPosts,
   };
 }

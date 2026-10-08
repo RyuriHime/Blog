@@ -1,9 +1,14 @@
 // 帖子详情页：正文、评价栏、转发列表、回复。
+//
+// **这个页面已经不渲染了**（帖子功能整体下线，见 README「帖子功能下线」一节）：
+// 路由仍留着 `#/post/:id`，但 `viewPost()` 只做一件事 —— 把读者送到对应的积木页。
+// 这个文件里还活着的三样东西是**给积木页复用的零件**：
+// `replyHtml`、`reactionBarHtml`、`repostSectionHtml`（`views/doc.js` 的互动条）。
+// 留着它们而不是搬进 doc.js，是因为搬一遍就是一次无谓的回归风险。
 
-import { $, emptyHtml, esc, loadingHtml, ui } from '../core/dom.js';
+import { esc, loadingHtml, toast, ui } from '../core/dom.js';
 import { api } from '../core/api.js';
 import { state } from '../core/state.js';
-import * as Ai from './ai.js';
 import * as Avatar from '../core/avatar.js';
 import * as Fmt from '../core/format.js';
 
@@ -38,8 +43,13 @@ function replyHtml(reply, post, opts = {}) {
       </div>
     </div>`;
 }
-function reactionBarHtml(post) {
+function reactionBarHtml(post, opts = {}) {
   const isAuthor = state.me && state.me.id === post.author.id;
+  // 积木页复用这条互动条时（`opts.docMode`）压掉两个按钮：
+  // 「✏️ 编辑」指向 `#/edit/:postId`、「🗑 删除」删的是那篇影子帖 ——
+  // 都是通往帖子功能的门，而积木页自己那张卡片顶上（`views/doc.js` 的
+  // `docActionsHtml`）本来就有「编辑 / 删除」，改的是积木本身。留着只会误导。
+  const postDoors = !opts.docMode;
 
   return `
     <div class="action-bar">
@@ -65,7 +75,7 @@ function reactionBarHtml(post) {
           : ''
       }
       <span class="spacer"></span>
-      ${isAuthor ? `<a class="btn btn-sm" href="#/edit/${post.id}">✏️ 编辑</a>` : ''}
+      ${isAuthor && postDoors ? `<a class="btn btn-sm" href="#/edit/${post.id}">✏️ 编辑</a>` : ''}
       ${
         state.me && Fmt.isStaffUser(state.me)
           ? `<button class="btn btn-sm ${post.hidden ? 'is-on' : ''}" data-action="hide-post" data-id="${post.id}" data-hidden="${post.hidden ? '1' : '0'}"
@@ -73,7 +83,7 @@ function reactionBarHtml(post) {
           : ''
       }
       ${
-        state.me && (isAuthor || Fmt.isStaffUser(state.me))
+        postDoors && state.me && (isAuthor || Fmt.isStaffUser(state.me))
           ? `<button class="btn btn-sm btn-danger" data-action="delete-post" data-id="${post.id}">🗑 删除</button>`
           : ''
       }
@@ -144,136 +154,70 @@ function repostSectionHtml(post, reposters, opts = {}) {
     </section>`;
 }
 /**
- * 「这一篇已经搬进积木了」。
+ * 这篇帖子对应的积木是哪一篇？没有就返回 null。
  *
- * 帖子页现在是被弃用的入口：新东西都写进积木（`#/doc/:id`）。但旧链接、旧收藏、
- * 列表卡片点进来还是这条路，所以**不能把帖子页关掉**，只能在顶上挂一条横幅，
- * 把读者送到真正该去的地方 —— 积木页上的正文、点赞、收藏和 AI 解读
- * 就是从这里搬过去的（阅读页的互动条直接打在锚点行上）。
+ * 帖子与积木是两张表，只有文档知道自己锚在哪篇帖子上（`documents.anchor_post_id`），
+ * 所以这件事只能反查。影子行的可见性跟着文档 scope 走：看不见的文档反查不到，
+ * 于是也不会把人送进一篇他本来就无权读的积木。
  */
-function movedNoteHtml(doc) {
-  return `<div class="doc-moved-banner">
-    <span class="doc-moved-icon">🧩</span>
-    <div class="doc-moved-text">
-      <strong>这一篇已经搬进积木了</strong>
-      <div class="hint">正文、点赞、收藏和 AI 解读都在积木页上。这里留着的只是它的「影子」（旧链接还能点进来）。</div>
-    </div>
-    <a class="btn btn-sm btn-primary" href="#/doc/${esc(doc.id)}">去积木页 →</a>
-  </div>`;
+async function docOfPost(postId) {
+  if (!Number.isInteger(postId) || postId <= 0) return null;
+  return api(`/api/docs/by-anchor/${postId}`)
+    .then((data) => data?.doc ?? null)
+    .catch(() => null);
 }
 
+/**
+ * 帖子页 —— 现在只做一件事：把读者送到这篇帖子对应的积木页。
+ *
+ * 帖子功能整体下线，站内**一切**指向 `#/post/:id` 的链接（旧收藏、动态流里
+ * 的引用卡、通知、搜索结果、管理后台的列表……）都汇到这一个函数里，
+ * 所以重定向只写在这一处 —— 别的入口一个都不用动，也就不存在漏网的通道。
+ *
+ * 反查不到积木说明这篇帖子还没被迁进积木（理论上启动时的一次性迁移已经把
+ * 活帖都补过了，见 `src/modules/doc/store.js` 的 `migrateLegacyPosts`），
+ * 这时也不能停在一个已经废除的页面上，只能请人去广场。
+ */
 async function viewPost(id) {
   ui.app.innerHTML = loadingHtml();
-  const [{ post, replies, reposters }, aiInfo, moved] = await Promise.all([
-    api(`/api/posts/${id}`),
-    api(`/api/ai/posts/${id}`).catch(() => ({ cached: null, stale: false })),
-    // 反查这篇帖子是不是某篇积木的影子行。影子行的可见性跟着文档 scope 走，
-    // 列表里能看见它就说明读者本来就有权看，所以这里拿不到也只是「不是影子行」。
-    api(`/api/docs/by-anchor/${id}`).catch(() => ({ doc: null })),
-  ]);
-  const movedDoc = moved?.doc ?? null;
+  const doc = await docOfPost(Number(id));
+  if (doc) {
+    location.replace(`#/doc/${doc.id}`);
+    return;
+  }
+  ui.app.innerHTML = `<article class="card">
+    <div class="page-head"><h1>这篇帖子没有对应的积木</h1></div>
+    <p class="hint">帖子功能已经下线：新内容一律写在积木里，老帖也已经各自搬成了一篇积木。这一篇可能已经被删掉了。</p>
+    <div class="form-actions"><a class="btn btn-primary" href="#/docs">去积木广场 →</a></div>
+  </article>`;
+}
 
-  ui.app.innerHTML = `
-    <article class="card">
-      ${movedDoc ? movedNoteHtml(movedDoc) : ''}
-      ${
-        post.hidden
-          ? `<div class="moderation-banner">
-               <span class="moderation-icon">🙈</span>
-               <div>
-                 <strong>这篇文章已被${post.hiddenBy && state.me && post.hiddenBy === state.me.id ? '你' : '管理团队'}隐藏</strong>
-                 <div class="hint">
-                   ${post.hiddenReason ? `原因：${esc(post.hiddenReason)} · ` : ''}
-                   隐藏期间普通访客访问会看到 404，且不出现在列表与搜索里，只有作者本人和管理团队可见。
-                 </div>
-               </div>
-               ${
-                 state.me && Fmt.isStaffUser(state.me)
-                   ? `<button class="btn btn-sm" data-action="hide-post" data-id="${post.id}" data-hidden="1">👁 恢复显示</button>`
-                   : ''
-               }
-             </div>`
-          : ''
-      }
-      <div class="post-detail-head">
-        ${Avatar.avatarHtml(post.author, 'avatar-lg')}
-        <div style="min-width:0;flex:1">
-          <div class="post-tags">
-            <a class="tag" href="#/board/${esc(post.board.slug)}">${post.board.icon} ${esc(post.board.name)}</a>
-            ${post.pinned ? '<span class="tag tag-pin">📌 置顶</span>' : ''}
-            ${post.locked ? '<span class="tag">🔒 已锁定</span>' : ''}
-            ${post.authorFollowed ? '<span class="tag tag-follow">✓ 已关注作者</span>' : ''}
-          </div>
-          <h1 class="post-detail-title">${esc(post.title)}</h1>
-          <div class="post-detail-meta">
-            <a href="#/u/${encodeURIComponent(post.author.username)}">${esc(post.author.displayName)}</a>
-            ${Fmt.roleTag(post.author.role)}
-            <span>·</span>
-            <span title="${Fmt.fullTime(post.createdAt)}">发布于 ${Fmt.timeAgo(post.createdAt)}</span>
-            ${post.updatedAt - post.createdAt > 60000 ? `<span>· 已编辑于 ${Fmt.timeAgo(post.updatedAt)}</span>` : ''}
-            <span>·</span>
-            <span>👁 ${post.views} 次浏览</span>
-          </div>
-        </div>
-      </div>
-
-      <div class="md" style="margin-top:18px">${post.contentHtml}</div>
-
-      ${Ai.aiPostPanelHtml(post, aiInfo)}
-
-      ${state.me ? reactionBarHtml(post) : `<div class="action-bar">
-        <a class="btn btn-sm btn-primary" href="#/login">登录后可以评价和关注作者</a>
-        <span class="spacer"></span>
-        <span class="post-meta"><span>👍 ${post.likeCount}</span><span>👎 ${post.dislikeCount}</span><span>⭐ ${post.bookmarkCount}</span><span>🔁 ${post.repostCount}</span></span>
-      </div>`}
-    </article>
-
-    <section class="card" style="padding:0">
-      <div class="card-head" style="padding:16px 18px;margin:0;border-bottom:1px solid var(--border-soft)">
-        <span class="card-title">💬 全部回复（${replies.length}）</span>
-        ${post.locked ? '<span class="tag">🔒 该帖已锁定</span>' : ''}
-      </div>
-      ${replies.length ? replies.map((reply) => replyHtml(reply, post)).join('') : emptyHtml('💭', '还没有人回复', '来抢占沙发吧')}
-    </section>
-
-    <section class="card">
-      <div class="card-head"><span class="card-title">✍️ 发表回复</span></div>
-      ${
-        !state.me
-          ? `<div class="hint" style="margin-bottom:12px">登录后即可参与讨论。</div>
-             <div class="form-actions">
-               <a class="btn btn-primary" href="#/login">登录</a>
-               <a class="btn" href="#/register">注册新账号</a>
-             </div>`
-          // 锁定的帖子只有管理团队还能回（服务端 `src/core/guards.js` 的口径是 owner + admin）。
-          // 这里曾写成只认 admin，站长就被自己的锁定帖挡在门外了。
-          : post.locked && !Fmt.isStaffUser(state.me)
-            ? '<div class="hint">该帖子已锁定，暂时无法回复。</div>'
-            : `<form class="form" data-action="reply" data-id="${post.id}">
-                 <div class="field">
-                   <textarea name="content" placeholder="写下你的想法…（支持 Markdown，@某人 可以提醒 TA）" required maxlength="5000"></textarea>
-                   <span class="hint">支持 粗体、行内代码、代码块、引用、列表、链接与 @提及</span>
-                 </div>
-                 <div class="form-error" data-error hidden></div>
-                 <div class="form-actions">
-                   <button class="btn btn-primary" type="submit">发表回复</button>
-                   <button class="btn btn-ghost" type="button" data-action="preview" data-target="reply">预览</button>
-                 </div>
-                 <div class="preview-box" data-preview hidden></div>
-               </form>`
-      }
-    </section>
-
-    ${repostSectionHtml(post, reposters)}`;
+/**
+ * 老的「编辑帖子」地址（`#/edit/:id`）：同样改道它对应的积木编辑器。
+ *
+ * 编辑入口只剩积木一条路 —— 帖子写接口已经整体返回 410，把作者留在一个
+ * 点不动的表单上才是真的坏体验。
+ */
+async function viewLegacyEdit(id) {
+  ui.app.innerHTML = loadingHtml();
+  const doc = await docOfPost(Number(id));
+  if (doc) {
+    toast('帖子已经搬进积木了，这里是它的编辑器');
+    location.replace(`#/doc/${doc.id}/edit`);
+    return;
+  }
+  toast('帖子功能已经下线，去积木广场新建一篇吧', 'error');
+  location.replace('#/docs');
 }
 
 /* ------------------------------------------------------------------ */
-/* 视图：发帖 / 编辑                                                   */
+/* 视图：帖子链接一律改道积木                                          */
 
 // ── 导出 ──────────────────────────────────────────────────────────────
 export { replyHtml };
 export { reactionBarHtml };
 export { repostSectionHtml };
 export { viewPost };
+export { viewLegacyEdit };
 
 /* @hand-written */

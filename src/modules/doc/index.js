@@ -69,7 +69,20 @@ export default {
     const { canView } = createVisibility({ db: ctx.db, hasTeams: detectTeams(ctx.db) });
     addPostVisibility((post, reqCtx) => {
       const row = queries.documentByAnchor(post.id);
-      return Boolean(row && canView(row, reqCtx?.user));
+      if (!row) return false;
+      // 站务的「隐藏」压过积木的可见性。
+      //
+      // 影子行的 `hidden` 平时是**推导值**：公开积木一律 0（`anchor.js` 的
+      // `anchorHidden`），非公开积木一律 1，只由 scope 决定。所以「公开积木 + 影子行
+      // hidden = 1」只可能是一种情况：staff 在后台把这篇文章隐藏了（`POST
+      // /api/admin/posts/:id/hide`）。这时候要是还按 scope 放行，隐藏对访客就失效了
+      // —— 这是老代码没有、老帖全部迁成积木之后才露出来的坑（迁移前那篇帖子没有对应
+      // 文档，判定函数拿不到 row，自然 404）。
+      //
+      // wiki 的「页」是唯一例外：它是公开文档，影子行却按设计就是 hidden = 1
+      //（`store.js` 的 `STATION_PAGE_HIDDEN`），不能当成站务隐藏处理。
+      if (post.hidden && row.scope === 'public' && row.template !== WIKI_TEMPLATE) return false;
+      return canView(row, reqCtx?.user);
     });
 
     // wiki 站的**页**不是帖子：一个 wiki 是一篇帖子，页是站里的内容。
@@ -85,6 +98,10 @@ export default {
     }));
 
     registerDocRoutes(ctx, { store, queries });
+
+    // 帖子功能下线后 `#/post/:id` 一律改道积木，所以「还没有积木的活帖」要补一篇
+    // —— 幂等、同步、数据量很小（生产库实测 8 篇）。见 store.migrateLegacyPosts。
+    store.migrateLegacyPosts();
 
     // 起完之后的一次性后台活儿：站里有「OI Wiki」空站时，自己把它导满。
     // 为什么必须由**代码**来干这件事：那 519 页是数据库内容，而部署只换

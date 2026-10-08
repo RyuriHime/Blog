@@ -124,7 +124,7 @@ export function createDocQueries(db) {
      * 列表。`visible` 由 visibility.js 给出（null = staff，不加范围条件）。
      * `viewerId` 只用于 `mine=1`。
      */
-    listDocuments({ viewerId = null, visible = null, kind = '', scope = '', tag = '', wiki = '', mine = false, q = '', page = 1, limit = 20, sort = 'updated' } = {}) {
+    listDocuments({ viewerId = null, visible = null, kind = '', scope = '', tag = '', wiki = '', template = '', mine = false, q = '', page = 1, limit = 20, sort = 'updated' } = {}) {
       const conditions = ['d.deleted = 0'];
       const params = [];
       if (kind && DOC_KINDS.includes(kind)) {
@@ -134,6 +134,16 @@ export function createDocQueries(db) {
       if (scope) {
         conditions.push('d.scope = ?');
         params.push(scope);
+      }
+      if (template) {
+        // 点名要某一类模板（首页/公告页要 `template=announce`）。
+        conditions.push('d.template = ?');
+        params.push(template);
+      } else if (visible) {
+        // 站务公告不进积木广场 —— 整条广场列表（没点名模板的那一次查询）里，
+        // 非 staff（含未登录）看不到 `announce`。首页与公告页点名要它，
+        // 所以那条路走上面的分支，不受这句影响。
+        conditions.push("d.template <> 'announce'");
       }
       // 按标签筛选：EXISTS 而不是 JOIN —— JOIN 会让一篇带两个匹配标签的文档出现两次。
       // COLLATE NOCASE：手工敲进地址栏的 `?tag=css` 也该命中作者写的 `CSS`。
@@ -173,13 +183,31 @@ export function createDocQueries(db) {
       return { rows, total };
     },
 
-    insertDocument({ userId, kind, title, scope, template, anchorPostId, now }) {
+    insertDocument({ userId, kind, title, scope, template, anchorPostId, now, createdAt = now, updatedAt = now }) {
       const result = run(
         `INSERT INTO documents (user_id, kind, title, scope, template, anchor_post_id, sandbox_disabled, deleted, created_at, updated_at)
          VALUES (?, ?, ?, ?, ?, ?, 0, 0, ?, ?)`,
-        [userId, kind, title, scope, template, anchorPostId, now, now],
+        [userId, kind, title, scope, template, anchorPostId, createdAt, updatedAt],
       );
       return Number(result.lastInsertRowid);
+    },
+
+    /**
+     * 「还没有积木的活帖」—— 帖子功能下线时的一次性迁移要的那张名单。
+     *
+     * 只读 posts / boards 两张别人家的表（模块清单里 `reads` 已声明），
+     * 一行都不改：迁移是「给帖子补一篇积木」，不是「改帖子」。
+     */
+    postsMissingDocument() {
+      return all(
+        `SELECT p.id, p.user_id, p.board_id, b.slug AS board_slug, p.title, p.content,
+                p.hidden, p.created_at, p.updated_at
+           FROM posts p
+           LEFT JOIN boards b ON b.id = p.board_id
+          WHERE p.deleted = 0
+            AND NOT EXISTS (SELECT 1 FROM documents d WHERE d.anchor_post_id = p.id)
+          ORDER BY p.id ASC`,
+      );
     },
 
     updateDocumentMeta({ id, title, scope, template, updatedAt }) {

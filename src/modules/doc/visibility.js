@@ -12,6 +12,7 @@
 // 403 / 401 的区分是验收标准 ⑪，而不可见时必须 404 ——
 // 403 会顺带泄露「这篇文档存在」。
 import { isStaff } from '../../core/guards.js';
+import { ANNOUNCE_TEMPLATE } from './templates.js';
 
 /** `team_members` 表在不在（探测一次，与 feed 同一个技巧）。 */
 export function detectTeams(db) {
@@ -44,6 +45,9 @@ export function createVisibility({ db, hasTeams }) {
   /** 改 / 删 / 套模板 / 回滚：作者或 staff。 */
   function canEdit(doc, viewer) {
     if (!doc || doc.deleted || !viewer) return false;
+    // 站务公告是站方的口子：只有站长和管理员能改。它从「meta 板块的帖子」
+    // 迁移过来时作者可能是当年的普通用户，所以这里**不看作者**。
+    if (doc.template === ANNOUNCE_TEMPLATE) return isStaff(viewer);
     return isStaff(viewer) || viewer.id === doc.user_id;
   }
 

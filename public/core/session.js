@@ -63,7 +63,8 @@ function renderUserArea() {
       <a class="menu-item" href="#/teams">👥 团队广场</a>
       <a class="menu-item" href="#/wiki">⧉ Wiki 站</a>
       <a class="menu-item" href="#/settings">⚙️ 账号设置</a>
-      <a class="menu-item" href="#/new">✏️ 发布新帖</a>
+      <!-- 「✏️ 发布新帖」在这里去掉了：帖子功能整体下线，写作入口只剩积木广场
+           （上面那条积木广场）。旧地址 #/new 仍然认，会被 router 送到广场。 -->
       ${Fmt.isStaffUser(me) ? '<a class="menu-item" href="#/admin">🛠️ 管理后台</a>' : ''}
       <div class="menu-sep"></div>
       <button class="menu-item" data-action="logout" type="button">🚪 退出登录</button>
