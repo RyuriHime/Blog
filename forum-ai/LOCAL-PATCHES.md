@@ -482,6 +482,40 @@ AI 接口没有返回内容（finish_reason=length，提示 8840 / 生成 3000 t
 
 ---
 
+## O3. O2 之后那条宽问题换了个码：502 `ai_bad_json`——模型把代码块直接写进了 JSON 字符串（甲类）
+
+**现象**：O2 上线后线上复测同一条「想学习dfs，然后实现成代码」，失败码从 503 `ai_answer_truncated`
+变成 **502 `ai_bad_json`**（多次复现：14:23 / 19430ms、14:24 / 36798ms、14:27 / 22100ms、14:31 / 39249ms、
+14:33 / 14233ms），错误文案只有一句「AI 返回的问答结果不是合法 JSON」。
+
+**原因**：
+
+- `isTruncated()` 只认 `finish_reason === 'length'`：这条回复**不是被截断**，而是上游给的正文压根解析不出 JSON
+  ⇒ `chatJson` 的 `jsonAttempts = 2` 两次都拿不到对象，直接抛 `ai_bad_json`，O2 那套「缩材料 + 要短答案」
+  对这种失败一点用都没有；
+- 最可能的形态是**模型把代码块直接写进 JSON 字符串**：字符串里是字面换行（`\n` 而非 `\\n`），
+  这在 JSON 里是非法字符，`JSON.parse` 直接报错——可它想表达的就是换行；
+- 另外：`toResponse()` 以前**只回 `{code, message}`**，`details`（`finishReason` / 用量 / 模型原文）不进响应体，
+  线上看到 502 时根本分不清是「被截断」「被限流」还是「格式错」——只能猜。
+
+**我们的修法**（能救的坏 JSON 自己救，救不了的在报错里留下现场）：
+
+| 位置 | 改动 |
+|---|---|
+| `src/parse.mjs` | 新增 `repairJsonControlChars(text)`：**只在 JSON 字符串内部**把裸控制字符转义（`\n` → `\\n`、`\r`、`\t`、其它 `< 0x20` → `\u00xx`），已经是合法转义（`\n` / `\"`）的部分原样保留 |
+| `src/parse.mjs` | 新增 `repairJsonQuotes(text)`：另一种常见坏法是 `{"answer":"print("hi")"}` —— 内容里的引号没转义。判断一个 `"` 是「结束」还是「内容里的孤引号」：看它后面第一个非空白字符，只有 `,` `:` `}` `]` 或到头才算结束；有损，所以只当最后手段 |
+| `src/parse.mjs` | `extractJson()` 重写成两层尝试：候选 = [整段代码块包裹的内容, 原文] × [原文, 转义控制字符后的, 再补孤引号后的]，每个候选都先直接 `JSON.parse`、再按花括号配平截取（`sliceJsonObject()` 从原实现里抽出来）；**代码块外壳只认「整段就是 ```` ```json … ``` ````」**——答案自己带的 ```` ```python ```` 片段以前会被当成外壳切掉 |
+| `src/routes.mjs` | `toResponse()` 对 `ai_bad_json` / `ai_empty_response` 拼上 `errorHint()`（`finish_reason` 与提示/生成 token 数），线上再出问题能一眼看出是截断还是格式错（报告失败路径早就在用同一招） |
+
+**同步改过的作者文件**：`selftest.mjs` +11 项（字符串里的裸换行 / 代码块里的多个裸换行 / 裸制表符都能解析、
+已转义的不受影响、转义只发生在字符串内部、字符串里的孤引号也能解析、孤引号修复不碰正常的字段分隔、
+已转义的引号不受影响、孤引号修复是最后手段、坏 JSON 的响应带现场、别的错误不拼现场）= **203 项**；
+`scripts/smoke-ai.mjs` +2 项（上游 JSON 里有字面换行也能解析、解析后答案保住代码内容）= **89 项**，
+并把假服务的字符串回复改成**原样送出**（原来是 `JSON.stringify(字符串)`，等于给模型的输出多套了一层引号，
+「答案里带字面换行」这种真实形态根本测不出来）。
+
+---
+
 ## 附：作者包的其它小问题（不影响功能，仅记录）
 
 1. `forum-ai/src/mount.mjs` 顶部的用法注释写的是 `mountForumAi({ db, resolveUser, baseDir: ROOT, aiDir: join(ROOT,'forum-ai') })`，但**实际函数签名没有 `baseDir` / `aiDir` 这两个参数**（注释与实现不一致）。
@@ -498,11 +532,11 @@ AI 接口没有返回内容（finish_reason=length，提示 8840 / 生成 3000 t
 | 测试 | 期望 |
 |---|---|
 | `node forum-ai/selftest-mount.mjs` | 通过 49 项，失败 0 项 |
-| `node forum-ai/selftest.mjs` | 通过 192 项，失败 0 项 |
-| `node scripts/smoke-ai.mjs` | 通过 87 项，失败 0 项 |
+| `node forum-ai/selftest.mjs` | 通过 203 项，失败 0 项 |
+| `node scripts/smoke-ai.mjs` | 通过 89 项，失败 0 项 |
 | `node scripts/smoke.mjs` | 通过 237 项，失败 0 项 |
 | `node scripts/check-golden.mjs` | 通过 88 项，差异 0 项（对外行为与改造前一致） |
 | `node scripts/check-ui-contract.mjs` | 通过 325 项（下限 317），问题 0 项 |
 | `node scripts/check-encoding.mjs` | 已检查 210 个文件（下限 205），中文片段断言 84 条 |
 
-合计 **978 项**（2026-10 复跑实测；数量随轮次增删会变，以各脚本自己打印的下限为准）。另外 `node scripts/check-encoding.mjs` 在 Linux 上会报 `ENOENT ... start.cmd` —— 它硬编码要检查 `start.cmd`（Windows 专用文件、故意不上传），**这个失败是预期的，不是问题**。
+合计 **991 项**（2026-10 复跑实测；数量随轮次增删会变，以各脚本自己打印的下限为准）。另外 `node scripts/check-encoding.mjs` 在 Linux 上会报 `ENOENT ... start.cmd` —— 它硬编码要检查 `start.cmd`（Windows 专用文件、故意不上传），**这个失败是预期的，不是问题**。

@@ -23,29 +23,106 @@ const asStringArray = (value, max = 8, each = 60) =>
 const oneOf = (value, allowed, fallback) => (allowed.includes(clampText(value, 8)) ? clampText(value, 8) : fallback);
 
 /**
- * 从模型输出里抠出一个 JSON 对象。
- * 支持 ```json 代码块、前后夹带说明、以及截取第一个平衡花括号块。
- * @returns {object|null}
+ * 把 JSON **字符串里面**的裸控制字符转义掉。
+ *
+ * 模型写代码块时经常直接在 JSON 字符串里换行（而不是写成 `\n`），这在 JSON 规范里是非法字符，
+ * `JSON.parse` 直接报错 —— 但它想表达的就是换行。这里按字面意思转义，而不是把整段判成坏 JSON。
+ * 已经是合法转义（`\n`、`\t`、`\"`）的部分原样保留。
+ * @param {string} text
+ * @returns {string}
  */
-export function extractJson(text) {
-  const raw = String(text ?? '').trim();
-  const fenced = raw.match(/```(?:json)?\s*([\s\S]*?)```/i);
-  const candidate = fenced ? fenced[1].trim() : raw;
-
-  try {
-    const direct = JSON.parse(candidate);
-    if (direct && typeof direct === 'object') return direct;
-  } catch {
-    /* 继续尝试花括号截取 */
+export function repairJsonControlChars(text) {
+  const raw = String(text ?? '');
+  let out = '';
+  let inString = false;
+  let escaped = false;
+  for (const char of raw) {
+    if (inString) {
+      if (escaped) {
+        out += char;
+        escaped = false;
+        continue;
+      }
+      if (char === '\\') {
+        out += char;
+        escaped = true;
+        continue;
+      }
+      if (char === '"') {
+        out += char;
+        inString = false;
+        continue;
+      }
+      const code = char.charCodeAt(0);
+      if (code < 0x20) {
+        out += char === '\n' ? '\\n' : char === '\r' ? '\\r' : char === '\t' ? '\\t' : `\\u${code.toString(16).padStart(4, '0')}`;
+        continue;
+      }
+      out += char;
+      continue;
+    }
+    if (char === '"') inString = true;
+    out += char;
   }
+  return out;
+}
 
-  const start = candidate.indexOf('{');
+/**
+ * 把 JSON 字符串里**没转义的双引号**补上转义 —— 模型写代码时的另一种常见坏法：
+ * `{"answer":"print("hi")"}` 这种，`JSON.parse` 一样直接报错。
+ *
+ * 怎么判断一个 `"` 是「字符串结束」还是「内容里的孤引号」：看它后面第一个非空白字符，
+ * 只有 `,` `:` `}` `]` 或者到头了才算结束，否则当成内容里的引号转义掉。
+ * 这是个有损的启发式，所以只在别的办法都解析不出来时才用（见 `extractJson`）。
+ * @param {string} text
+ * @returns {string}
+ */
+export function repairJsonQuotes(text) {
+  const raw = String(text ?? '');
+  let out = '';
+  let inString = false;
+  let escaped = false;
+  for (let i = 0; i < raw.length; i += 1) {
+    const char = raw[i];
+    if (escaped) {
+      out += char;
+      escaped = false;
+      continue;
+    }
+    if (char === '\\') {
+      out += char;
+      escaped = true;
+      continue;
+    }
+    if (char !== '"') {
+      out += char;
+      continue;
+    }
+    if (!inString) {
+      inString = true;
+      out += char;
+      continue;
+    }
+    const next = raw.slice(i + 1).match(/\S/)?.[0] ?? '';
+    if (next === '' || next === ',' || next === ':' || next === '}' || next === ']') {
+      inString = false;
+      out += char;
+      continue;
+    }
+    out += '\\"';
+  }
+  return out;
+}
+
+/** 从 `{` 开始按花括号配平截一个对象出来（字符串里的花括号不算）。 */
+function sliceJsonObject(text) {
+  const start = text.indexOf('{');
   if (start === -1) return null;
   let depth = 0;
   let inString = false;
   let escaped = false;
-  for (let i = start; i < candidate.length; i += 1) {
-    const char = candidate[i];
+  for (let i = start; i < text.length; i += 1) {
+    const char = text[i];
     if (inString) {
       if (escaped) escaped = false;
       else if (char === '\\') escaped = true;
@@ -58,12 +135,41 @@ export function extractJson(text) {
       depth -= 1;
       if (depth === 0) {
         try {
-          const parsed = JSON.parse(candidate.slice(start, i + 1));
+          const parsed = JSON.parse(text.slice(start, i + 1));
           return parsed && typeof parsed === 'object' ? parsed : null;
         } catch {
           return null;
         }
       }
+    }
+  }
+  return null;
+}
+
+/**
+ * 从模型输出里抠出一个 JSON 对象。
+ * 支持整段 ```json 代码块包裹、前后夹带说明、以及截取第一个平衡花括号块；
+ * 整段解析不了时再试两次修补版本：先转义字符串里的裸控制字符（`repairJsonControlChars`），
+ * 再把没转义的孤引号补上（`repairJsonQuotes`）。
+ * @returns {object|null}
+ */
+export function extractJson(text) {
+  const raw = String(text ?? '').trim();
+  // 只有「整段就是 ```json … ``` 」才算代码块包裹：答案自己带的 ```python 片段不能当外壳切
+  const fenced = raw.match(/^\s*```(?:json)?\s*([\s\S]*)\s*```\s*$/i);
+  const candidates = fenced ? [fenced[1].trim(), raw] : [raw];
+
+  for (const candidate of candidates) {
+    const withControlChars = repairJsonControlChars(candidate);
+    for (const attempt of [candidate, withControlChars, repairJsonQuotes(withControlChars)]) {
+      try {
+        const direct = JSON.parse(attempt);
+        if (direct && typeof direct === 'object') return direct;
+      } catch {
+        /* 继续尝试花括号截取 */
+      }
+      const sliced = sliceJsonObject(attempt);
+      if (sliced) return sliced;
     }
   }
   return null;

@@ -126,11 +126,13 @@ const mockServer = http.createServer((req, res) => {
       return;
     }
     const content = mockReply(parsed?.messages);
+    // 对象 → 序列化成模型的 JSON 输出；字符串 → 就是模型的原始输出（`failWith` 那类坏 JSON 要原样送去）
+    const text = typeof content === 'string' ? content : JSON.stringify(content);
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(
       JSON.stringify({
         model: parsed?.model ?? 'mock-model',
-        choices: [{ message: { role: 'assistant', content: JSON.stringify(content) } }],
+        choices: [{ message: { role: 'assistant', content: text } }],
         usage: { prompt_tokens: 123, completion_tokens: 45 },
       }),
     );
@@ -431,6 +433,14 @@ try {
   check('两次都截断时返回 503 ai_answer_truncated', askTruncated.status === 503 && askTruncated.error?.code === 'ai_answer_truncated', `status=${askTruncated.status} ${JSON.stringify(askTruncated.error)}`);
   check('截断提示告诉用户怎么办', String(askTruncated.error?.message ?? '').includes('问得具体一点'), String(askTruncated.error?.message));
   mock.maxPromptChars = 0;
+
+  // 模型把代码块直接写进 JSON 字符串（字面换行，而不是 \n）：上游很常见的坏 JSON，
+  // 服务端要自己转义兜住，不能把 502 甩给用户（线上「想学习dfs，然后实现成代码」就是这么挂的）。
+  mock.failWith = '{"answer":"看这段：\n```python\nprint(1)\n```","citations":[],"confidence":"high"}';
+  const askRawNewline = await member2.call('/api/ai/ask', { method: 'POST', body: { question: 'Markdown 写作有什么技巧？' } });
+  mock.failWith = null;
+  check('上游 JSON 里有字面换行也能解析', askRawNewline.status === 200, `status=${askRawNewline.status} ${JSON.stringify(askRawNewline.error)}`);
+  check('解析后答案保住了代码内容', String(askRawNewline.data?.answer ?? '').includes('print(1)'), String(askRawNewline.data?.answer ?? '').slice(0, 80));
 
   console.log('\n▶ 检索与缓存过期');
   const retrieved = mock.calls.map((call) => String(call.body?.messages?.[1]?.content ?? ''));
