@@ -3412,6 +3412,53 @@ if (!state.theme) problems.push('state.theme 没被初始化');
   }
 }
 
+/*
+ * ---- 登录失败要说人话：401 不等于「你的登录过期了」 ----
+ *
+ * 服务端的登录接口在密码错时回的是 401 `bad_credentials` + 「用户名或密码不对」。
+ * 而 `apiErrorText` 以前只看状态码，任何 401 都走「会话过期」那一支：清本地登录态、
+ * 跳登录页、弹「登录状态已失效，请重新登录」，最后 **return ''**（约定是「已经处理过、
+ * 别再提示」）。调用方 `events.js` 的 catch 是 `const text = apiErrorText(error); if (text) fail(text);`
+ * —— 于是真正的原因被吞掉，用户在登录页把密码打错，看到的是让他去重新登录。
+ *
+ * 这里钉住三件事，都是「用户会看到什么」：
+ *   1. 密码错 → 原样把服务端那句话交出来（不是空串、也不是过期文案）
+ *   2. 真有会话时撞上 401 → 仍然算过期（返回空串，由那一支自己跳转+弹提示）
+ *   3. 压根没登录的人撞上 401 → 不能说他「登录状态已失效」（他从来没登录过）
+ */
+{
+  const { apiErrorText } = await import(pathToFileURL(join(ROOT, 'public', 'core', 'errors.js')).href);
+  const { state } = await import(pathToFileURL(join(ROOT, 'public', 'core', 'state.js')).href);
+
+  const passwordWrong = apiErrorText({
+    status: 401,
+    code: 'bad_credentials',
+    message: '用户名或密码不对',
+  });
+  if (passwordWrong !== '用户名或密码不对') {
+    problems.push(
+      `登录密码错时给用户看的是「${passwordWrong}」—— 该是服务端那句「用户名或密码不对」，不能是空串（空串等于什么都不显示）`,
+    );
+  }
+
+  // 有会话时 401 = 真的过期：那一支自己会跳登录页并弹提示，所以对外返回空串
+  state.me = { id: 1, username: 'probe' };
+  const expired = apiErrorText({ status: 401, code: 'unauthorized', message: '请先登录' });
+  if (expired !== '') {
+    problems.push(`有会话时撞上 401 该当成过期（返回空串、由那一支跳转提示），实际返回了「${expired}」`);
+  }
+
+  // 游客撞上 401：不能套用过期的说法
+  state.me = null;
+  const asGuest = apiErrorText({ status: 401, code: 'unauthorized', message: '请先登录' });
+  if (!asGuest || asGuest.includes('失效')) {
+    problems.push(`没登录的人撞上 401，给的是「${asGuest}」—— 他从来没登录过，不该被告知登录状态失效`);
+  }
+
+  state.me = null;
+  console.log('  ✅ 交互：密码错就说密码错，401 只在真有会话时才算「过期」');
+}
+
 if (problems.length) {
   console.log('\n发现的问题：');
   for (const item of problems) console.log(`  ❌ ${item}`);

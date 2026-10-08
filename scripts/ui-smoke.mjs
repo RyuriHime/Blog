@@ -364,6 +364,27 @@ console.log('\n▶ Tab 缩进');
   );
 }
 
+/* 三·7、登录失败的文案：401 不等于「你的登录过期了」                    */
+console.log('\n▶ 登录失败的文案');
+{
+  const errorsJs = read('core/errors.js');
+  check(
+    '密码错要原样交给用户（401 bad_credentials 不能被当成会话过期吞掉）',
+    /code === 'bad_credentials'\)\s*return[\s\S]{0,120}?status === 401/.test(errorsJs),
+    "errors.js 里 bad_credentials 那一支没排在 401 前面，用户输错密码会看到「登录状态已失效」",
+  );
+  check(
+    '没登录的人撞上 401，不能被告知「登录状态已失效」（他从来没登录过）',
+    /const hadSession = Boolean\(state\.me\)[\s\S]{0,400}?if \(!hadSession\)/.test(errorsJs),
+    'errors.js 的 401 支里没有 hadSession 判断 —— 游客也会收到「登录状态已失效，请重新登录」',
+  );
+  check(
+    '真有会话时仍然算过期（跳登录页 + 弹提示那条路没被删掉）',
+    /if \(!hadSession\)[\s\S]{0,400}?toast\('登录状态已失效，请重新登录'/.test(errorsJs),
+    'errors.js 里会话过期该做的跳转/提示不见了',
+  );
+}
+
 /* ================================================================== */
 /* 四、布局与窄屏                                                      */
 /* ================================================================== */

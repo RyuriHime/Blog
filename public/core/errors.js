@@ -22,11 +22,21 @@ import { state } from './state.js';
 function apiErrorText(error) {
   const status = error?.status;
   const code = error?.code;
+  // 「这一次登录没成」和「你的登录过期了」都是 401，但该说的话完全不一样。
+  // 以前这里只看状态码，于是在登录页把密码打错，弹出来的是
+  // 「登录状态已失效，请重新登录」—— 用户压根不知道自己错在密码上，
+  // 而服务端明明已经回了「用户名或密码不对」。
+  if (code === 'bad_credentials') return error?.message || '用户名或密码不对';
   if (status === 401 || code === 'login_required' || code === 'unauthorized') {
+    // 「过期」的前提是本来有过。游客撞上 401（某个接口只给登录的人看、
+    // 或者手滑点了只有登录才能做的事）不该被告知「你的登录状态失效了」——
+    // 他从来没登录过，该听到的是「这个操作要先登录」。
+    const hadSession = Boolean(state.me);
     // 会话过期：清掉本地登录态、记住来路、送去登录页，回来还能接着原路走
     state.me = null;
     state.unread = 0;
     Session.renderUserArea();
+    if (!hadSession) return error?.message || '这个操作要先登录';
     state.redirect = location.hash.replace(/^#/, '') || '/';
     // 等价于 navigate('/login')：只有确实不在登录页时才写 hash，
     // 所以不会走到 navigate 里「同地址就重新 route()」那个分支。

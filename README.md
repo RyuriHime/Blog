@@ -316,6 +316,14 @@ HOST=0.0.0.0 node src/server.js       # 允许局域网内其它设备访问
 - **修改密码**：需要输入当前密码，新密码至少 6 位且不能与旧密码相同；**改密成功后其它设备上的会话会被立即吊销**，当前浏览器保持登录；
 - **账号信息**：用户名（不可改）、身份、注册时间、状态。
 
+> **登录失败要说人话**：`POST /api/auth/login` 在密码错时回的是 **401** + `bad_credentials`
+> + 「用户名或密码不对」—— 这是全站唯一一个「401 但带着真话」的接口。前端 `public/core/errors.js`
+> 的 `apiErrorText` 以前只看状态码，把所有 401 一律当成会话过期（清本地登录态、跳登录页、
+> 弹「登录状态已失效，请重新登录」，然后返回空串表示「已经处理过了、别再提示」），于是那句
+> 真话被吞掉，用户在登录页把密码打错，看到的是让他去重新登录。
+> 现在两条规矩：① `bad_credentials` 直接原样交给用户；② **只有本来登录着**（`state.me` 非空）
+> 才算过期 —— 游客撞上 401 该听到的是「这个操作要先登录」，而不是「你的登录状态失效了」。
+
 ---
 
 ## 3. 目录结构
@@ -828,7 +836,7 @@ node scripts/feed-smoke.mjs        # 动态流端到端：191 项（含动态回
 node scripts/doc-smoke.mjs         # 积木（可编程帖子）端到端：694 项（含阅读页的回复区与转发区）
 node scripts/team-smoke.mjs        # 团队端到端：306 项（可见范围 / 越权 / 版本冲突 / 编辑权只归作者 / 文件柜 / 群聊 / 团队号 / 公告通知 / Markdown 与公式 / 帖子回复 / 加入申请与审核 / 隐藏团队 / 老库升级与坏库自愈）
 node scripts/check-ui-contract.mjs # 前端契约：CSS 类名 + API 字段 + 主题/头像/角色/私信/团队号/公告/剪贴板/公式/关注列表（已关注按钮）/详情与回复/申请与隐藏结构/编辑权与侧边抽屉/表重建与自愈/币已下线/本地偏好键读写一致（通过项数不下降哨兵：317）
-node scripts/ui-smoke.mjs          # 首页外壳轻量化 + 右侧栏抽屉 + 起始页与动态流地址 + 站务公告列表页 + 单条动态 #/feed/<id>（m05506 契约）+ 编辑区与积木块字段框的 Tab 缩进：87 项
+node scripts/ui-smoke.mjs          # 首页外壳轻量化 + 右侧栏抽屉 + 起始页与动态流地址 + 站务公告列表页 + 单条动态 #/feed/<id>（m05506 契约）+ 编辑区与积木块字段框的 Tab 缩进 + 登录失败的文案（401 不等于「登录过期」）：96 项
 node scripts/check-encoding.mjs    # 源码编码体检：BOM / 乱码 / 关键中文内容
 node scripts/check-notes-ui.mjs    # 笔记 UI
 node scripts/notes-smoke.mjs       # 笔记接口
@@ -846,10 +854,10 @@ node scripts/capture-fixtures.mjs  # 重采前端冒烟用的假数据（改了�
 一次跑完（`npm test` 就是上面这些，15 组）：
 
 ```
-check-encoding 210 文件 / 84 断言 · check-skeleton 47 项 · check-golden 88 项 0 差异
+check-encoding 211 文件 / 84 断言 · check-skeleton 47 项 · check-golden 88 项 0 差异
 check-markdown 72 · check-frontend 43 个页面 + 34 个模块静态扫描 · smoke 237 · smoke-ai 89
-ai-smoke 486 · feed-smoke 191 · doc-smoke 694 · team-smoke 306
-check-ui-contract 325 · check-notes-ui 33 · notes-smoke 44 · ui-smoke 87
+ai-smoke 518 · feed-smoke 191 · doc-smoke 694 · team-smoke 306
+check-ui-contract 325 · check-notes-ui 33 · notes-smoke 44 · ui-smoke 96
 ```
 
 > 知识网络图（`knowledge-pack/` + `#/graph` + `/api/knowledge/*`）已在 2026-10 整条链路删除：
