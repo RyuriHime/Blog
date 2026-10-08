@@ -398,7 +398,7 @@ try {
 
   // 线上「问答永远 502」的根因：以前把 maxTokens 写死 1200，宽问题被截断成空正文。
   const askCall = mock.calls.find((call) => String(call.body?.messages?.[1]?.content ?? '').includes('Markdown 写作有什么技巧'));
-  check('问答的输出预算不再是写死的 1200', askCall?.body?.max_tokens === 3000, String(askCall?.body?.max_tokens));
+  check('问答的输出预算不再是写死的 1200', askCall?.body?.max_tokens === 4000, String(askCall?.body?.max_tokens));
   const askPromptChars = String(askCall?.body?.messages?.[1]?.content ?? '').length;
   check('全站问答的材料压在 12000 字以内', askPromptChars <= 12000 + 3000, String(askPromptChars));
 
@@ -413,7 +413,12 @@ try {
   const askRetry = await member2.call('/api/ai/ask', { method: 'POST', body: { question: 'Markdown 写作有什么技巧？' } });
   check('上游截断一次后，服务端自己砍半重问，最终返回 200', askRetry.status === 200, `status=${askRetry.status} ${JSON.stringify(askRetry.error)}`);
   const retryCalls = mock.calls.slice(beforeRetry);
-  check('重问时把预算加倍到 6000', retryCalls.length === 2 && retryCalls[1].body.max_tokens === 6000, retryCalls.map((call) => call.body?.max_tokens).join(','));
+  check('重问时把预算加倍到 8000', retryCalls.length === 2 && retryCalls[1].body.max_tokens === 8000, retryCalls.map((call) => call.body?.max_tokens).join(','));
+  check(
+    '重问时明确要求短答案',
+    String(retryCalls[1]?.body?.messages?.[1]?.content ?? '').includes('【上一次】'),
+    String(retryCalls[1]?.body?.messages?.[1]?.content ?? '').slice(-60),
+  );
   check(
     '重问的材料确实更短',
     String(retryCalls[1]?.body?.messages?.[1]?.content ?? '').length < String(retryCalls[0]?.body?.messages?.[1]?.content ?? '').length,

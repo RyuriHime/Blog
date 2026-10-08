@@ -354,7 +354,7 @@ try {
   console.log('\n▶ 问答预算与截断自适应');
   mock.calls.length = 0;
   await answerQuestion('分页怎么优化？', DOCS.slice(0, 2), { scope: 'corpus', chatOptions: { env } });
-  check('问答默认输出预算放宽到 3000（上游写死 1200，宽问题必被截断）', mock.calls.at(-1)?.body?.max_tokens === 3000, String(mock.calls.at(-1)?.body?.max_tokens));
+  check('问答默认输出预算放宽到 4000（上游写死 1200，宽问题必被截断）', mock.calls.at(-1)?.body?.max_tokens === 4000, String(mock.calls.at(-1)?.body?.max_tokens));
   mock.calls.length = 0;
   await answerQuestion('分页怎么优化？', DOCS.slice(0, 2), { scope: 'corpus', chatOptions: { env: { ...env, AI_ASK_MAX_TOKENS: '5000' } } });
   check('预算可以用 AI_ASK_MAX_TOKENS 覆盖', mock.calls.at(-1)?.body?.max_tokens === 5000, String(mock.calls.at(-1)?.body?.max_tokens));
@@ -366,7 +366,7 @@ try {
     '',
   );
 
-  // 材料一多就被截断：6 篇长文档 > 6000 字（截断），砍半后 < 6000 字（答得完）
+  // 材料一多就被截断：6 篇长文档 > 6000 字（截断），缩到三分之一后 < 6000 字（答得完）
   const bigAskDocs = Array.from({ length: 6 }, (_, index) => ({
     id: `ask-${index + 1}`,
     title: `长文档 ${index + 1}`,
@@ -378,8 +378,15 @@ try {
   mock.calls.length = 0;
   mock.truncateOverChars = 6000;
   const retried = await answerQuestion('这些文档讲什么？', bigAskDocs, { scope: 'corpus', chatOptions: { env } });
-  check('被截断时自动少喂一半再问一次', mock.calls.length === 2 && retried.answer.text.length > 0, `calls=${mock.calls.length}`);
-  check('第二次问的预算翻倍（封顶 8000）', mock.calls.at(-1)?.body?.max_tokens === 6000, String(mock.calls.at(-1)?.body?.max_tokens));
+  check('被截断时自动少喂一部分再问一次', mock.calls.length === 2 && retried.answer.text.length > 0, `calls=${mock.calls.length}`);
+  check('第二次问的预算翻倍（封顶 8000）', mock.calls.at(-1)?.body?.max_tokens === 8000, String(mock.calls.at(-1)?.body?.max_tokens));
+  check(
+    '第二次问的少喂到三分之一（不是一半）',
+    mock.calls.at(-1)?.body?.messages?.at(-1)?.content?.includes('长文档 2') === true &&
+      mock.calls.at(-1)?.body?.messages?.at(-1)?.content?.includes('长文档 3') === false,
+    '',
+  );
+  check('第二次问的明确要求短答案', String(mock.calls.at(-1)?.body?.messages?.at(-1)?.content ?? '').includes('【上一次】'), '');
   check(
     '第二次的材料确实变短了',
     String(mock.calls.at(-1)?.body?.messages?.at(-1)?.content ?? '').length < String(mock.calls[0]?.body?.messages?.at(-1)?.content ?? '').length,

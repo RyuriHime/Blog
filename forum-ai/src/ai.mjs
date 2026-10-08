@@ -543,7 +543,7 @@ export async function reviewCorpus(docs, options = {}) {
  * 注意：**不要**把这个变量名加进 `aiStatus()` 的 `envKeys`（`/api/site` 的 `ai`
  * 形状被 `scripts/check-golden.mjs` 冻着）。
  */
-const ASK_MAX_TOKENS_DEFAULT = 3000;
+const ASK_MAX_TOKENS_DEFAULT = 4000;
 
 /** 问答预算：环境变量优先，非法值退回默认。 */
 function askMaxTokens(env) {
@@ -565,12 +565,12 @@ export async function answerQuestion(question, docs, options = {}) {
   const contentPerDoc = scope === 'document' ? 12000 : 1600;
   const focus = questionTerms(question);
 
-  const ask = (list, cap, maxTokens) => {
+  const ask = (list, cap, maxTokens, { brief = false } = {}) => {
     const material = buildMaterial(list, { charLimit: cap, withReplies: true, withContent: true, contentPerDoc, focus });
     return chatJson(
       [
         { role: 'system', content: ASK_SYSTEM },
-        { role: 'user', content: renderAskUser({ scope, material: material.text, question: clampText(question, 500) }) },
+        { role: 'user', content: renderAskUser({ scope, material: material.text, question: clampText(question, 500), brief }) },
       ],
       { temperature: 0.3, maxTokens, badJsonMessage: 'AI 返回的问答结果不是合法 JSON', ...chatOptions },
     ).then((result) => ({ ...result, material }));
@@ -580,11 +580,14 @@ export async function answerQuestion(question, docs, options = {}) {
   try {
     attempt = await ask(docs, limit, budget);
   } catch (error) {
-    // 预算被烧光时上游不重试，但**材料少一半往往就答得完**：少喂几篇、预算翻倍再问一次。
+    // 预算被烧光时上游不重试，但**材料和答案都缩一缩往往就答得完**：
+    // 少喂到三分之一、预算翻倍（默认 4000 → 8000），并在提问里明确要求短答案。
     if (!isTruncated(error) || docs.length < 2) throw error;
-    const half = docs.slice(0, Math.max(1, Math.ceil(docs.length / 2)));
+    const fewer = docs.slice(0, Math.max(2, Math.ceil(docs.length / 3)));
     try {
-      attempt = await ask(half, Math.max(4000, Math.floor(limit / 2)), Math.min(budget * 2, 8000));
+      attempt = await ask(fewer, Math.max(3000, Math.floor(limit / 3)), Math.min(Math.max(budget, 4000) * 2, 8000), {
+        brief: true,
+      });
     } catch (retryError) {
       // 两次都答不完：给一句用户看得懂的失败原因（前端对 `ai_*` 码会原样展示这句话）。
       if (isTruncated(retryError)) {

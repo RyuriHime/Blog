@@ -113,13 +113,14 @@ JSON 结构：
 answer 的排版（宿主按 Markdown 渲染，务必照做，不要挤成一大段）：
 - 先用一两句话直接给结论，再展开；
 - **answer 控制在 800 字以内**：回答里给的是「够用的结论 + 关键细节」，不是把材料复述一遍；
+- 要写代码时只给最小可运行片段（20 行以内），不要给多份变体、不要拼接完整工程；
 - 内容多时按小节组织：**小节标题单独占一行**，写成 **小节标题**（需要时带序号，如 **2. 基础概念**）；
 - 并列的要点写成 "- " 开头的列表，一条一行，两条不要并在一行；
 - 段落之间空一行（JSON 里就是 \\n\\n）；不要用表格；除非问题本身要代码，不要用代码块；
 - 引用材料时把 [#编号] 紧跟在那句话后面。
 要求：
 - answer 里引用材料时用 [#编号] 标注；
-- citations 只列真正用到的文档，编号必须真实存在；
+- citations 最多 8 条，只列真正用到的文档，编号必须真实存在，每条 quote 30 字内；
 - 材料不足以回答时，answer 直接说明缺什么，confidence 用 low。`;
 
 export const NOT_CONFIGURED_MESSAGE =
@@ -165,7 +166,11 @@ export function renderSiteMergeUser({ count = 0, parts = '' }) {
   return `【全库概况】共 ${count} 篇文档\n【各部分的分组草案】\n\n${parts}`;
 }
 
-export function renderAskUser({ scope, material, question }) {
+export function renderAskUser({ scope, material, question, brief = false }) {
   const scopeText = scope === 'document' ? '单篇文档及其讨论' : '全部文档及其讨论';
-  return `【材料范围】${scopeText}\n【材料】\n${material}\n\n【问题】${question}`;
+  // brief：上一次回答把预算烧光了，这次明确要「短答案」（LOCAL PATCH，见 LOCAL-PATCHES.md 的 O 节）
+  const hint = brief
+    ? '\n【上一次】上一次回答超出预算被掐断了（材料也已缩到最少）。这次只给要点：结论 + 最小示例，不要复述材料；要代码就给 20 行以内的片段；answer 控制在 400 字以内。'
+    : '';
+  return `【材料范围】${scopeText}\n【材料】\n${material}\n\n【问题】${question}${hint}`;
 }
