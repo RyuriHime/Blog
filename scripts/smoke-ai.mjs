@@ -362,6 +362,19 @@ try {
   check('统计里有已解读篇数', siteIndex.data.stats.analyzed >= 2, JSON.stringify(siteIndex.data.stats));
   check('整理后不算过期', siteIndex.data.stale === false, `stale=${siteIndex.data.stale}`);
 
+  console.log('\n▶ 语料检索');
+  const searchCommon = await member2.call(`/api/ai/search?q=${encodeURIComponent('的')}`);
+  check('两个字以下不搜（minLength=2）', searchCommon.status === 200 && searchCommon.data?.total === 0 && searchCommon.data.minLength === 2, JSON.stringify(searchCommon.data).slice(0, 160));
+  const searchBody = await member2.call(`/api/ai/search?q=${encodeURIComponent('Node')}`);
+  check('语料检索返回 200 并带命中数', searchBody.status === 200 && typeof searchBody.data?.total === 'number', `status=${searchBody.status} ${JSON.stringify(searchBody.data).slice(0, 160)}`);
+  check('检索结果带片段与出处', searchBody.data.items.every((item) => item.id && item.title && typeof item.snippet === 'string' && item.author !== undefined), JSON.stringify(searchBody.data.items[0] ?? {}).slice(0, 200));
+  check('检索知道语料一共有多少篇', searchBody.data.documents >= 3, String(searchBody.data.documents));
+  const knownTitle = String(siteIndex.data.readingPath?.[0]?.post?.title ?? siteIndex.data.topics[0].posts[0].title ?? '');
+  const searchTitleWord = await member2.call(`/api/ai/search?q=${encodeURIComponent(knownTitle.slice(0, 2))}`);
+  check('标题里的词能搜到且标成 inTitle', searchTitleWord.data?.total >= 1 && searchTitleWord.data.items.some((item) => item.inTitle === true), JSON.stringify(searchTitleWord.data.items.map((item) => item.inTitle)));
+  const searchAnon = await anon.call(`/api/ai/search?q=${encodeURIComponent('Node')}`);
+  check('未登录检索被拒绝（401）', searchAnon.status === 401, `status=${searchAnon.status}`);
+
   console.log('\n▶ 问答');
   const askPost = await member2.call('/api/ai/ask', { method: 'POST', body: { question: '这篇讲了什么？', postId: 2 } });
   check('单篇问答返回 200', askPost.status === 200, `status=${askPost.status} ${JSON.stringify(askPost.error)}`);

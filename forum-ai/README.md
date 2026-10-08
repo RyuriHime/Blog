@@ -252,6 +252,7 @@ http.createServer(async (req, res) => {
 | POST | `/api/ai/corpus/analyze` | 重新整理全库 | 管理员 |
 | DELETE | `/api/ai/corpus` | 清空解读与报告缓存 | 管理员 |
 | POST | `/api/ai/ask` | 问答，`{ question, documentId? }` | 登录 |
+| GET | `/api/ai/search?q=&limit=` | 语料检索（标题 + 正文，`q` 至少 2 字） | 登录 |
 
 统一响应：成功 `{ ok: true, data }`，失败 `{ ok: false, error: { code, message } }`。
 错误码与状态码的映射见 `routes.mjs` 的 `AI_ERROR_STATUS`：
@@ -277,7 +278,7 @@ http.createServer(async (req, res) => {
 - **批量解读的优先级**：解读失败 → 没解读过 → 这一篇自己变了；上游整体故障时立即返回部分结果（`partial: true`），不会把剩下的都试一遍。
 - **并发安全**：同一文档重复解读是覆盖写（`ON CONFLICT DO UPDATE`）；批量为串行，避免把上游打爆。
 
-## 6. 自测覆盖（169 项，无需真实密钥）
+## 6. 自测覆盖（176 项，无需真实密钥）
 
 ```
 ▶ 配置与降级      未配置抛错、状态不含密钥、映射成 503
@@ -291,6 +292,7 @@ http.createServer(async (req, res) => {
 ▶ 输出截断        不重试（只打一次上游）/ 半截 JSON 也算截断 / 目录截断自动落分块 / 块截断对半切开 / 归并失败用草案兜底
 ▶ 问答预算        默认 3000（不再是写死的 1200）/ AI_ASK_MAX_TOKENS 生效 / 截断后砍半重问、再截断抛 ai_answer_truncated / 单篇不重问
 ▶ 检索选择        命中排序、预算控制、空问题
+▶ 语料检索        标题命中（inTitle）/ 正文命中 / 命中片段带上下文 / limit 只截返回条数 / 空关键词
 ▶ SQLite 缓存     索引同步、逐篇指纹与整站指纹、缓存读写、过期判定（新增别篇不算过期）、老库补齐逐篇指纹、批量优先级、失败现场落库
 ▶ HTTP 处理器     未登录 401、非管理员 403、未配置 503 且不写脏缓存、404、
                   问答 scope、参数校验、清缓存、**上游故障的部分失败语义**

@@ -1521,6 +1521,8 @@ let pagesScanned = 0;
 let ownerFollowCardsChecked = 0;
 /** `#/ai-edit` 的用量面板断言到底跑没跑（同上，哨兵得能证明自己没被跳过）。 */
 let usagePanelChecked = 0;
+/** `#/ai` 的语料检索断言到底跑没跑（同上）。 */
+let aiSearchChecked = 0;
 for (const [label, file, fn, argv] of CASES) {
   let target;
   try {
@@ -1557,6 +1559,24 @@ for (const [label, file, fn, argv] of CASES) {
       if (!pageHtml.includes('我的关注者')) problems.push('个人主页（自己视角）：「关注者」那张卡没有换成「我的关注者」');
       if (followAt >= 0 && postsAt >= 0 && followAt > postsAt) {
         problems.push('个人主页（自己视角）：「我关注的人」卡排在文章列表下面，文章一多就又看不见了');
+      }
+    }
+    // `#/ai` 的语料检索（m09344：本地按标题过滤 + 后端按标题与正文搜，wiki 词条正文也进语料）。
+    // 这一块曾经只是「在已渲染的前 30 行上按标题过滤」，所以「搜不到 wiki」——
+    // 夹具里 `/api/ai/site` 的 35 篇之外什么都没有，光看页面字符串看不出区别，
+    // 于是这里钉住三样：结果容器、新占位文案、以及老的前端过滤动作还留着。
+    if (fn === 'viewAI') {
+      aiSearchChecked += 1;
+      const required = [
+        ['语料检索的结果容器', 'data-ai-hits'],
+        ['搜索框明说能搜正文', 'placeholder="搜标题或正文…"'],
+        ['本地按标题过滤的钩子还在（列表不必等后端）', 'data-action="ai-list-search"'],
+        ['「全部」与三个筛选按钮还在', 'data-ai-list="1"'],
+      ];
+      for (const [what, marker] of required) {
+        if (!pageHtml.includes(marker)) {
+          problems.push(`AI 助手：语料检索少了${what}（找不到 ${marker}）—— 搜索是「本地先筛 + 后端再搜」，两半都得在`);
+        }
       }
     }
     // `#/ai-edit` 的用量面板（m07388：人人见自己的、管理员多一层全站）。
@@ -1685,6 +1705,9 @@ if (ownerFollowCardsChecked !== 1) {
 // 同理：`#/ai-edit` 要是哪天从 CASES 里被挪走或改了函数名，用量面板那串断言会静静跳过。
 if (usagePanelChecked !== 1) {
   problems.push(`AI 编辑台用量面板的断言跑了 ${usagePanelChecked} 次（应该正好 1 次）—— 检查等于没生效`);
+}
+if (aiSearchChecked !== 1) {
+  problems.push(`AI 助手的语料检索断言跑了 ${aiSearchChecked} 次（应该正好 1 次）—— 检查等于没生效`);
 }
 void feedMod;
 

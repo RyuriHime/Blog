@@ -333,6 +333,7 @@ export function mountForumAi({
   // 路由表（顺序敏感：静态段要排在 :id 之前）
   const routes = [
     ['GET', `${basePath}/status`, handlers.status, false],
+    ['GET', `${basePath}/search`, handlers.search, false],
     ['GET', `${basePath}/posts/:id`, handlers.getReview, true],
     ['POST', `${basePath}/posts/:id/analyze`, handlers.analyzeDocument, true],
     ['POST', `${basePath}/posts/analyze-pending`, handlers.analyzePending, true],

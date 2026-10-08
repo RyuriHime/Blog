@@ -179,6 +179,28 @@ try {
   check('文档 id 是字符串（兼容通用包契约）', typeof docs[0].id === 'string');
   check('宿主表没有被写入 AI 字段', !db.prepare('PRAGMA table_info(posts)').all().some((col) => col.name.startsWith('ai_')));
 
+  console.log('\n▶ 语料检索（标题 + 正文）');
+  const searchBody = await call('/api/ai/search?q=keyset', { cookie: 'forum_sid=alice-token' });
+  check('登录后检索 → 200', searchBody.status === 200, JSON.stringify(searchBody.body).slice(0, 160));
+  check(
+    '正文命中也能搜到（不只是标题）',
+    searchBody.body.data.total === 1 && searchBody.body.data.items[0].id === '2' && searchBody.body.data.items[0].inTitle === false,
+    JSON.stringify(searchBody.body.data).slice(0, 200),
+  );
+  check('命中片段带着上下文与关键词', /keyset/.test(String(searchBody.body.data.items[0].snippet)), String(searchBody.body.data.items[0].snippet));
+  const titleHit = await call('/api/ai/search?q=SQLite', { cookie: 'forum_sid=alice-token' });
+  check(
+    '标题命中的都算命中',
+    titleHit.body.data.total === 2 && titleHit.body.data.items.every((item) => item.inTitle === true),
+    JSON.stringify(titleHit.body.data.items.map((item) => item.id)),
+  );
+  const searchLimit = await call('/api/ai/search?q=SQLite&limit=1', { cookie: 'forum_sid=alice-token' });
+  check('limit 只截返回条数、total 仍是全部命中', searchLimit.body.data.items.length === 1 && searchLimit.body.data.total === 2, JSON.stringify(searchLimit.body.data).slice(0, 120));
+  const tooShort = await call('/api/ai/search?q=深', { cookie: 'forum_sid=alice-token' });
+  check('一个字不搜（minLength=2）', tooShort.body.data.total === 0 && tooShort.body.data.minLength === 2, JSON.stringify(tooShort.body.data).slice(0, 120));
+  const searchAnon = await call('/api/ai/search?q=SQLite');
+  check('未登录检索 → 401', searchAnon.status === 401, String(searchAnon.status));
+
   console.log('\n▶ 解读（普通用户）');
   const analyze = await call('/api/ai/posts/1/analyze', { method: 'POST', body: {}, cookie: 'forum_sid=alice-token' });
   check('登录后解读 → 200', analyze.status === 200, JSON.stringify(analyze.body).slice(0, 200));
