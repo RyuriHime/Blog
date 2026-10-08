@@ -564,6 +564,37 @@ AI 接口没有返回内容（finish_reason=length，提示 8840 / 生成 3000 t
 
 ---
 
+## R. 回答里的代码块全糊了：正文换行被压平 + 模型把 ``` 挤在一行（甲类，同日补）
+
+**现象**（用户截图）：`#/ai` 的回答里，代码块显示成一行行内文字 —— 能看见字面的 `` ```cpp ``、
+语句全挤在一行、代码里还夹着反引号样式，读者根本看不出那是代码。
+
+**原因**（两处叠加，缺一不可）：
+
+1. `src/parse.mjs` 的 `normalizeAnswer()` 用 `clampText(parsed.answer, 4000)` 收尾，而 `clampText` 会把
+   连续空白**压成一个空格** —— 换行全没了，`` ```cpp\nint a = 1;\n``` `` 变成 `` ```cpp int a = 1; ``` `` 一行；
+2. 前端 `public/views/ai.js` 的分块渲染要求 ``` 标记**单独占一行**（`/^```/`）才认代码块，于是它把这行
+   当普通段落，行内代码规则又把 `` ``` `` 当成了行内反引号 —— 代码块彻底退化成正文。
+
+**我们的修法**：
+
+| 位置 | 改动 |
+|---|---|
+| `src/parse.mjs` | 新增 `answerText(value, max = 4000)`：**保留换行**（CRLF → LF、去行尾空白、连续空行压成一个、去首尾空行，仍按 4000 字截断），`normalizeAnswer()` 的 `text` 改用它 —— 代码块 / 列表 / 小标题都靠换行成段 |
+| `src/prompts.mjs` | `ASK_SYSTEM` 的排版清单改成「要写代码就用 ```语言 单独占一行开头、``` 单独占一行结尾，代码每行一条语句，不要挤成一行；需要对比时可以用 Markdown 表格」，不再一律禁用表格与代码块 |
+| `public/views/ai.js` | 新增 `aiFencesToLines()`：把 ``` 标记摆正（成对才当代码块，落单的反引号留给正文），语言标记与代码分开，并只对**代码之外**的文字做断行（`aiNormalizeProse()`）—— 代码里的 `- ` / `1. ` / `**` 不再被当成结构 |
+| `public/views/ai.js` | 代码块带语言标签（`AI_CODE_LANGS` 认 cpp / python / js …），渲染成 `.ai-pre-wrap > .ai-pre-lang + pre.ai-pre`；新增 Markdown 表格（`AI_TABLE_ROW` / `AI_TABLE_SEP` / `aiTableCells()`）渲染成 `.ai-table`（表头 `<th>`、数据 `<td>`、分隔行丢弃） |
+| `public/css/95-ai.css` | 新增 `.ai-pre-wrap` / `.ai-pre-lang` / `.ai-table` 的样式（语言标签浮在代码块右上角；表格窄边线、表头用面板底色） |
+
+**同步改过的作者文件**：`selftest.mjs` +4 项（回答正文保留换行、代码块每行都在、CRLF 折成 LF 且连续空行压成一个、
+仍按 4000 字截断）= **213 项**；`scripts/smoke-ai.mjs` +1 项（回答正文保留了换行）= **94 项**；
+`scripts/check-ui-contract.mjs` +3 项（支持 ``` 代码块且标记会摆正 / 代码里的 Markdown 标记不被当结构 / 支持 Markdown 表格）= **328 项**。
+
+> 说明：模型**整块挤成一行**且语言标记与代码同一个 token 时（`` ```cpp vector<int> a; ``` ``），
+> 前端只能保证「这是代码块 + 语言标签正确」，行内换行得靠提示词要求模型自己写 —— 它写了就都在。
+
+---
+
 ## 附：作者包的其它小问题（不影响功能，仅记录）
 
 1. `forum-ai/src/mount.mjs` 顶部的用法注释写的是 `mountForumAi({ db, resolveUser, baseDir: ROOT, aiDir: join(ROOT,'forum-ai') })`，但**实际函数签名没有 `baseDir` / `aiDir` 这两个参数**（注释与实现不一致）。
@@ -580,11 +611,11 @@ AI 接口没有返回内容（finish_reason=length，提示 8840 / 生成 3000 t
 | 测试 | 期望 |
 |---|---|
 | `node forum-ai/selftest-mount.mjs` | 通过 49 项，失败 0 项 |
-| `node forum-ai/selftest.mjs` | 通过 209 项，失败 0 项 |
-| `node scripts/smoke-ai.mjs` | 通过 93 项，失败 0 项 |
+| `node forum-ai/selftest.mjs` | 通过 213 项，失败 0 项 |
+| `node scripts/smoke-ai.mjs` | 通过 94 项，失败 0 项 |
 | `node scripts/smoke.mjs` | 通过 237 项，失败 0 项 |
 | `node scripts/check-golden.mjs` | 通过 88 项，差异 0 项（对外行为与改造前一致） |
-| `node scripts/check-ui-contract.mjs` | 通过 325 项（下限 317），问题 0 项 |
+| `node scripts/check-ui-contract.mjs` | 通过 328 项（下限 317），问题 0 项 |
 | `node scripts/check-encoding.mjs` | 已检查 211 个文件（下限 205），中文片段断言 84 条 |
 
-合计 **1001 项**（2026-10 复跑实测；数量随轮次增删会变，以各脚本自己打印的下限为准）。另外 `node scripts/check-encoding.mjs` 在 Linux 上会报 `ENOENT ... start.cmd` —— 它硬编码要检查 `start.cmd`（Windows 专用文件、故意不上传），**这个失败是预期的，不是问题**。
+合计 **1009 项**（2026-10 复跑实测；数量随轮次增删会变，以各脚本自己打印的下限为准）。另外 `node scripts/check-encoding.mjs` 在 Linux 上会报 `ENOENT ... start.cmd` —— 它硬编码要检查 `start.cmd`（Windows 专用文件、故意不上传），**这个失败是预期的，不是问题**。

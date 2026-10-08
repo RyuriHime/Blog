@@ -294,6 +294,14 @@ try {
   check('置信度非法时回落 medium', answer.confidence === 'medium');
   check('兼容 postId 写法', normalizeAnswer({ citations: [{ postId: 1, title: 'x' }] }, [{ id: 1 }]).citations[0].documentId === 1);
 
+  const keepNewlines = normalizeAnswer({ answer: '第一段\n\n```cpp\nint a = 1;\nint b = 2;\n```\n\n第二段\n' }, []).text;
+  check('回答正文保留换行（代码块才成得了段）', keepNewlines === '第一段\n\n```cpp\nint a = 1;\nint b = 2;\n```\n\n第二段', JSON.stringify(keepNewlines));
+  check('回答里的代码块每行都在', keepNewlines.split('\n').length === 8, String(keepNewlines.split('\n').length));
+  const crlf = normalizeAnswer({ answer: '\r\n\r\n甲\r\n\r\n\r\n乙\r\n' }, []).text;
+  check('CRLF 折成 LF、连续空行压成一个', crlf === '甲\n\n乙', JSON.stringify(crlf));
+  const longAnswer = normalizeAnswer({ answer: 'x'.repeat(4500) }, []).text;
+  check('回答仍然按 4000 字截断', longAnswer.length === 4000, String(longAnswer.length));
+
   /* ---------------- 材料装配 ---------------- */
   console.log('\n▶ 材料装配');
   const material = buildMaterial(DOCS, { charLimit: 100000 });
