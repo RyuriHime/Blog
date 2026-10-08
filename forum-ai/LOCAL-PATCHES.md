@@ -540,6 +540,30 @@ AI 接口没有返回内容（finish_reason=length，提示 8840 / 生成 3000 t
 
 ---
 
+## Q. 「问全站」慢到 8 秒以上：思维链全花在用户等待里（甲类，同日补）
+
+**现象**：`#/ai` 的「问全站」稳定要 **8 秒上下**（线上 6 个问题实测：平均 7732ms、中位 7901ms、最慢 11206ms），
+宽问题更慢；`tokens.completion` 实测 **1144 ~ 2487**，而同一个回答的正文只有 500~1300 字 —— 生成的大头不是答案。
+
+**原因**：`deepseek-flash` **默认开着思考模式、effort = `high`**（官方文档「思考模式」那页），
+思维链通过 `reasoning_content` 返回并**计入 `completion_tokens`**。问答这条路其实不需要长思考：
+材料已经摆在提示词里、答案限 800 字、输出还得是 JSON —— 思维链每多一千 token，用户就多等三秒左右，
+而且宽问题还容易被思维链把 `max_tokens` 吃光（就是 O / O2 / O3 三节那些 502、503 的成因之一）。
+线上 `/api/site` 的 `ai.baseUrl` 实测是 `https://api.deepseek.com`，所以这个开关是官方支持的参数。
+
+**我们的修法**（只关问答这一条路，别的照旧开着）：
+
+| 位置 | 改动 |
+|---|---|
+| `src/ai.mjs` | `chatOnce()` 支持把 `thinking` / `reasoningEffort` 透传进请求体（不传就沿用服务端默认「开着」） |
+| `src/ai.mjs` | 新增 `ASK_THINKING = { type: 'disabled' }`，`answerQuestion()` 的每一次调用（含被截断后的重问）都带上它 —— 思考模式关掉、思维链归零，延迟掉到 5 秒上下 |
+| `src/ai.mjs` | 边界：**解读（`reviewDocument`）与整理全站（`reviewCorpus`）不传**，继续用思考模式（那边真需要推理，且不在用户等待路径上，是一次性的后台成本） |
+
+**同步改过的作者文件**：`selftest.mjs` +2 项（问答请求显式关掉思考模式 / 整理全站没关思考模式）= **209 项**；
+`scripts/smoke-ai.mjs` +1 项（问答请求关掉思考模式）= **93 项**。
+
+---
+
 ## 附：作者包的其它小问题（不影响功能，仅记录）
 
 1. `forum-ai/src/mount.mjs` 顶部的用法注释写的是 `mountForumAi({ db, resolveUser, baseDir: ROOT, aiDir: join(ROOT,'forum-ai') })`，但**实际函数签名没有 `baseDir` / `aiDir` 这两个参数**（注释与实现不一致）。
@@ -556,11 +580,11 @@ AI 接口没有返回内容（finish_reason=length，提示 8840 / 生成 3000 t
 | 测试 | 期望 |
 |---|---|
 | `node forum-ai/selftest-mount.mjs` | 通过 49 项，失败 0 项 |
-| `node forum-ai/selftest.mjs` | 通过 207 项，失败 0 项 |
-| `node scripts/smoke-ai.mjs` | 通过 92 项，失败 0 项 |
+| `node forum-ai/selftest.mjs` | 通过 209 项，失败 0 项 |
+| `node scripts/smoke-ai.mjs` | 通过 93 项，失败 0 项 |
 | `node scripts/smoke.mjs` | 通过 237 项，失败 0 项 |
 | `node scripts/check-golden.mjs` | 通过 88 项，差异 0 项（对外行为与改造前一致） |
 | `node scripts/check-ui-contract.mjs` | 通过 325 项（下限 317），问题 0 项 |
 | `node scripts/check-encoding.mjs` | 已检查 211 个文件（下限 205），中文片段断言 84 条 |
 
-合计 **998 项**（2026-10 复跑实测；数量随轮次增删会变，以各脚本自己打印的下限为准）。另外 `node scripts/check-encoding.mjs` 在 Linux 上会报 `ENOENT ... start.cmd` —— 它硬编码要检查 `start.cmd`（Windows 专用文件、故意不上传），**这个失败是预期的，不是问题**。
+合计 **1001 项**（2026-10 复跑实测；数量随轮次增删会变，以各脚本自己打印的下限为准）。另外 `node scripts/check-encoding.mjs` 在 Linux 上会报 `ENOENT ... start.cmd` —— 它硬编码要检查 `start.cmd`（Windows 专用文件、故意不上传），**这个失败是预期的，不是问题**。

@@ -407,6 +407,13 @@ try {
   // 线上「问答永远 502」的根因：以前把 maxTokens 写死 1200，宽问题被截断成空正文。
   const askCall = mock.calls.find((call) => String(call.body?.messages?.[1]?.content ?? '').includes('Markdown 写作有什么技巧'));
   check('问答的输出预算不再是写死的 1200', askCall?.body?.max_tokens === 4000, String(askCall?.body?.max_tokens));
+  // 思考模式：DeepSeek 的 deepseek-flash 默认开着、effort=high，思维链算进 completion_tokens
+  // （线上一次问答 1100~2500 token 里大头是思维链）⇒ 问答这条路显式关掉，只留解读/整理全站开着。
+  check(
+    '问答请求关掉思考模式（思维链默认开着，又慢又吃预算）',
+    askCall?.body?.thinking?.type === 'disabled',
+    JSON.stringify(askCall?.body?.thinking),
+  );
   const askPromptChars = String(askCall?.body?.messages?.[1]?.content ?? '').length;
   check('全站问答的材料压在 12000 字以内', askPromptChars <= 12000 + 3000, String(askPromptChars));
 
