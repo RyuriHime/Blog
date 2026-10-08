@@ -115,6 +115,8 @@ export function createAiStore({ db, documentSource, tablePrefix = DEFAULT_PREFIX
         prompt_tokens = excluded.prompt_tokens, completion_tokens = excluded.completion_tokens,
         error = excluded.error, error_detail = excluded.error_detail, updated_at = excluded.updated_at`),
     deleteReview: db.prepare(`DELETE FROM ${P}document_reviews WHERE document_id = ?`),
+    // LOCAL PATCH (see LOCAL-PATCHES.md): 旧库补齐逐篇指纹时用（见 backfillDocumentHashes）。
+    setReviewHash: db.prepare(`UPDATE ${P}document_reviews SET content_hash = ? WHERE document_id = ?`),
     countDone: db.prepare(`SELECT COUNT(*) AS count FROM ${P}document_reviews WHERE status = 'done'`),
     countFailed: db.prepare(`SELECT COUNT(*) AS count FROM ${P}document_reviews WHERE status <> 'done'`),
     clearReviews: db.prepare(`DELETE FROM ${P}document_reviews`),
@@ -145,6 +147,46 @@ export function createAiStore({ db, documentSource, tablePrefix = DEFAULT_PREFIX
       return fallback;
     }
   };
+
+  /*
+   * LOCAL PATCH (see LOCAL-PATCHES.md): 语料检索要的上下文片段。
+   *
+   * 命中位置在正文里可能很靠后（wiki 词条几千字），直接把正文丢给前端没用 ——
+   * 从命中处往回取半屏、往回不到头就补省略号，空白折成一格（Markdown 里全是换行）。
+   */
+  const excerptAround = (text, at, matchLength, { width = 50, max = 160 } = {}) => {
+    const flat = String(text ?? '').replace(/\s+/g, ' ').trim();
+    if (!flat) return '';
+    // 折过空白后位置会漂，按命中前后的原文片段重新定位（找不到就从头开始）
+    const needle = String(text ?? '').slice(Math.max(0, at), Math.max(0, at) + Math.max(matchLength, 1));
+    const flatNeedle = needle.replace(/\s+/g, ' ').trim();
+    const hit = flatNeedle ? flat.indexOf(flatNeedle) : -1;
+    const center = hit >= 0 ? hit : 0;
+    const start = Math.max(0, center - width);
+    const end = Math.min(flat.length, center + Math.max(flatNeedle.length, 1) + width);
+    const body = flat.slice(start, end).slice(0, max);
+    return `${start > 0 ? '…' : ''}${body}${end < flat.length ? '…' : ''}`;
+  };
+
+  /** 索引行里「这一篇自己的内容时间」：正文更新时间与它自己的回复里最晚的一条。 */
+  const latestContentAt = (row) => {
+    let latest = Math.max(Number(row.updated_at ?? 0), Number(row.created_at ?? 0));
+    for (const reply of safeJson(row.replies_json, [])) {
+      latest = Math.max(latest, Number(reply.createdAt ?? 0));
+    }
+    return latest;
+  };
+
+  /** 索引行 → 这一篇自己的指纹（形状与 documentHash() 一致）。 */
+  const fingerprintOfIndexRow = (row) =>
+    fingerprintOf([
+      {
+        content: row.content,
+        createdAt: row.created_at,
+        updatedAt: row.updated_at,
+        replies: safeJson(row.replies_json, []),
+      },
+    ]);
 
   const shapeReviewRow = (row) =>
     row && {
@@ -249,6 +291,105 @@ export function createAiStore({ db, documentSource, tablePrefix = DEFAULT_PREFIX
       return fingerprintOf(api.corpusDocuments({ withContent: true, withReplies: true }));
     },
 
+    /*
+     * LOCAL PATCH (see LOCAL-PATCHES.md): 语料检索（标题 + 正文）。
+     *
+     * 上游只有「按 id 取一篇」和「整站指纹」，没有检索接口 —— 站内那个「搜标题…」
+     * 是前端拿 /api/ai/site 报到的几十篇在本地过滤，正文（尤其 wiki 词条正文）根本搜不到。
+     * 这里在索引表上做大小写无关的子串匹配：命中的标题排前面，正文命中给一段上下文；
+     * 全库几百篇、几 MB，一次扫描几十毫秒，用不着上 FTS 表。
+     */
+    searchCorpus({ query = '', limit = 20 } = {}) {
+      const keyword = String(query ?? '').trim();
+      const needle = keyword.toLowerCase();
+      const rows = statements.listIndex.all();
+      if (!needle) return { query: keyword, documents: rows.length, total: 0, items: [] };
+
+      const max = Math.min(Math.max(Number(limit) || 20, 1), 50);
+      const hits = [];
+      for (const row of rows) {
+        const title = String(row.title ?? '');
+        const content = String(row.content ?? '');
+        const titleAt = title.toLowerCase().indexOf(needle);
+        const contentAt = content.toLowerCase().indexOf(needle);
+        if (titleAt < 0 && contentAt < 0) continue;
+        const meta = safeJson(row.meta_json, {});
+        const replies = Number(row.reply_count) || 0;
+        hits.push({
+          id: String(row.document_id),
+          title,
+          board: String(meta.board ?? ''),
+          author: String(meta.author ?? ''),
+          replyCount: replies,
+          updatedAt: Number(row.updated_at) || 0,
+          // 标题命中一律排在只命中正文的前面；正文越靠前、回复越多越靠前
+          inTitle: titleAt >= 0,
+          snippet: excerptAround(content, Math.max(contentAt, 0), needle.length),
+          score:
+            (titleAt >= 0 ? 1000 - Math.min(titleAt, 200) : 0) +
+            (contentAt >= 0 ? 200 - Math.min(Math.floor(contentAt / 40), 200) : 0) +
+            Math.min(replies, 30),
+        });
+      }
+      hits.sort((a, b) => b.score - a.score || a.id.localeCompare(b.id, 'en'));
+      return {
+        query: keyword,
+        documents: rows.length,
+        total: hits.length,
+        items: hits.slice(0, max).map(({ score, ...item }) => item),
+      };
+    },
+
+    /*
+     * LOCAL PATCH (see LOCAL-PATCHES.md): 每篇自己的指纹。
+     *
+     * 上游把**整站语料指纹**写进每一篇解读（`{ contentHash: store.corpusHash() }`），
+     * 于是任何一篇帖子或一条回复动过，全站所有旧解读都算「内容已变」——
+     * 「待整理」永远等于全站总数，页面上的黄色提示也一直亮着。
+     * 这里按篇算指纹（同一篇的正文 / 自己的回复 / 更新时间），只给「这一篇自己变了」
+     * 用；「整理全站」那份报告仍然是整站粒度，继续用 corpusHash()。
+     */
+    documentHashes(ids = null) {
+      const hashes = new Map();
+      for (const doc of api.corpusDocuments({ withContent: true, withReplies: true, ids })) {
+        hashes.set(String(doc.id), fingerprintOf([doc]));
+      }
+      return hashes;
+    },
+
+    documentHash(documentId) {
+      return api.documentHashes([documentId]).get(String(documentId)) ?? '';
+    },
+
+    /*
+     * LOCAL PATCH (see LOCAL-PATCHES.md): 旧库一次性补齐逐篇指纹。
+     *
+     * 换成按篇判之后，老账里存的**整站**指纹（`564:1791433912605:3:192568`）全都对不上，
+     * 「待整理」还是等于全站总数 —— 光改判据不够，得把这些老账改写成逐篇指纹。
+     * 旧值反推不出「这一篇当时」的指纹，只能拿时间戳判：
+     *   这篇自己（正文 + 它自己的回复）在最后一次解读之后没动过 → 补上当前逐篇指纹；
+     *   动过 → 保留旧值，继续算「内容已变」（宁可多问一次，也不假装它没过期）。
+     * 逐篇指纹一定以 `1:` 开头（只算一篇），所以这条迁移天然幂等：跑过一次就不再动它。
+     * 返回补了几篇。
+     */
+    backfillDocumentHashes() {
+      const legacy = statements.reviewsByIds
+        .all()
+        .filter((row) => row.content_hash && !String(row.content_hash).startsWith('1:'));
+      if (legacy.length === 0) return 0;
+      const index = new Map(statements.listIndex.all().map((row) => [String(row.document_id), row]));
+      let repaired = 0;
+      for (const review of legacy) {
+        const row = index.get(String(review.document_id));
+        if (!row) continue; // 索引里没有它（已被删）→ 交给「从未解读 / 已消失」那套逻辑
+        const reviewAt = Number(review.updated_at || review.created_at || 0);
+        if (reviewAt <= 0 || latestContentAt(row) > reviewAt) continue;
+        statements.setReviewHash.run(fingerprintOfIndexRow(row), String(review.document_id));
+        repaired += 1;
+      }
+      return repaired;
+    },
+
     /* ---------------- 单篇解读缓存 ---------------- */
 
     reviewOf(documentId) {
@@ -299,14 +440,15 @@ export function createAiStore({ db, documentSource, tablePrefix = DEFAULT_PREFIX
     },
 
     /**
-     * 待整理的文档：解读失败 → 没解读过 → 内容已变化。
+     * 待整理的文档：解读失败 → 没解读过 → 内容已变化（**这一篇自己**变了，见 documentHashes）。
      *
      * 失败必须排在最前面：批量接口一次只取 `limit` 条（默认 10），大站动辄几百篇「没解读过」，
      * 排在它们后面的失败篇目**永远轮不到重试** —— 页面上那句「解读失败」就再也消不掉了。
      * 「内容已变化」留在最后是有意的：它已经有解读可看，先把没解读过的补上更划算。
      */
     pendingDocuments({ limit = 10 } = {}) {
-      const hash = api.corpusHash();
+      // LOCAL PATCH (see LOCAL-PATCHES.md): 逐篇指纹，不是整站指纹（见 documentHashes）。
+      const hashes = api.documentHashes();
       const reviews = new Map(
         statements.reviewsByIds.all().map((row) => [String(row.document_id), row]),
       );
@@ -317,7 +459,9 @@ export function createAiStore({ db, documentSource, tablePrefix = DEFAULT_PREFIX
         const review = reviews.get(String(row.document_id));
         if (!review) never.push(row.document_id);
         else if (review.status !== 'done') failed.push(row.document_id);
-        else if (review.content_hash && review.content_hash !== hash) stale.push(row.document_id);
+        else if (review.content_hash && review.content_hash !== hashes.get(String(row.document_id))) {
+          stale.push(row.document_id);
+        }
       }
       return [...failed, ...never, ...stale].slice(0, Math.max(1, limit));
     },
@@ -372,6 +516,9 @@ export function createAiStore({ db, documentSource, tablePrefix = DEFAULT_PREFIX
       return selectDocs(question, api.corpusDocuments(), options);
     },
   };
+
+  // LOCAL PATCH (see LOCAL-PATCHES.md): 老库里的整站指纹在这里一次性换成逐篇指纹（幂等）。
+  api.backfillDocumentHashes();
 
   return api;
 }

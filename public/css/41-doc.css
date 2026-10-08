@@ -1500,6 +1500,9 @@ body.doc-wide .sidebar {
   display: block;
   width: 100%;
   min-height: 80px;
+  /* 宽度跟着容器走（上面那条），高度也得有个头：里面报多少就撑多高的话，
+     一个 AI 写歪的循环能把一屏全吃掉。夹住之后超出部分在沙箱内部滚动。 */
+  max-height: 720px;
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   background: var(--bg-soft);

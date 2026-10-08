@@ -33,9 +33,8 @@ import {
 } from './prompts.mjs';
 import { extractJson, normalizeReview, normalizeSiteReport, normalizeAnswer } from './parse.mjs';
 import { buildIndexLines, buildMaterial, clampText, splitByBudget } from './material.mjs';
-
 export { extractJson } from './parse.mjs';
-export { buildIndexLines, buildMaterial, buildContext, clampText, splitByBudget } from './material.mjs';
+export { buildIndexLines, buildMaterial, buildContext, clampText, splitByBudget, excerptAroundFocus, focusHeadings } from './material.mjs';
 export {
   ANALYZE_SYSTEM,
   SITE_SYSTEM,
@@ -534,6 +533,25 @@ export async function reviewCorpus(docs, options = {}) {
 }
 
 /**
+ * 问答的输出预算（LOCAL PATCH，见 LOCAL-PATCHES.md 的 L 节）。
+ *
+ * 上游把问答的 `maxTokens` 写死成 1200：全站问答（14 篇材料、要带引用的 JSON）实测
+ * 输出 992 就已经贴到上限，问题一宽就撞 `finish_reason=length` —— 上游对这种情况
+ * 明确不重试（见 `isTruncated`），于是返回空正文 → `ai_empty_response` → 前端
+ * 只看到「服务器开小差了」。这里把预算放宽，并允许 `AI_ASK_MAX_TOKENS` 覆盖。
+ *
+ * 注意：**不要**把这个变量名加进 `aiStatus()` 的 `envKeys`（`/api/site` 的 `ai`
+ * 形状被 `scripts/check-golden.mjs` 冻着）。
+ */
+const ASK_MAX_TOKENS_DEFAULT = 4000;
+
+/** 问答预算：环境变量优先，非法值退回默认。 */
+function askMaxTokens(env) {
+  const value = Number(env?.AI_ASK_MAX_TOKENS);
+  return Number.isFinite(value) && value >= 200 ? Math.floor(value) : ASK_MAX_TOKENS_DEFAULT;
+}
+
+/**
  * 基于材料的问答。
  * @param {string} question
  * @param {Array<object>} docs 本次允许使用的材料
@@ -541,79 +559,201 @@ export async function reviewCorpus(docs, options = {}) {
  */
 export async function answerQuestion(question, docs, options = {}) {
   const { scope = 'corpus', charLimit, chatOptions = {} } = options;
-  const material = buildMaterial(docs, {
-    charLimit: charLimit ?? (scope === 'document' ? 16000 : 24000),
-    withReplies: true,
-    withContent: true,
-  });
-  const { parsed, model, usage } = await chatJson(
-    [
-      { role: 'system', content: ASK_SYSTEM },
-      { role: 'user', content: renderAskUser({ scope, material: material.text, question: clampText(question, 500) }) },
-    ],
-    { temperature: 0.3, maxTokens: 1200, badJsonMessage: 'AI 返回的问答结果不是合法 JSON', ...chatOptions },
-  );
+  const limit = charLimit ?? (scope === 'document' ? 16000 : 12000);
+  const budget = askMaxTokens(chatOptions.env);
+  // 单篇问答可以整篇喂（正文长才答得细）；全站问答每篇只留一段，靠命中处选取。
+  const contentPerDoc = scope === 'document' ? 12000 : 1600;
+  const focus = questionTerms(question);
 
+  const ask = (list, cap, maxTokens, { brief = false } = {}) => {
+    const material = buildMaterial(list, { charLimit: cap, withReplies: true, withContent: true, contentPerDoc, focus });
+    return chatJson(
+      [
+        { role: 'system', content: ASK_SYSTEM },
+        { role: 'user', content: renderAskUser({ scope, material: material.text, question: clampText(question, 500), brief }) },
+      ],
+      { temperature: 0.3, maxTokens, badJsonMessage: 'AI 返回的问答结果不是合法 JSON', ...chatOptions },
+    ).then((result) => ({ ...result, material }));
+  };
+
+  let attempt;
+  try {
+    attempt = await ask(docs, limit, budget);
+  } catch (error) {
+    // 预算被烧光时上游不重试，但**材料和答案都缩一缩往往就答得完**：
+    // 少喂到三分之一、预算翻倍（默认 4000 → 8000），并在提问里明确要求短答案。
+    if (!isTruncated(error) || docs.length < 2) throw error;
+    const fewer = docs.slice(0, Math.max(2, Math.ceil(docs.length / 3)));
+    try {
+      attempt = await ask(fewer, Math.max(3000, Math.floor(limit / 3)), Math.min(Math.max(budget, 4000) * 2, 8000), {
+        brief: true,
+      });
+    } catch (retryError) {
+      // 两次都答不完：给一句用户看得懂的失败原因（前端对 `ai_*` 码会原样展示这句话）。
+      if (isTruncated(retryError)) {
+        throw new AiError(
+          'ai_answer_truncated',
+          '这次的资料太多，模型没能在预算内答完。把问题问得具体一点（或选中某一篇再问）会好很多。',
+          retryError.details ?? error.details ?? {},
+        );
+      }
+      throw retryError;
+    }
+  }
+
+  const { parsed, model, usage, material } = attempt;
   const answer = normalizeAnswer(parsed, docs);
   return { answer, model, usage, truncated: material.truncated, included: material.included };
 }
 
 /**
+ * 问题里的检索词：英文/数字串按 2 个字以上切，连续的汉字按 2 个字以上切。
+ * 例：「想学习dfs，然后实现成代码」→ ['想学习', 'dfs', '然后实现成代码']
+ * @param {string} question
+ * @returns {string[]} 已去重、已转小写
+ */
+export function questionTerms(question) {
+  return [...new Set(String(question ?? '').toLowerCase().match(/[a-z0-9_+#.]{2,}|[\u4e00-\u9fa5]{2,}/g) ?? [])];
+}
+
+/**
+ * 汉字长词的「半截词」：整段汉字问句往往一个字都命中不了（「想学习」匹配不到「学习」），
+ * 因此对 3 个字以上的连续汉字再切出 2 字片段，用低权重参与打分。
+ */
+function partialTerms(terms = []) {
+  const grams = new Set();
+  for (const term of terms) {
+    if (!/^[\u4e00-\u9fa5]{3,}$/.test(term)) continue;
+    for (let i = 0; i + 2 <= term.length; i += 1) grams.add(term.slice(i, i + 2));
+  }
+  for (const term of terms) grams.delete(term);
+  return [...grams];
+}
+
+const HEADING_LINE = /^\s{0,3}#{1,6}\s+(.+?)\s*#*\s*$/;
+const BOLD_LINE = /^\s*\*\*([^*\n]{1,40})\*\*\s*$/;
+
+/**
+ * 一篇文档的小标题：Markdown 的 `#` 标题 + 整行加粗的「假标题」（wiki 正文里很常见）。
+ * @param {string} text
+ * @param {{ limit?: number }} [options]
+ * @returns {string[]} 已转小写，最多 limit 条
+ */
+export function extractHeadings(text, { limit = 40 } = {}) {
+  const out = [];
+  for (const line of String(text ?? '').split('\n')) {
+    const match = HEADING_LINE.exec(line) ?? BOLD_LINE.exec(line);
+    if (!match) continue;
+    const heading = String(match[1]).trim().toLowerCase();
+    if (heading) out.push(heading);
+    if (out.length >= limit) break;
+  }
+  return out;
+}
+
+/**
  * 关键词检索打分：零依赖的中文/英文混合检索，用于在超预算时挑选最相关的文档。
  * 打分越高越相关；不修改传入对象。
+ *
+ * 权重刻意「标题 ≫ 小标题 > 标签/摘要/分类 > 正文 > 回复」：
+ * 语料里 wiki 词条的正文动辄上万字，正文里的偶发命中几乎没有区分度。
  * @param {string} question
  * @param {Array<object>} docs
- * @returns {Array<{ doc: object, score: number }>} 已按分数降序排列
+ * @returns {Array<{ doc: object, score: number, titleHit: number, headingHit: number, bodyHit: number }>} 已按分数降序排列
  */
 export function rankDocuments(question, docs) {
-  const terms = [...new Set(String(question ?? '').toLowerCase().match(/[a-z0-9_+#.]{2,}|[\u4e00-\u9fa5]{2,}/g) ?? [])];
+  const terms = questionTerms(question);
+  const partials = partialTerms(terms);
   const now = Date.now();
-  const scored = docs.map((doc) => {
+  const scored = (docs ?? []).map((doc) => {
     const title = String(doc.title ?? '').toLowerCase();
     const summary = String(doc.summary ?? '').toLowerCase();
     const category = String(doc.category ?? '').toLowerCase();
     const tags = (Array.isArray(doc.tags) ? doc.tags : []).join(' ').toLowerCase();
     const body = String(doc.content ?? '').toLowerCase();
     const replyText = (doc.replies ?? []).map((reply) => String(reply.content ?? '')).join(' ').toLowerCase();
+    const headings = terms.length ? extractHeadings(doc.content ?? '').join(' \n ') : '';
 
     let score = 0;
+    let titleHit = 0;
+    let headingHit = 0;
+    let bodyHit = 0;
     for (const term of terms) {
-      if (title.includes(term)) score += 12;
+      if (title.includes(term)) {
+        score += 20;
+        titleHit += 1;
+      }
+      if (headings.includes(term)) {
+        score += 9;
+        headingHit += 1;
+      }
       if (tags.includes(term)) score += 8;
       if (summary.includes(term)) score += 6;
       if (category.includes(term)) score += 5;
-      if (body.includes(term)) score += 3;
-      if (replyText.includes(term)) score += 2;
+      if (body.includes(term)) {
+        score += 2;
+        bodyHit += 1;
+      }
+      if (replyText.includes(term)) score += 1;
     }
+    // 半截词只用来把「学习」「代码」这类词排上来，权重压到不影响精确命中
+    for (const gram of partials) {
+      if (title.includes(gram)) score += 5;
+      if (headings.includes(gram)) score += 3;
+      if (body.includes(gram)) score += 1;
+    }
+
     if (terms.length === 0) score += 1;
     score += Math.min(Number(doc.replyCount ?? doc.replies?.length ?? 0), 10) * 0.3;
     const age = Number(doc.updatedAt ?? doc.createdAt ?? now);
     score += Math.max(0, 6 - (now - age) / (7 * 24 * 3600 * 1000)) * 0.2;
-    return { doc, score };
+    return { doc, score, titleHit, headingHit, bodyHit };
   });
   return scored.sort((a, b) => b.score - a.score || String(a.doc.id).localeCompare(String(b.doc.id)));
 }
 
 /**
  * 在字符预算内挑出该塞进上下文的文档。
+ *
+ * 分两档：**标题/小标题命中**的算强命中，正文偶然命中的算弱命中。
+ * 有强命中时弱命中最多补 maxWeak 篇 —— 否则一句宽问题会把十几篇正文里
+ * 恰好出现该词的文档拖进来，既慢又容易把答案预算烧光。
  * @param {string} question
  * @param {Array<object>} docs
- * @param {{ charBudget?: number, maxDocuments?: number, forceAll?: boolean }} [options]
+ * @param {{ charBudget?: number, maxDocuments?: number, forceAll?: boolean, maxWeak?: number, contentPerDoc?: number }} [options]
+ *   contentPerDoc：实际进材料的每篇正文字数（材料装配会按它截断，选材也得按它估体量，否则一篇长 wiki 就把预算吃光）
  */
-export function selectForQuestion(question, docs, { charBudget = 24000, maxDocuments = 14, forceAll = false } = {}) {
+export function selectForQuestion(
+  question,
+  docs,
+  { charBudget = 11000, maxDocuments = 6, forceAll = false, maxWeak = 2, contentPerDoc = 1600 } = {},
+) {
   const ranked = rankDocuments(question, docs);
+  const strong = ranked.filter((item) => item.titleHit > 0 || item.headingHit > 0);
+  const order = strong.length ? [...strong, ...ranked.filter((item) => item.titleHit === 0 && item.headingHit === 0)] : ranked;
+  const weakCap = strong.length ? Math.max(0, Number(maxWeak) || 0) : maxDocuments;
   const picked = [];
   let used = 0;
-  for (const { doc } of ranked) {
-    const size =
-      String(doc.title ?? '').length +
-      String(doc.content ?? '').length +
-      (doc.replies ?? []).reduce((sum, reply) => sum + String(reply.content ?? '').length, 0) +
-      200;
+  let weakUsed = 0;
+  for (const item of order) {
     if (picked.length >= maxDocuments) break;
+    const isWeak = strong.length > 0 && item.titleHit === 0 && item.headingHit === 0;
+    if (isWeak && weakUsed >= weakCap) continue;
+    const size =
+      String(item.doc.title ?? '').length +
+      Math.min(String(item.doc.content ?? '').length, contentPerDoc) +
+      (item.doc.replies ?? []).reduce((sum, reply) => sum + String(reply.content ?? '').length, 0) +
+      200;
     if (!forceAll && used + size > charBudget && picked.length > 0) break;
-    picked.push(doc);
+    picked.push(item.doc);
     used += size;
+    if (isWeak) weakUsed += 1;
   }
-  return { picked: picked.length ? picked : ranked.slice(0, 1).map((item) => item.doc), used };
+  return {
+    picked: picked.length ? picked : ranked.slice(0, 1).map((item) => item.doc),
+    used,
+    strong: strong.length,
+    weak: weakUsed,
+  };
 }
+

@@ -37,7 +37,7 @@ function check(name, condition, detail = '') {
 /* 假的 OpenAI 兼容服务                                                */
 /* ------------------------------------------------------------------ */
 
-const mock = { calls: [], mode: 'analyze', failWith: null };
+const mock = { calls: [], mode: 'analyze', failWith: null, maxPromptChars: 0, truncateOnce: false };
 
 function mockReply(messages) {
   const system = String(messages?.[0]?.content ?? '');
@@ -110,6 +110,21 @@ const mockServer = http.createServer((req, res) => {
       /* 忽略 */
     }
     mock.calls.push({ headers: req.headers, body: parsed });
+    // 模拟「输出预算被烧光」：上游 200，但 finish_reason=length 且正文为空。
+    const userChars = String(parsed?.messages?.[1]?.content ?? '').length;
+    const truncated = mock.truncateOnce || (mock.maxPromptChars > 0 && userChars > mock.maxPromptChars);
+    if (mock.truncateOnce) mock.truncateOnce = false;
+    if (truncated) {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(
+        JSON.stringify({
+          model: parsed?.model ?? 'mock-model',
+          choices: [{ message: { role: 'assistant', content: '' }, finish_reason: 'length' }],
+          usage: { prompt_tokens: 123, completion_tokens: 45 },
+        }),
+      );
+      return;
+    }
     const content = mockReply(parsed?.messages);
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(
@@ -349,6 +364,19 @@ try {
   check('统计里有已解读篇数', siteIndex.data.stats.analyzed >= 2, JSON.stringify(siteIndex.data.stats));
   check('整理后不算过期', siteIndex.data.stale === false, `stale=${siteIndex.data.stale}`);
 
+  console.log('\n▶ 语料检索');
+  const searchCommon = await member2.call(`/api/ai/search?q=${encodeURIComponent('的')}`);
+  check('两个字以下不搜（minLength=2）', searchCommon.status === 200 && searchCommon.data?.total === 0 && searchCommon.data.minLength === 2, JSON.stringify(searchCommon.data).slice(0, 160));
+  const searchBody = await member2.call(`/api/ai/search?q=${encodeURIComponent('Node')}`);
+  check('语料检索返回 200 并带命中数', searchBody.status === 200 && typeof searchBody.data?.total === 'number', `status=${searchBody.status} ${JSON.stringify(searchBody.data).slice(0, 160)}`);
+  check('检索结果带片段与出处', searchBody.data.items.every((item) => item.id && item.title && typeof item.snippet === 'string' && item.author !== undefined), JSON.stringify(searchBody.data.items[0] ?? {}).slice(0, 200));
+  check('检索知道语料一共有多少篇', searchBody.data.documents >= 3, String(searchBody.data.documents));
+  const knownTitle = String(siteIndex.data.readingPath?.[0]?.post?.title ?? siteIndex.data.topics[0].posts[0].title ?? '');
+  const searchTitleWord = await member2.call(`/api/ai/search?q=${encodeURIComponent(knownTitle.slice(0, 2))}`);
+  check('标题里的词能搜到且标成 inTitle', searchTitleWord.data?.total >= 1 && searchTitleWord.data.items.some((item) => item.inTitle === true), JSON.stringify(searchTitleWord.data.items.map((item) => item.inTitle)));
+  const searchAnon = await anon.call(`/api/ai/search?q=${encodeURIComponent('Node')}`);
+  check('未登录检索被拒绝（401）', searchAnon.status === 401, `status=${searchAnon.status}`);
+
   console.log('\n▶ 问答');
   const askPost = await member2.call('/api/ai/ask', { method: 'POST', body: { question: '这篇讲了什么？', postId: 2 } });
   check('单篇问答返回 200', askPost.status === 200, `status=${askPost.status} ${JSON.stringify(askPost.error)}`);
@@ -360,12 +388,49 @@ try {
   const askSite = await member2.call('/api/ai/ask', { method: 'POST', body: { question: 'Markdown 写作有什么技巧？' } });
   check('全站问答返回 200', askSite.status === 200, `status=${askSite.status} ${JSON.stringify(askSite.error)}`);
   check('全站问答 scope=site 并统计纳入篇数', askSite.data?.scope === 'site' && askSite.data.included >= 1, JSON.stringify(askSite.data));
-  check('全站问答材料含多篇帖子', askSite.data.included >= 4, `included=${askSite.data.included}`);
+  check('全站问答材料含多篇帖子', askSite.data.included >= 3, `included=${askSite.data.included}`);
+  check('全站问答选材有上限（不再把全库塞进材料）', askSite.data.included <= 6, `included=${askSite.data.included}`);
 
   const tooShort = await member2.call('/api/ai/ask', { method: 'POST', body: { question: 'x' } });
   check('过短问题被拒绝（400）', tooShort.status === 400, `status=${tooShort.status}`);
   const tooLong = await member2.call('/api/ai/ask', { method: 'POST', body: { question: 'x'.repeat(501) } });
   check('过长问题被拒绝（400）', tooLong.status === 400, `status=${tooLong.status}`);
+
+  // 线上「问答永远 502」的根因：以前把 maxTokens 写死 1200，宽问题被截断成空正文。
+  const askCall = mock.calls.find((call) => String(call.body?.messages?.[1]?.content ?? '').includes('Markdown 写作有什么技巧'));
+  check('问答的输出预算不再是写死的 1200', askCall?.body?.max_tokens === 4000, String(askCall?.body?.max_tokens));
+  const askPromptChars = String(askCall?.body?.messages?.[1]?.content ?? '').length;
+  check('全站问答的材料压在 12000 字以内', askPromptChars <= 12000 + 3000, String(askPromptChars));
+
+  // 回答挤成一大段（线上实测 1540 字、0 个换行）读不动：提示词必须明确要结构。
+  const askSystem = String(askCall?.body?.messages?.[0]?.content ?? '');
+  check('问答提示词要求分段与小标题', askSystem.includes('answer 的排版') && askSystem.includes('小节标题单独占一行'), askSystem.includes('answer 的排版') ? '已要求' : '没要求');
+  check('问答提示词要求要点写成 - 列表', askSystem.includes('"- " 开头的列表'), '');
+
+  // 上游截断（预算被烧光）：服务端自己砍半材料、把预算加倍再问一次，而不是把 502 甩给用户。
+  mock.truncateOnce = true;
+  const beforeRetry = mock.calls.length;
+  const askRetry = await member2.call('/api/ai/ask', { method: 'POST', body: { question: 'Markdown 写作有什么技巧？' } });
+  check('上游截断一次后，服务端自己砍半重问，最终返回 200', askRetry.status === 200, `status=${askRetry.status} ${JSON.stringify(askRetry.error)}`);
+  const retryCalls = mock.calls.slice(beforeRetry);
+  check('重问时把预算加倍到 8000', retryCalls.length === 2 && retryCalls[1].body.max_tokens === 8000, retryCalls.map((call) => call.body?.max_tokens).join(','));
+  check(
+    '重问时明确要求短答案',
+    String(retryCalls[1]?.body?.messages?.[1]?.content ?? '').includes('【上一次】'),
+    String(retryCalls[1]?.body?.messages?.[1]?.content ?? '').slice(-60),
+  );
+  check(
+    '重问的材料确实更短',
+    String(retryCalls[1]?.body?.messages?.[1]?.content ?? '').length < String(retryCalls[0]?.body?.messages?.[1]?.content ?? '').length,
+    `${String(retryCalls[0]?.body?.messages?.[1]?.content ?? '').length} → ${String(retryCalls[1]?.body?.messages?.[1]?.content ?? '').length}`,
+  );
+
+  // 砍半还是截断：给一句用户能照着做的话，而不是让前端显示「服务器开小差了」。
+  mock.maxPromptChars = 1;
+  const askTruncated = await member2.call('/api/ai/ask', { method: 'POST', body: { question: 'Markdown 写作有什么技巧？' } });
+  check('两次都截断时返回 503 ai_answer_truncated', askTruncated.status === 503 && askTruncated.error?.code === 'ai_answer_truncated', `status=${askTruncated.status} ${JSON.stringify(askTruncated.error)}`);
+  check('截断提示告诉用户怎么办', String(askTruncated.error?.message ?? '').includes('问得具体一点'), String(askTruncated.error?.message));
+  mock.maxPromptChars = 0;
 
   console.log('\n▶ 检索与缓存过期');
   const retrieved = mock.calls.map((call) => String(call.body?.messages?.[1]?.content ?? ''));
@@ -374,8 +439,9 @@ try {
 
   // 帖子写入接口已经下线（`POST /api/posts` 一律 410 `posts_retired`），
   // 所以这里改「建一篇公开积木」—— 积木会顺带配一条影子帖（hidden = 0、deleted = 0），
-  // AI 语料指纹里的「篇数 + 最新更新时间 + 正文总字符数」照样会变，
-  // 要验的「内容一变缓存就标过期」一个字没少。
+  // 它也会进 AI 语料。顺带验 LOCAL PATCH（见 `forum-ai/LOCAL-PATCHES.md`）：
+  // 解读缓存的过期改按**这一篇自己**的指纹判 —— 新增别篇不该让老解读过期，
+  // 只有这一篇自己的正文变了才回队。
   const newDoc = await member2.call('/api/docs', {
     method: 'POST',
     body: {
@@ -390,10 +456,34 @@ try {
     newDoc.status === 200 && Number(newDoc.data?.doc?.id) > 0,
     `status=${newDoc.status} ${JSON.stringify(newDoc.error ?? newDoc.body).slice(0, 160)}`,
   );
+  const newDocId = newDoc.data?.doc?.id;
+  const anchor = await member2.call(`/api/docs/${newDocId}/anchor`);
+  const newPostId = Number(anchor.data?.post?.id);
+  check('新积木的影子帖拿得到 id', newPostId > 0, JSON.stringify(anchor.data?.post ?? anchor.body).slice(0, 160));
+
   const afterChange = await member2.call('/api/ai/posts/2');
-  check('内容变化后缓存标记为过期', afterChange.data?.stale === true, `stale=${afterChange.data?.stale}`);
+  check('新增别篇不让老解读过期（按篇判过期）', afterChange.data?.stale === false, `stale=${afterChange.data?.stale}`);
+
+  const analyzedNew = await member2.call(`/api/ai/posts/${newPostId}/analyze`, { method: 'POST' });
+  check('新建的那一篇解读成功', analyzedNew.status === 200, `status=${analyzedNew.status}`);
+  const freshNew = await member2.call(`/api/ai/posts/${newPostId}`);
+  check('刚解读完自己不算过期', freshNew.data?.stale === false, `stale=${freshNew.data?.stale}`);
+
+  const newMd = await member2.call(`/api/docs/${newDocId}/markdown`);
+  const wrote = await member2.call(`/api/docs/${newDocId}/markdown`, {
+    method: 'PUT',
+    body: { markdown: `${newMd.data?.markdown ?? ''}\n\n这一段是新加的：验「这一篇自己变了才标过期」。` },
+  });
+  check(
+    '改这一篇自己的正文',
+    wrote.status === 200,
+    `status=${wrote.status} ${JSON.stringify(wrote.error ?? wrote.body).slice(0, 160)}`,
+  );
+  const changedSelf = await member2.call(`/api/ai/posts/${newPostId}`);
+  check('这一篇自己变了才标过期', changedSelf.data?.stale === true, `stale=${changedSelf.data?.stale}`);
+
   const siteAfter = await member2.call('/api/ai/site');
-  check('内容变化后全站整理也标记过期', siteAfter.data?.stale === true, `stale=${siteAfter.data?.stale}`);
+  check('内容变化后全站整理仍标记过期', siteAfter.data?.stale === true, `stale=${siteAfter.data?.stale}`);
 
   console.log('\n▶ 失败现场与重试');
   mock.failWith = '抱歉，我暂时没法给出结构化结果。';

@@ -10,7 +10,7 @@
  */
 import http from 'node:http';
 import { DatabaseSync } from 'node:sqlite';
-import { mountForumAi } from './src/mount.mjs';
+import { createForumDocumentSource, mountForumAi } from './src/mount.mjs';
 
 let passed = 0;
 const failures = [];
@@ -179,6 +179,28 @@ try {
   check('文档 id 是字符串（兼容通用包契约）', typeof docs[0].id === 'string');
   check('宿主表没有被写入 AI 字段', !db.prepare('PRAGMA table_info(posts)').all().some((col) => col.name.startsWith('ai_')));
 
+  console.log('\n▶ 语料检索（标题 + 正文）');
+  const searchBody = await call('/api/ai/search?q=keyset', { cookie: 'forum_sid=alice-token' });
+  check('登录后检索 → 200', searchBody.status === 200, JSON.stringify(searchBody.body).slice(0, 160));
+  check(
+    '正文命中也能搜到（不只是标题）',
+    searchBody.body.data.total === 1 && searchBody.body.data.items[0].id === '2' && searchBody.body.data.items[0].inTitle === false,
+    JSON.stringify(searchBody.body.data).slice(0, 200),
+  );
+  check('命中片段带着上下文与关键词', /keyset/.test(String(searchBody.body.data.items[0].snippet)), String(searchBody.body.data.items[0].snippet));
+  const titleHit = await call('/api/ai/search?q=SQLite', { cookie: 'forum_sid=alice-token' });
+  check(
+    '标题命中的都算命中',
+    titleHit.body.data.total === 2 && titleHit.body.data.items.every((item) => item.inTitle === true),
+    JSON.stringify(titleHit.body.data.items.map((item) => item.id)),
+  );
+  const searchLimit = await call('/api/ai/search?q=SQLite&limit=1', { cookie: 'forum_sid=alice-token' });
+  check('limit 只截返回条数、total 仍是全部命中', searchLimit.body.data.items.length === 1 && searchLimit.body.data.total === 2, JSON.stringify(searchLimit.body.data).slice(0, 120));
+  const tooShort = await call('/api/ai/search?q=深', { cookie: 'forum_sid=alice-token' });
+  check('一个字不搜（minLength=2）', tooShort.body.data.total === 0 && tooShort.body.data.minLength === 2, JSON.stringify(tooShort.body.data).slice(0, 120));
+  const searchAnon = await call('/api/ai/search?q=SQLite');
+  check('未登录检索 → 401', searchAnon.status === 401, String(searchAnon.status));
+
   console.log('\n▶ 解读（普通用户）');
   const analyze = await call('/api/ai/posts/1/analyze', { method: 'POST', body: {}, cookie: 'forum_sid=alice-token' });
   check('登录后解读 → 200', analyze.status === 200, JSON.stringify(analyze.body).slice(0, 200));
@@ -230,6 +252,55 @@ try {
   const failedRows = db.prepare("SELECT COUNT(*) AS c FROM ai_document_reviews WHERE status = 'failed'").get().c;
   check('未配置不在缓存里写失败记录（避免脏数据）', failedRows === 0, `failed 行数=${failedRows}`);
   process.env.AI_API_KEY = backupKey;
+
+  console.log('\n▶ wiki 页正文进语料（LOCAL PATCH K）');
+  const wikiDb = new DatabaseSync(':memory:');
+  wikiDb.exec(`
+    CREATE TABLE posts (
+      id INTEGER PRIMARY KEY, title TEXT, content TEXT,
+      deleted INTEGER DEFAULT 0, created_at INTEGER, updated_at INTEGER
+    );
+    CREATE TABLE documents (
+      id INTEGER PRIMARY KEY, title TEXT, template TEXT, scope TEXT,
+      anchor_post_id INTEGER, deleted INTEGER DEFAULT 0, updated_at INTEGER
+    );
+    CREATE TABLE doc_settings (
+      document_id INTEGER PRIMARY KEY, station_id INTEGER DEFAULT 0,
+      source_text TEXT DEFAULT '', updated_at INTEGER
+    );
+  `);
+  const pageAt = Date.now();
+  wikiDb.exec(`
+    INSERT INTO posts (id, title, content, created_at, updated_at) VALUES
+      (1, '普通帖', '帖子正文', ${pageAt - 5000}, ${pageAt - 5000}),
+      (2, '15-puzzle', '页面前 400 字的摘要', ${pageAt - 9000}, ${pageAt - 9000}),
+      (3, '短页', '摘要比页正文长', ${pageAt - 9000}, ${pageAt - 9000});
+    INSERT INTO documents (id, title, template, scope, anchor_post_id, updated_at) VALUES
+      (10, '15-puzzle', 'page', 'public', 2, ${pageAt}),
+      (11, '短页', 'page', 'public', 3, ${pageAt}),
+      (12, '没有影子帖的页', 'page', 'public', 404, ${pageAt});
+    INSERT INTO doc_settings (document_id, station_id, source_text, updated_at) VALUES
+      (10, 23, '## 简介\n15-拼图的**整页正文**，比影子帖摘要长得多。', ${pageAt}),
+      (11, 23, '短', ${pageAt}),
+      (12, 23, '这是没有影子帖的页', ${pageAt});
+  `);
+  const pageSource = createForumDocumentSource(wikiDb, { contentLimit: 20000 })();
+  const pageDoc = pageSource.find((doc) => doc.id === '2');
+  const shortDoc = pageSource.find((doc) => doc.id === '3');
+  const plainDoc = pageSource.find((doc) => doc.id === '1');
+  check(
+    'wiki 页的影子帖用整页正文（不再是前 400 字摘要）',
+    pageDoc?.content.includes('整页正文') && !pageDoc.content.includes('前 400 字'),
+    String(pageDoc?.content).slice(0, 60),
+  );
+  check('页面自己的修改时间进了 updatedAt（改页 → 旧解读回待整理）', pageDoc?.updatedAt === pageAt, String(pageDoc?.updatedAt));
+  check('页正文比摘要短时保留摘要', shortDoc?.content === '摘要比页正文长', String(shortDoc?.content));
+  check('页正文为空时不改影子帖', shortDoc?.updatedAt === pageAt);
+  check('普通帖子一个字都没变', plainDoc?.content === '帖子正文' && plainDoc?.updatedAt === pageAt - 5000, JSON.stringify(plainDoc));
+  check('影子帖不存在的页不会凭空多出一篇', pageSource.length === 3, String(pageSource.length));
+  const noPageSource = createForumDocumentSource(db)();
+  check('宿主没有积木表时语料照旧（只读 posts）', noPageSource[0].content.startsWith('node:sqlite'), String(noPageSource[0].content).slice(0, 40));
+  wikiDb.close();
 
   console.log('\n▶ 清缓存');
   const cleared = await call('/api/ai/cache', { method: 'DELETE', cookie: 'forum_sid=admin-token' });

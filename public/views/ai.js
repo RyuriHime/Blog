@@ -36,6 +36,167 @@ function aiAskFormHtml(context) {
     </form>
     <div class="ai-answer-host" data-ai-answer hidden></div>`;
 }
+/* ------------------------------------------------------------------ */
+/* 回答的排版：模型回的是 Markdown，之前整段 esc 完只把换行换成 <br />，*/
+/* 于是 `**粗体**`、`[#37]`、`1. ` 全都原样堆在一起，读不动。          */
+/* 这里做一个小而安全的子集渲染（全部基于 esc 之后的文本，不注入 HTML）。*/
+
+/** `[#37]`、`[#37, #42]` → 能点的出处标记。 */
+function aiCiteChips(text) {
+  return text.replace(/\[#(\d+(?:\s*[、,，]\s*#?\d+)*)\]/g, (whole, ids) => {
+    const list = String(ids)
+      .split(/\s*[、,，]\s*/)
+      .map((id) => id.replace('#', '').trim())
+      .filter(Boolean);
+    if (!list.length) return whole;
+    return list.map((id) => `<a class="ai-inline-cite" href="#/post/${id}" title="跳到第 ${id} 篇">#${id}</a>`).join('');
+  });
+}
+
+/** 行内：行内代码、Markdown 链接、粗体、出处标记。调用前必须先 esc。 */
+function aiInlineHtml(text) {
+  return aiCiteChips(String(text ?? ''))
+    .replace(/`([^`\n]+)`/g, '<code class="ai-code">$1</code>')
+    .replace(/\[([^\]\n]+)\]\((#[^)\s]+|https?:\/\/[^)\s]+)\)/g, '<a class="ai-link" href="$2">$1</a>')
+    .replace(/\*\*([^*\n]+)\*\*/g, '<strong>$1</strong>');
+}
+
+const AI_LIST_ITEM = /^\s*(?:[-*•]|\d+[.)])\s+(.*)$/;
+
+/**
+ * 模型常把整篇答案写成**一行**：`**1. 小标题** … - 项：… - 项：…`。
+ * 结构标记前面的空白换成换行，后面的分块与列表才认得出它们。
+ */
+function aiNormalizeAnswerMd(raw) {
+  let text = String(raw ?? '').replace(/\r\n?/g, '\n');
+  // 编号小标题（限定短标题，别把正文里的加粗也断开）
+  text = text.replace(/[ \t]+(?=\*\*\s*\d+[.)、]\s{0,2}[^*\n]{0,40}\*\*)/g, '\n');
+  // 短加粗 + 冒号的引导句
+  text = text.replace(/[ \t]+(?=\*\*[^*\n]{2,20}\*\*\s*[：:])/g, '\n');
+  // 行内项目符号：整段出现两次以上才当列表，免得「a - b」这种减法被拆开
+  if ((text.match(/(?:^|\s)[-*•]\s+\S/g) ?? []).length >= 2) text = text.replace(/[ \t]+(?=[-*•]\s+\S)/g, '\n');
+  return text;
+}
+
+/** 一段里塞了好几个「1. … 2. …」就拆成有序列表 —— 模型爱这么写。 */
+function aiParagraphBlock(text) {
+  const marks = text.match(/(?:^|\s)\d+[.)]\s/g) ?? [];
+  if (marks.length < 2) return { type: 'p', text };
+  const parts = text
+    .split(/(?=\s\d+[.)]\s)/)
+    .map((part) => part.trim())
+    .filter(Boolean);
+  if (parts.length < 2) return { type: 'p', text };
+  const items = parts
+    .map((part) => part.replace(/^\d+[.)]\s*/, '').trim())
+    .filter(Boolean);
+  return items.length >= 2 ? { type: 'list', ordered: true, items } : { type: 'p', text };
+}
+
+function aiAnswerBlocks(raw) {
+  const text = aiNormalizeAnswerMd(raw).trim();
+  if (!text) return [];
+  const blocks = [];
+  let para = [];
+  let list = null;
+  let fence = null;
+  const flushPara = () => {
+    if (!para.length) return;
+    blocks.push(aiParagraphBlock(para.join(' ')));
+    para = [];
+  };
+  const flushList = () => {
+    if (list) blocks.push(list);
+    list = null;
+  };
+  const flushAll = () => {
+    flushPara();
+    flushList();
+    if (fence) {
+      blocks.push({ type: 'pre', text: fence.join('\n') });
+      fence = null;
+    }
+  };
+  for (const line of text.split('\n')) {
+    const trimmed = line.trim();
+    if (fence) {
+      if (/^```/.test(trimmed)) flushAll();
+      else fence.push(line);
+      continue;
+    }
+    if (/^```/.test(trimmed)) {
+      flushPara();
+      flushList();
+      fence = [];
+      continue;
+    }
+    if (!trimmed) {
+      flushAll();
+      continue;
+    }
+    const head = /^(#{1,6})\s+(.*)$/.exec(trimmed);
+    if (head) {
+      flushAll();
+      blocks.push({ type: 'h', level: head[1].length, text: head[2] });
+      continue;
+    }
+    // 整行就是加粗的短句 → 当成小标题（模型爱用 **1. xxx** 分节）
+    const boldHead = /^\*\*([^*\n]{1,60})\*\*\s*$/.exec(trimmed);
+    if (boldHead) {
+      flushAll();
+      blocks.push({ type: 'h', level: 3, text: boldHead[1] });
+      continue;
+    }
+    if (/^(?:-{3,}|\*{3,})$/.test(trimmed)) {
+      flushAll();
+      blocks.push({ type: 'hr' });
+      continue;
+    }
+    const quote = /^>\s?(.*)$/.exec(trimmed);
+    if (quote) {
+      flushPara();
+      flushList();
+      blocks.push({ type: 'quote', text: quote[1] });
+      continue;
+    }
+    const item = AI_LIST_ITEM.exec(trimmed);
+    if (item) {
+      flushPara();
+      const ordered = /^\d/.test(trimmed);
+      if (!list || list.ordered !== ordered) {
+        flushList();
+        list = { type: 'list', ordered, items: [] };
+      }
+      list.items.push(item[1]);
+      continue;
+    }
+    flushList();
+    para.push(trimmed);
+  }
+  flushAll();
+  return blocks;
+}
+
+/** 把回答渲染成有层次的块：段落 / 小标题 / 列表 / 引用 / 代码 / 分隔线。 */
+function aiAnswerBodyHtml(raw) {
+  return aiAnswerBlocks(raw)
+    .map((block) => {
+      if (block.type === 'h') {
+        const level = Math.min(block.level + 1, 4);
+        return `<div class="ai-h ai-h${level}">${aiInlineHtml(esc(block.text))}</div>`;
+      }
+      if (block.type === 'hr') return '<hr class="ai-rule" />';
+      if (block.type === 'quote') return `<blockquote class="ai-quote">${aiInlineHtml(esc(block.text))}</blockquote>`;
+      if (block.type === 'pre') return `<pre class="ai-pre"><code>${esc(block.text)}</code></pre>`;
+      if (block.type === 'list') {
+        const tag = block.ordered ? 'ol' : 'ul';
+        return `<${tag} class="ai-answer-list">${block.items.map((item) => `<li>${aiInlineHtml(esc(item))}</li>`).join('')}</${tag}>`;
+      }
+      return `<p class="ai-p">${aiInlineHtml(esc(block.text))}</p>`;
+    })
+    .join('');
+}
+
 function aiAnswerHtml(data) {
   const citations = (data.citations ?? [])
     .map((item) => {
@@ -58,7 +219,8 @@ function aiAnswerHtml(data) {
         ${data.model ? aiChip(data.model, 'soft') : ''}
         ${data.truncated ? aiChip('材料已截断', 'warn') : ''}
       </div>
-      <div class="ai-answer-text">${esc(data.answer).replace(/\n/g, '<br />')}</div>
+      ${data.question ? `<div class="ai-answer-q">${esc(data.question)}</div>` : ''}
+      <div class="ai-answer-text">${aiAnswerBodyHtml(data.answer)}</div>
       ${
         citations
           ? `<div class="ai-cites"><div class="ai-sub">引用出处</div>${citations}</div>`
@@ -155,6 +317,42 @@ function aiPostPanelHtml(post, aiInfo) {
 /** 逐篇分类默认只渲染这么多行：554 篇文档一次全铺开是几十屏，其余点「显示全部」再展开。 */
 const AI_LIST_LIMIT = 30;
 
+/** 语料检索的最短关键词（与后端 forum-ai 的 SEARCH_MIN_LENGTH 一致）。 */
+const AI_SEARCH_MIN = 2;
+
+/**
+ * 语料检索的一条命中（`/api/ai/search`）：标题 + 一段上下文片段。
+ *
+ * 链接仍走 `#/post/<id>`：wiki 词条的影子帖会由 doc 模块改道到积木页，正文命中时给片段，
+ * 只命中标题的（片段为空）就不画那一行。
+ */
+function aiSearchHitHtml(item) {
+  const meta = [item.board, item.author, item.replyCount ? `${Fmt.fmtNum(item.replyCount)} 条回复` : '']
+    .filter(Boolean)
+    .join(' · ');
+  return `
+    <a class="ai-hit" href="#/post/${esc(String(item.id ?? ''))}">
+      <span class="ai-hit-title">${esc(item.title || '（无标题）')}${
+        item.wiki ? '<span class="ai-hit-tag">Wiki 词条</span>' : ''
+      }</span>
+      ${item.snippet ? `<span class="ai-hit-snippet">${esc(item.snippet)}</span>` : ''}
+      ${meta ? `<span class="ai-hit-meta">${esc(meta)}</span>` : ''}
+    </a>`;
+}
+
+/** 语料检索结果块（events.js 的 ai-list-search 拿到接口结果后往里塞）。 */
+function aiSearchHitsHtml(data) {
+  const items = data?.items ?? [];
+  const query = String(data?.query ?? '');
+  const documents = Fmt.fmtNum(data?.documents ?? 0);
+  if (!items.length) return `<div class="ai-hits-head">${documents} 篇语料里没搜到「${esc(query)}」</div>`;
+  const total = Number(data?.total ?? items.length);
+  const more = total > items.length ? `，先看前 ${items.length} 篇` : '';
+  return `
+    <div class="ai-hits-head">${documents} 篇语料里搜到 ${Fmt.fmtNum(total)} 篇（标题或正文命中）${more}</div>
+    <div class="ai-hits-list">${items.map(aiSearchHitHtml).join('')}</div>`;
+}
+
 /** 逐篇分类的一行。状态写进 `data-ai-status`，卡内的「已解读 / 未解读」筛选直接读它。 */
 function aiDocRowHtml(doc) {
   return `
@@ -211,8 +409,9 @@ function aiAllDocsHtml(posts, pendingCount, isAdmin) {
           <button class="ai-scope is-on" type="button" data-action="ai-list-scope" data-scope="all">全部 ${Fmt.fmtNum(posts.length)}</button>
           <button class="ai-scope" type="button" data-action="ai-list-scope" data-scope="done">已解读 ${Fmt.fmtNum(doneCount)}</button>
           <button class="ai-scope" type="button" data-action="ai-list-scope" data-scope="pending">未解读 ${Fmt.fmtNum(posts.length - doneCount)}</button>
-          <input class="ai-search" type="search" data-action="ai-list-search" placeholder="搜标题…" aria-label="按标题筛选" />
+          <input class="ai-search" type="search" data-action="ai-list-search" placeholder="搜标题或正文…" aria-label="搜索语料（标题或正文）" />
         </div>
+        <div class="ai-hits" data-ai-hits hidden></div>
         <div class="ai-posts wide" data-ai-list="1" data-scope="all"${clipped ? ' data-clip="1"' : ''}>${posts
           .map(aiDocRowHtml)
           .join('')}</div>
@@ -335,7 +534,7 @@ export { aiChip };
 export { aiIdOf };
 export { aiPostLink };
 export { aiAskFormHtml };
-export { aiAnswerHtml };
+export { aiAnswerHtml, aiSearchHitsHtml, AI_SEARCH_MIN };
 export { aiReviewCardHtml };
 export { aiPostPanelHtml };
 export { viewAI };

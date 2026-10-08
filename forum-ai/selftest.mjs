@@ -27,13 +27,18 @@ import {
   answerQuestion,
   rankDocuments,
   selectForQuestion,
+  questionTerms,
+  extractHeadings,
+  excerptAroundFocus,
   createAiStore,
   createAiHandlers,
   createAiRouter,
   toResponse,
   rawOutputHead,
   isTruncated,
+  AI_ERROR_STATUS,
 } from './src/index.mjs';
+import { ASK_SYSTEM } from './src/prompts.mjs';
 
 let passed = 0;
 const failures = [];
@@ -290,6 +295,21 @@ try {
   check('预算被真正卡住', tiny.text.length <= 50 + 8, String(tiny.text.length));
   check('可以关闭回复', buildMaterial(DOCS, { withReplies: false }).text.includes('分页那里') === false);
 
+  // 命中词在 3000 字之后时，从开头截等于没喂；要从命中处截，并报出命中的小标题。
+  const longDoc = {
+    id: '9',
+    title: '长词条',
+    content: `${'前面都是无关的铺垫。'.repeat(200)}\n## DFS 的实现\n递归写法与显式栈写法。`,
+  };
+  const focused = buildMaterial([longDoc], { charLimit: 100000, contentPerDoc: 300, focus: ['dfs'] });
+  check('正文从命中处截（不再只看开头）', focused.text.includes('## DFS 的实现'), focused.text.slice(0, 120));
+  check('截出来的片段带省略号', focused.text.includes('…'));
+  check('材料里报出命中的小标题', focused.text.includes('相关小节：DFS 的实现'), focused.text);
+  const notFocused = buildMaterial([longDoc], { charLimit: 100000, contentPerDoc: 300 });
+  check('不给 focus 时行为不变（仍从头截）', notFocused.text.includes('## DFS 的实现') === false);
+  check('excerptAroundFocus 命中词不在开头时从中间取', excerptAroundFocus(`开头${'填充'.repeat(400)}命中词结尾`, ['命中词'], 200).includes('命中词'));
+
+
   /* ---------------- 三个能力 ---------------- */
   console.log('\n▶ 单篇解读 / 全库整理 / 问答');
   const WIKI = [
@@ -329,6 +349,82 @@ try {
   const asked = await answerQuestion('分页怎么优化？', DOCS.slice(0, 1), { scope: 'document', chatOptions: { env } });
   check('问答返回答案与引用', asked.answer.text.length > 0 && asked.answer.citations.length === 1, JSON.stringify(asked.answer.citations));
   check('问答保留备注与置信度', asked.answer.notes.length === 1 && asked.answer.confidence === 'high');
+
+  /* ---------------- 问答的输出预算与截断自适应（LOCAL PATCH L） ---------------- */
+  console.log('\n▶ 问答预算与截断自适应');
+  mock.calls.length = 0;
+  await answerQuestion('分页怎么优化？', DOCS.slice(0, 2), { scope: 'corpus', chatOptions: { env } });
+  check('问答默认输出预算放宽到 4000（上游写死 1200，宽问题必被截断）', mock.calls.at(-1)?.body?.max_tokens === 4000, String(mock.calls.at(-1)?.body?.max_tokens));
+  mock.calls.length = 0;
+  await answerQuestion('分页怎么优化？', DOCS.slice(0, 2), { scope: 'corpus', chatOptions: { env: { ...env, AI_ASK_MAX_TOKENS: '5000' } } });
+  check('预算可以用 AI_ASK_MAX_TOKENS 覆盖', mock.calls.at(-1)?.body?.max_tokens === 5000, String(mock.calls.at(-1)?.body?.max_tokens));
+  check('新变量没有混进 /api/site 的 ai 形状里', !aiStatus(env).envKeys.includes('AI_ASK_MAX_TOKENS'), JSON.stringify(aiStatus(env).envKeys));
+  // 提示词从没要求过结构：线上实测一次 1540 字的回答里换行是 0 个，模型把整篇答案摊成一行。
+  check(
+    '提示词要求 answer 自带结构（分段 / 小标题单独一行 / - 列表）',
+    ASK_SYSTEM.includes('answer 的排版') && ASK_SYSTEM.includes('小节标题单独占一行') && ASK_SYSTEM.includes('"- " 开头的列表'),
+    '',
+  );
+
+  // 材料一多就被截断：6 篇长文档 > 6000 字（截断），缩到三分之一后 < 6000 字（答得完）
+  const bigAskDocs = Array.from({ length: 6 }, (_, index) => ({
+    id: `ask-${index + 1}`,
+    title: `长文档 ${index + 1}`,
+    content: `正文哨兵${index + 1} `.repeat(200),
+    board: '技术',
+    createdAt: Date.now(),
+    updatedAt: Date.now(),
+  }));
+  mock.calls.length = 0;
+  mock.truncateOverChars = 6000;
+  const retried = await answerQuestion('这些文档讲什么？', bigAskDocs, { scope: 'corpus', chatOptions: { env } });
+  check('被截断时自动少喂一部分再问一次', mock.calls.length === 2 && retried.answer.text.length > 0, `calls=${mock.calls.length}`);
+  check('第二次问的预算翻倍（封顶 8000）', mock.calls.at(-1)?.body?.max_tokens === 8000, String(mock.calls.at(-1)?.body?.max_tokens));
+  check(
+    '第二次问的少喂到三分之一（不是一半）',
+    mock.calls.at(-1)?.body?.messages?.at(-1)?.content?.includes('长文档 2') === true &&
+      mock.calls.at(-1)?.body?.messages?.at(-1)?.content?.includes('长文档 3') === false,
+    '',
+  );
+  check('第二次问的明确要求短答案', String(mock.calls.at(-1)?.body?.messages?.at(-1)?.content ?? '').includes('【上一次】'), '');
+  check(
+    '第二次的材料确实变短了',
+    String(mock.calls.at(-1)?.body?.messages?.at(-1)?.content ?? '').length < String(mock.calls[0]?.body?.messages?.at(-1)?.content ?? '').length,
+    `${String(mock.calls[0]?.body?.messages?.at(-1)?.content ?? '').length} → ${String(mock.calls.at(-1)?.body?.messages?.at(-1)?.content ?? '').length}`,
+  );
+
+  // 全站问答：每篇只喂命中处的一段，材料整体压在 12000 字以内，并带上命中的小标题
+  const focusingDocs = Array.from({ length: 5 }, (_, index) => ({
+    id: `focus-${index + 1}`,
+    title: `词条 ${index + 1}`,
+    content: `## DFS 的实现 ${index + 1}\n${'铺垫内容。'.repeat(1200)}`,
+  }));
+  mock.calls.length = 0;
+  await answerQuestion('dfs 怎么实现', focusingDocs, { scope: 'corpus', chatOptions: { env } });
+  const focusPrompt = String(mock.calls.at(-1)?.body?.messages?.at(-1)?.content ?? '');
+  check('全站问答的材料压在 12000 字以内', focusPrompt.length <= 12000 + 2000, String(focusPrompt.length));
+  check('材料里带上命中的小标题（不用模型自己找）', focusPrompt.includes('相关小节：DFS 的实现 1'), focusPrompt.slice(0, 160));
+
+  mock.calls.length = 0;
+  mock.truncateOverChars = 200; // 砍半后仍然超预算：两次都答不完
+  let truncatedAskError = null;
+  try {
+    await answerQuestion('这些文档讲什么？', bigAskDocs, { scope: 'corpus', chatOptions: { env } });
+  } catch (error) {
+    truncatedAskError = error;
+  }
+  check('两次都答不完 → ai_answer_truncated（不再假装是「服务器开小差」）', truncatedAskError?.code === 'ai_answer_truncated' && mock.calls.length === 2, `${truncatedAskError?.code}/calls=${mock.calls.length}`);
+  check('这个错误码被宿主映射成 503', AI_ERROR_STATUS.ai_answer_truncated === 503, String(AI_ERROR_STATUS.ai_answer_truncated));
+
+  mock.calls.length = 0;
+  let singleTruncatedError = null;
+  try {
+    await answerQuestion('这篇讲什么？', [bigAskDocs[0]], { scope: 'document', chatOptions: { env } });
+  } catch (error) {
+    singleTruncatedError = error;
+  }
+  check('只有一篇材料时不重复问（砍半没意义，照原样抛错）', singleTruncatedError?.code === 'ai_empty_response' && mock.calls.length === 1, `${singleTruncatedError?.code}/calls=${mock.calls.length}`);
+  mock.truncateOverChars = 0;
 
   /* ---------------- 上游抖动：空响应与重试 ---------------- */
   console.log('\n▶ 上游抖动与重试');
@@ -577,6 +673,22 @@ try {
   const selectedAll = selectForQuestion('性能', DOCS, { charBudget: 100000 });
   check('预算充足时全选', selectedAll.picked.length === 3);
 
+  // 标题 ≫ 小标题 > 正文：正文里的偶发命中不该压过标题/小标题命中
+  const TIRED = [
+    { id: 'body', title: '杂谈', content: '这里顺便提到了 dfs 两个字。' },
+    { id: 'head', title: '图论基础', content: '## DFS 的实现\n递归与显式栈。' },
+    { id: 'title', title: 'DFS 入门', content: '深度优先搜索的基本写法。' },
+  ];
+  const tiredRanked = rankDocuments('dfs 怎么实现', TIRED);
+  check('标题命中排在小标题命中前面', String(tiredRanked[0].doc.id) === 'title', JSON.stringify(tiredRanked.map((r) => [r.doc.id, r.score, r.titleHit, r.headingHit])));
+  check('小标题命中排在纯正文命中前面', String(tiredRanked[1].doc.id) === 'head', String(tiredRanked[1]?.doc?.id));
+  const tiered = selectForQuestion('dfs 怎么实现', [...TIRED, { id: 'w1', title: '甲', content: 'dfs' }, { id: 'w2', title: '乙', content: 'dfs' }, { id: 'w3', title: '丙', content: 'dfs' }], { charBudget: 100000, maxDocuments: 8, maxWeak: 1 });
+  check('有强命中时，纯正文命中的最多补 maxWeak 篇', tiered.picked.length === 3 && tiered.weak === 1, JSON.stringify({ picked: tiered.picked.map((doc) => doc.id), strong: tiered.strong, weak: tiered.weak }));
+  check('选材按「进材料后的字数」估体量（长文档不再一票吃光预算）', selectForQuestion('dfs', [{ id: 'big', title: 'DFS 大全', content: 'x'.repeat(50000) }, { id: 'two', title: 'DFS 续', content: 'y'.repeat(50000) }], { charBudget: 5000 }).picked.length === 2);
+  check('小标题抽取认得 # 标题与整行加粗', extractHeadings('# 一\n正文\n**二**\n### 三').join(',') === '一,二,三', extractHeadings('# 一\n正文\n**二**\n### 三').join(','));
+  const terms = questionTerms('想学习dfs，然后实现成代码');
+  check('问题分词包含英文词与汉字段', terms.includes('dfs') && terms.includes('想学习'), JSON.stringify(terms));
+
   /* ---------------- 存储层 ---------------- */
   console.log('\n▶ SQLite 存储层');
   const db = new DatabaseSync(':memory:');
@@ -587,12 +699,31 @@ try {
   check('corpusDocuments 带回正文与回复', store.corpusDocuments()[0].content.includes('node:sqlite') && store.corpusDocuments()[0].replies.length === 1);
   const hashBefore = store.corpusHash();
   check('指纹稳定', store.corpusHash() === hashBefore);
+  // LOCAL PATCH (see LOCAL-PATCHES.md): 解读缓存记的是**这一篇自己**的指纹。
+  const hashOf1 = store.documentHash('1');
+  check('每篇有自己的指纹', Boolean(hashOf1) && hashOf1 !== store.documentHash('2') && hashOf1 !== hashBefore);
+
+  // LOCAL PATCH (see LOCAL-PATCHES.md): 语料检索（标题 + 正文）。
+  const searchBody = store.searchCorpus({ query: '分页' });
+  check(
+    '正文命中也能搜到（不是只搜标题）',
+    searchBody.total === 1 && searchBody.items[0].id === '1' && searchBody.items[0].inTitle === false,
+    JSON.stringify(searchBody).slice(0, 200),
+  );
+  check('命中片段带上下文', searchBody.items[0].snippet.includes('分页'), String(searchBody.items[0].snippet));
+  check('检索知道一共多少篇', searchBody.documents === 3, String(searchBody.documents));
+  const searchTitle = store.searchCorpus({ query: 'SQLite' });
+  check('标题命中标成 inTitle 并排在前面', searchTitle.total === 1 && searchTitle.items[0].inTitle === true, JSON.stringify(searchTitle.items.map((item) => item.id)));
+  check('命中带板块与回复数', searchTitle.items[0].board === '技术' && searchTitle.items[0].replyCount === 1, JSON.stringify(searchTitle.items[0]));
+  const searchLimit = store.searchCorpus({ query: '一', limit: 1 });
+  check('limit 只截返回条数', searchLimit.items.length <= 1, JSON.stringify({ total: searchLimit.total, got: searchLimit.items.length }));
+  check('空关键词什么都不返回', store.searchCorpus({ query: '   ' }).total === 0);
 
   check('初始无缓存', store.reviewOf('1') === null);
   check('初始全是待整理', store.countPending() === 3 && store.pendingDocuments({ limit: 2 }).length === 2, JSON.stringify(store.pendingDocuments({ limit: 2 })));
   const savedReview = store.saveReview(
     { documentId: '1', status: 'done', category: '数据库', difficulty: '进阶', summary: 's', tags: ['sqlite'], prereq: [], recommend: [], model: 'm', tokens: { prompt: 3, completion: 2 } },
-    { contentHash: hashBefore },
+    { contentHash: hashOf1 },
   );
   check('保存解读可读回', savedReview.category === '数据库' && savedReview.tokens.prompt === 3);
   check('已解读的不在待整理里', store.pendingDocuments({ limit: 10 }).includes('1') === false);
@@ -600,7 +731,7 @@ try {
 
   const failedReview = store.saveReview(
     { documentId: '2', status: 'failed', error: 'AI 返回的解读结果不是合法 JSON', errorDetail: '{"category": "数据' },
-    { contentHash: hashBefore },
+    { contentHash: store.documentHash('2') },
   );
   check('失败也把模型原文存进 errorDetail', failedReview.errorDetail === '{"category": "数据' && store.reviewOf('2').errorDetail === '{"category": "数据', JSON.stringify(failedReview));
   check('失败的篇目排在从未解读的前面', store.pendingDocuments({ limit: 2 }).join(',') === '2,3', JSON.stringify(store.pendingDocuments({ limit: 10 })));
@@ -609,8 +740,48 @@ try {
   source = [...DOCS, { id: '4', title: '新文档', content: '新增内容' }];
   store.syncCorpus();
   check('内容变化后指纹改变', store.corpusHash() !== hashBefore);
-  check('内容变化后旧解读算过期', store.pendingDocuments({ limit: 10 }).includes('1') === true);
-  check('待整理顺序：失败 → 从未解读 → 内容已变', store.pendingDocuments({ limit: 10 }).join(',') === '2,3,4,1', JSON.stringify(store.pendingDocuments({ limit: 10 })));
+  check('新增别篇不让旧解读过期（按篇判过期）', store.pendingDocuments({ limit: 10 }).includes('1') === false);
+  check('还没解读过的新篇照样待整理', store.pendingDocuments({ limit: 10 }).join(',') === '2,3,4', JSON.stringify(store.pendingDocuments({ limit: 10 })));
+
+  source = source.map((doc) => (doc.id === '1' ? { ...doc, content: `${doc.content}（改过）` } : doc));
+  store.syncCorpus();
+  check('这一篇自己变了才回队', store.pendingDocuments({ limit: 10 }).includes('1') === true);
+  check('待整理顺序：失败 → 从未解读 → 这一篇自己变了', store.pendingDocuments({ limit: 10 }).join(',') === '2,3,4,1', JSON.stringify(store.pendingDocuments({ limit: 10 })));
+
+  // LOCAL PATCH (see LOCAL-PATCHES.md): 老库里的**整站**指纹要被一次性换成逐篇指纹，
+  // 否则改完判据之后那些老账会永远算「内容已变」，「待整理」还是等于全站总数。
+  {
+    const legacyDocs = [
+      { id: 'L1', title: '老账一', content: '正文', createdAt: 1000, updatedAt: 1000, replies: [] },
+      { id: 'L2', title: '老账二', content: '正文二', createdAt: 2000, updatedAt: 2000, replies: [] },
+    ];
+    const legacyStore = createAiStore({
+      db: new DatabaseSync(':memory:'),
+      documentSource: () => legacyDocs,
+      tablePrefix: 'ai_',
+    });
+    legacyStore.syncCorpus();
+    // 老账：解读里存的是当时的整站语料指纹（`2:…`），换成按篇判之后它就一直对不上。
+    legacyStore.saveReview(
+      { documentId: 'L1', status: 'done', category: 'x', summary: 's', model: 'm' },
+      { contentHash: legacyStore.corpusHash() },
+    );
+    check('老库的整站指纹会一直算过期', legacyStore.pendingDocuments({ limit: 10 }).includes('L1') === true);
+    check('补齐逐篇指纹：补了 1 篇', legacyStore.backfillDocumentHashes() === 1);
+    check('补完就不在待整理里', legacyStore.pendingDocuments({ limit: 10 }).includes('L1') === false);
+    check('补齐是幂等的（再跑不用补）', legacyStore.backfillDocumentHashes() === 0);
+
+    // 解读之后这一篇自己动过 → 不补，保留「内容已变」（宁可多问一次，也不假装它没过期）。
+    legacyStore.saveReview(
+      { documentId: 'L2', status: 'done', category: 'y', summary: 's2', model: 'm' },
+      { contentHash: legacyStore.corpusHash() },
+    );
+    legacyDocs[1] = { ...legacyDocs[1], content: '正文二（改过）', updatedAt: 9999999999999 };
+    legacyStore.syncCorpus();
+    check('解读之后动过的老账不补', legacyStore.backfillDocumentHashes() === 0);
+    check('只有真动过的那篇留在待整理', legacyStore.pendingDocuments({ limit: 10 }).join(',') === 'L2');
+  }
+
   check('reportIsStale 对空报告返回 true', store.reportIsStale() === true);
 
   const savedReport = store.saveReport(

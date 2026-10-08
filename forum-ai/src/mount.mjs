@@ -88,6 +88,58 @@ function columnsOf(db, table) {
 }
 
 /**
+ * 站内 Wiki 页的正文（LOCAL PATCH，见 LOCAL-PATCHES.md 的 K 节）。
+ *
+ * 「积木」模块给 wiki 页写影子帖时只塞了**页面前 400 字**的纯文本
+ * （`store.js` 的 `blocksToPlainText(blocks, 400)`），页的完整正文躺在
+ * `doc_settings.source_text`（编辑器与站内搜索读的就是这一列）。后果是语料里
+ * 每篇 wiki 页只有一段摘要：全站问答搜不到页内的内容，解读也只能看开头。
+ *
+ * 这里按影子帖编号（`documents.anchor_post_id`）把整页正文读出来交给语料；
+ * 宿主没有积木模块（表/列不存在）时返回 null，语料退化成「只有帖子」，与上游一致。
+ *
+ * @returns {null | ((limit: number) => Map<string, { text: string, updatedAt: number }>)}
+ */
+function pickPageText(db) {
+  const documents = pickTable(db, ['documents']);
+  const settings = pickTable(db, ['doc_settings']);
+  if (!documents || !settings) return null;
+  const docCols = columnsOf(db, documents);
+  const setCols = columnsOf(db, settings);
+  if (!docCols.has('template') || !docCols.has('anchor_post_id')) return null;
+  if (!setCols.has('document_id') || !setCols.has('source_text')) return null;
+
+  const sql = [
+    'SELECT d.anchor_post_id AS anchor_post_id, s.source_text AS source_text,',
+    `  ${docCols.has('updated_at') ? 'd.updated_at' : '0'} AS doc_updated_at,`,
+    `  ${setCols.has('updated_at') ? 's.updated_at' : '0'} AS source_updated_at`,
+    `FROM ${documents} d JOIN ${settings} s ON s.document_id = d.id`,
+    "WHERE d.template = 'page' AND d.anchor_post_id > 0",
+    docCols.has('deleted') ? 'AND d.deleted = 0' : '',
+    docCols.has('scope') ? "AND d.scope = 'public'" : '',
+  ]
+    .filter(Boolean)
+    .join(' ');
+
+  return function pageText(limit) {
+    const out = new Map();
+    try {
+      for (const row of db.prepare(sql).all()) {
+        const text = String(row.source_text ?? '');
+        if (!text.trim()) continue;
+        out.set(String(row.anchor_post_id), {
+          text: text.slice(0, Number(limit) || text.length),
+          updatedAt: Math.max(Number(row.doc_updated_at ?? 0), Number(row.source_updated_at ?? 0)),
+        });
+      }
+    } catch {
+      /* 表结构不认识就当没有：语料退回「只有影子帖摘要」 */
+    }
+    return out;
+  };
+}
+
+/**
  * 论坛数据 → 通用文档数组。只读，不写宿主任何表。
  */
 export function createForumDocumentSource(db, { contentLimit = 20000 } = {}) {
@@ -101,6 +153,9 @@ export function createForumDocumentSource(db, { contentLimit = 20000 } = {}) {
   const postCols = columnsOf(db, schema.posts);
   const userCols = schema.users ? columnsOf(db, schema.users) : new Set();
   const boardCols = schema.boards ? columnsOf(db, schema.boards) : new Set();
+  // LOCAL PATCH (see LOCAL-PATCHES.md 的 K 节)：wiki 页的影子帖只有前 400 字摘要，
+  // 整页正文从 `doc_settings.source_text` 补回来（没有积木模块就是 null，行为同上游）。
+  const readPageText = pickPageText(db);
 
   const deletedFilter = postCols.has('deleted') ? 'AND p.deleted = 0' : '';
   const select = [
@@ -134,6 +189,7 @@ export function createForumDocumentSource(db, { contentLimit = 20000 } = {}) {
 
   return function documentSource() {
     const posts = db.prepare(postsSql).all();
+    const pageText = readPageText ? readPageText(contentLimit) : null;
     const byPost = new Map();
     if (repliesSql) {
       for (const reply of db.prepare(repliesSql).all()) {
@@ -146,17 +202,24 @@ export function createForumDocumentSource(db, { contentLimit = 20000 } = {}) {
         });
       }
     }
-    return posts.map((row) => ({
-      id: String(row.id),
-      title: String(row.title ?? ''),
-      content: String(row.content ?? ''),
-      board: row.board_name ?? '',
-      author: row.author_name ?? '',
-      createdAt: Number(row.created_at ?? 0),
-      updatedAt: Number(row.updated_at ?? 0),
-      replies: byPost.get(String(row.id)) ?? [],
-      replyCount: (byPost.get(String(row.id)) ?? []).length,
-    }));
+    return posts.map((row) => {
+      const excerpt = String(row.content ?? '');
+      const page = pageText?.get(String(row.id));
+      const updatedAt = Number(row.updated_at ?? 0);
+      return {
+        id: String(row.id),
+        title: String(row.title ?? ''),
+        // 整页正文比影子帖摘要长就用整页正文（摘要为空也一样用页正文）。
+        content: page && page.text.length > excerpt.length ? page.text : excerpt,
+        board: row.board_name ?? '',
+        author: row.author_name ?? '',
+        createdAt: Number(row.created_at ?? 0),
+        // 改过页面的时间也算进去：语料指纹一变，这篇的旧解读自然会回到「待整理」。
+        updatedAt: page ? Math.max(updatedAt, page.updatedAt) : updatedAt,
+        replies: byPost.get(String(row.id)) ?? [],
+        replyCount: (byPost.get(String(row.id)) ?? []).length,
+      };
+    });
   };
 }
 
@@ -270,6 +333,7 @@ export function mountForumAi({
   // 路由表（顺序敏感：静态段要排在 :id 之前）
   const routes = [
     ['GET', `${basePath}/status`, handlers.status, false],
+    ['GET', `${basePath}/search`, handlers.search, false],
     ['GET', `${basePath}/posts/:id`, handlers.getReview, true],
     ['POST', `${basePath}/posts/:id/analyze`, handlers.analyzeDocument, true],
     ['POST', `${basePath}/posts/analyze-pending`, handlers.analyzePending, true],

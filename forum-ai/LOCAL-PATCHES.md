@@ -266,6 +266,222 @@ AI 接口没有返回内容（finish_reason=length，提示 8840 / 生成 3000 t
 
 ---
 
+## J. 逐篇判过期：「待整理」永远等于全站总数（甲类）
+
+**现象**：`#/ai`「AI 阅读助手」页头同时写着 **563 篇已解读** 和 **563 篇待整理**，黄色提示「论坛内容有更新，这份整理可能已经过时，建议重新整理」也一直亮着。
+两个数不可能同时都对：既然全站都解读过了，待整理就不该等于全站；那个「内容有更新」也不是全站一起更新。
+
+**原因**：存解读时写进 `content_hash` 的是 **`store.corpusHash()`** —— 整站语料指纹（`篇数:最新更新时间:回复数:正文总字符数`，见
+`src/store-sqlite.mjs` 的 `fingerprintOf()`），而 `pendingDocuments()` 又拿它去跟**当前整站指纹**比。于是论坛里
+**任何**一篇帖子或一条回复被写过，全站每一篇的旧解读都同时落进 `stale` 桶 ——「待整理」永远 = 全站总数，
+这也让「批量解读」每次都想把 563 篇重跑一遍。线上实测：抽三篇的 `content_hash` 分别是 `554:1791389447994:3:192724`、
+`554:1791389447994:3:192724`、`555:1791420236171:3:192534`，而当时整站指纹已经是 `564:…:3:192568` 的口径 —— 三篇都在
+「内容已变」里躺着，其实它们自己一个字都没改。
+
+**我们的修法**（区分两种粒度：单篇解读按单篇判，全站报告按整站判）：
+
+| 位置 | 改动 |
+|---|---|
+| `src/store-sqlite.mjs` | 新增 `export function documentHashes(ids = null)`：返回 `Map<documentId, 指纹>`，对 `corpusDocuments({ withContent: true, withReplies: true, ids })` 里的每一篇跑一次 `fingerprintOf([doc])`（= 这一篇的正文长度 + 它自己的最新更新时间 + 它自己的回复数） |
+| `src/store-sqlite.mjs` | 新增 `documentHash(documentId)` 作为单篇快捷方式（`documentHashes([id])` 取不出就回 `''`） |
+| `src/store-sqlite.mjs` | `pendingDocuments()` 里 `const hash = api.corpusHash()` 改成 `const hashes = api.documentHashes()`，判断改成 `review.content_hash !== hashes.get(String(row.document_id))` —— 「内容已变化」现在是**这一篇自己**变了 |
+| `src/routes.mjs` | `runReview()` 存的是 `store.documentHash(id)`（原来 `store.corpusHash()`）；`getReview()` 返回的 `stale` 同样按 `store.documentHash(id)` 比 |
+| `src/store-sqlite.mjs` | `corpusHash()` 与 `reportIsStale()` **有意不动**：「整理全站」的报告本来就是全站粒度，别的帖子新增/改动让报告过期是对的（这一条与页头黄色提示的语义一致） |
+
+改完之后：3 篇已解读、其中 1 篇正文被改过 → 待整理是 1 篇（就是被改的那篇 + 从没解读过的），
+不再是全站总数；`/api/ai/site` 的 `stale`（报告过期）仍然是「语料动过就 true」，两者不再互相冒充。
+
+**同步改过的作者文件**：`README.md`（4.2 的接口示例改成 `documentHash(1)` / `documentHashes()`、`saveReview(…, { contentHash: store.documentHash(1) })`；
+3.x「缓存与过期」讲清逐篇与整站两种指纹；「批量解读的优先级」顺序与 `LOCAL PATCH G1` 对齐；自测项数同步）、
+`selftest.mjs`（+3 项：「每篇有自己的指纹」「新增别篇不让旧解读过期」「这一篇自己变了才回队」，原来那条「内容变化后旧解读算过期」拆成按篇的两条）、
+`scripts/smoke-ai.mjs`（+5 项：新积木的影子帖拿得到 id、新增别篇不让老解读过期、新建那篇解读成功、刚解读完自己不算过期、改这一篇自己的 Markdown 才标过期；原来那条「全站整理仍标记过期」保留）。
+
+### J2（甲类，同日补）老账要一次性换成逐篇指纹
+
+只改判据还不够：线上那 563 条解读里存的都是**当时的整站指纹**（`554:…` / `555:…`），
+换成按篇比之后它们依然全部对不上，「待整理」还是 563 —— 修完反而看不出变化。
+
+**修法**：`createAiStore()` 建完 store 时跑一次 `api.backfillDocumentHashes()`（幂等）。
+逐篇指纹一定以 `1:` 开头（只算一篇），凡是**不以 `1:` 开头**的 `content_hash` 就是老账。旧值反推不出
+「这一篇当时」的指纹，只能拿时间戳判：
+
+| 情况 | 处理 |
+|---|---|
+| 这一篇自己（正文 + 它自己的回复）在**最后一次解读之后没动过** | 直接补上当前逐篇指纹 → 不算过期（这些正是被整站指纹连累的误报） |
+| 最后一次解读之后**动过**（正文更新或来了新回复） | 保留旧值 → 继续算「内容已变」，宁可多问一次也不假装它没过期 |
+| 索引里已经没有它 | 不动（交给「从未解读 / 已消失」那套逻辑） |
+
+**同步改过的作者文件**：`selftest.mjs`（+6 项：老库的整站指纹会一直算过期、补齐补了几篇、补完就不在待整理里、
+补齐幂等、解读之后动过的老账不补、只有真动过的那篇留在待整理；用独立的 `:memory:` 库验，不干扰别的用例）、
+`README.md`（4.2 的示例补上 `backfillDocumentHashes()` 与「老库升级」一句）。
+
+---
+
+## K. wiki 页正文进语料（乙类）
+
+**现象**：线上论坛 42 篇真帖 + 522 个 wiki 页影子帖 = 564 篇语料，但 `/api/ai/site` 的 `corpus.chars` 只有 192,568（平均 341 字/篇）。于是「问全站」问 wiki 里的东西（例如「博弈论」）答不出来，`#/ai` 的「搜标题」也搜不到 —— 等于 522 篇 wiki 对 AI 只留了个标题。
+
+**原因**：wiki 页的正文在 `doc_settings.source_text`，而它的影子帖 `posts.content` 只存了**页面前 400 字的纯文本**
+（宿主 `src/modules/doc/store.js` 的 `syncDocumentAnchor()` 写的是 `blocksToPlainText(liveBlocks, 400)`）。
+包内语料源 `createForumDocumentSource()` 读的正是 `posts.content`，所以 AI 只看到每页开头那 400 字。
+
+**我们的修法**（宿主的影子帖不动；包内语料源优先用整页正文）：
+
+| 位置 | 改动 |
+|---|---|
+| `src/mount.mjs` | 新增 `pickPageText(db)`：探测 `documents JOIN doc_settings`（`template = 'page'`、`anchor_post_id > 0`，有 `deleted` / `scope` 就再排除掉删除与非公开的），返回 `(limit) => Map<影子帖 id, { text, updatedAt }>`；`text` 是 `source_text` 截到 `limit`，`updatedAt` 取文档与 `doc_settings` 里较新的那个；探测不到表就回 `null`（老库/别的宿主照旧） |
+| `src/mount.mjs` | `createForumDocumentSource()` 拼每一篇时：**页面正文比影子帖摘要长就用页面正文**（短或为空就保持原样，零回归）；`updatedAt` 取两者较大值 —— 改了页这一篇的逐篇指纹就变，旧解读自然回「待整理」（J 节的判据） |
+
+**同步改过的作者文件**：`selftest-mount.mjs` 新增「▶ wiki 页正文进语料」7 项（整页正文替换摘要、页面自己的修改时间进 `updatedAt`、
+页正文更短时保留摘要、普通帖一字不变、影子帖不存在的页不会凭空多出一篇、宿主没有积木表时语料照旧）；
+`README.md` 的「语料从哪来」同步成「wiki 页用整页正文」。
+
+---
+
+## L. 问答的输出预算写死 1200（甲类）
+
+**现象**：线上 `#/ai`「问全站」对宽问题**一律 502**，前端显示「服务器开小差了，请稍后再试」；同一个框问「Markdown 是什么」能成，
+问「博弈论」就失败。实测：成功的全站问答 `completion = 992` tokens —— **已经贴着 1200 的墙**；失败例 5.4 秒返回 `ai_empty_response`
+（上游 200、正文为空、`finish_reason=length`），不是网络抖动。
+
+**原因**：`src/ai.mjs` 的 `answerQuestion()` 把 `maxTokens` 写死成 **1200**（别的调用都走 `aiConfig()` 的 `AI_MAX_TOKENS`，默认 2000）。
+全站问答要吐一段结构化 JSON（答案 + 引用 + 备注 + 置信度），宽问题还没写完正文预算就烧光了 —— 与 I / I2 节同源。
+
+**我们的修法**（同一思路：截断说明「问得太多 / 预算太小」，重试没用）：
+
+| 位置 | 改动 |
+|---|---|
+| `src/ai.mjs` | 问答预算改成 `askMaxTokens(env)`：读 `AI_ASK_MAX_TOKENS`，默认 3000。**故意不列进 `aiStatus().envKeys`** —— `/api/site` 的 ai 形状被宿主 `check-golden` 冻着 |
+| `src/ai.mjs` | 被截断（`isTruncated`）且材料不止一篇时：**材料砍半 + 预算加倍**（上限 8000）重问一次；再被截断就抛 `ai_answer_truncated`（文案是给用户看的：把问题问得具体一点，或选中某一篇再问） |
+| `src/routes.mjs` | `AI_ERROR_STATUS` 加 `ai_answer_truncated: 503` |
+| 宿主 `public/core/errors.js` | `ai_*` 的失败文案**原样透出**：原来 5xx 一律换成「服务器开小差了，请稍后再试」，把「AI 还没配置」「这次的资料太多…」这些照着能做的事都糊掉了 |
+
+**同步改过的作者文件**：`selftest.mjs` 新增「▶ 问答预算与截断自适应」9 项（默认预算 3000、`AI_ASK_MAX_TOKENS` 生效、
+`envKeys` 里没有它、截断后砍半重问且预算加倍、重问的材料更短、两次都截断时抛 `ai_answer_truncated`、单篇不重问）；
+`scripts/smoke-ai.mjs` 新增 6 项（问答请求 `max_tokens = 3000`、截断后重问一次且预算是 6000、材料更短、两次都截断时 503 `ai_answer_truncated`、
+提示里告诉用户怎么办）；`README.md` 问答一节补预算与自适应。
+
+---
+
+## M. 没有语料检索：「搜标题」搜不到 wiki，也搜不到正文（乙类）
+
+**现象**：`#/ai` 页头那个框写着「搜标题…」，但它只是**在前端已经渲染出来的前 30 行上按标题过滤**
+（宿主 `public/views/ai.js` 的 `AI_LIST_LIMIT = 30`），而这份列表又只来自 `/api/ai/site` 报告里 `readingPath` + `topics[].documentIds`
+去重后的 80 条。于是在线上：wiki 词条搜不到（它们大多不在报告列表里），**就算在，也只能按标题搜 —— 正文里写了什么都搜不出来**。
+用户原话：「这里的搜索无法搜到wiki」。K 节把整页正文喂进了语料之后，这一条就变成明摆着的缺口：内容有了，没有检索的入口。
+
+**原因**：作者包**根本没有检索接口** —— `createAiRouter()` 只暴露 `GET /status`、`GET /posts/:id`、`POST /posts/:id/analyze`、
+`POST /posts/analyze-pending`、`GET /site`、`POST /site/analyze`、`DELETE /site`、`DELETE /cache`、`POST /ask`（AI 侧没有 search 路由）。
+语料只被当成「喂给模型的材料」，从来没被当成一个可以查的库。
+
+**我们的修法**（不改宿主语料，只在包内加一条只读检索 + 宿主前端接上）：
+
+| 位置 | 改动 |
+|---|---|
+| `src/store-sqlite.mjs` | 新增 `excerptAround(text, at, matchLength, { width = 50, max = 160 })`（命中处左右各 50 字、截 160、两端补 `…`）与 api `searchCorpus({ query, limit })`：遍历 `ai_corpus_index` 的标题 + 正文做大小写无关子串匹配，返回 `{ query, documents, total, items: [{ id, title, board, author, replyCount, updatedAt, inTitle, snippet }] }`；排序 = 标题命中（越靠前越优先）→ 正文命中（越靠前越优先）→ 回复多的；`limit` 夹 1..50 |
+| `src/routes.mjs` | 新增 `GET /search?q=&limit=`（**要登录**）：handler 的 ctx 里没有 query 字段，所以自己从 `ctx.req.url` 解析；两字以下只回 `{ minLength: 2, total: 0, items: [] }`；每个命中项附 `wiki: true/false`（用 `wikiPageList()` 的影子帖 id 集合判断），前端据此画「Wiki 词条」小标 |
+| `src/mount.mjs` | 路由表加 `['GET', `${basePath}/search`, handlers.search, false]` |
+| 宿主 `public/views/ai.js` | 输入框占位改成「搜标题或正文…」，新增 `aiSearchHitsHtml()` / `aiSearchHitHtml()` 与 `<div class="ai-hits" data-ai-hits hidden></div>` 落点 |
+| 宿主 `public/core/events.js` | 本地按标题过滤照旧（列表不必等后端），另加 250ms 防抖的后端检索；回来时输入已变就丢弃；失败把原因写进结果卡的头一行 |
+| 宿主 `public/css/95-ai.css` | `.ai-hits` / `.ai-hit` / `.ai-hit-tag` 等一整套样式 |
+
+**同步改过的作者文件**：`selftest.mjs` 在「▶ SQLite 存储层」加 7 项（正文命中、命中片段、语料总数、标题命中优先、板块与回复数、limit 只截条数、空关键词）；
+`selftest-mount.mjs` 加「▶ 语料检索」7 项（200、正文命中、片段、标题命中、limit、两字以下 `minLength`、未登录 401）；
+`scripts/smoke-ai.mjs` 加 6 项（同样这几种，走真实 HTTP）；宿主 `scripts/check-frontend.mjs`（`#/ai` 渲染出的 `data-ai-hits` / 新占位 / 老的本地过滤钩子）
+与 `scripts/check-ui-contract.mjs`（真的打到 `/api/ai/search`、有防抖与最短长度、结果有落点）各加守卫；`README.md` 接口表补 `GET /search`。
+
+---
+
+## N. 问答的回答挤成一大段：提示词没要结构，宿主也只把换行换成 `<br />`（甲类 + 乙类）
+
+**现象**：线上「问全站」的回答读不动。实测「博弈论」那一次：`answer` **1540 字、换行 0 个** ——
+`**1. 博弈论是什么** … - 合作/非合作博弈：… - 对称/非对称博弈：… [#365]` 全部挤在同一行里；
+宿主再 `esc()` 一遍、只把 `\n` 换成 `<br />`，于是 `**` 标记、列表符号、引用编号都原样露在正文里。
+用户原话：「格式能好看一点吗，可读性强一点」。
+
+**原因**（两头都有）：
+
+- **甲类**：`src/prompts.mjs` 的 `ASK_SYSTEM` 只写了「中文回答，条理清晰」，从没要求分段 / 小标题 / 列表 ——
+  模型于是把整篇答案写成一个 JSON 字符串，一个换行都没有；
+- **乙类**：宿主 `public/views/ai.js` 的 `aiAnswerHtml()` 只有 `${esc(data.answer).replace(/\n/g, '<br />')}`，
+  既没有 Markdown 渲染，也没有排版样式。
+
+**我们的修法**：
+
+| 位置 | 改动 |
+|---|---|
+| `src/prompts.mjs` | `ASK_SYSTEM` 增加「answer 的排版」5 条：先用一两句给结论再展开；小节标题**单独占一行**（`**小节标题**`，需要时带序号）；并列要点写成 `- ` 一条一行；段落之间空一行（JSON 里就是 `\n\n`）；不用表格、非必要不用代码块；`[#编号]` 紧跟对应那句话 |
+| 宿主 `public/views/ai.js` | 新增 `aiNormalizeAnswerMd()` / `aiAnswerBlocks()` / `aiAnswerBodyHtml()` / `aiInlineHtml()` / `aiCiteChips()`：先还原「模型把结构全写在一行里」（编号小标题、短加粗+冒号、行内 `- ` 要点前面断开 —— 整段出现两次以上 `- ` 才当列表，免得 `a - b` 这种减法被拆），再按块渲染段落 / 小标题 / 有序无序列表 / 引用 / 代码 / 分隔线；行内渲染 `**粗体**`、`` `代码` ``、Markdown 链接，并把 `[#37]`、`[#37, #42]` 变成可点的出处小标 |
+| 宿主 `public/views/ai.js` | 回答卡片顶部多一行「你的问题」（用后端本来就返回的 `data.question`） |
+| 宿主 `public/css/95-ai.css` | `.ai-answer-q` / `.ai-p` / `.ai-h2~4` / `.ai-answer-list` / `.ai-quote` / `.ai-pre` / `.ai-rule` / `.ai-code` / `.ai-link` / `.ai-inline-cite` 一整套；正文 `max-width: 78ch`、行高 1.9 |
+
+**同步改过的作者文件**：`scripts/smoke-ai.mjs` 加 2 项（问答提示词里真的有「answer 的排版」「小节标题单独占一行」「`- ` 开头的列表」）；
+宿主 `scripts/check-ui-contract.mjs` 加 3 项（回答走 `aiAnswerBodyHtml`、出处标 `ai-inline-cite`、不再用 `<br />` 顶替分段）。
+
+---
+
+## O. 全站问答乱选材：正文偶发命中压过标题，材料太肥把答案预算烧光（甲类）
+
+**现象**：「问全站」问宽一点的问题（线上实测「想学习dfs，然后实现成代码」）经常等 8 秒以上，还会直接回红条
+「这次的资料太多，模型没能在预算内答完。把问题问得具体一点（或选中某一篇再问）会好很多。」（`ai_answer_truncated`，503）。
+实测那一次 **8220ms、只选了 3 篇、`truncated=true`**。用户原话：「怎么回事，而且很慢，可以优化一下吗，没必要全部检索，优先标题和小标题」。
+
+**原因**（三处叠加）：
+
+- `rankDocuments()` 的权重里**没有「小标题」这个概念**（标题 12 / 标签 8 / 摘要 6 / 分类 5 / 正文 3 / 回复 2），
+  一篇正文里偶然提到「dfs」的长词条能压过真正讲 DFS 的篇目；
+- `selectForQuestion()` 既按分数取，也按**整篇正文长度**估算体量（`charBudget = 24000`）——
+  wiki 词条动辄上万字，于是**第一篇就吃掉大半预算**，线上只挑到 3 篇就走不动了；
+- `buildMaterial()` 的 `clampText(content, contentPerDoc)` 一律**从头截**正文：命中段落在 3000 字之后时，
+  喂给模型的材料里根本没有讲那件事的部分，它只能拿开头那段硬答，答案于是又长又散，还容易把输出预算烧光。
+
+**我们的修法**（选材优先标题与小标题，材料变瘦、命中段进材料）：
+
+| 位置 | 改动 |
+|---|---|
+| `src/ai.mjs` | 新增 `questionTerms(question)`：英文/数字串与连续汉字段按 2 字以上切词（「想学习dfs，然后实现成代码」→ `想学习` / `dfs` / `然后实现成代码`），3 字以上的汉字段再切 2 字片段，低权重参与打分 |
+| `src/ai.mjs` | 新增 `extractHeadings(text)`：认得 `#`~`######` 标题与「整行只有一句加粗」的小标题（`**小节标题**`） |
+| `src/ai.mjs` | `rankDocuments()` 权重改成**标题 20 / 小标题 9** / 标签 8 / 摘要 6 / 分类 5 / 正文 2 / 回复 1（半截词另算），并返回 `{doc, score, titleHit, headingHit, bodyHit}` 供调用方分层 |
+| `src/ai.mjs` | `selectForQuestion()` 默认值改成 `charBudget = 11000`、`maxDocuments = 6`、`maxWeak = 2`、`contentPerDoc = 1600`：**先收标题/小标题命中的强命中**，有强命中时纯正文命中最多再补 2 篇；体量按 `min(正文长度, contentPerDoc)` 估，长词条不再一票吃光预算 |
+| `src/ai.mjs` | `answerQuestion()`：全站问答的材料上限 `24000 → 12000`、每篇 `3000 → 1600`（单篇问答仍是 16000 / 整篇喂），并把 `questionTerms()` 当 `focus` 交给材料装配 |
+| `src/material.mjs` | 新增 `excerptAroundFocus(content, focus, max)`：正文**从命中处往前后截**（前面留 240 字、两端补 `…`；`lead` 会夹到窗口的三分之一以内，免得命中词落在片段之外），命中词本来就在开头时行为不变；新增 `focusHeadings()`，把命中的小标题列成一行 `相关小节：A / B` 附在材料里 |
+| `src/prompts.mjs` | `ASK_SYSTEM` 补一条：**answer 控制在 800 字以内**（给「够用的结论 + 关键细节」，不是复述材料）—— 既压截断，也省时间 |
+
+**同步改过的作者文件**：`selftest.mjs` +14 项（正文从命中处截、片段带省略号、`相关小节：`、不给 focus 行为不变、
+标题命中 > 小标题命中 > 纯正文命中、有强命中时弱命中只补 `maxWeak` 篇、长文档不再一票吃光预算、`extractHeadings`
+认 `#` 与整行加粗、分词含英文词与汉字段、全站问答材料压在 12000 字以内等）；`scripts/smoke-ai.mjs` 改成材料体积断言 +
+选材上限断言，并把「上游截断一次 → 服务端砍半重问」的模拟从「按字数阈值卡」换成假服务的一次性开关 `truncateOnce`
+（小语料库里材料本来就不到一千字，阈值卡法已经卡不出「第一次失败、第二次成功」）。
+
+---
+
+## O2. 上面那条宽问题**改完还是红条**：模型自己写得太长，两次都把预算烧光（甲类，同日补）
+
+**现象**：O 节上线后线上复测，同一条「想学习dfs，然后实现成代码」仍然 503 `ai_answer_truncated`，
+而且这次**耗了 38.8 秒**——说明两次尝试（默认预算 → 翻倍重试）**都被 `finish_reason=length` 掐断**。
+（同批其它问题都正常：「博弈论」7040ms / 5 篇 / 754 字，「2-SAT 是什么」5292ms / 6 篇 / 1027 字，
+「Markdown 表格怎么写」9009ms / 4 篇 / 708 字。）
+
+**原因**：这条问题里明确要「实现成代码」，模型于是写一长段程序（可能还有多种变体），
+`answer` 800 字的提示词约束、以及 3000/6000 的输出预算都拦不住它；
+而 `isTruncated()`（`finish_reason === 'length'`）在作者的实现里**明确不重试**，
+于是两次尝试失败后只能抛 503。也就是说：**问题不在材料太肥，而在「答案本身太长」**。
+
+**我们的修法**（让「答案太长」这条路也能自己救回来）：
+
+| 位置 | 改动 |
+|---|---|
+| `src/ai.mjs` | `ASK_MAX_TOKENS_DEFAULT` **3000 → 4000**（`max_tokens` 是上限、不是花费，宽问题第一次尝试的余量给足） |
+| `src/ai.mjs` | 截断重试从「少喂一半 + 预算 ×2（封顶 8000）」改成**少喂到三分之一**（`Math.max(2, ceil(n/3))`、材料 `Math.max(3000, floor(limit/3))`）+ **预算用满 8000**（`Math.min(Math.max(budget, 4000) * 2, 8000)`） |
+| `src/ai.mjs` + `src/prompts.mjs` | 重试时 `renderAskUser(..., { brief: true })` 在提问末尾加【上一次】：说明上次是被预算掐断的、**只要要点**、要代码就给 20 行以内的片段、`answer` 控制在 400 字以内 |
+| `src/prompts.mjs` | `ASK_SYSTEM` 再补两条：要写代码时**只给最小可运行片段（20 行以内）**、不给多份变体；`citations` **最多 8 条**、每条 `quote` 30 字内（引用本身也可能吃掉输出预算） |
+
+**同步改过的作者文件**：`selftest.mjs` 的「▶ 问答预算与截断自适应」改成 4000 / 8000 并 +2 项
+（第二次只喂三分之一、第二次的提问里带【上一次】）；
+`scripts/smoke-ai.mjs` 对应两条改成 4000 / 8000，并 +1 项（重问时明确要求短答案）。
+
+---
+
 ## 附：作者包的其它小问题（不影响功能，仅记录）
 
 1. `forum-ai/src/mount.mjs` 顶部的用法注释写的是 `mountForumAi({ db, resolveUser, baseDir: ROOT, aiDir: join(ROOT,'forum-ai') })`，但**实际函数签名没有 `baseDir` / `aiDir` 这两个参数**（注释与实现不一致）。
@@ -281,12 +497,12 @@ AI 接口没有返回内容（finish_reason=length，提示 8840 / 生成 3000 t
 
 | 测试 | 期望 |
 |---|---|
-| `node forum-ai/selftest-mount.mjs` | 通过 35 项，失败 0 项 |
-| `node forum-ai/selftest.mjs` | 通过 151 项，失败 0 项 |
-| `node scripts/smoke-ai.mjs` | 通过 65 项，失败 0 项 |
-| `node scripts/smoke.mjs` | 通过 238 项，失败 0 项 |
+| `node forum-ai/selftest-mount.mjs` | 通过 49 项，失败 0 项 |
+| `node forum-ai/selftest.mjs` | 通过 192 项，失败 0 项 |
+| `node scripts/smoke-ai.mjs` | 通过 87 项，失败 0 项 |
+| `node scripts/smoke.mjs` | 通过 237 项，失败 0 项 |
 | `node scripts/check-golden.mjs` | 通过 88 项，差异 0 项（对外行为与改造前一致） |
-| `node scripts/check-ui-contract.mjs` | 通过 317 项（下限 317），问题 0 项 |
-| `node scripts/check-encoding.mjs` | 已检查 207 个文件（下限 205），中文片段断言 84 条 |
+| `node scripts/check-ui-contract.mjs` | 通过 325 项（下限 317），问题 0 项 |
+| `node scripts/check-encoding.mjs` | 已检查 210 个文件（下限 205），中文片段断言 84 条 |
 
-合计 **806 项**（2026-10 复跑实测；数量随轮次增删会变，以各脚本自己打印的下限为准）。另外 `node scripts/check-encoding.mjs` 在 Linux 上会报 `ENOENT ... start.cmd` —— 它硬编码要检查 `start.cmd`（Windows 专用文件、故意不上传），**这个失败是预期的，不是问题**。
+合计 **978 项**（2026-10 复跑实测；数量随轮次增删会变，以各脚本自己打印的下限为准）。另外 `node scripts/check-encoding.mjs` 在 Linux 上会报 `ENOENT ... start.cmd` —— 它硬编码要检查 `start.cmd`（Windows 专用文件、故意不上传），**这个失败是预期的，不是问题**。

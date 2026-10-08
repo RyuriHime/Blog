@@ -237,6 +237,21 @@ check('统一的错误出口 toastError 存在', /function toastError\(/.test(ap
 check('不再有裸的 toast(error.message)（统一走 toastError）', !/toast\(error\.message/.test(appJs));
 check('不再有裸的 fail(error.message)（统一走 apiErrorText）', !/fail\(error\.message/.test(appJs));
 check(
+  'AI 的失败文案原样透出（别被 5xx 那句「服务器开小差了」顶掉）',
+  /code\.startsWith\('ai_'\)/.test(appJs),
+);
+// m09344：`#/ai` 的搜索从「只在前 30 行上按标题过滤」改成「本地先筛 + 后端搜语料」。
+// 这一改必须连着三件事一起在，不然又会退化成「搜不到 wiki」：
+// ① 真的打到 /api/ai/search；② 输入有防抖且短词不发（AI_SEARCH_MIN）；③ 结果有落点。
+check('语料检索真的打到服务端', /\/api\/ai\/search\?q=/.test(appJs));
+check('检索输入有防抖与最短长度', /aiSearchTimer/.test(appJs) && /AI_SEARCH_MIN/.test(appJs));
+check('检索结果有固定落点（data-ai-hits）', /data-ai-hits/.test(appJs));
+// m09717：回答原来整段 esc 完只把换行换成 <br />，`**粗体**`、`[#37]`、`1. ` 全糊在一起。
+// 现在走 aiAnswerBodyHtml（块级渲染）+ ai-inline-cite（出处能点），别再退回一行到底。
+check('回答按块渲染（段落 / 小标题 / 列表）', /aiAnswerBodyHtml\(data\.answer\)/.test(appJs) && /aiAnswerBlocks/.test(appJs));
+check('回答里的出处标记能点', /ai-inline-cite/.test(appJs));
+check('回答不再用 <br /> 顶替分段', !/esc\(data\.answer\)\.replace\(\/\\n\/g, '<br \/>'\)/.test(appJs));
+check(
   'route() 有请求序号守卫（防切页竞态）',
   /routeSeq \+= 1/.test(appJs) && /throw routeAborted\(\)/.test(appJs) && /if \(seq !== null && seq !== routeSeq\)/.test(appJs),
 );

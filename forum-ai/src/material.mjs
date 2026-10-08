@@ -11,19 +11,79 @@ export const clampText = (value, max) =>
     .trim()
     .slice(0, max);
 
+/** 把正文压成一行（和 clampText 一样的折叠规则），供「围着命中词截取」算偏移用。 */
+const flatten = (value) => String(value ?? '').replace(/\s+/g, ' ').trim();
+
+/**
+ * 取一段「围着命中词」的正文。
+ *
+ * 纯 clampText 是从头截 max 个字，而 wiki 词条的命中段落常常在 3000 字之后 ——
+ * 结果就是「检索命中了，但模型看不到」。命中词不在开头时，从它前面留 lead 个字开始截。
+ * @param {string} value
+ * @param {string[]} focus 小写关键词（questionTerms 的产物）
+ * @param {number} max 截取长度
+ * @param {{ lead?: number }} [options]
+ */
+export function excerptAroundFocus(value, focus = [], max = 3000, { lead = 240 } = {}) {
+  const flat = flatten(value);
+  const size = Math.max(1, Number(max) || 1);
+  if (flat.length <= size) return flat;
+  // lead 不能大过窗口，否则命中词会落在截出来的那段之外（小 max 时尤其明显）
+  const back = Math.max(0, Math.min(Number(lead) || 0, Math.floor(size / 3)));
+  const haystack = flat.toLowerCase();
+  let at = -1;
+  for (const term of focus ?? []) {
+    const key = String(term ?? '').toLowerCase();
+    if (key.length < 2) continue;
+    const hit = haystack.indexOf(key);
+    if (hit >= 0 && (at < 0 || hit < at)) at = hit;
+  }
+  if (at <= back) return flat.slice(0, size);
+  const start = at - back;
+  const end = Math.min(flat.length, start + size);
+  return `…${flat.slice(start, end)}${end < flat.length ? '…' : ''}`;
+}
+
+/**
+ * 材料里额外报一下「命中词出现在哪几个小标题里」。
+ * 模型看到 `相关小节：DFS 实现` 就知道正文里有这块，比只给一段正文更有方向。
+ * @param {string} value 正文
+ * @param {string[]} focus 小写关键词
+ * @param {{ limit?: number, headingChars?: number }} [options]
+ */
+export function focusHeadings(value, focus = [], { limit = 4, headingChars = 40 } = {}) {
+  const terms = (focus ?? []).map((term) => String(term ?? '').toLowerCase()).filter((term) => term.length >= 2);
+  if (terms.length === 0) return [];
+  const out = [];
+  for (const line of String(value ?? '').split('\n')) {
+    const match = /^\s{0,3}#{1,6}\s+(.+?)\s*#*\s*$/.exec(line) ?? /^\s*\*\*([^*\n]{1,40})\*\*\s*$/.exec(line);
+    if (!match) continue;
+    const text = match[1].trim();
+    const lower = text.toLowerCase();
+    if (terms.some((term) => lower.includes(term))) {
+      out.push(clampText(text, headingChars));
+      if (out.length >= limit) break;
+    }
+  }
+  return out;
+}
+
+
 /**
  * 把一批文档拼成材料文本。
  * @param {Array<object>} docs 文档：{ id, title, content, board?, author?, tags?, category?, difficulty?, summary?, replies? }
- * @param {{ charLimit?: number, withReplies?: boolean, withContent?: boolean, contentPerDoc?: number, replyPerDoc?: number }} [options]
+ * @param {{ charLimit?: number, withReplies?: boolean, withContent?: boolean, contentPerDoc?: number, replyPerDoc?: number, focus?: string[] }} [options]
+ *   focus：问题里的关键词（`questionTerms` 的产物）。给了它就从命中处截正文，并额外报出命中的小标题。
  * @returns {{ text: string, included: number, truncated: boolean, chars: number }}
  */
 export function buildMaterial(
   docs,
-  { charLimit = 48000, withReplies = true, withContent = true, contentPerDoc = 3000, replyPerDoc = 400 } = {},
+  { charLimit = 48000, withReplies = true, withContent = true, contentPerDoc = 3000, replyPerDoc = 400, focus = [] } = {},
 ) {
   const blocks = [];
   let used = 0;
   let truncated = false;
+  const hasFocus = Array.isArray(focus) && focus.length > 0;
 
   for (const [index, doc] of (docs ?? []).entries()) {
     const parts = [`[#${doc.id}] 《${doc.title}》`];
@@ -40,8 +100,17 @@ export function buildMaterial(
       .join(' ');
     if (meta) parts.push(meta);
 
+    const raw = doc.content ?? doc.text ?? '';
+    if (hasFocus) {
+      const headings = focusHeadings(raw, focus);
+      if (headings.length) parts.push(`相关小节：${headings.join(' / ')}`);
+    }
+
     let block = `${parts.join('\n')}\n`;
-    if (withContent) block += `正文：${clampText(doc.content ?? doc.text ?? '', contentPerDoc)}\n`;
+    if (withContent) {
+      const body = hasFocus ? excerptAroundFocus(raw, focus, contentPerDoc) : clampText(raw, contentPerDoc);
+      block += `正文：${body}\n`;
+    }
     if (withReplies && Array.isArray(doc.replies) && doc.replies.length) {
       const lines = doc.replies.map(
         (reply) => `  - ${reply.author ?? reply.display_name ?? '匿名'}：${clampText(reply.content, replyPerDoc)}`,

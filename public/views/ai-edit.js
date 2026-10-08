@@ -55,6 +55,13 @@ const MAX_SECTION_BLOCKS = 50;
 const MAX_RANGE_CHARS = 40000;
 
 /**
+ * 预览小缓存的**兜底**条数。真上限由服务端 `GET /api/ai-edit/preview-policy` 报：
+ * 普通成员拿到一个有限值，站长 / 管理员拿到 0 = 不封顶。
+ * 之所以还留这个兜底：问服务端之前就可能有人点了预览，那几条也得有个数。
+ */
+const PREVIEW_CACHE_DEFAULT_MAX = 12;
+
+/**
  * 内置块类型的中文名（目前 15 种）。只用在预览与操作记录里做显示，
  * 真正管放行的是服务端的 AI_BLOCK_TYPE_NAMES —— 少一项不会报错，
  * 只会让那一类块显示成英文原名（`BLOCK_LABEL[t] || t`）。
@@ -136,6 +143,16 @@ const aeState = {
   docMarkdown: null,
   /** docMarkdown 是哪一篇的（换文档要重取） */
   docMarkdownFor: '',
+  /* ---- 预览缓存上限：服务端说了算（见 aeApplyPreviewPolicy） ---- */
+  /** 当前生效的上限条数；0 = 不封顶 */
+  previewMax: 12,
+  /** 站长 / 管理员（服务端算的；只有他们能拿到不封顶） */
+  previewStaff: false,
+  previewNote: '',
+  /** 我最新那条「不封顶」申请：`{ id, status, reason, decidedNote, … }`，没申请过是 null */
+  previewRequest: null,
+  /** 待批队列：只有管理员拿得到，普通成员恒为空数组 */
+  previewQueue: [],
   /* ---- 全站用量（管理员专属） ---- */
   /** null=没拿到；>=400 时整个区块静默隐藏 */
   usage: null,
@@ -466,6 +483,7 @@ function aeSiteDaysHtml(site) {
       return `<tr${classes.length ? ` class="${classes.join(' ')}"` : ''}>
         <td>${esc(day.date)}</td>
         <td>${esc(aeTokens(day.billed ?? 0))}</td>
+        <td>${esc(aeTokens(day.tokens?.calls ?? 0))}</td>
         <td>${esc(aeTokens(day.tokens?.total ?? 0))}</td>
         <td>${esc(aeYuan(day.cost?.yuan ?? 0))}</td>
       </tr>`;
@@ -476,18 +494,52 @@ function aeSiteDaysHtml(site) {
     <div class="ae-usage-line">本月每天（北京时间，${esc(days[days.length - 1]?.date ?? '')} 起）</div>
     <div class="table-wrap">
       <table class="data ae-days-table">
-        <thead><tr><th>日期</th><th>计费次数</th><th>tokens</th><th>花费（估算）</th></tr></thead>
+        <thead><tr><th>日期</th><th>配额次数</th><th>记账调用</th><th>tokens</th><th>花费（估算）</th></tr></thead>
         <tbody>
           ${rows}
           <tr class="ae-day-sum">
             <td>本月合计</td>
             <td>${esc(aeTokens(month.billed ?? 0))}</td>
+            <td>${esc(aeTokens(month.tokens?.calls ?? 0))}</td>
             <td>${esc(aeTokens(month.tokens?.total ?? 0))}</td>
             <td>${esc(aeYuan(month.cost?.yuan ?? 0))}</td>
           </tr>
         </tbody>
       </table>
     </div>
+    <div class="ae-usage-line">「配额次数」是配额闸门的口径（UTC 自然日，只数 AI 编辑台的操作）；「记账调用」「tokens」「花费」按北京时间，含下面列出的三路来源。</div>
+  </div>`;
+}
+
+/**
+ * 这份账是**哪几路拼起来的**：来源清单（含各自已知的不精确）。
+ *
+ * 文案由后端给（`usage.sources`）：三个来源的坑是数据层的事实，抄到前端就会跟实现对不上。
+ * 管理员那边还会带上每一路**本月**自己的钱（`site.bySource`）—— 合计涨上去之后，
+ * 管理员要能看出是哪一路花的。
+ */
+function aeSourcesHtml(usage) {
+  const sources = Array.isArray(usage.sources) ? usage.sources : [];
+  if (!sources.length) return '';
+  const bySource = Array.isArray(usage.site?.bySource) ? usage.site.bySource : [];
+  const money = new Map(bySource.map((row) => [row.key, row]));
+  const rows = sources
+    .map((source) => {
+      const sum = money.get(source.key);
+      const amount = sum
+        ? `${aeYuan(sum.cost?.yuan ?? 0)} · ${aeTokens(sum.tokens?.total ?? 0)} tokens · 记账 ${aeTokens(sum.tokens?.calls ?? 0)} 次`
+        : '';
+      return `<div class="ae-usage-source">
+        <span class="ae-usage-source-name">${esc(source.label ?? source.key)}</span>
+        ${amount ? `<span class="ae-usage-source-money">${esc(amount)}</span>` : ''}
+        <span class="ae-usage-source-detail">${esc(source.detail ?? '')}${source.caveat ? ` ${esc(source.caveat)}` : ''}</span>
+      </div>`;
+    })
+    .join('');
+  const unattributed = sources.some((source) => source.perUser === false);
+  return `<div class="ae-usage-sources">
+    <div class="ae-usage-line">金额来源${bySource.length ? '（各路自己的本月账）' : ''}${unattributed ? '：逐篇解读没记「谁触发的」，那份钱只进全站合计、不进「我自己的用量」' : ''}</div>
+    ${rows}
   </div>`;
 }
 
@@ -580,10 +632,11 @@ function aeUsageHtml() {
         <h2>AI 用量</h2>
         <span class="ae-target-state">金额为估算</span>
       </div>
-      <div class="page-sub">金额 = token × 单价，按每次调用当时的档位估算，按北京时间自然日/周/月汇总；次数是配额闸门的口径（UTC 自然日）。</div>
+      <div class="page-sub">金额 = token × 单价，按每次调用当时的档位估算，按北京时间自然日/周/月汇总，<strong>覆盖 AI 编辑台 / 论坛 AI / 笔记三路</strong>；「配额次数」是配额闸门的口径（UTC 自然日，只数 AI 编辑台的操作）。</div>
       <div class="ae-usage">
         ${aeMyUsageHtml(usage)}
         ${aeSiteUsageHtml(usage)}
+        ${aeSourcesHtml(usage)}
         ${
           priceNote
             ? `<div class="ae-usage-line">${esc(priceNote)}${priceSource ? ` <a href="${esc(priceSource)}" target="_blank" rel="noopener">单价出处</a>` : ''}</div>`
@@ -721,16 +774,30 @@ function draftMetaText(draft) {
  * Markdown 一变键就变，所以落盘后重新拉一次自然拿到新渲染，不会读到旧画面。
  */
 const previewCache = new Map();
-const PREVIEW_CACHE_MAX = 12;
+/** 生效中的上限；0 = 不封顶。由 `aeApplyPreviewPolicy()` 从服务端改写。 */
+let previewCacheMax = PREVIEW_CACHE_DEFAULT_MAX;
 
 function aePreviewKey(documentId, markdown) {
   return `${documentId}\u0000${markdown}`;
 }
 
+/** 把服务端报的上限落地；拿不到（接口挂了 / 没登录）就退回兜底值，页面照常能用。 */
+function aeApplyPreviewPolicy(policy) {
+  const max = Number(policy?.max);
+  previewCacheMax = Number.isFinite(max) && max >= 0 ? max : PREVIEW_CACHE_DEFAULT_MAX;
+  aeState.previewMax = previewCacheMax;
+  aeState.previewStaff = Boolean(policy?.staff);
+  aeState.previewNote = String(policy?.note ?? '');
+  aeState.previewRequest = policy?.request ?? null;
+  aeState.previewQueue = Array.isArray(policy?.queue) ? policy.queue : [];
+}
+
 function aeRememberPreview(key, entry) {
   previewCache.set(key, entry);
+  // 0 = 不封顶：服务端只在管理员身上给这个数。
+  if (previewCacheMax <= 0) return;
   // 只留最近几条（一篇文档的整篇 + 几节片段），别让长 Markdown 一直占着内存。
-  while (previewCache.size > PREVIEW_CACHE_MAX) {
+  while (previewCache.size > previewCacheMax) {
     const oldest = previewCache.keys().next();
     if (oldest.done) break;
     previewCache.delete(oldest.value);
@@ -930,6 +997,95 @@ function sliceOpeningSection(text) {
   return sliced ? { text: sliced, note: '' } : { text, note: SLICE_MISS_NOTE };
 }
 
+/**
+ * 「预览能留几条」那一块：现状一句 + 申请 / 审批。
+ *
+ * 为什么申请按钮不是「点一下就解锁」：上限在服务端按**申请状态**算
+ * （`GET /api/ai-edit/preview-policy` 的 `unlimited`），客户端说了不算 ——
+ * 否则谁都能点一下把封顶掀掉，等于没有封顶。按下去只是**真的递一条申请**，
+ * 等站长 / 管理员在下面那份队列里批。
+ */
+function aePreviewLimitHtml() {
+  const note =
+    aeState.previewNote ||
+    (aeState.previewMax <= 0
+      ? '预览缓存不封顶。'
+      : `预览缓存最多留 ${aeState.previewMax} 条（再预览会替掉最早的那几条）。`);
+  const req = aeState.previewRequest;
+  const rows = [`<div>${esc(note)}</div>`];
+
+  // 管理员那一份队列：谁在等，就在谁后面给「同意 / 拒绝」。
+  if (aeState.previewStaff && aeState.previewQueue.length > 0) {
+    rows.push(`<div class="ae-field-hint">有 ${aeState.previewQueue.length} 条「不封顶」申请在等你批：</div>`);
+    for (const item of aeState.previewQueue) {
+      const id = String(item?.id ?? '');
+      rows.push(
+        `<div class="ae-approval">` +
+          `<span class="ae-approval-who">${esc(String(item?.username || `#${id}`))}</span>` +
+          `<span class="ae-approval-why">${esc(String(item?.reason || '（没写理由）'))}</span>` +
+          `<button class="btn btn-sm btn-primary" type="button" data-ae-act="preview-approve" data-ae-id="${esc(id)}">同意</button>` +
+          `<button class="btn btn-sm" type="button" data-ae-act="preview-reject" data-ae-id="${esc(id)}">拒绝</button>` +
+          `</div>`,
+      );
+    }
+  }
+
+  // 我自己那条申请：待批 / 被拒，各说各话。
+  if (req && req.status === 'pending') {
+    rows.push(
+      `<div class="ae-field-hint">申请 #${esc(String(req.id))} 已经递上去了，等管理员批。` +
+        `<button class="btn btn-sm" type="button" data-ae-act="preview-cancel" data-ae-id="${esc(String(req.id))}">撤下申请</button></div>`,
+    );
+  } else if (req && req.status === 'rejected') {
+    rows.push(
+      `<div class="ae-field-hint">上一次申请被管理员拒了${req.decidedNote ? `：${esc(String(req.decidedNote))}` : '。'}` +
+        `<button class="btn btn-sm" type="button" data-ae-act="preview-limit">再申请一次</button></div>`,
+    );
+  } else if (!aeState.previewStaff && aeState.previewMax > 0) {
+    rows.push(`<button class="btn btn-sm" type="button" data-ae-act="preview-limit">申请不封顶（要管理员同意）</button>`);
+  }
+  return rows.join('');
+}
+
+/** 递一条「不封顶」申请，然后把最新的状态与队列一起拉回来。 */
+function aeAskPreviewLimit(node) {
+  return withBusy(node, async () => {
+    try {
+      await api('/api/ai-edit/preview-requests', { method: 'POST', body: {} });
+      aeApplyPreviewPolicy(await api('/api/ai-edit/preview-policy'));
+    } catch (error) {
+      aeState.previewNote = `申请没递出去：${error.message}`;
+    }
+  }).then(aeRender);
+}
+
+/** 撤下自己那条申请（管理员也能用它收回已经批过的）。 */
+function aeCancelPreviewLimit(node, id) {
+  return withBusy(node, async () => {
+    try {
+      await api(`/api/ai-edit/preview-requests/${encodeURIComponent(String(id))}`, { method: 'DELETE' });
+      aeApplyPreviewPolicy(await api('/api/ai-edit/preview-policy'));
+    } catch (error) {
+      aeState.previewNote = `撤不下来：${error.message}`;
+    }
+  }).then(aeRender);
+}
+
+/** 管理员批 / 拒一条申请 —— 服务端还会再查一次权限，前端这颗按钮只是入口。 */
+function aeDecidePreviewLimit(node, id, approve) {
+  return withBusy(node, async () => {
+    try {
+      await api(`/api/ai-edit/preview-requests/${encodeURIComponent(String(id))}/decide`, {
+        method: 'POST',
+        body: { approve },
+      });
+      aeApplyPreviewPolicy(await api('/api/ai-edit/preview-policy'));
+    } catch (error) {
+      aeState.previewNote = `没批成：${error.message}`;
+    }
+  }).then(aeRender);
+}
+
 /** 一个预览面板：标题 + 渲染容器（.md 是站点现成的正文排版）+ 解析提示。 */
 function aePreviewPanelHtml(slot, title, bodyHtml, note) {
   return `
@@ -1036,6 +1192,7 @@ function aeDraftHtml() {
               : '这一页不显示块 JSON —— 落盘走块，预览走 Markdown。'
           }
         </div>
+        <div class="ae-field-hint">${aePreviewLimitHtml()}</div>
       </div>`;
   return `
     <section class="card">
@@ -1402,11 +1559,15 @@ async function aeLoadUsage() {
 async function aeLoad() {
   const token = ++loadToken;
   try {
-    const [caps, ops] = await Promise.all([
+    const [caps, ops, policy] = await Promise.all([
       api('/api/ai-edit/capabilities'),
       api('/api/ai-edit/ops?limit=30'),
+      // 预览缓存能留几条，问服务端（管理员拿到 0 = 不封顶）。
+      // 单拎一条 `.catch`：这条问不出来不该把「能力 / 日志」也一起拖下水。
+      api('/api/ai-edit/preview-policy').catch(() => null),
     ]);
     if (token !== loadToken) return;
+    aeApplyPreviewPolicy(policy);
     aeState.capabilities = caps?.capabilities ?? [];
     aeState.ops = ops?.ops ?? [];
     aeState.total = ops?.total ?? 0;
@@ -1942,6 +2103,10 @@ function aeBind() {
     const act = node.dataset.aeAct;
     aeSyncTextarea();
     if (act === 'refresh') withBusy(node, aeLoad).then(aeRender);
+    else if (act === 'preview-limit') aeAskPreviewLimit(node);
+    else if (act === 'preview-cancel') aeCancelPreviewLimit(node, node.dataset.aeId);
+    else if (act === 'preview-approve') aeDecidePreviewLimit(node, node.dataset.aeId, true);
+    else if (act === 'preview-reject') aeDecidePreviewLimit(node, node.dataset.aeId, false);
     else if (act === 'grant') aeGrant(node, node.dataset.aeCap);
     else if (act === 'revoke') aeRevoke(node, node.dataset.aeCap);
     else if (act === 'rollback') aeRollback(node, node.dataset.aeId);

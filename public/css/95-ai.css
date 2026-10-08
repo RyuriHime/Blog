@@ -146,7 +146,73 @@
 }
 
 .ai-answer-head { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-bottom: 8px; }
-.ai-answer-text { color: var(--text); line-height: 1.85; }
+.ai-answer-text { color: var(--text); line-height: 1.9; font-size: 14.5px; max-width: 78ch; }
+.ai-answer-text > :first-child { margin-top: 0; }
+.ai-answer-text > :last-child { margin-bottom: 0; }
+
+/* 回答的排版（aiAnswerBodyHtml）：段落、小标题、列表、引用、代码、出处标记 */
+.ai-answer-q {
+  margin-bottom: 10px;
+  padding: 6px 10px;
+  border-left: 2px solid var(--accent);
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+  background: var(--panel);
+  color: var(--text-dim);
+  font-size: 13px;
+}
+.ai-p { margin: 0 0 10px; }
+.ai-h { margin: 16px 0 8px; color: var(--text); font-weight: 600; }
+.ai-h2 { font-size: 16px; }
+.ai-h3 { font-size: 15px; }
+.ai-h4 { font-size: 14px; color: var(--text-dim); }
+.ai-answer-list { margin: 0 0 10px; padding-left: 22px; }
+.ai-answer-list li { margin: 3px 0; }
+.ai-answer-list li::marker { color: var(--muted); }
+.ai-quote {
+  margin: 0 0 10px;
+  padding: 6px 12px;
+  border-left: 3px solid var(--border-soft);
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+  background: var(--panel);
+  color: var(--text-dim);
+}
+.ai-pre {
+  margin: 0 0 10px;
+  padding: 10px 12px;
+  overflow-x: auto;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-sm);
+  background: var(--panel);
+  color: var(--text-dim);
+  font-family: var(--mono);
+  font-size: 12.5px;
+  line-height: 1.7;
+}
+.ai-rule { margin: 14px 0; border: none; border-top: 1px solid var(--border-soft); }
+.ai-code {
+  padding: 1px 5px;
+  border: 1px solid var(--border-soft);
+  border-radius: 4px;
+  background: var(--panel);
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 12.5px;
+}
+.ai-link { color: var(--accent); text-decoration: none; }
+.ai-link:hover { text-decoration: underline; }
+.ai-inline-cite {
+  display: inline-block;
+  margin: 0 2px;
+  padding: 1px 6px;
+  border: 1px solid var(--border-soft);
+  border-radius: 999px;
+  background: var(--panel);
+  color: var(--accent);
+  font-family: var(--mono);
+  font-size: 11.5px;
+  text-decoration: none;
+}
+.ai-inline-cite:hover { border-color: var(--accent); }
 
 .ai-cites { display: flex; flex-direction: column; gap: 6px; }
 .ai-cite {
@@ -205,8 +271,9 @@
 }
 details[open] > summary .ai-caret { transform: rotate(90deg); }
 
-/* 逐篇分类：整卡默认收起 + 卡内筛选（全部 / 已解读 / 未解读）+ 标题搜索 + 默认只显示前 30 行。
-   筛选与搜索只切 class / dataset，不重新请求接口（见 core/events.js 的 ai-list-scope / ai-list-search）。 */
+/* 逐篇分类：整卡默认收起 + 卡内筛选（全部 / 已解读 / 未解读）+ 搜索（本地按标题 + 后端语料检索）
+   + 默认只显示前 30 行。筛选只切 class / dataset；两个字起的搜索会请求 /api/ai/search
+   （见 core/events.js 的 ai-list-scope / ai-list-search）。 */
 .ai-all > summary { cursor: pointer; }
 .ai-all-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 10px; }
 .ai-all-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 12px 0 8px; }
@@ -234,6 +301,30 @@ details[open] > summary .ai-caret { transform: rotate(90deg); }
   font-size: 13px;
 }
 .ai-search:focus { outline: none; border-color: var(--accent); }
+
+/* 语料检索结果（两个字起才出现）：一条命中 = 标题（+ Wiki 标记）+ 上下文片段 + 出处。 */
+.ai-hits {
+  margin: 4px 0 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-sm);
+  background: var(--bg-soft);
+}
+.ai-hits-head { font-size: 12.5px; color: var(--muted); margin-bottom: 8px; }
+.ai-hits-list { display: flex; flex-direction: column; gap: 8px; }
+.ai-hit { display: flex; flex-direction: column; gap: 3px; text-decoration: none; color: inherit; }
+.ai-hit:hover .ai-hit-title { color: var(--accent-fg); }
+.ai-hit-title { font-size: 13.5px; font-weight: 600; display: flex; align-items: center; gap: 6px; }
+.ai-hit-tag {
+  padding: 1px 6px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--muted);
+}
+.ai-hit-snippet { font-size: 12.5px; color: var(--text-dim); line-height: 1.5; }
+.ai-hit-meta { font-size: 11.5px; color: var(--muted); }
 .ai-more { margin-top: 10px; }
 .ai-posts[data-clip] .ai-post-row:nth-child(n + 31) { display: none; }
 .ai-posts[data-scope='done'] .ai-post-row[data-ai-status='pending'],

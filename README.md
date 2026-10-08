@@ -600,7 +600,7 @@ DB_FILE=/opt/app/data/forum.db node scripts/seed-oiwiki.mjs --user RyuriHime   #
 | POST | `/api/teams/:id/messages` | 发消息，body `{ content }`（1-1000 字） | 团队成员（每分钟 60 条） |
 | DELETE | `/api/teams/:id/messages/:messageId` | 删消息 | 作者 / 团队管理员 |
 
-**AI 编辑台（`/api/ai-edit`）** —— 前缀为什么不是 `/api/ai/`：`forum-ai` 的挂载层把 `/api/ai/` 下**所有**路径都短路了（没命中它那 14 条路由就直接 404，永远不回宿主路由表），所以宿主自己的 AI 路由另起一段前缀。
+**AI 编辑台（`/api/ai-edit`）** —— 前缀为什么不是 `/api/ai/`：`forum-ai` 的挂载层把 `/api/ai/` 下**所有**路径都短路了（没命中它那 15 条路由就直接 404，永远不回宿主路由表），所以宿主自己的 AI 路由另起一段前缀。
 这一套的链路是「**先授权能力 → 再草拟（只预览）→ 确认后才落盘 → 每一步留审计**」；落盘本身仍由前端调上面那张表里的 P2 接口完成，AI 模块不自己写文档（这样沙箱、块校验、快照、`blocks.derived` 那套规则一套都不用重写）。
 
 | 方法 | 路径 | 说明 | 权限 |
@@ -820,10 +820,10 @@ team_messages(id, team_id, user_id, content, deleted, created_at)
 node scripts/check-golden.mjs      # ★ 行为金标准：88 条请求的状态码 + 响应结构，一条都不能变
 node scripts/check-skeleton.mjs    # ★ 骨架自检：模块能不能独立拆掉、薄入口有没有变胖
 node scripts/check-markdown.mjs    # ★ 正文渲染回归：72 项（站内链接 / 带括号 URL / 表格 / 嵌套列表 / 转义 / 危险协议 / 行内 HTML 白名单 / 列表里的块公式 / 兜底拷贝同步）
-node scripts/check-frontend.mjs    # ★ 前端渲染冒烟：43 个页面全部渲染一遍 + 关注列表 / 主页关注名单卡（自己视角排文章前面、别人视角仍在最底下）/ 团队的文件柜/群聊/成员名单/团队号/公告/加入申请与审核/隐藏开关/设置与申请改右侧抽屉/帖子预览与详情回复（「💬 回复」按钮、编辑权只归作者）/ 动态回复 / 动态转发（点开才画框、发得出当前原文、计数跟着走、转不了的画静态计数）/ 积木页转发（转得出、发完留在原地、撤销得掉、互动条跟着重画）/ 转发出来的卡片写「转发了帖子」而纯引用写「引用了帖子」/ 转发的引用卡带着 `#/feed/<原动态 id>`（原动态删了就变回死块，不再假装能点）/ 公告页翻页带页码而首页那块只要 5 条 / AI 编辑台的用量面板（自己那份三行 + 全站的今日/本周/本月与「本月每天」那张表 —— 「首次渲染就得在场」，用法接口故意晚一个宏任务回来盯着它）/ 交互 + 裸调用未定义名字的静态扫描
+node scripts/check-frontend.mjs    # ★ 前端渲染冒烟：43 个页面全部渲染一遍 + 关注列表 / 主页关注名单卡（自己视角排文章前面、别人视角仍在最底下）/ 团队的文件柜/群聊/成员名单/团队号/公告/加入申请与审核/隐藏开关/设置与申请改右侧抽屉/帖子预览与详情回复（「💬 回复」按钮、编辑权只归作者）/ 动态回复 / 动态转发（点开才画框、发得出当前原文、计数跟着走、转不了的画静态计数）/ 积木页转发（转得出、发完留在原地、撤销得掉、互动条跟着重画）/ 转发出来的卡片写「转发了帖子」而纯引用写「引用了帖子」/ 转发的引用卡带着 `#/feed/<原动态 id>`（原动态删了就变回死块，不再假装能点）/ 公告页翻页带页码而首页那块只要 5 条 / AI 编辑台的用量面板（自己那份三行 + 全站的今日/本周/本月、「本月每天」那张表的五列表头、三路来源清单与每路本月自己的钱 —— 「首次渲染就得在场」，用法接口故意晚一个宏任务回来盯着它）/ 交互 + 裸调用未定义名字的静态扫描
 node scripts/smoke.mjs             # 后端端到端：237 项（临时独立库+端口，跑完自动清理）
-node scripts/smoke-ai.mjs          # AI 接口端到端：65 项
-node scripts/ai-smoke.mjs          # AI 接口端到端（更细的一套：校验 / 限流 / 额度 / 审查 / 模板与提示词漂移哨兵 / 能力目录只列接上了线的能力 / 用量面板分层 / 跨日界的计数口径哨兵）：478 项
+node scripts/smoke-ai.mjs          # AI 接口端到端：87 项（含逐篇过期判定：新增别篇不让老解读过期、改了这一篇自己才标过期；问答预算 4000 与「被截断就缩材料、在提问里要短答案再问、再截断给一句人话」；回答排版要求（分段 / 小标题 / `- ` 列表）与 800 字上限；语料检索（标题 + 正文）与未登录 401；全站问答的选材上限与材料体积）
+node scripts/ai-smoke.mjs          # AI 接口端到端（更细的一套：校验 / 限流 / 额度 / 审查 / 模板与提示词漂移哨兵 / 能力目录只列接上了线的能力 / 用量面板分层 / 三源合并（论坛 AI 与笔记那两本账也进面板、逐篇解读只进全站）/ 跨日界的计数口径哨兵）：486 项
 node scripts/feed-smoke.mjs        # 动态流端到端：191 项（含动态回复、动态转发、帖子转发也发到动态、「仅团队」的可见范围）
 node scripts/doc-smoke.mjs         # 积木（可编程帖子）端到端：694 项（含阅读页的回复区与转发区）
 node scripts/team-smoke.mjs        # 团队端到端：306 项（可见范围 / 越权 / 版本冲突 / 编辑权只归作者 / 文件柜 / 群聊 / 团队号 / 公告通知 / Markdown 与公式 / 帖子回复 / 加入申请与审核 / 隐藏团队 / 老库升级与坏库自愈）
@@ -846,10 +846,10 @@ node scripts/capture-fixtures.mjs  # 重采前端冒烟用的假数据（改了�
 一次跑完（`npm test` 就是上面这些，15 组）：
 
 ```
-check-encoding 209 文件 / 84 断言 · check-skeleton 47 项 · check-golden 88 项 0 差异
-check-markdown 72 · check-frontend 43 个页面 + 34 个模块静态扫描 · smoke 237 · smoke-ai 65
-ai-smoke 478 · feed-smoke 191 · doc-smoke 694 · team-smoke 306
-check-ui-contract 318 · check-notes-ui 33 · notes-smoke 44 · ui-smoke 81
+check-encoding 210 文件 / 84 断言 · check-skeleton 47 项 · check-golden 88 项 0 差异
+check-markdown 72 · check-frontend 43 个页面 + 34 个模块静态扫描 · smoke 237 · smoke-ai 87
+ai-smoke 486 · feed-smoke 191 · doc-smoke 694 · team-smoke 306
+check-ui-contract 325 · check-notes-ui 33 · notes-smoke 44 · ui-smoke 81
 ```
 
 > 知识网络图（`knowledge-pack/` + `#/graph` + `/api/knowledge/*`）已在 2026-10 整条链路删除：
@@ -862,7 +862,7 @@ check-ui-contract 318 · check-notes-ui 33 · notes-smoke 44 · ui-smoke 81
 
 ```
 node note-studio/tests/run.mjs        # 学术笔记子系统
-node forum-ai/selftest.mjs            # AI 层：92 项
+node forum-ai/selftest.mjs            # AI 层：192 项
 npm run test:notes                    # AI 工作台抽屉：32 个文件 / 724 条断言
 ```
 
