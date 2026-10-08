@@ -11,7 +11,7 @@
 // **永远不交回宿主路由表**。所以任何注册在 `/api/ai/<子路径>` 的宿主路由都是不可达的。
 // `/api/ai-edit/` 不以 `/api/ai/` 开头，落回宿主路由表，能被正常分发。
 import { HttpError, ensure, rateLimit } from '../../core/http.js';
-import { requireUser, requireStaff } from '../../core/guards.js';
+import { isStaff, requireUser } from '../../core/guards.js';
 import {
   AI_CAPABILITIES,
   AI_CAPABILITY_KEYS,
@@ -61,6 +61,57 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 /** 配额按 **UTC 自然日** 结算：把时间戳向下取整到当天 00:00。 */
 function startOfUtcDay(at) {
   return at - (at % DAY_MS);
+}
+
+/** 北京时间的固定偏移：中国没有夏令时，这个偏移是常量。 */
+const BEIJING_OFFSET_MS = 8 * 60 * 60 * 1000;
+
+/**
+ * **金额与 token** 按北京时间自然日/周/月结算（配额次数仍旧按 UTC 日，见 `startOfUtcDay`）。
+ *
+ * 为什么钱这边不能跟着配额用 UTC 日：这张账是给人看的。「每天花了多少」按 UTC 切的话，
+ * 中国的管理员要在早上 8 点看着昨天的数字突然跳到今天；而且定价的高峰/空闲判据本来就是
+ * 北京时间（pricing.js），两边同一个时区才不会出现「同一笔钱被算进两个日子」。
+ *
+ * 于是这一版面板有两个口径，界面上如实写出来：
+ *   · 次数（配额闸门口径，`total` / `billed` / `blocked` / `users` / `budget.used`）→ UTC 日；
+ *   · token 与金额（`me` 与 `site` 的 `tokens` / `cost` / `days`）→ 北京时间。
+ */
+function startOfBeijingDay(at) {
+  const shifted = Number(at) + BEIJING_OFFSET_MS;
+  return shifted - (shifted % DAY_MS) - BEIJING_OFFSET_MS;
+}
+
+/** 「北京日序号」= (时间戳 + 8h) 向下取整整除一天 —— 偏移已经并进序号，比较/分组都用它。 */
+function beijingDayIndex(at) {
+  return Math.floor((Number(at) + BEIJING_OFFSET_MS) / DAY_MS);
+}
+
+/** 日序号 → 那天的 `YYYY-MM-DD`（序号里已经含偏移，按 UTC 读出来正好是北京日期）。 */
+function beijingDayKey(index) {
+  const date = new Date(index * DAY_MS);
+  return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, '0')}-${String(date.getUTCDate()).padStart(2, '0')}`;
+}
+
+/** 本月 1 号 00:00（北京时间）。 */
+function startOfBeijingMonth(at) {
+  const date = new Date(Number(at) + BEIJING_OFFSET_MS);
+  return Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), 1) - BEIJING_OFFSET_MS;
+}
+
+/** 本周一 00:00（北京时间）—— 中文语境里一周从周一起算。 */
+function startOfBeijingWeek(at) {
+  const dayStart = startOfBeijingDay(at);
+  const weekday = new Date(dayStart + BEIJING_OFFSET_MS).getUTCDay(); // 0 = 周日
+  return dayStart - ((weekday + 6) % 7) * DAY_MS;
+}
+
+/** 本月已过去的每一天（1 号到今天）的日序号，按时间从早到晚。 */
+function beijingMonthDayIndexes(at) {
+  const list = [];
+  const last = beijingDayIndex(at);
+  for (let index = beijingDayIndex(startOfBeijingMonth(at)); index <= last; index += 1) list.push(index);
+  return list;
 }
 
 /** 要求登录。未登录 → 401 `unauthenticated`（不是 404）。 */
@@ -152,6 +203,137 @@ function readSiteBudget() {
   if (raw == null || raw === '') return 0;
   const limit = Number(raw);
   return Number.isFinite(limit) && limit > 0 ? Math.floor(limit) : 0;
+}
+
+/* ---------- 用量面板的取数（token / 金额都在这里） ---------- */
+
+/**
+ * 一段窗口里**计费**了多少次（`user_id` 不给就是全站）。
+ *
+ * 与 `usedToday` / `siteUsedToday` 逐字同口径（只数 `AI_QUOTA_ACTIONS`、且 `status <> blocked`），
+ * 区别只是窗口起点能随便给 —— 面板要按「本周」「本月」算，而配额闸门只关心当天。
+ */
+function billedIn(db, { from, userId = null } = {}) {
+  const placeholders = AI_QUOTA_ACTIONS.map(() => '?').join(', ');
+  const where = ['created_at >= ?', `action IN (${placeholders})`, 'status <> ?'];
+  const args = [from, ...AI_QUOTA_ACTIONS, AI_BLOCKED_STATUS];
+  if (userId != null) {
+    where.push('user_id = ?');
+    args.push(userId);
+  }
+  return Number(
+    db.prepare(`SELECT COUNT(*) AS n FROM ai_op_logs WHERE ${where.join(' AND ')}`).get(...args)?.n ?? 0,
+  );
+}
+
+/** `summarizeCost` 的汇总结果 → 面板上的 token 数字。 */
+function tokenCounts(sum) {
+  return {
+    prompt: sum.promptTokens,
+    cached: sum.cachedTokens,
+    completion: sum.completionTokens,
+    total: sum.totalTokens,
+    calls: sum.calls,
+    missing: sum.missing,
+  };
+}
+
+/** `summarizeCost` 的汇总结果 → 面板上的钱。 */
+function moneyOf(sum) {
+  return {
+    yuan: sum.yuan,
+    peakYuan: sum.peakYuan,
+    offPeakYuan: sum.offPeakYuan,
+    currency: AI_PRICE_CURRENCY,
+    unit: AI_PRICE_UNIT,
+  };
+}
+
+/**
+ * 一段窗口里的 token 用量（`user_id` 不给就是全站）。
+ *
+ * 按 `(peak, model)` 分组取，汇总时每组按自己的档位与模型单价算钱 —— 分组而不是
+ * 「拿总 token 乘一个价」：历史账单里可能混着好几个模型、也可能跨了高峰与空闲两档，
+ * 混着乘出来的数看着精确，其实每一段都不对（理由详见 pricing.js）。
+ */
+function usageTotals(db, { from = null, userId = null } = {}) {
+  const where = [];
+  const args = [];
+  if (from != null) {
+    where.push('created_at >= ?');
+    args.push(from);
+  }
+  if (userId != null) {
+    where.push('user_id = ?');
+    args.push(userId);
+  }
+  const rows = db
+    .prepare(
+      `SELECT peak, model,
+              SUM(prompt_tokens) AS promptTokens,
+              SUM(cached_tokens) AS cachedTokens,
+              SUM(completion_tokens) AS completionTokens,
+              COUNT(*) AS calls,
+              SUM(CASE WHEN prompt_tokens = 0 AND completion_tokens = 0 THEN 1 ELSE 0 END) AS missing
+         FROM ${AI_TOKEN_USAGE_TABLE}
+        ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
+        GROUP BY peak, model`,
+    )
+    .all(...args);
+  return summarizeCost(
+    rows.map((row) => ({ ...row, peak: Number(row.peak) === 1 })),
+    { env: process.env },
+  );
+}
+
+/** 按**北京日**分组的 token 用量行：`Map<日序号, 该日的 (peak, model) 分组>`。 */
+function usageByBeijingDay(db, { from, userId = null } = {}) {
+  const where = ['created_at >= ?'];
+  const args = [from];
+  if (userId != null) {
+    where.push('user_id = ?');
+    args.push(userId);
+  }
+  const rows = db
+    .prepare(
+      `SELECT CAST((created_at + ${BEIJING_OFFSET_MS}) / ${DAY_MS} AS INTEGER) AS dayIndex, peak, model,
+              SUM(prompt_tokens) AS promptTokens,
+              SUM(cached_tokens) AS cachedTokens,
+              SUM(completion_tokens) AS completionTokens,
+              COUNT(*) AS calls,
+              SUM(CASE WHEN prompt_tokens = 0 AND completion_tokens = 0 THEN 1 ELSE 0 END) AS missing
+         FROM ${AI_TOKEN_USAGE_TABLE}
+        WHERE ${where.join(' AND ')}
+        GROUP BY dayIndex, peak, model`,
+    )
+    .all(...args);
+  const byDay = new Map();
+  for (const row of rows) {
+    const index = Number(row.dayIndex);
+    const groups = byDay.get(index);
+    const shaped = { ...row, peak: Number(row.peak) === 1 };
+    if (groups) groups.push(shaped);
+    else byDay.set(index, [shaped]);
+  }
+  return byDay;
+}
+
+/** 按**北京日**分组的计费次数：`Map<日序号, 次数>`。 */
+function billedByBeijingDay(db, { from, userId = null } = {}) {
+  const placeholders = AI_QUOTA_ACTIONS.map(() => '?').join(', ');
+  const where = ['created_at >= ?', `action IN (${placeholders})`, 'status <> ?'];
+  const args = [from, ...AI_QUOTA_ACTIONS, AI_BLOCKED_STATUS];
+  if (userId != null) {
+    where.push('user_id = ?');
+    args.push(userId);
+  }
+  const rows = db
+    .prepare(
+      `SELECT CAST((created_at + ${BEIJING_OFFSET_MS}) / ${DAY_MS} AS INTEGER) AS dayIndex, COUNT(*) AS n
+         FROM ai_op_logs WHERE ${where.join(' AND ')} GROUP BY dayIndex`,
+    )
+    .all(...args);
+  return new Map(rows.map((row) => [Number(row.dayIndex), Number(row.n)]));
 }
 
 /**
@@ -1667,17 +1849,22 @@ export function registerAiRoutes(ctx) {
     });
   });
 
-  // ── 12. 全站用量 + 预算状态 + 花的钱（仅管理团队）────────────────────────
+  // ── 12. AI 用量（人人可见自己的，管理团队多一层全站）────────────────────
   //
-  // 补的是「配额按用户算、钱按 key 算」留下的那个洞：在这之前，全站今天调了多少次、
-  // 谁在用、有没有顶到上限，管理员一概看不见，唯一的全局约束就是账单本身。
+  // 两个问题分开答，因为它们的观众不同：
+  //   · 「我自己用了多少、花了多少钱」—— 每个登录用户都该看得见自己的账；
+  //   · 「全站这个月每天用了多少、花了多少」—— 这是「谁在用这把 key」的账单视角，
+  //     只有管理团队能看，所以对普通用户**响应里根本不带 `site` 这一块**
+  //     （界面藏不藏是另一回事：藏起来但数据照发，等于没权限）。
   //
   // 口径分两套，故意**分开报**，因为它们回答的是不同的问题：
-  //   · 次数（`total` / `billed` / `blocked` / `users` / `byAction` / `topUsers`）
+  //   · 次数（`total` / `billed` / `blocked` / `users` / `byAction` / `topUsers` / `budget.used`）
   //     —— 配额闸门用的就是它：`billed` 只数 AI_QUOTA_ACTIONS 里**没失败**的行，
   //     与用户额度、全站预算逐字一致；`total` 是当天的全部日志行（含预览、授权、被挡的）。
-  //   · 钱（`tokens` + `cost`）—— 来自 `ai_token_usage`（每次真打到上游的调用一行），
-  //     次数当不了成本的代理：一次整篇改写和一次单块草拟都算「1 次」，账单差几十倍。
+  //     按 **UTC 自然日**结算（配额的老口径，不动它）。
+  //   · 钱（`me` 与 `site` 里的 `tokens` / `cost` / `days`）—— 来自 `ai_token_usage`
+  //     （每次真打到上游的调用一行），次数当不了成本的代理：一次整篇改写和一次单块草拟
+  //     都算「1 次」，账单差几十倍。按**北京时间**自然日/周/月结算（理由见 `startOfBeijingDay`）。
   //
   // 金额按**每行自己的 `model` 与落库时的 `peak` 档位**算：换模型不会改写历史账单，
   // 半夜打开面板看白天的账也不会跟着变价（理由见 pricing.js 文件头）。
@@ -1685,9 +1872,67 @@ export function registerAiRoutes(ctx) {
   // 这是**估算**，面板上要说清：单价抄自官方价目表（官方调价后要对齐 pricing.js）；
   // 上游没报 usage 的调用金额按 0 算，单独用 `tokens.missing` 报出来，别让 0 元像免费。
   routes.add('GET', '/api/ai-edit/usage', (reqCtx) => {
-    requireStaff(reqCtx);
+    const user = viewer(reqCtx); // 未登录 → 401
+    const staff = isStaff(user); // 站长 / 管理员才有全站那一块
     const at = Date.now();
-    const since = startOfUtcDay(at);
+    const since = startOfUtcDay(at); // 次数：UTC 自然日（配额口径）
+    const dayStart = startOfBeijingDay(at); // 钱：北京时间自然日
+    const weekStart = startOfBeijingWeek(at); // 周一为一周之始
+    const monthStart = startOfBeijingMonth(at);
+
+    // 「我的账」：计费次数（与自己的额度逐字同口径）＋ token 与钱（北京时间窗口）。
+    const myBucket = (from) => {
+      const usage = usageTotals(db, { from, userId: user.id });
+      return {
+        billed: billedIn(db, { from, userId: user.id }),
+        tokens: tokenCounts(usage),
+        cost: moneyOf(usage),
+      };
+    };
+    const me = {
+      userId: user.id,
+      username: String(user.username ?? ''),
+      today: myBucket(dayStart),
+      week: myBucket(weekStart),
+      month: myBucket(monthStart),
+    };
+
+    const peakNow = isPeakHour(at);
+    const price = priceFor(process.env.AI_MODEL || 'deepseek-chat', process.env);
+    const payload = {
+      // `scope` 说的是**这份响应里带了哪一层**：`site` = 除了自己那份还带了全站口径。
+      scope: staff ? 'site' : 'me',
+      // 窗口起点与两套口径的时区原样给出去，面板要能写出「本周从哪天算起、按哪个时区」。
+      windows: {
+        today: dayStart,
+        week: weekStart,
+        month: monthStart,
+        timezone: 'Asia/Shanghai (+08:00)',
+        countsTimezone: 'UTC',
+      },
+      me,
+      // 面板要把「这份账按什么单价、哪个时段算的」原样写出来（含出处链接）：
+      // 金额是估算，来历不明的话没人能判断该不该信它。
+      pricing: {
+        model: price.model,
+        known: price.known,
+        label: price.label,
+        inputMiss: price.inputMiss,
+        inputHit: price.inputHit,
+        output: price.output,
+        unit: AI_PRICE_UNIT,
+        currency: AI_PRICE_CURRENCY,
+        offPeakFactor: AI_OFF_PEAK_FACTOR,
+        peakNow,
+        source: AI_PRICE_SOURCE,
+        envKeys: AI_PRICE_ENV_KEYS,
+        note: priceNote(price, { peak: peakNow }),
+      },
+      note: '次数是配额闸门的口径（UTC 自然日）；金额 = token × 单价，按北京时间自然日/周/月汇总，每次调用按当时的档位估算（单价抄自官方价目表）。',
+    };
+    // 不是管理团队就到此为止：全站那一块**根本不进响应**。
+    if (!staff) return ctx.http.ok(reqCtx.res, payload);
+
     const placeholders = AI_QUOTA_ACTIONS.map(() => '?').join(', ');
 
     const total = Number(
@@ -1722,78 +1967,44 @@ export function registerAiRoutes(ctx) {
     );
     const allTime = Number(db.prepare('SELECT COUNT(*) AS n FROM ai_op_logs').get()?.n ?? 0);
 
-    // 用量按 `(peak, model)` 分组取，汇总时每组按自己的档位与模型单价算钱。
-    // 分组而不是「拿总 token 乘一个价」：历史账单里可能混着好几个模型、
-    // 也可能跨了高峰与空闲两档，混着乘出来的数看着精确，其实每一段都不对。
-    const usageOf = (from) => {
-      const base = `SELECT peak, model,
-                           SUM(prompt_tokens) AS promptTokens,
-                           SUM(cached_tokens) AS cachedTokens,
-                           SUM(completion_tokens) AS completionTokens,
-                           COUNT(*) AS calls,
-                           SUM(CASE WHEN prompt_tokens = 0 AND completion_tokens = 0 THEN 1 ELSE 0 END) AS missing
-                      FROM ${AI_TOKEN_USAGE_TABLE}`;
-      const rows =
-        from == null
-          ? db.prepare(`${base} GROUP BY peak, model`).all()
-          : db.prepare(`${base} WHERE created_at >= ? GROUP BY peak, model`).all(from);
-      return summarizeCost(
-        rows.map((row) => ({ ...row, peak: Number(row.peak) === 1 })),
-        { env: process.env },
-      );
-    };
-    const todayUsage = usageOf(since);
-    const allTimeUsage = usageOf(null);
-    const counts = (sum) => ({
-      prompt: sum.promptTokens,
-      cached: sum.cachedTokens,
-      completion: sum.completionTokens,
-      total: sum.totalTokens,
-      calls: sum.calls,
-      missing: sum.missing,
+    // 全站的 token 与钱：今日（北京日）/本周/本月/历史累计，以及本月每一天。
+    // 每天的窗口由 `beijingMonthDayIndexes` 给出（1 号 → 今天），**没调用的日子也留在
+    // 列表里**（全 0 一行）：管理员要的是「这个月每天花了多少」，不是「哪几天花过」——
+    // 缺行会让人以为自己看漏了一天。前端把全 0 的行压暗。
+    const monthUsage = usageTotals(db, { from: monthStart });
+    const weekUsage = usageTotals(db, { from: weekStart });
+    const todayUsage = usageTotals(db, { from: dayStart });
+    const allTimeUsage = usageTotals(db, {});
+    const dayGroups = usageByBeijingDay(db, { from: monthStart });
+    const billedByDay = billedByBeijingDay(db, { from: monthStart });
+    const days = beijingMonthDayIndexes(at).map((index) => {
+      const sum = summarizeCost(dayGroups.get(index) ?? [], { env: process.env });
+      return {
+        date: beijingDayKey(index),
+        billed: billedByDay.get(index) ?? 0,
+        tokens: tokenCounts(sum),
+        cost: moneyOf(sum),
+      };
     });
-    const money = (sum) => ({
-      yuan: sum.yuan,
-      peakYuan: sum.peakYuan,
-      offPeakYuan: sum.offPeakYuan,
-      currency: AI_PRICE_CURRENCY,
-      unit: AI_PRICE_UNIT,
-    });
-
     const limit = readSiteBudget();
-    const peakNow = isPeakHour(at);
-    const price = priceFor(process.env.AI_MODEL || 'deepseek-chat', process.env);
-    return ctx.http.ok(reqCtx.res, {
-      scope: 'site',
-      since,
+    // `billed` 与 `budget.used` 是配额口径（UTC 日）：它们要和闸门看到的数字一模一样，
+    // 不然「还剩几次」会跟实际能不能用对不上。钱的日子另算（见文件头）。
+    payload.site = {
       today: {
+        date: beijingDayKey(beijingDayIndex(at)),
         total,
         billed,
         blocked,
         users,
         byAction,
         topUsers,
-        tokens: counts(todayUsage),
-        cost: money(todayUsage),
+        tokens: tokenCounts(todayUsage),
+        cost: moneyOf(todayUsage),
       },
-      allTime: { total: allTime, tokens: counts(allTimeUsage), cost: money(allTimeUsage) },
-      // 面板要把「这份账按什么单价、哪个时段算的」原样写出来（含出处链接）：
-      // 金额是估算，来历不明的话管理员没办法判断该不该信它。
-      pricing: {
-        model: price.model,
-        known: price.known,
-        label: price.label,
-        inputMiss: price.inputMiss,
-        inputHit: price.inputHit,
-        output: price.output,
-        unit: AI_PRICE_UNIT,
-        currency: AI_PRICE_CURRENCY,
-        offPeakFactor: AI_OFF_PEAK_FACTOR,
-        peakNow,
-        source: AI_PRICE_SOURCE,
-        envKeys: AI_PRICE_ENV_KEYS,
-        note: priceNote(price, { peak: peakNow }),
-      },
+      week: { from: weekStart, billed: billedIn(db, { from: weekStart }), tokens: tokenCounts(weekUsage), cost: moneyOf(weekUsage) },
+      month: { from: monthStart, billed: billedIn(db, { from: monthStart }), tokens: tokenCounts(monthUsage), cost: moneyOf(monthUsage) },
+      allTime: { total: allTime, tokens: tokenCounts(allTimeUsage), cost: moneyOf(allTimeUsage) },
+      days,
       budget: {
         envKey: AI_BUDGET_ENV,
         unlimited: limit <= 0,
@@ -1801,7 +2012,7 @@ export function registerAiRoutes(ctx) {
         used: billed,
         remaining: limit <= 0 ? null : Math.max(limit - billed, 0),
       },
-      note: '次数与 token 用量分开统计：次数是配额闸门的口径，金额 = token × 单价（按调用时刻的高峰/空闲档位估算，单价抄自官方价目表）。',
-    });
+    };
+    return ctx.http.ok(reqCtx.res, payload);
   });
 }

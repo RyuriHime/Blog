@@ -407,7 +407,7 @@ forum/
 | `#/blocks` | 块类型表的老地址：进的是同一页 `#/dev`（页面没下线，收藏夹里的链接照样能开） |
 | `#/dev` | 开发者功能：块类型表（内置/自定义类型的 schema 速查 + 注册自己的块类型）+「我的脚本模板」（把自己常写的沙箱代码存下来，一键新建一篇只带这一块的积木） |
 | `#/guide` | 积木教程：写给用积木的人 —— 新建一篇、编辑器三档怎么用、一次「保存」都存什么、谁可以看、怎么分享、**标签（怎么打、怎么按标签找）**、读者能做什么，后半截是进阶（让积木跑代码的两种块、能申请的六项能力、超时与失败怎么接、七个能直接抄的样例、存脚本模板、给全站加新块类型）；末节是 **18. 应用示例：从零开始建一个 OI Wiki** |
-| `#/ai-edit` | **AI 编辑台**：给模型授权（**目录里只有「修改内容」一项，默认关闭**）→ 草拟（**只预览**）→ 确认才落盘 → 每一步都留审计、可回滚。也能**审查**一篇（原「AI 学术审查」的接班人：按块给意见、引用不到原文的意见会被丢掉）与让模型整篇**套站内模板**。入口在 AI 页面里的「🎛 AI 编辑台」 |
+| `#/ai-edit` | **AI 编辑台**：给模型授权（**目录里只有「修改内容」一项，默认关闭**）→ 草拟（**只预览**）→ 确认才落盘 → 每一步都留审计、可回滚。也能**审查**一篇（原「AI 学术审查」的接班人：按块给意见、引用不到原文的意见会被丢掉）与让模型整篇**套站内模板**。页面底部是**用量面板**：每个人都能看到自己今日/本周/本月的 token 与估算金额（按北京时间算钱、按 UTC 日算配额次数），站长/管理员多一层全站账单（今日、本月/本周汇总、**本月每天**的明细与预算）。入口在 AI 页面里的「🎛 AI 编辑台」 |
 | `#/notes` | **（已下线，入口不再出现）** 老的学术笔记宿主页：路由与页面都留着，直接输地址还能看以前写的笔记，顶上写着「已经并进积木了 —— 给积木打 `#学术笔记` 标签」。代码没删（`public/views/notes.js`、`src/notes.js`、`note-studio/`），只是界面上不再提它 |
 | `#/wiki/:name` | Wiki 多页面：`[[双链]]` 的落点；左侧是分类边栏（页内筛选 + 新建页，作者多一个「改分类」），有这一页就渲染它，没有就给「建这一页」（`?create=1` 一步进编辑器） |
 | `#/teams` | 团队列表：公开团队广场（**被创建者藏起来的团队不出现**），`?mine=1` 只看我加入的，`?page=` 翻页；未登录也能看。顶上是「🔑 用团队号加入」，填 6 位号直接进队（登录后才显示） |
@@ -615,7 +615,7 @@ DB_FILE=/opt/app/data/forum.db node scripts/seed-oiwiki.mjs --user RyuriHime   #
 | POST | `/api/ai-edit/sections` | 按 `#` 标题把块切成小节（纯切分：不调模型、不落库、不花钱） | 登录 |
 | POST | `/api/ai-edit/draft-range` | 草拟**一节或整篇**；整篇的 patch 要么是 `{ markdown }`，要么只回 `{ template: '<模板 key>' }`（此时 `writeTo` 指向 `/api/docs/:id/apply-template`，模板 key 只能是站里那 8 个） | 登录 + `edit_content`（5 次/分钟） |
 | POST | `/api/ai-edit/review` | **审查**（原「AI 学术审查」的接班人）：body `{ documentId, blocks? \| markdown?, instruction? }` → `{ summary, findings: [{ blockId, kind, severity, quote, issue, suggestion, patch }], strengths, dropped }`。**只出意见、不落盘**；`quote` 在原文里找不到的意见会被丢掉并计入 `dropped` | 登录 + `edit_content`（5 次/分钟） |
-| GET | `/api/ai-edit/usage` | 全站今日用量 + 预算状态 | 站长/管理员 |
+| GET | `/api/ai-edit/usage` | **我的**用量与估算金额（今日/本周/本月，token + 次数）。响应按人分层：`scope: 'me'` 只带 `me` 这一块；站长/管理员拿到的是 `scope: 'site'`，额外带 `site`（全站今日、本月/本周汇总、**本月每天**的明细与预算状态）。全站那块**不在普通用户的响应里**，不是前端藏起来 | 登录 |
 
 > **提示词才是这一层真正的产品**：块类型有十几种、其中两种还会**跑代码**（`app` 小应用 / `script` 脚本），光把类型名字丢给模型，它既不知道 `poll` 的 `options` 是 `[{id,text}]`、也不知道沙箱里能申请什么能力、更不知道申请会 5 秒超时 —— 于是用户说「帮我做个投票」，回来的只是一段正文。
 > 所以 `src/modules/ai/syntax.js` 里手写了一份**给模型看的积木说明书**：每类块的 props 逐字示例、结构化围栏写法、沙箱六项能力与超时、以及「什么时候该用 `app` 而不是正文」的取舍规则；`blockPromptRules()` 每次把它拼进系统提示词。
@@ -820,14 +820,14 @@ node scripts/check-golden.mjs      # ★ 行为金标准：88 条请求的状态
 node scripts/check-skeleton.mjs    # ★ 骨架自检：模块能不能独立拆掉、薄入口有没有变胖
 node scripts/check-markdown.mjs    # ★ 正文渲染回归：72 项（站内链接 / 带括号 URL / 表格 / 嵌套列表 / 转义 / 危险协议 / 行内 HTML 白名单 / 列表里的块公式 / 兜底拷贝同步）
 node scripts/check-frontend.mjs    # ★ 前端渲染冒烟：41 个页面全部渲染一遍 + 关注列表 / 主页关注名单卡（自己视角排文章前面、别人视角仍在最底下）/ 团队的文件柜/群聊/成员名单/团队号/公告/加入申请与审核/隐藏开关/设置与申请改右侧抽屉/帖子预览与详情回复（「💬 回复」按钮、编辑权只归作者）/ 动态回复 / 动态转发（点开才画框、发得出当前原文、计数跟着走、转不了的画静态计数）/ 积木页转发（转得出、发完留在原地、撤销得掉、互动条跟着重画）/ 转发出来的卡片写「转发了帖子」而纯引用写「引用了帖子」/ 公告页翻页带页码而首页那块只要 5 条 交互 + 裸调用未定义名字的静态扫描
-node scripts/smoke.mjs             # 后端端到端：238 项（临时独立库+端口，跑完自动清理）
+node scripts/smoke.mjs             # 后端端到端：237 项（临时独立库+端口，跑完自动清理）
 node scripts/smoke-ai.mjs          # AI 接口端到端：65 项
-node scripts/ai-smoke.mjs          # AI 接口端到端（更细的一套：校验 / 限流 / 额度 / 审查 / 模板与提示词漂移哨兵 / 能力目录只列接上了线的能力）：461 项
+node scripts/ai-smoke.mjs          # AI 接口端到端（更细的一套：校验 / 限流 / 额度 / 审查 / 模板与提示词漂移哨兵 / 能力目录只列接上了线的能力 / 用量面板分层）：475 项
 node scripts/feed-smoke.mjs        # 动态流端到端：191 项（含动态回复、动态转发、帖子转发也发到动态、「仅团队」的可见范围）
 node scripts/doc-smoke.mjs         # 积木（可编程帖子）端到端：635 项（含阅读页的回复区与转发区）
 node scripts/team-smoke.mjs        # 团队端到端：306 项（可见范围 / 越权 / 版本冲突 / 编辑权只归作者 / 文件柜 / 群聊 / 团队号 / 公告通知 / Markdown 与公式 / 帖子回复 / 加入申请与审核 / 隐藏团队 / 老库升级与坏库自愈）
 node scripts/check-ui-contract.mjs # 前端契约：CSS 类名 + API 字段 + 主题/头像/角色/私信/团队号/公告/剪贴板/公式/关注列表（已关注按钮）/详情与回复/申请与隐藏结构/编辑权与侧边抽屉/表重建与自愈/币已下线/本地偏好键读写一致（通过项数不下降哨兵：317）
-node scripts/ui-smoke.mjs          # 首页外壳轻量化 + 右侧栏抽屉 + 起始页与动态流地址 + 站务公告列表页（m05506 契约）：79 项
+node scripts/ui-smoke.mjs          # 首页外壳轻量化 + 右侧栏抽屉 + 起始页与动态流地址 + 站务公告列表页（m05506 契约）：80 项
 node scripts/check-encoding.mjs    # 源码编码体检：BOM / 乱码 / 关键中文内容
 node scripts/check-notes-ui.mjs    # 笔记 UI
 node scripts/notes-smoke.mjs       # 笔记接口
@@ -845,10 +845,10 @@ node scripts/capture-fixtures.mjs  # 重采前端冒烟用的假数据（改了�
 一次跑完（`npm test` 就是上面这些，15 组）：
 
 ```
-check-encoding 208 文件 / 84 断言 · check-skeleton 47 项 · check-golden 88 项 0 差异
-check-markdown 72 · check-frontend 41 个页面 + 34 个模块静态扫描 · smoke 238 · smoke-ai 65
-ai-smoke 436 · feed-smoke 191 · doc-smoke 635 · team-smoke 306
-check-ui-contract 317 · check-notes-ui 33 · notes-smoke 44 · ui-smoke 79
+check-encoding 209 文件 / 84 断言 · check-skeleton 47 项 · check-golden 88 项 0 差异
+check-markdown 72 · check-frontend 41 个页面 + 34 个模块静态扫描 · smoke 237 · smoke-ai 65
+ai-smoke 475 · feed-smoke 191 · doc-smoke 690 · team-smoke 306
+check-ui-contract 318 · check-notes-ui 33 · notes-smoke 44 · ui-smoke 80
 ```
 
 > 知识网络图（`knowledge-pack/` + `#/graph` + `/api/knowledge/*`）已在 2026-10 整条链路删除：

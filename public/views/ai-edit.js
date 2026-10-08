@@ -390,7 +390,7 @@ function aeHeadHtml() {
     </section>`;
 }
 
-/* ---------- 全站用量（管理员专属） ---------- */
+/* ---------- AI 用量（人人可见自己的，管理团队多一层全站） ---------- */
 
 /** 千分位。`Fmt.fmtNum` 会把 12345 缩成「1.2w」—— 账单上要的是准数，不是概数。 */
 function aeTokens(value) {
@@ -417,84 +417,178 @@ function aeYuan(value) {
   return `¥${aeTokens(Math.ceil(num))}`;
 }
 
-function aeUsageTopListHtml(today) {
+/** 「今日/本周/本月」共用的一行：金额当主角，token 与次数跟在后面。 */
+function aeUsageRowHtml(label, bucket) {
+  const tokens = bucket?.tokens ?? {};
+  const cost = bucket?.cost ?? {};
+  return `<div class="ae-usage-row">
+    <span class="ae-usage-when">${esc(label)}</span>
+    <span class="ae-usage-money">${esc(aeYuan(cost.yuan))}</span>
+    <span class="ae-usage-sub">${aeTokens(tokens.total)} tokens · 记账调用 ${aeTokens(tokens.calls)} 次 · 计费 ${aeTokens(bucket?.billed ?? 0)} 次</span>
+  </div>`;
+}
+
+/** 「我的用量」：每个登录用户都看得到自己的账，不需要是管理员。 */
+function aeMyUsageHtml(usage) {
+  const me = usage.me ?? {};
+  const rows = [
+    ['今日', me.today],
+    ['本周', me.week],
+    ['本月', me.month],
+  ]
+    .map(([label, bucket]) => aeUsageRowHtml(label, bucket))
+    .join('');
+  const idle = ![me.today, me.week, me.month].some(
+    (bucket) => Number(bucket?.tokens?.total) > 0 || Number(bucket?.tokens?.calls) > 0 || Number(bucket?.billed) > 0,
+  );
+  // 上游没报 usage 的那几次按 ¥0 计 —— 必须说出来，不然「0 元」看着像白送。
+  const missing = Number(me.month?.tokens?.missing) || 0;
+  const missingHtml = missing
+    ? `<div class="ae-note">本月有 ${aeTokens(missing)} 次调用没拿到 token 用量（上游没返回 usage），这几次按 ¥0 计 —— 真实花费会比上面显示的更高。</div>`
+    : '';
+  return `<div class="ae-block">
+    <div class="ae-block-head">我自己的用量</div>
+    <div class="ae-usage-rows">${rows}</div>
+    ${idle ? '<div class="ae-usage-line">你还没有用过 AI 编辑。用过之后，这里会出现次数与金额。</div>' : ''}
+    ${missingHtml}
+  </div>`;
+}
+
+/** 全站「本月每天」的明细表：新的在上（今天最靠前），全 0 的日子压暗但**不省略**。 */
+function aeSiteDaysHtml(site) {
+  const days = [...(site.days ?? [])].reverse();
+  if (!days.length) return '';
+  const todayKey = site.today?.date ?? '';
+  const rows = days
+    .map((day) => {
+      const idle = !Number(day.tokens?.total) && !Number(day.billed);
+      const classes = [idle ? 'ae-day-idle' : '', day.date === todayKey ? 'ae-day-today' : ''].filter(Boolean);
+      return `<tr${classes.length ? ` class="${classes.join(' ')}"` : ''}>
+        <td>${esc(day.date)}</td>
+        <td>${esc(aeTokens(day.billed ?? 0))}</td>
+        <td>${esc(aeTokens(day.tokens?.total ?? 0))}</td>
+        <td>${esc(aeYuan(day.cost?.yuan ?? 0))}</td>
+      </tr>`;
+    })
+    .join('');
+  const month = site.month ?? {};
+  return `<div class="ae-days">
+    <div class="ae-usage-line">本月每天（北京时间，${esc(days[days.length - 1]?.date ?? '')} 起）</div>
+    <div class="table-wrap">
+      <table class="data ae-days-table">
+        <thead><tr><th>日期</th><th>计费次数</th><th>tokens</th><th>花费（估算）</th></tr></thead>
+        <tbody>
+          ${rows}
+          <tr class="ae-day-sum">
+            <td>本月合计</td>
+            <td>${esc(aeTokens(month.billed ?? 0))}</td>
+            <td>${esc(aeTokens(month.tokens?.total ?? 0))}</td>
+            <td>${esc(aeYuan(month.cost?.yuan ?? 0))}</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>`;
+}
+
+/** 全站那一层：只有管理团队的响应里才有 `site`，没有就整块不渲染。 */
+function aeSiteUsageHtml(usage) {
+  const site = usage.site;
+  if (!site) return '';
+  const today = site.today ?? {};
+  const todayTokens = today.tokens ?? {};
+  const todayMoney = today.cost ?? {};
+  const week = site.week ?? {};
+  const month = site.month ?? {};
+  const allTime = site.allTime ?? {};
+  const budget = site.budget ?? {};
+  const byAction = (today.byAction ?? []).map((row) => `${row.action} ${row.count}`).join(' · ');
+  const budgetText = budget.unlimited
+    ? '未设全站上限'
+    : `${budget.used ?? 0}/${budget.limit ?? 0}${budget.remaining === null || budget.remaining === undefined ? '' : `（还剩 ${budget.remaining}）`}`;
+  const missing = Number(todayTokens.missing) || 0;
+  const missingHtml = missing
+    ? `<div class="ae-note">今天有 ${aeTokens(missing)} 次调用没拿到 token 用量（上游没返回 usage），这几次按 ¥0 计 —— 真实花费会比上面显示的更高。</div>`
+    : '';
   const rows = (today.topUsers ?? []).slice(0, 5);
-  if (!rows.length) return '<div class="ae-usage-line">今天还没有人用过。</div>';
-  return `<div class="ae-usage-top">${rows
-    .map(
-      (row) =>
-        `<div class="ae-usage-user"><span class="ae-usage-name">${esc(row.username || `用户 ${row.userId}`)}</span><span class="ae-usage-count">${row.count ?? 0} 次</span></div>`,
-    )
-    .join('')}</div>`;
+  const topHtml = rows.length
+    ? `<div class="ae-usage-top">${rows
+        .map(
+          (row) =>
+            `<div class="ae-usage-user"><span class="ae-usage-name">${esc(row.username || `用户 ${row.userId}`)}</span><span class="ae-usage-count">${row.count ?? 0} 次</span></div>`,
+        )
+        .join('')}</div>`
+    : '<div class="ae-usage-line">今天还没有人用过。</div>';
+  return `<div class="ae-block">
+    <div class="ae-block-head">全站用量<span class="ae-block-tag">仅管理团队可见</span></div>
+    <div class="ae-usage-grid">
+      <div class="ae-stat">
+        <div class="ae-stat-num">${today.total ?? 0}</div>
+        <div class="ae-stat-label">今日调用（含预览/被挡）</div>
+      </div>
+      <div class="ae-stat">
+        <div class="ae-stat-num">${today.billed ?? 0}</div>
+        <div class="ae-stat-label">今日计费次数</div>
+      </div>
+      <div class="ae-stat">
+        <div class="ae-stat-num">${today.blocked ?? 0}</div>
+        <div class="ae-stat-label">今日被挡</div>
+      </div>
+      <div class="ae-stat">
+        <div class="ae-stat-num">${today.users ?? 0}</div>
+        <div class="ae-stat-label">今日涉及用户</div>
+      </div>
+      <div class="ae-stat">
+        <div class="ae-stat-num">${esc(aeYuan(todayMoney.yuan))}</div>
+        <div class="ae-stat-label">今日花费（估算）</div>
+      </div>
+      <div class="ae-stat">
+        <div class="ae-stat-num">${aeTokens(todayTokens.total)}</div>
+        <div class="ae-stat-label">今日 tokens</div>
+      </div>
+      <div class="ae-stat">
+        <div class="ae-stat-num">${esc(aeYuan(month.cost?.yuan ?? 0))}</div>
+        <div class="ae-stat-label">本月花费（估算）</div>
+      </div>
+      <div class="ae-stat">
+        <div class="ae-stat-num">${esc(aeYuan(week.cost?.yuan ?? 0))}</div>
+        <div class="ae-stat-label">本周花费（估算）</div>
+      </div>
+    </div>
+    <div class="ae-usage-rows">
+      ${aeUsageRowHtml('本月汇总', month)}
+      ${aeUsageRowHtml('本周汇总', week)}
+    </div>
+    <div class="ae-usage-line">今日 token：输入 ${aeTokens(todayTokens.prompt)}（其中缓存命中 ${aeTokens(todayTokens.cached)}）· 输出 ${aeTokens(todayTokens.completion)} · 共 ${aeTokens(todayTokens.total)} · 记账调用 ${aeTokens(todayTokens.calls)} 次</div>
+    ${missingHtml}
+    <div class="ae-usage-line">全站上限（${esc(budget.envKey || 'AI_DAILY_TOTAL_LIMIT')}）：<strong>${esc(budgetText)}</strong> · 历史累计 ${allTime.total ?? 0} 次${allTime.tokens?.total ? ` · ${esc(aeYuan(allTime.cost?.yuan ?? 0))}（${aeTokens(allTime.tokens.total)} tokens）` : ''}${byAction ? ` · 今日动作：${esc(byAction)}` : ''}</div>
+    ${aeSiteDaysHtml(site)}
+    ${topHtml}
+  </div>`;
 }
 
 function aeUsageHtml() {
   if (!aeState.usage) return '';
   const usage = aeState.usage;
-  const today = usage.today ?? {};
-  const budget = usage.budget ?? {};
-  const allTime = usage.allTime ?? {};
-  const todayTokens = today.tokens ?? {};
-  const allTimeTokens = allTime.tokens ?? {};
-  const todayMoney = today.cost ?? {};
-  const allTimeMoney = allTime.cost ?? {};
   const pricing = usage.pricing ?? {};
-  const byAction = (today.byAction ?? []).map((row) => `${row.action} ${row.count}`).join(' · ');
-  const budgetText = budget.unlimited
-    ? '未设全站上限'
-    : `${budget.used ?? 0}/${budget.limit ?? 0}${budget.remaining === null || budget.remaining === undefined ? '' : `（还剩 ${budget.remaining}）`}`;
-  // 上游没报 usage 的那几次按 ¥0 计 —— 必须说出来，不然「0 元」看着像白送。
-  const missing = Number(todayTokens.missing) || 0;
-  const missingHtml = missing
-    ? `<div class="ae-note">今天有 ${missing} 次调用没拿到 token 用量（上游没返回 usage），这几次按 ¥0 计 —— 真实花费会比上面显示的更高。</div>`
-    : '';
   const priceNote = typeof pricing.note === 'string' ? pricing.note : '';
-  // 单价出处要能点回去：金额是估算，来路不明的数字管理员没法判断该不该信。
+  // 单价出处要能点回去：金额是估算，来路不明的数字没法判断该不该信。
   const priceSource = typeof pricing.source === 'string' && pricing.source ? pricing.source : '';
   return `
     <section class="card">
       <div class="card-head">
-        <h2>全站用量</h2>
-        <span class="ae-target-state">仅管理员可见</span>
+        <h2>AI 用量</h2>
+        <span class="ae-target-state">金额为估算</span>
       </div>
-      <div class="page-sub">次数是配额闸门的口径；金额是「token × 单价」的估算，按每次调用当时的时段档位算。</div>
+      <div class="page-sub">金额 = token × 单价，按每次调用当时的档位估算，按北京时间自然日/周/月汇总；次数是配额闸门的口径（UTC 自然日）。</div>
       <div class="ae-usage">
-        <div class="ae-usage-grid">
-          <div class="ae-stat">
-            <div class="ae-stat-num">${today.total ?? 0}</div>
-            <div class="ae-stat-label">今日调用</div>
-          </div>
-          <div class="ae-stat">
-            <div class="ae-stat-num">${today.billed ?? 0}</div>
-            <div class="ae-stat-label">计费次数</div>
-          </div>
-          <div class="ae-stat">
-            <div class="ae-stat-num">${today.blocked ?? 0}</div>
-            <div class="ae-stat-label">被挡次数</div>
-          </div>
-          <div class="ae-stat">
-            <div class="ae-stat-num">${today.users ?? 0}</div>
-            <div class="ae-stat-label">涉及用户</div>
-          </div>
-          <div class="ae-stat">
-            <div class="ae-stat-num">${esc(aeYuan(todayMoney.yuan))}</div>
-            <div class="ae-stat-label">今日花费（估算）</div>
-          </div>
-          <div class="ae-stat">
-            <div class="ae-stat-num">${esc(Fmt.fmtNum(todayTokens.total ?? 0))}</div>
-            <div class="ae-stat-label">今日 tokens</div>
-          </div>
-        </div>
-        <div class="ae-usage-line">今日 token：输入 ${aeTokens(todayTokens.prompt)}（其中缓存命中 ${aeTokens(todayTokens.cached)}）· 输出 ${aeTokens(todayTokens.completion)} · 共 ${aeTokens(todayTokens.total)}${todayTokens.calls ? ` · 记账调用 ${todayTokens.calls} 次` : ''}</div>
-        ${missingHtml}
-        <div class="ae-usage-line">全站上限（${esc(budget.envKey || 'AI_DAILY_TOTAL_LIMIT')}）：<strong>${esc(budgetText)}</strong></div>
-        <div class="ae-usage-line">历史累计：${allTime.total ?? 0} 次${allTimeTokens.total ? ` · ${esc(aeYuan(allTimeMoney.yuan))}（${aeTokens(allTimeTokens.total)} tokens）` : ''}${byAction ? ` · 今日动作：${esc(byAction)}` : ''}</div>
+        ${aeMyUsageHtml(usage)}
+        ${aeSiteUsageHtml(usage)}
         ${
           priceNote
             ? `<div class="ae-usage-line">${esc(priceNote)}${priceSource ? ` <a href="${esc(priceSource)}" target="_blank" rel="noopener">单价出处</a>` : ''}</div>`
             : ''
         }
-        ${aeUsageTopListHtml(today)}
       </div>
       ${aeState.usageError ? `<div class="ae-note">用量面板读不到：${esc(aeState.usageError)}</div>` : ''}
     </section>`;
@@ -1300,7 +1394,7 @@ async function aeLoadUsage() {
   } catch (error) {
     aeState.usage = null;
     aeState.usageStatus = error.status ?? 0;
-    // 非管理员（403）/ 未登录（401）静默隐藏整个区块 —— 这一区本来就不给他们看。
+    // 401 = 没登录（这一页本来就要求登录）；其余失败安静地留一行提示，不弹窗打断。
     aeState.usageError = aeState.usageStatus === 200 ? error.message : '';
   }
 }
