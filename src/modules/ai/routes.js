@@ -660,9 +660,24 @@ function sectionPatchProblem(value, allowedIds) {
  * 让模型现编 Markdown 反而更容易编歪（也更容易超出 `AI_MAX_RANGE_CHARS`）。
  * 两种形状**二选一**：同时给 template 与 markdown 就报错，免得两个解释打架。
  */
-function documentPatchProblem(value, label) {
+/**
+ * 整篇形状校验。
+ *
+ * `allowReplyOnly` 只有**草拟**那条路（`/draft-range`）会传 true：模型可以只答话不改稿。
+ * 落盘那条路（`/ops`）保持从严 —— 写盘必须有 markdown，不能只带一句 reply。
+ */
+function documentPatchProblem(value, label, allowReplyOnly = false) {
   if (value === null || typeof value !== 'object' || Array.isArray(value)) {
     return `${label} 必须是对象 { markdown }`;
+  }
+  // `reply` 是「模型对用户说的那句话」，走对话气泡；它是可选的，也只在这一个地方
+  // 需要放行 —— 校验它不为空、不超长，其余形状与从前逐字一样。
+  const hasReply = typeof value.reply === 'string' && value.reply.trim() !== '';
+  if (value.reply !== undefined && value.reply !== null && !hasReply) {
+    return `${label}.reply 必须是非空字符串`;
+  }
+  if (hasReply && value.reply.length > AI_MAX_REPLY) {
+    return `${label}.reply 有 ${value.reply.length} 字，超过 ${AI_MAX_REPLY} 的上限`;
   }
   const hasTemplate = typeof value.template === 'string' && value.template.trim() !== '';
   if (value.template !== undefined && value.template !== null && !hasTemplate) {
@@ -676,8 +691,12 @@ function documentPatchProblem(value, label) {
     if (typeof value.markdown === 'string' && value.markdown.trim() !== '') {
       return `${label} 同时给了 template 与 markdown，只能二选一`;
     }
-  } else if (typeof value.markdown !== 'string' || value.markdown.trim() === '') {
-    return `${label}.markdown 必须是非空字符串`;
+  } else if ((typeof value.markdown !== 'string' || value.markdown.trim() === '') && !(allowReplyOnly && hasReply)) {
+    // 只有「既没改稿、也没答话」才算坏形状；草拟那条路上给了 reply 就说明这一趟是
+    // 回答问题，前端不会去动编辑区，所以 markdown 可以缺。
+    return allowReplyOnly
+      ? `${label}.markdown 必须是非空字符串（只有给了 reply、确实不用改稿时才可省略）`
+      : `${label}.markdown 必须是非空字符串`;
   }
   if (typeof value.markdown === 'string' && value.markdown.length > AI_MAX_RANGE_CHARS) {
     return `${label}.markdown 有 ${value.markdown.length} 字符，超过 ${AI_MAX_RANGE_CHARS} 的上限`;
@@ -694,6 +713,8 @@ function cleanDocumentPatch(value) {
   if (typeof value.template === 'string' && value.template.trim() !== '') patch.template = value.template.trim();
   if (typeof value.markdown === 'string') patch.markdown = value.markdown;
   if (typeof value.title === 'string' && value.title.trim() !== '') patch.title = value.title.trim();
+  // 对用户说的那句话原样留着（前端靠它渲染对话气泡）。
+  if (typeof value.reply === 'string' && value.reply.trim() !== '') patch.reply = value.reply.trim();
   return patch;
 }
 
@@ -715,6 +736,91 @@ const AI_REVIEW_KINDS = Object.freeze(['logic', 'fact', 'structure', 'clarity', 
 const AI_REVIEW_SEVERITIES = Object.freeze(['high', 'medium', 'low']);
 const AI_MAX_FINDINGS = 12;
 const AI_MAX_REVIEW_TEXT = 400;
+
+/**
+ * `reply`（模型对用户说的那句人话）的长度上限。
+ *
+ * 与 `markdown` 分开算：改稿可以几万字，答复只是一段话 —— 不设上限的话模型会把整篇
+ * 改稿的理由糊成一大段塞进对话气泡里，气泡就没法看了。
+ */
+const AI_MAX_REPLY = 800;
+
+/**
+ * 普通成员在 AI 编辑台能留几条预览渲染结果（原来是前端写死的 12）。
+ *
+ * 由服务端报给前端（见 `/api/ai-edit/preview-policy`）：这样「不封顶」这件事必须问过
+ * 服务端，而不是前端改个常量就绕过去了；前端的
+ * `PREVIEW_CACHE_DEFAULT_MAX = 12` 只是「还没问到服务端」时的兜底。
+ */
+const AI_PREVIEW_CACHE_MAX = 120;
+
+/**
+ * 「预览缓存不封顶」的申请状态。
+ *
+ * 走的是**真的审批**（用户 2026-02 的要求）：普通成员提一条 `pending`，站长 / 管理员
+ * 在 AI 编辑台把它改成 `approved` 或 `rejected`；申请人自己可以 `canceled`（撤下申请），
+ * 管理员事后也能把已经批过的收回去。`approved` 是唯一会让上限变成 0（不封顶）的状态。
+ */
+const AI_PREVIEW_REQUEST_STATUSES = Object.freeze(['pending', 'approved', 'rejected', 'canceled']);
+const AI_PREVIEW_APPROVED = 'approved';
+const AI_PREVIEW_PENDING = 'pending';
+/** 申请 / 批注文字的长度上限（沿用审计里 `reason` 的口径）。 */
+const AI_MAX_PREVIEW_REASON = AI_MAX_REASON;
+/** 申请行 → 前端认的形状。 */
+function shapePreviewRequest(row) {
+  if (!row) return null;
+  const status = String(row.status ?? AI_PREVIEW_PENDING);
+  return {
+    id: Number(row.id),
+    // 不认识的 status 一律按「待批」报：这样前端不会出现一个它没有分支的状态。
+    status: AI_PREVIEW_REQUEST_STATUSES.includes(status) ? status : AI_PREVIEW_PENDING,
+    reason: String(row.reason ?? ''),
+    createdAt: Number(row.created_at ?? 0),
+    decidedAt: row.decided_at == null ? null : Number(row.decided_at),
+    decidedBy: row.decided_by == null ? null : Number(row.decided_by),
+    decidedNote: String(row.decided_note ?? ''),
+  };
+}
+
+/** 这个人最新的一条申请（不管是待批、已批还是被拒）。 */
+function latestPreviewRequest(db, userId) {
+  return db
+    .prepare('SELECT * FROM ai_preview_requests WHERE user_id = ? ORDER BY id DESC LIMIT 1')
+    .get(userId);
+}
+
+/** 这个人手里有没有一条**已同意**的「不封顶」。 */
+function hasPreviewUnlimited(db, userId) {
+  const row = db
+    .prepare(
+      `SELECT id FROM ai_preview_requests
+        WHERE user_id = ? AND status = ? ORDER BY id DESC LIMIT 1`,
+    )
+    .get(userId, AI_PREVIEW_APPROVED);
+  return Boolean(row);
+}
+
+/**
+ * 这个人此刻的预览缓存上限。
+ *
+ * 0 = 不封顶。三条路能拿到它：站长 / 管理员本人、或者管理员批过他一条申请。
+ * 判定永远在服务端 —— 前端的按钮只是「去问一次」，问不出权限来。
+ */
+function previewPolicyOf(db, user) {
+  const staff = isStaff(user);
+  const approved = staff ? true : hasPreviewUnlimited(db, user.id);
+  return {
+    max: approved ? 0 : AI_PREVIEW_CACHE_MAX,
+    staff,
+    unlimited: approved,
+    request: shapePreviewRequest(latestPreviewRequest(db, user.id)),
+    note: staff
+      ? '你是管理员，预览缓存不封顶。'
+      : approved
+        ? '管理员已经同意了你的申请，预览缓存不封顶。'
+        : `预览缓存最多留 ${AI_PREVIEW_CACHE_MAX} 条；想不封顶要管理员同意。`,
+  };
+}
 
 /**
  * 审查的系统提示词。
@@ -866,7 +972,15 @@ function sectionSystemPrompt() {
 function documentSystemPrompt() {
   return [
     '你是博客「积木帖子」的整篇编辑器。用户给你**整篇 Markdown**，以及一句改写要求。',
-    '只输出一个 JSON 对象，形状必须是 {"markdown":"<改完的整篇>"}，',
+    // 正文可能是空的 —— 用户点开一篇新文档就能直接用 AI，这时候这一趟是「从零写一篇」。
+    '（我给的正文有可能是**空的**：那表示这是一篇还没有内容的文档，按用户的要求从零写。）',
+    '只输出一个 JSON 对象，形状必须是 {"reply":"<对用户说的话>","markdown":"<改完的整篇>"}，',
+    // reply 与 markdown 是**两条通道**，用户要的是「边聊边改」：reply 走对话气泡，
+    // markdown 走编辑区。只给改稿不给 reply，用户只能自己猜你动了什么。
+    '"reply" 是给用户看的一段人话（不超过 300 字）：说清你改了什么、为什么这么改；',
+    '用户只是在问问题、不需要改稿时，就把答案写在 reply 里，markdown 原样抄回我给的正文；',
+    '注意：**答复写进 reply，不要写进 markdown** —— markdown 是要落进编辑区的正文，',
+    '里面多一句「好的，我帮你改了」就变成文档正文了。',
     '可选一个 "title" 字段（用户明确要求改标题时再给）。',
     templateMenu(),
     '如果用户要的整篇**正好就是某个模板**（例如「改成投票问卷的样子」「按实验记录来写」），',
@@ -889,6 +1003,17 @@ function documentSystemPrompt() {
     '能不动结构就别动结构。',
     '要「能跑的东西」（投票、小工具、小界面）时，直接在 markdown 里写 ```doc:poll / ```doc:app 围栏，',
     '围栏里的 JSON 规则见块编辑器的说明（形状写错会退化成普通代码块）。',
+    // 交稿前的自检清单（用户第 4 条：提升模型对积木源码格式的理解，靠提示词减少 Bug）。
+    // 前端拿到稿子后会先在**影子编辑区**把预览跑一遍，跑不起来的东西交付不出去，
+    // 所以宁可在这里多写五条，也别让模型交出「看着像、点不动」的小程序。
+    // 每一条都对应一次线上踩过的坑（见 syntax.js 文件头的两次事故记录）。
+    '交稿前对着这份清单自检 —— 写一段跑不起来的代码，比什么都不写更糟：',
+    '· 每个围栏块三行齐全：开头那行（三个反引号 + doc:<类型>，可跟一个 {#id}）、JSON 正文、结尾那行三个反引号；',
+    '· 已有块的信息串照抄，新块的字段名只能取上面列过的：`app` 就是 {"app","config","code"}，没有 html / css / js；',
+    '· `code` 里只写浏览器原生能直接跑的东西：不要 import / require / fetch / XMLHttpRequest / 外链 CDN，',
+    '  不要占位符（「// 这里补上逻辑」）和 TODO；取到的元素先判空再操作；',
+    '· 代码要能独立跑通：按钮绑了事件没有、初始那一屏画出来没有，自己在脑子里过一遍再交；',
+    '· 拿不准块类型或字段名时，宁可少写一块，也**不许发明**新的块类型。',
   ].join('');
 }
 
@@ -1671,12 +1796,9 @@ export function registerAiRoutes(ctx) {
     }
 
     const markdown = typeof body.markdown === 'string' ? body.markdown : '';
-    ensure(
-      markdown.trim() !== '',
-      400,
-      'bad_request',
-      'markdown 不能为空（整篇模式要先把当前的 Markdown 发过来）',
-    );
+    // 正文**允许为空**：空正文就是「从零写一篇」。`instruction` 在上面已经强制非空，
+    // 所以模型不会拿到「既没正文、又没要求」的空请求。以前这里拦「markdown 不能为空」，
+    // 结果是新文档编辑区一个字都没有时 AI 整个不可用 —— 而这恰恰是最需要 AI 的时候。
     ensure(
       markdown.length <= AI_MAX_RANGE_CHARS,
       400,
@@ -1704,7 +1826,12 @@ export function registerAiRoutes(ctx) {
       targetId,
       targetType: AI_RANGE_TARGET_TYPES.document,
       system: documentSystemPrompt(),
-      userText: `当前整篇 Markdown：\n${markdown}\n改写要求：${instruction}`,
+      // 空正文要**明说**是空的：直接把空串塞进「当前整篇 Markdown：」后面，模型会以为
+      // 是它读漏了，要么乱猜一篇、要么回一句「请把正文发给我」。
+      userText:
+        markdown.trim() === ''
+          ? `当前整篇 Markdown 是空的（这是一篇还没写内容的新文档，请直接从零写）。\n改写要求：${instruction}`
+          : `当前整篇 Markdown：\n${markdown}\n改写要求：${instruction}`,
     });
     const patch = parseModelJson(content, {
       db,
@@ -1724,7 +1851,8 @@ export function registerAiRoutes(ctx) {
       ? { ...patchObject, ...(fixedMarkdown ? { markdown: fixedMarkdown.value } : {}) }
       : patchObject;
     const repairs = describeRepairs(fixedMarkdown ? fixedMarkdown.notes : []);
-    const patchProblem = documentPatchProblem(fixedPatch, 'patch');
+    // 草拟这条路上允许「只答话不改稿」（第三参 true）；落盘的 `/ops` 仍从严。
+    const patchProblem = documentPatchProblem(fixedPatch, 'patch', true);
     if (patchProblem) {
       logBlocked(
         db,
@@ -2101,5 +2229,118 @@ export function registerAiRoutes(ctx) {
       },
     };
     return ctx.http.ok(reqCtx.res, payload);
+  });
+
+  // ── 13. 预览缓存上限（AI 编辑台问它「能留几条渲染结果」）─────────────────
+  //
+  // 为什么放到服务端、而不是让前端自己写死一个常量：上限关系到「能不能不封顶」，
+  // 而这件事得管理员点头，前端说了不算（否则谁都能改个常量把封顶掀掉）。
+  routes.add('GET', '/api/ai-edit/preview-policy', (reqCtx) => {
+    const user = viewer(reqCtx); // 未登录 → 401
+    const policy = previewPolicyOf(db, user);
+    const pendingRows = isStaff(user)
+      ? db
+          .prepare(
+            `SELECT r.*, u.username AS username FROM ai_preview_requests r
+               LEFT JOIN users u ON u.id = r.user_id
+              WHERE r.status = ? ORDER BY r.id ASC LIMIT 50`,
+          )
+          .all(AI_PREVIEW_PENDING)
+      : [];
+    return ctx.http.ok(reqCtx.res, {
+      // 0 = 不封顶，与 `readSiteBudget()` 的「0 或不配 = 不限」是同一套约定。
+      max: policy.max,
+      staff: policy.staff,
+      unlimited: policy.unlimited,
+      note: policy.note,
+      request: policy.request,
+      /** 只有管理员拿得到队列 —— 普通成员这里恒为空数组。 */
+      queue: pendingRows.map((row) => ({ ...shapePreviewRequest(row), username: String(row.username ?? '') })),
+    });
+  });
+
+  // ── 14. 申请「预览缓存不封顶」（用户提，管理员批）───────────────────────
+  //
+  // 这不是能力授权，所以**不能**复用 `POST /api/ai-edit/grants`：那条路是自助的
+  // （自己点一下就给自己开），照它的样子做等于谁都能把封顶掀掉。这里只记录一条申请，
+  // 能不能不封顶由 `previewPolicyOf()` 按 `approved` 状态判。
+  routes.add('POST', '/api/ai-edit/preview-requests', (reqCtx) => {
+    const user = viewer(reqCtx);
+    const body = reqCtx.body ?? {};
+    const reason = String(body.reason ?? '').trim();
+    ensure(reason.length <= AI_MAX_PREVIEW_REASON, 400, 'bad_request', `申请理由最多 ${AI_MAX_PREVIEW_REASON} 字`);
+
+    const at = Date.now();
+    const open = db
+      .prepare('SELECT * FROM ai_preview_requests WHERE user_id = ? AND status = ? ORDER BY id DESC LIMIT 1')
+      .get(user.id, AI_PREVIEW_PENDING);
+    if (open) {
+      // 已经递过一条了：不要再堆一条（管理员那边会看到一串一模一样的申请）。
+      return ctx.http.ok(reqCtx.res, { request: shapePreviewRequest(open), created: false });
+    }
+    if (hasPreviewUnlimited(db, user.id)) {
+      return ctx.http.ok(reqCtx.res, { request: shapePreviewRequest(latestPreviewRequest(db, user.id)), created: false });
+    }
+    const info = db
+      .prepare(
+        `INSERT INTO ai_preview_requests (user_id, status, reason, created_at, decided_at, decided_by, decided_note)
+         VALUES (?, ?, ?, ?, NULL, NULL, '')`,
+      )
+      .run(user.id, AI_PREVIEW_PENDING, reason, at);
+    const row = db.prepare('SELECT * FROM ai_preview_requests WHERE id = ?').get(Number(info.lastInsertRowid));
+    return ctx.http.ok(reqCtx.res, { request: shapePreviewRequest(row), created: true });
+  });
+
+  // ── 15. 批 / 拒一条申请（只有站长与管理员）──────────────────────────────
+  routes.add('POST', '/api/ai-edit/preview-requests/:id/decide', (reqCtx) => {
+    const user = viewer(reqCtx);
+    ensure(isStaff(user), 403, 'forbidden', '只有站长 / 管理员能批这条申请');
+    const id = Number(reqCtx.params.id);
+    ensure(Number.isInteger(id) && id > 0, 400, 'bad_request', '申请 id 不对');
+    const body = reqCtx.body ?? {};
+    ensure(typeof body.approve === 'boolean', 400, 'bad_request', 'approve 必须是 true / false');
+    const note = String(body.note ?? '').trim();
+    ensure(note.length <= AI_MAX_PREVIEW_REASON, 400, 'bad_request', `批注最多 ${AI_MAX_PREVIEW_REASON} 字`);
+
+    const row = db.prepare('SELECT * FROM ai_preview_requests WHERE id = ?').get(id);
+    ensure(Boolean(row), 404, 'not_found', `没有编号为 ${id} 的申请`);
+    ensure(String(row.status) !== 'canceled', 409, 'bad_request', '这条申请已经撤下了，批不动');
+    const at = Date.now();
+    db.prepare('UPDATE ai_preview_requests SET status = ?, decided_at = ?, decided_by = ?, decided_note = ? WHERE id = ?').run(
+      body.approve ? AI_PREVIEW_APPROVED : 'rejected',
+      at,
+      user.id,
+      note,
+      id,
+    );
+    return ctx.http.ok(reqCtx.res, {
+      request: shapePreviewRequest(db.prepare('SELECT * FROM ai_preview_requests WHERE id = ?').get(id)),
+    });
+  });
+
+  // ── 16. 撤下申请 / 收回已批的权限 ────────────────────────────────────────
+  //
+  // 申请人可以撤自己那条待批的；管理员还能把批过的收回去（收回去就立即回到封顶状态）。
+  routes.add('DELETE', '/api/ai-edit/preview-requests/:id', (reqCtx) => {
+    const user = viewer(reqCtx);
+    const id = Number(reqCtx.params.id);
+    ensure(Number.isInteger(id) && id > 0, 400, 'bad_request', '申请 id 不对');
+    const row = db.prepare('SELECT * FROM ai_preview_requests WHERE id = ?').get(id);
+    ensure(Boolean(row), 404, 'not_found', `没有编号为 ${id} 的申请`);
+    const mine = Number(row.user_id) === Number(user.id);
+    ensure(mine || isStaff(user), 403, 'forbidden', '这条申请不是你的，只有管理员能收回来');
+    if (String(row.status) === 'canceled') {
+      return ctx.http.ok(reqCtx.res, { canceled: true, id });
+    }
+
+    const at = Date.now();
+    db.prepare('UPDATE ai_preview_requests SET status = ?, decided_at = ?, decided_by = ?, decided_note = ? WHERE id = ?').run(
+      'canceled',
+      at,
+      user.id,
+      mine ? '申请人自己撤下' : '管理员收回',
+      id,
+    );
+    return ctx.http.ok(reqCtx.res, { canceled: true, id });
   });
 }

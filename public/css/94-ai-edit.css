@@ -71,6 +71,27 @@
   background: var(--code-bg);
   color: var(--code-fg);
 }
+/* 待批队列里的一条「不封顶」申请：谁、为什么、同意 / 拒绝。 */
+.ae-approval {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 4px 6px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-soft);
+  font-size: 12px;
+}
+.ae-approval-who {
+  font-weight: 600;
+}
+.ae-approval-why {
+  flex: 1 1 auto;
+  min-width: 0;
+  color: var(--muted);
+  word-break: break-word;
+}
 .ae-placeholder {
   padding: 8px 10px;
   border: 1px dashed var(--border);
@@ -584,6 +605,21 @@
   line-height: 1.6;
 }
 
+/* AI 的回话靠左站（与上面那句配成一对气泡）—— 它和「改稿卡片」是两回事：
+   模型可以只回话不改稿，也可以一边回话一边改。 */
+.doc-ai-bubble {
+  align-self: flex-start;
+  max-width: 92%;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg-soft);
+  font-size: 13px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
 .doc-ai-card {
   display: flex;
   flex-direction: column;
@@ -619,6 +655,90 @@
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
+}
+
+/* 思考过程：一条会长、会走秒的清单。没有进度条 —— 服务端是一次阻塞调用，
+   编出来的百分比是假的，这里只报真事（本地做了什么 + 已经等了多久）。 */
+.doc-ai-steps {
+  padding: 8px 10px;
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-soft);
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.doc-ai-steps-head {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.doc-ai-steps-list {
+  margin: 4px 0 0;
+  padding-left: 18px;
+}
+
+.doc-ai-step.is-running {
+  color: var(--accent);
+}
+
+/* 效果预览就在编辑区右边那一栏，抽屉里不再另开小预览 —— 只留「试跑没过」那一句的红字。 */
+.doc-ai-trial-bad {
+  color: var(--danger, #c0392b);
+}
+
+/* AI 的稿子已经摆进编辑区、还等作者「接受 / 拒绝」：编辑区只读（`setLocked(true)`），
+   给个视觉提示，免得作者以为编辑器卡住了。 */
+.doc-textarea.is-ai-locked {
+  opacity: 0.7;
+  cursor: not-allowed;
+}
+
+/* 改前改后对照：默认折起来（`<details>`），展开后逐行看 —— 删的行带 `-`、加的行带 `+`。 */
+.doc-ai-diff-wrap {
+  margin: 2px 0;
+  font-size: 12px;
+}
+
+.doc-ai-diff-wrap > summary {
+  color: var(--accent);
+  cursor: pointer;
+}
+
+.doc-ai-diff {
+  max-height: 260px;
+  margin-top: 4px;
+  padding: 6px 8px;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-soft);
+  font-family: var(--mono);
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* 对照里的一行：底子 + 上面三种着色之一（`doc-ai-diff-del/-add/-same`）。 */
+.doc-ai-diff-line {
+  padding: 0 2px;
+  border-radius: 2px;
+}
+
+.doc-ai-diff-del {
+  color: var(--danger, #c0392b);
+  background: rgba(192, 57, 43, 0.08);
+}
+
+.doc-ai-diff-add {
+  color: var(--ok, #1e8449);
+  background: rgba(30, 132, 73, 0.08);
+}
+
+.doc-ai-diff-same {
+  color: var(--muted);
 }
 
 .doc-ai-input {

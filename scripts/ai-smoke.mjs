@@ -2664,10 +2664,13 @@ try {
     method: 'POST',
     body: { scope: 'document', documentId: 'doc-range', markdown: '  ', instruction: '改一下' },
   });
-  check('整篇 markdown 为空时也是 400（不是 503）', rangeDocEmpty.status === 400, `实际 ${rangeDocEmpty.status}`);
+  // 空的整篇正文是**合法**输入（= 从零写一篇），所以它不再被参数校验拦成 400，
+  // 而是照常走到配置门拿到 503。整篇模式唯一的必填项是 instruction。
+  check('整篇 markdown 为空时不再算坏请求（放行到配置门，503 而不是 400）', rangeDocEmpty.status === 503, `实际 ${rangeDocEmpty.status}`);
 
   const afterList = await listOps(admin);
-  // 这一段总共新增 5 条：section 类 4 条（提交那次 + 循环 3 次）+ document 类 1 条。
+  // 这一段总共新增 6 条：section 类 4 条（提交那次 + 循环 3 次）+ document 类 2 条
+  // （正常整篇 + 上面那条空正文的）。
   // 先按 id 差集取全部新行，再把 section 那 4 条挑出来（document 那条单独核）。
   const rangeBlockedNew = afterList.filter((row) => !beforeIds.has(row.id));
   const rangeBlocked = rangeBlockedNew.filter((row) => row.targetId === 'doc-range:rs1~rs2');
@@ -2688,8 +2691,8 @@ try {
     JSON.stringify(rangeBlocked.map((row) => row.reason)),
   );
   check(
-    '这一段新增的审计只有 5 条（没有多记也没有漏记）',
-    rangeBlockedNew.length === 5,
+    '这一段新增的审计只有 6 条（没有多记也没有漏记）',
+    rangeBlockedNew.length === 6,
     JSON.stringify(rangeBlockedNew.map((row) => [row.targetType, row.targetId, row.reason])),
   );
   const rangeBlockedDoc = rangeBlockedNew.find((row) => row.targetId === 'doc-range:*');
@@ -2730,8 +2733,8 @@ try {
     ['section 的块 type 不在白名单', rangeSectionBody({ blocks: [{ blockId: 'a1', type: 'vote', props: {} }] })],
     ['section 的块缺 props', rangeSectionBody({ blocks: [{ blockId: 'a1', type: 'paragraph' }] })],
     ['section 整体超过 40000 字符', rangeSectionBody({ blocks: [sectionPara('big', 'x'.repeat(60000))] })],
-    ['document 的 markdown 为空', { scope: 'document', documentId: 'doc-range', markdown: '', instruction: '改一下' }],
-    ['document 缺 markdown', { scope: 'document', documentId: 'doc-range', instruction: '改一下' }],
+    // 「document 的 markdown 为空 / 缺 markdown」原本在这张表里，现在**不算坏请求**了：
+    // 空正文 = 从零写一篇（前端编辑栏为空时也要能用 AI），单独在上面那条 check 里核。
     ['document 的 markdown 超过 40000 字', { scope: 'document', documentId: 'doc-range', markdown: 'x'.repeat(40001), instruction: '改一下' }],
   ];
   const rangeBadResults = [];
@@ -2751,7 +2754,7 @@ try {
     JSON.stringify(rangeBadResults.filter((item) => item.code !== 'bad_request')),
   );
 
-  // 限流排在校验之后：上面已经连发了 27 次坏请求，全都该是 400 而不是 429
+  // 限流排在校验之后：上面已经连发了 24 次坏请求，全都该是 400 而不是 429
   // （限流桶是 5 次/分钟；要是它在校验之前，第一批之后就会开始吐 429）。
   check(
     '连发坏请求不会被记进限流额度（没有一条 429）',

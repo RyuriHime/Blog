@@ -1,6 +1,7 @@
 // AI 参与编辑（P3）—— 能力授权 + 操作审计 + 回滚。
 //
-//   owns  ai_capability_grants / ai_op_logs / ai_token_usage —— 只有这三张表，别的表一律只读
+//   owns  ai_capability_grants / ai_op_logs / ai_token_usage / ai_preview_requests
+//         —— 只有这四张表，别的表一律只读
 //   api   /api/ai-edit/*                     —— 见下面「为什么不是 /api/ai」的说明
 //
 // 不拥有：ai_post_reviews / ai_site_reports（forum-ai 运行时自建自管，写进 owns 会被
@@ -32,8 +33,8 @@ export default {
   name: 'ai',
   /** 只做加法；具体前缀取值理由见文件头。 */
   apiPrefix: '/api/ai-edit',
-  /** 本模块**拥有**的表。三张都是新增表，既有表一张都不动。 */
-  owns: ['ai_capability_grants', 'ai_op_logs', 'ai_token_usage'],
+  /** 本模块**拥有**的表。都是新增表，既有表一张都不动。 */
+  owns: ['ai_capability_grants', 'ai_op_logs', 'ai_token_usage', 'ai_preview_requests'],
   /**
    * 会读、但不拥有的表（只读，绝不写）。
    * `documents` / `document_blocks` 归 P2，`users` / `posts` 归 core。

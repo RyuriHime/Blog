@@ -4,6 +4,7 @@
 //   ai_capability_grants —— 能力授权（谁、授予哪项能力、何时、有效期、每日配额、是否已收回）
 //   ai_op_logs           —— AI 操作日志（每次能力使用一行，存 before/after，可回滚）
 //   ai_token_usage       —— 每次真的打到上游的模型调用一行 token 用量（成本面板的钱）
+//   ai_preview_requests  —— 「预览缓存不封顶」的申请与审批（谁申请、谁批的、什么时候）
 //
 // 不在这里，也不许写进 owns：
 //   ai_post_reviews / ai_site_reports —— forum-ai 运行时自建自管，不归任何一个模块登记。
@@ -244,4 +245,17 @@ CREATE TABLE IF NOT EXISTS ai_token_usage (
 );
 CREATE INDEX IF NOT EXISTS idx_ai_token_usage_created ON ai_token_usage (created_at);
 CREATE INDEX IF NOT EXISTS idx_ai_token_usage_user ON ai_token_usage (user_id, created_at);
+
+CREATE TABLE IF NOT EXISTS ai_preview_requests (
+  id           INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id      INTEGER NOT NULL REFERENCES users(id),
+  status       TEXT    NOT NULL DEFAULT 'pending',
+  reason       TEXT    NOT NULL DEFAULT '',
+  created_at   INTEGER NOT NULL,
+  decided_at   INTEGER,
+  decided_by   INTEGER,
+  decided_note TEXT    NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_ai_preview_requests_user ON ai_preview_requests (user_id, id DESC);
+CREATE INDEX IF NOT EXISTS idx_ai_preview_requests_status ON ai_preview_requests (status, id DESC);
 `;

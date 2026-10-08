@@ -168,13 +168,20 @@ function sanitizeInputs(inputs) {
  * 换页 / 重画之前必须调一次：清掉所有定时器与登记。
  * 不调的话，上一页的 iframe 已经被 DOM 丢掉，看门狗仍会在 2 秒后
  * 去 `replaceWith` 一个已经不在文档里的节点（抛异常，且日志里看不出是谁）。
+ *
+ * `root` 是可选参数（2026-02 加）：只收掉**这棵子树里**的沙箱。
+ * 不传 = 全清，与原来一字不差，老调用点（doc.js 的整块重画、ai-edit.js 换文档）不受影响；
+ * 传了则给「屏幕外的试跑容器」用 —— AI 抽屉在影子编辑区里挂过一次沙箱之后得单独收回，
+ * 不能顺手把右边真实预览里正在跑的那几个一起带走。
  */
-export function unmountSandboxes() {
-  for (const entry of registry.values()) {
+export function unmountSandboxes(root) {
+  for (const entry of Array.from(registry.values())) {
+    if (root && !root.contains(entry.frame)) continue;
     entry.dead = true;
     if (entry.timer) clearTimeout(entry.timer);
+    registry.delete(entry.windowRef);
   }
-  registry.clear();
+  if (!root) registry.clear();
 }
 
 /** 宿主保存下来的沙箱输出（块间联动在客户端侧读取用）。 */
