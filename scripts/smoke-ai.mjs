@@ -372,11 +372,24 @@ try {
   const markdownAsk = retrieved.find((text) => text.includes('Markdown 写作有什么技巧'));
   check('关键词命中的帖子排在材料前面', /材料[\s\S]*?\[#4\]/.test(markdownAsk ?? ''), (markdownAsk ?? '').slice(0, 200));
 
-  const newPost = await member2.call('/api/posts', {
+  // 帖子写入接口已经下线（`POST /api/posts` 一律 410 `posts_retired`），
+  // 所以这里改「建一篇公开积木」—— 积木会顺带配一条影子帖（hidden = 0、deleted = 0），
+  // AI 语料指纹里的「篇数 + 最新更新时间 + 正文总字符数」照样会变，
+  // 要验的「内容一变缓存就标过期」一个字没少。
+  const newDoc = await member2.call('/api/docs', {
     method: 'POST',
-    body: { boardId: 2, title: 'AI 测试新增的一篇帖子', content: '新增内容用于让语料指纹变化。' },
+    body: {
+      title: 'AI 测试新增的一篇积木',
+      kind: 'post',
+      scope: 'public',
+      blocks: [{ type: 'paragraph', props: { text: '新增内容用于让语料指纹变化。' } }],
+    },
   });
-  check('新增帖子成功', newPost.status === 200);
+  check(
+    '新增积木成功（影子帖一同进语料）',
+    newDoc.status === 200 && Number(newDoc.data?.doc?.id) > 0,
+    `status=${newDoc.status} ${JSON.stringify(newDoc.error ?? newDoc.body).slice(0, 160)}`,
+  );
   const afterChange = await member2.call('/api/ai/posts/2');
   check('内容变化后缓存标记为过期', afterChange.data?.stale === true, `stale=${afterChange.data?.stale}`);
   const siteAfter = await member2.call('/api/ai/site');

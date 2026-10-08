@@ -1137,10 +1137,16 @@ try {
   check('me.user 不再有 coinBalance（投币已下线）', !('coinBalance' in me.user), JSON.stringify(Object.keys(me.user ?? {})));
   check('me.unread（消息铃铛依赖）', has(me, 'unread'));
 
-  const created = (
-    await admin('/api/posts', { method: 'POST', body: { boardId: site.boards[0].id, title: '契约检查帖', content: '内容' } })
-  ).json.data;
-  check('发帖返回 id（前端用于跳转）', Number.isInteger(created.id));
+  // 帖子写入接口已经下线（`POST /api/posts` 一律 410 `posts_retired`）：
+  // 这里改成「建一篇公开积木」，再用它的影子帖继续验下面那一串互动接口
+  // （回复 / 评价 / 收藏 / 转发本来就打在影子帖上，字段形状一个字没变）。
+  const contractDoc = (
+    await admin('/api/docs', { method: 'POST', body: { title: '契约检查积木', kind: 'post', scope: 'public' } })
+  ).json.data?.doc;
+  check('建积木返回 id（前端用于跳转）', Number.isInteger(contractDoc?.id));
+
+  const created = (await admin(`/api/docs/${contractDoc?.id}/anchor`)).json.data?.post ?? {};
+  check('积木的影子帖也拿到了 id（前端拿它拼互动接口）', Number.isInteger(created.id));
 
   const reply = (await admin(`/api/posts/${created.id}/replies`, { method: 'POST', body: { content: '回复' } })).json.data;
   check('回帖返回 reply.id / replyCount', Number.isInteger(reply.reply.id) && Number.isInteger(reply.replyCount));
@@ -1354,9 +1360,11 @@ try {
   check('最近发布带 hidden 标记', 'hidden' in (overview.recentPosts[0] ?? {}));
   check('列表接口带 hidden / hiddenReason 字段', 'hidden' in (list.items[0] ?? {}) && 'hiddenReason' in (list.items[0] ?? {}));
 
-  const hideTargetPost = (
-    await admin('/api/posts', { method: 'POST', body: { boardId: site.boards[0].id, title: '契约隐藏目标', content: '用来验证隐藏/恢复' } })
-  ).json.data;
+  // 同上：隐藏/恢复的作用对象改成「积木的影子帖」。
+  const hideTargetDoc = (
+    await admin('/api/docs', { method: 'POST', body: { title: '契约隐藏目标积木', kind: 'post', scope: 'public' } })
+  ).json.data?.doc;
+  const hideTargetPost = (await admin(`/api/docs/${hideTargetDoc?.id}/anchor`)).json.data?.post ?? {};
   const memberClient = client();
   const memberName = `cm_${Date.now().toString(36)}`;
   const memberReg = await memberClient('/api/auth/register', { method: 'POST', body: { username: memberName, password: 'secret123' } });

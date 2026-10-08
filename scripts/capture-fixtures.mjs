@@ -102,14 +102,20 @@ try {
   const login = await call('POST', '/api/auth/login', { username: 'admin', password: 'admin123' });
   if (login.status !== 200) failures.push(`登录失败：status=${login.status} ${JSON.stringify(login.payload)}`);
 
-  // 发一篇帖子，让 /api/posts/:id 有内容可采（同时验证写链路）。
-  const created = await call('POST', '/api/posts', {
-    boardId: 1,
-    title: '假数据采样帖',
-    content: '# 采样\n\n正文一段。\n\n- 列表项\n\n`code`',
+  // 帖子写入接口已经下线（`POST /api/posts` 一律 410 `posts_retired`）：
+  // 改成「建一篇公开积木」—— 它会配一条影子帖，`/api/posts/:id` 照样有内容可采，
+  // 写链路也照样验到了（拿 `doc.anchorPostId` 当老的 postId 用）。
+  const created = await call('POST', '/api/docs', {
+    title: '假数据采样积木',
+    kind: 'post',
+    scope: 'public',
+    blocks: [
+      { type: 'heading', props: { text: '采样', level: 1 } },
+      { type: 'paragraph', props: { text: '正文一段。' } },
+    ],
   });
-  const postId = created.payload?.data?.post?.id ?? created.payload?.data?.id ?? 1;
-  if (created.status !== 200) failures.push(`发帖失败：status=${created.status} ${JSON.stringify(created.payload)}`);
+  const postId = created.payload?.data?.doc?.anchorPostId ?? 1;
+  if (created.status !== 200) failures.push(`建积木失败：status=${created.status} ${JSON.stringify(created.payload)}`);
 
   // 发一条动态，好让动态流的假数据里**真的有内容**。
   // 空列表也能渲染，但「有内容的列表」才测得到作者、时间、引用卡片这些分支。
