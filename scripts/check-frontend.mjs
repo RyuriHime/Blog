@@ -1013,6 +1013,14 @@ globalThis.fetch = async (url, options = {}) => {
   const payload = options.body ? JSON.parse(options.body) : null;
   REQUESTS.push({ url: raw, method, body: payload });
   const bare = raw.split('?')[0];
+  // 让用量接口比别的接口**晚一个宏任务**回来，模拟真机上的网络延迟。
+  // 【为什么非要这一条】假 DOM 里其余接口全走微任务，不 await 也照样赶得上第一次渲染 ——
+  // 于是 `#/ai-edit` 那个真 bug 溜了过去：`aeLoad()` 里 `aeLoadUsage()` 没 await，
+  // 首次渲染时 usage 还是 null，`aeUsageHtml()` 直接返回空串，整块「AI 用量」**永远不出现**
+  // （线上真机复现过）。给这一个接口加一个宏任务的延迟，这条竞态在这里就能红。
+  if (bare === '/api/ai-edit/usage') {
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
   // 建团队 / 传文件 / 发消息这三条 POST 要回自己那一小块真形状 ——
   // 否则页面会拿到 undefined 去渲染，报出来的错看着像代码坏了，其实只是夹具缺了。
   const created = { team: { ...TEAM_FIXTURE, slug: 'new-team-1', name: '新团队' } };
@@ -1431,6 +1439,8 @@ let rendered = 0;
 let pagesScanned = 0;
 /** 「自己看自己」那条关注名单卡守卫到底跑没跑（守卫的自检，见上面的哨兵传统）。 */
 let ownerFollowCardsChecked = 0;
+/** `#/ai-edit` 的用量面板断言到底跑没跑（同上，哨兵得能证明自己没被跳过）。 */
+let usagePanelChecked = 0;
 for (const [label, file, fn, argv] of CASES) {
   let target;
   try {
@@ -1468,6 +1478,39 @@ for (const [label, file, fn, argv] of CASES) {
       if (followAt >= 0 && postsAt >= 0 && followAt > postsAt) {
         problems.push('个人主页（自己视角）：「我关注的人」卡排在文章列表下面，文章一多就又看不见了');
       }
+    }
+    // `#/ai-edit` 的用量面板（m07388：人人见自己的、管理员多一层全站）。
+    // 这块最初**线上整块不出现**：`aeLoad()` 里 `aeLoadUsage()` 没 await，首次渲染时
+    // `aeState.usage` 还是 null，而 `aeUsageHtml()` 开头就是 `if (!aeState.usage) return '';`，
+    // 之后再没有任何东西重画它。夹具喂了 usage 数据、这里却一个字都没断言，所以当时全绿。
+    // 现在：用量接口故意晚一个宏任务回来（见上面的 fetch 桩），这里要求**第一次渲染**就带上它。
+    if (fn === 'viewAiEdit') {
+      usagePanelChecked += 1;
+      const required = [
+        ['用量面板外壳', 'class="ae-usage"'],
+        ['我的用量那一块', '我自己的用量'],
+        ['我的三行明细', 'ae-usage-row'],
+        ['全站用量被标明「仅管理团队可见」', 'ae-block-tag'],
+        ['全站用量那一块', '全站用量'],
+        ['本月每天那张表', 'ae-days-table'],
+        ['本月合计那行', '本月合计'],
+        ['全 0 的日子压暗（不省略）', 'ae-day-idle'],
+        ['今天那行加粗', 'ae-day-today'],
+      ];
+      for (const [what, marker] of required) {
+        if (!pageHtml.includes(marker)) {
+          problems.push(`AI 编辑台：用量面板少了${what}（找不到 ${marker}）—— 面板靠 aeLoad() 里「await 用量再画第一次」出现，别把那次 await 去掉`);
+        }
+      }
+      // 三行「我的」必须排在「全站」前面：自己的账是主视角，全站是附加信息。
+      const myAt = pageHtml.indexOf('我自己的用量');
+      const siteAt = pageHtml.indexOf('全站用量');
+      if (myAt >= 0 && siteAt >= 0 && myAt > siteAt) {
+        problems.push('AI 编辑台：全站用量排在我自己的用量前面了（自己那份该在上面）');
+      }
+      // `ae-usage-row` 至少 5 行：我 3 行 + 全站 2 行汇总。少了就是某一块整段没画出来。
+      const rowCount = (pageHtml.match(/ae-usage-row/g) ?? []).length;
+      if (rowCount < 5) problems.push(`AI 编辑台：用量面板只有 ${rowCount} 行明细（我 3 行 + 全站 2 行汇总，至少 5 行）`);
     }
   } catch (error) {
     const top = (error.stack ?? '').split('\n').slice(0, 3).join(' | ');
@@ -1546,6 +1589,10 @@ if (pagesScanned < 30) {
 // 会一声不吭地跳过（`label` 对不上），看起来还是全绿。
 if (ownerFollowCardsChecked !== 1) {
   problems.push(`「自己看自己」的关注名单卡守卫跑了 ${ownerFollowCardsChecked} 次（应该正好 1 次）—— 检查等于没生效`);
+}
+// 同理：`#/ai-edit` 要是哪天从 CASES 里被挪走或改了函数名，用量面板那串断言会静静跳过。
+if (usagePanelChecked !== 1) {
+  problems.push(`AI 编辑台用量面板的断言跑了 ${usagePanelChecked} 次（应该正好 1 次）—— 检查等于没生效`);
 }
 void feedMod;
 
