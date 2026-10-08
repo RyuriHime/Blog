@@ -146,7 +146,73 @@
 }
 
 .ai-answer-head { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-bottom: 8px; }
-.ai-answer-text { color: var(--text); line-height: 1.85; }
+.ai-answer-text { color: var(--text); line-height: 1.9; font-size: 14.5px; max-width: 78ch; }
+.ai-answer-text > :first-child { margin-top: 0; }
+.ai-answer-text > :last-child { margin-bottom: 0; }
+
+/* 回答的排版（aiAnswerBodyHtml）：段落、小标题、列表、引用、代码、出处标记 */
+.ai-answer-q {
+  margin-bottom: 10px;
+  padding: 6px 10px;
+  border-left: 2px solid var(--accent);
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+  background: var(--panel);
+  color: var(--text-dim);
+  font-size: 13px;
+}
+.ai-p { margin: 0 0 10px; }
+.ai-h { margin: 16px 0 8px; color: var(--text); font-weight: 600; }
+.ai-h2 { font-size: 16px; }
+.ai-h3 { font-size: 15px; }
+.ai-h4 { font-size: 14px; color: var(--text-dim); }
+.ai-answer-list { margin: 0 0 10px; padding-left: 22px; }
+.ai-answer-list li { margin: 3px 0; }
+.ai-answer-list li::marker { color: var(--muted); }
+.ai-quote {
+  margin: 0 0 10px;
+  padding: 6px 12px;
+  border-left: 3px solid var(--border-soft);
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+  background: var(--panel);
+  color: var(--text-dim);
+}
+.ai-pre {
+  margin: 0 0 10px;
+  padding: 10px 12px;
+  overflow-x: auto;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-sm);
+  background: var(--panel);
+  color: var(--text-dim);
+  font-family: var(--mono);
+  font-size: 12.5px;
+  line-height: 1.7;
+}
+.ai-rule { margin: 14px 0; border: none; border-top: 1px solid var(--border-soft); }
+.ai-code {
+  padding: 1px 5px;
+  border: 1px solid var(--border-soft);
+  border-radius: 4px;
+  background: var(--panel);
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 12.5px;
+}
+.ai-link { color: var(--accent); text-decoration: none; }
+.ai-link:hover { text-decoration: underline; }
+.ai-inline-cite {
+  display: inline-block;
+  margin: 0 2px;
+  padding: 1px 6px;
+  border: 1px solid var(--border-soft);
+  border-radius: 999px;
+  background: var(--panel);
+  color: var(--accent);
+  font-family: var(--mono);
+  font-size: 11.5px;
+  text-decoration: none;
+}
+.ai-inline-cite:hover { border-color: var(--accent); }
 
 .ai-cites { display: flex; flex-direction: column; gap: 6px; }
 .ai-cite {
