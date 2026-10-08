@@ -92,11 +92,86 @@
   color: var(--muted);
 }
 
-/* 全站用量（管理员） ---------------------------------------------------- */
+/* AI 用量（人人可见自己的，管理团队多一层全站） ------------------------------- */
 .ae-usage {
   display: flex;
   flex-direction: column;
+  gap: 14px;
+}
+/* 两块（我的 / 全站）各自成段：同一张卡里，靠一条上边线分开。 */
+.ae-block {
+  display: flex;
+  flex-direction: column;
   gap: 10px;
+}
+.ae-block + .ae-block {
+  padding-top: 12px;
+  border-top: 1px solid var(--border-soft);
+}
+.ae-block-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+}
+.ae-block-tag {
+  padding: 1px 8px;
+  border: 1px solid var(--border-soft);
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--muted);
+}
+/* 今日 / 本周 / 本月：金额在左、明细跟在后面，窄屏自动折行。 */
+.ae-usage-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.ae-usage-row {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 10px;
+  padding: 6px 10px;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-sm);
+  background: var(--bg-soft);
+  font-size: 13px;
+}
+.ae-usage-when {
+  min-width: 4em;
+  color: var(--text);
+}
+.ae-usage-money {
+  font-weight: 600;
+  color: var(--text);
+}
+.ae-usage-sub {
+  color: var(--muted);
+  font-size: 12px;
+}
+/* 本月每天：全 0 的日子压暗（不省略 —— 缺行会让人以为看漏了一天），今天加粗。 */
+.ae-days {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.ae-days-table td,
+.ae-days-table th {
+  font-size: 12px;
+}
+.ae-day-idle {
+  color: var(--muted);
+}
+.ae-day-today {
+  font-weight: 600;
+}
+.ae-day-sum td {
+  font-weight: 600;
+  border-top: 1px solid var(--border-soft);
 }
 .ae-usage-grid {
   display: flex;

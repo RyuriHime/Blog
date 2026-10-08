@@ -741,27 +741,93 @@ const EXTRA = {
     total: 2,
     limit: 30,
   },
+  // 用量面板这一版分两层：`me`（人人都有的自己那份）+ `site`（只有管理团队的响应里才有）。
+  // 夹具走的是管理团队那一份，所以 `scope: 'site'`：普通用户那条分支（响应里连 `site`
+  // 这个键都没有）由 ai-smoke 的 §21 盯着，前端这边只看「有 site 时渲染成什么样」。
   '/api/ai-edit/usage': {
     scope: 'site',
-    since: Date.now() - 3600000,
-    today: {
-      total: 5,
-      billed: 3,
-      blocked: 1,
-      users: 1,
-      byAction: [{ action: 'apply', count: 3 }, { action: 'draft', count: 2 }],
-      topUsers: [{ userId: 1, username: FIXTURE_USERNAME, displayName: '站长', count: 5 }],
-      // token / 金额也必须是真形状（`tokens` + `cost` + 顶层 `pricing`）：渲染测试只走到
-      // 夹具给得出来的分支，缺了这几块，「今日花费 ¥x」那一行永远不会被渲染到，
-      // 就算它把 `Fmt.fmtNum` 写成不存在的东西也照样全绿（这个坑踩过一次，见上面 660 行）。
-      // `missing: 1` 是故意的：要让「有几次没拿到用量」那句警告也真的渲染一遍。
-      tokens: { prompt: 12000, cached: 4000, completion: 3000, total: 15000, calls: 3, missing: 1 },
-      cost: { yuan: 0.02008, peakYuan: 0, offPeakYuan: 0.02008, currency: 'CNY', unit: '元/百万 tokens' },
+    windows: {
+      today: 1791388800000,
+      week: 1790956800000,
+      month: 1790784000000,
+      timezone: 'Asia/Shanghai (+08:00)',
+      countsTimezone: 'UTC',
     },
-    allTime: {
-      total: 42,
-      tokens: { prompt: 300000, cached: 90000, completion: 50000, total: 350000, calls: 42, missing: 0 },
-      cost: { yuan: 0.8236, peakYuan: 0.4, offPeakYuan: 0.4236, currency: 'CNY', unit: '元/百万 tokens' },
+    me: {
+      userId: 1,
+      username: FIXTURE_USERNAME,
+      today: {
+        billed: 3,
+        tokens: { prompt: 12000, cached: 4000, completion: 3000, total: 15000, calls: 3, missing: 1 },
+        cost: { yuan: 0.02008, peakYuan: 0, offPeakYuan: 0.02008, currency: 'CNY', unit: '元/百万 tokens' },
+      },
+      week: {
+        billed: 7,
+        tokens: { prompt: 28000, cached: 9000, completion: 7000, total: 35000, calls: 7, missing: 1 },
+        cost: { yuan: 0.04688, peakYuan: 0, offPeakYuan: 0.04688, currency: 'CNY', unit: '元/百万 tokens' },
+      },
+      month: {
+        billed: 12,
+        tokens: { prompt: 48000, cached: 14000, completion: 12000, total: 60000, calls: 12, missing: 1 },
+        cost: { yuan: 0.08036, peakYuan: 0, offPeakYuan: 0.08036, currency: 'CNY', unit: '元/百万 tokens' },
+      },
+    },
+    site: {
+      today: {
+        date: '2026-10-07',
+        total: 5,
+        billed: 3,
+        blocked: 1,
+        users: 1,
+        byAction: [{ action: 'apply', count: 3 }, { action: 'draft', count: 2 }],
+        topUsers: [{ userId: 1, username: FIXTURE_USERNAME, displayName: '站长', count: 5 }],
+        // token / 金额也必须是真形状（`tokens` + `cost` + 顶层 `pricing`）：渲染测试只走到
+        // 夹具给得出来的分支，缺了这几块，「今日花费 ¥x」那一行永远不会被渲染到，
+        // 就算它把 `Fmt.fmtNum` 写成不存在的东西也照样全绿（这个坑踩过一次，见上面 660 行）。
+        // `missing: 1` 是故意的：要让「有几次没拿到用量」那句警告也真的渲染一遍。
+        tokens: { prompt: 12000, cached: 4000, completion: 3000, total: 15000, calls: 3, missing: 1 },
+        cost: { yuan: 0.02008, peakYuan: 0, offPeakYuan: 0.02008, currency: 'CNY', unit: '元/百万 tokens' },
+      },
+      week: {
+        from: 1790956800000,
+        billed: 7,
+        tokens: { prompt: 28000, cached: 9000, completion: 7000, total: 35000, calls: 7, missing: 1 },
+        cost: { yuan: 0.04688, peakYuan: 0, offPeakYuan: 0.04688, currency: 'CNY', unit: '元/百万 tokens' },
+      },
+      month: {
+        from: 1790784000000,
+        billed: 12,
+        tokens: { prompt: 48000, cached: 14000, completion: 12000, total: 60000, calls: 12, missing: 1 },
+        cost: { yuan: 0.08036, peakYuan: 0, offPeakYuan: 0.08036, currency: 'CNY', unit: '元/百万 tokens' },
+      },
+      // 本月每天：**全 0 的那天也留在列表里**（`.ae-day-idle` 那条分支只有全 0 行才走得到，
+      // 少一行就等于那条样式永远没人渲染过）。最后一行是今天，前端靠它加 `.ae-day-today`。
+      days: [
+        {
+          date: '2026-10-05',
+          billed: 0,
+          tokens: { prompt: 0, cached: 0, completion: 0, total: 0, calls: 0, missing: 0 },
+          cost: { yuan: 0, peakYuan: 0, offPeakYuan: 0, currency: 'CNY', unit: '元/百万 tokens' },
+        },
+        {
+          date: '2026-10-06',
+          billed: 4,
+          tokens: { prompt: 16000, cached: 5000, completion: 4000, total: 20000, calls: 4, missing: 0 },
+          cost: { yuan: 0.0268, peakYuan: 0, offPeakYuan: 0.0268, currency: 'CNY', unit: '元/百万 tokens' },
+        },
+        {
+          date: '2026-10-07',
+          billed: 3,
+          tokens: { prompt: 12000, cached: 4000, completion: 3000, total: 15000, calls: 3, missing: 1 },
+          cost: { yuan: 0.02008, peakYuan: 0, offPeakYuan: 0.02008, currency: 'CNY', unit: '元/百万 tokens' },
+        },
+      ],
+      allTime: {
+        total: 42,
+        tokens: { prompt: 300000, cached: 90000, completion: 50000, total: 350000, calls: 42, missing: 0 },
+        cost: { yuan: 0.8236, peakYuan: 0.4, offPeakYuan: 0.4236, currency: 'CNY', unit: '元/百万 tokens' },
+      },
+      budget: { envKey: 'AI_DAILY_TOTAL_LIMIT', unlimited: false, limit: 200, used: 3, remaining: 197 },
     },
     pricing: {
       model: 'deepseek-flash',
@@ -782,8 +848,7 @@ const EXTRA = {
       },
       note: '按官方价目表算（DeepSeek-V4.1-Flash）：缓存未命中输入 2、缓存命中输入 0.04、输出 8 元/百万 tokens（高峰价，空闲时段减半）；此刻是空闲时段。',
     },
-    budget: { envKey: 'AI_DAILY_TOTAL_LIMIT', unlimited: true, limit: 0, used: 0, remaining: null },
-    note: '次数与 token 用量分开统计：次数是配额闸门的口径，金额 = token × 单价（按调用时刻的高峰/空闲档位估算，单价抄自官方价目表）。',
+    note: '次数是配额闸门的口径（UTC 自然日）；金额 = token × 单价，按北京时间自然日/周/月汇总，每次调用按当时的档位估算（单价抄自官方价目表）。',
   },
   // 团队（P4）的路由是 `#/teams`（列表）与 `#/team/<slug>`（主页）。
   // 采集器还没采这几条，先手工给真形状 —— 接口形状改了就跟着改这里。

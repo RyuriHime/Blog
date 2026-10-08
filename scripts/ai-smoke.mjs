@@ -1606,33 +1606,74 @@ try {
   check('预算服务器上的用量面板返回 200', budgetUsage.status === 200, `实际 ${budgetUsage.status}`);
   check(
     'budget.limit 就是 AI_DAILY_TOTAL_LIMIT',
-    budgetUsage.data?.budget?.limit === BUDGET_LIMIT,
-    String(budgetUsage.data?.budget?.limit),
+    budgetUsage.data?.site?.budget?.limit === BUDGET_LIMIT,
+    String(budgetUsage.data?.site?.budget?.limit),
   );
   check(
     'budget.used 等于已经计费的落盘次数',
-    budgetUsage.data?.budget?.used === BUDGET_LIMIT,
-    String(budgetUsage.data?.budget?.used),
+    budgetUsage.data?.site?.budget?.used === BUDGET_LIMIT,
+    String(budgetUsage.data?.site?.budget?.used),
   );
-  check('budget.remaining 归零', budgetUsage.data?.budget?.remaining === 0, String(budgetUsage.data?.budget?.remaining));
-  check('配了上限时 unlimited 是 false', budgetUsage.data?.budget?.unlimited === false, String(budgetUsage.data?.budget?.unlimited));
   check(
-    '预览没有被算进 today.billed',
-    budgetUsage.data?.today?.billed === BUDGET_LIMIT,
-    String(budgetUsage.data?.today?.billed),
+    'budget.remaining 归零',
+    budgetUsage.data?.site?.budget?.remaining === 0,
+    String(budgetUsage.data?.site?.budget?.remaining),
+  );
+  check(
+    '配了上限时 unlimited 是 false',
+    budgetUsage.data?.site?.budget?.unlimited === false,
+    String(budgetUsage.data?.site?.budget?.unlimited),
+  );
+  check(
+    '预览没有被算进 site.today.billed',
+    budgetUsage.data?.site?.today?.billed === BUDGET_LIMIT,
+    String(budgetUsage.data?.site?.today?.billed),
   );
 
-  /* ---------- 21. /api/ai-edit/usage 的权限与形状 ---------- */
+  /* ---------- 21. /api/ai-edit/usage：自己的账 vs 全站账 ---------- */
   //
-  // 全站用量只有管理团队能看：这是「谁在用这把 key」的账单视角。
-  // 口径要与用户额度、全站预算逐字一致（billed 只数 AI_QUOTA_ACTIONS 里没失败的行）。
+  // 这一版面板分两层：**每个登录用户**都能看自己的用量与金额；全站口径
+  // （今天谁在用、这个月每天花了多少）只有管理团队拿得到 —— 而且不是前端藏起来：
+  // 普通用户的响应里**根本没有** `site` 这一块。
   const anonUsage = await createClient().call('/api/ai-edit/usage');
-  check('未登录看全站用量返回 401', anonUsage.status === 401, `实际 ${anonUsage.status}`);
+  check('未登录看用量返回 401', anonUsage.status === 401, `实际 ${anonUsage.status}`);
   check('未登录的错误代号是 unauthenticated', anonUsage.error?.code === 'unauthenticated', String(anonUsage.error?.code));
 
   const aliceUsage = await alice.call('/api/ai-edit/usage');
-  check('普通用户 alice 看全站用量返回 403', aliceUsage.status === 403, `实际 ${aliceUsage.status}`);
-  check('普通用户的错误代号是 forbidden', aliceUsage.error?.code === 'forbidden', String(aliceUsage.error?.code));
+  check(
+    '普通用户看用量返回 200（不再是 403 —— 自己的账自己看）',
+    aliceUsage.status === 200,
+    `实际 ${aliceUsage.status} ${JSON.stringify(aliceUsage.error ?? null)}`,
+  );
+  check('普通用户的 scope 是 me', aliceUsage.data?.scope === 'me', String(aliceUsage.data?.scope));
+  check(
+    '普通用户的响应里没有全站那一块（连字段都不给，不是前端藏起来）',
+    aliceUsage.data?.site === undefined && aliceUsage.data?.budget === undefined,
+    JSON.stringify(Object.keys(aliceUsage.data ?? {})),
+  );
+  check(
+    '普通用户自己那份有今日/本周/本月三个窗口，且都是数字形状',
+    ['today', 'week', 'month'].every(
+      (key) =>
+        typeof aliceUsage.data?.me?.[key]?.billed === 'number' &&
+        typeof aliceUsage.data?.me?.[key]?.tokens?.total === 'number' &&
+        typeof aliceUsage.data?.me?.[key]?.cost?.yuan === 'number',
+    ),
+    JSON.stringify(aliceUsage.data?.me ?? null),
+  );
+  check(
+    '窗口起点给出来了：金额按 Asia/Shanghai，次数口径仍是 UTC',
+    String(aliceUsage.data?.windows?.timezone ?? '').includes('Asia/Shanghai') &&
+      aliceUsage.data?.windows?.countsTimezone === 'UTC' &&
+      aliceUsage.data?.windows?.today <= Date.now() &&
+      aliceUsage.data?.windows?.week <= aliceUsage.data?.windows?.today,
+    JSON.stringify(aliceUsage.data?.windows ?? null),
+  );
+  check(
+    '普通用户自己的账记着刚才那次落盘（本月的计费次数大于 0）',
+    Number(aliceUsage.data?.me?.month?.billed) > 0,
+    JSON.stringify(aliceUsage.data?.me?.month ?? null),
+  );
 
   // 先制造几次计费调用，再断言面板把它们算进去了。
   await admin.call('/api/ai-edit/grants', {
@@ -1655,21 +1696,22 @@ try {
   );
 
   const usage = await admin.call('/api/ai-edit/usage');
-  check('管理员看全站用量返回 200', usage.status === 200, `实际 ${usage.status} ${JSON.stringify(usage.error ?? null)}`);
-  check('scope 是 site（全站口径，不是「我自己的」）', usage.data?.scope === 'site', String(usage.data?.scope));
+  check('管理员看用量返回 200', usage.status === 200, `实际 ${usage.status} ${JSON.stringify(usage.error ?? null)}`);
+  check('管理员的 scope 是 site（还带了全站口径）', usage.data?.scope === 'site', String(usage.data?.scope));
+  const usageSite = usage.data?.site ?? {};
   check(
     'budget.envKey 是 AI_DAILY_TOTAL_LIMIT',
-    usage.data?.budget?.envKey === 'AI_DAILY_TOTAL_LIMIT',
-    String(usage.data?.budget?.envKey),
+    usageSite.budget?.envKey === 'AI_DAILY_TOTAL_LIMIT',
+    JSON.stringify(usageSite.budget ?? null),
   );
   check(
     '没配全站上限时 unlimited=true 且 remaining=null',
-    usage.data?.budget?.unlimited === true && usage.data?.budget?.remaining === null,
-    JSON.stringify(usage.data?.budget ?? null),
+    usageSite.budget?.unlimited === true && usageSite.budget?.remaining === null,
+    JSON.stringify(usageSite.budget ?? null),
   );
-  const usageToday = usage.data?.today ?? {};
+  const usageToday = usageSite.today ?? {};
   check(
-    'today 的计数字段是数字、列表字段是数组',
+    'site.today 的计数字段是数字、列表字段是数组',
     typeof usageToday.total === 'number' &&
       typeof usageToday.billed === 'number' &&
       typeof usageToday.blocked === 'number' &&
@@ -1678,9 +1720,9 @@ try {
       Array.isArray(usageToday.topUsers),
     JSON.stringify(usageToday),
   );
-  check('today.billed 大于 0（刚制造的落盘算进去了）', usageToday.billed > 0, String(usageToday.billed));
+  check('site.today.billed 大于 0（刚制造的落盘算进去了）', usageToday.billed > 0, String(usageToday.billed));
   check(
-    'today.total 不小于 today.billed（total 是当天全部日志行）',
+    'site.today.total 不小于 site.today.billed（total 是当天全部日志行）',
     usageToday.total >= usageToday.billed,
     `${usageToday.total} / ${usageToday.billed}`,
   );
@@ -1700,6 +1742,66 @@ try {
     String(usage.data?.note),
   );
 
+  /* ---------- 21a. 全站「本月每天」与周/月汇总 ---------- */
+  //
+  // 用户要的是「这个月每天的用量与金额」。所以：1 号到今天每一天都要有一行
+  // （没调用的日子也不能缺 —— 缺行会让人以为看漏了一天），而且它得和今日那块对得上。
+  const usageDays = usageSite.days ?? [];
+  const dayPattern = /^\d{4}-\d{2}-\d{2}$/;
+  check(
+    'site.days 是 1 号到今天，每天一行',
+    Array.isArray(usageDays) && usageDays.length >= 1 && usageDays.every((day) => dayPattern.test(String(day.date))),
+    `共 ${usageDays.length} 行：${JSON.stringify(usageDays.slice(0, 2))}`,
+  );
+  check(
+    'site.days 从早到晚递增，最后一行是今天',
+    usageDays.every((day, index) => index === 0 || day.date > usageDays[index - 1].date) &&
+      usageDays[usageDays.length - 1]?.date === usageToday.date,
+    `${usageDays[usageDays.length - 1]?.date} vs ${usageToday.date}`,
+  );
+  check(
+    '本月 1 号的日期与 windows.month 对得上',
+    usageDays[0]?.date === new Date(Number(usage.data?.windows?.month ?? 0) + 8 * 3600 * 1000).toISOString().slice(0, 10),
+    `${usageDays[0]?.date} vs windows.month=${usage.data?.windows?.month}`,
+  );
+  check(
+    '每一行都有次数、token 与金额（形状齐全）',
+    usageDays.every(
+      (day) =>
+        typeof day.billed === 'number' &&
+        typeof day.tokens?.total === 'number' &&
+        typeof day.tokens?.calls === 'number' &&
+        typeof day.cost?.yuan === 'number',
+    ),
+    JSON.stringify(usageDays[usageDays.length - 1] ?? null),
+  );
+  check(
+    '今天的每日行与 site.today 的 token / 金额逐字一致（同一个北京时间日）',
+    Math.abs(Number(usageDays[usageDays.length - 1]?.cost?.yuan ?? -1) - Number(usageToday.cost?.yuan ?? -2)) < 1e-9 &&
+      Number(usageDays[usageDays.length - 1]?.tokens?.total ?? -1) === Number(usageToday.tokens?.total ?? -2),
+    `${JSON.stringify(usageDays[usageDays.length - 1] ?? null)} vs ${JSON.stringify(usageToday.tokens ?? null)}`,
+  );
+  check(
+    '本月汇总不少于今天、不少于本周（窗口是包含关系）',
+    Number(usageSite.month?.tokens?.total ?? 0) >= Number(usageToday.tokens?.total ?? 0) &&
+      Number(usageSite.month?.cost?.yuan ?? 0) >= Number(usageToday.cost?.yuan ?? 0) &&
+      Number(usageSite.month?.tokens?.total ?? 0) >= Number(usageSite.week?.tokens?.total ?? 0),
+    JSON.stringify({ month: usageSite.month?.tokens ?? null, week: usageSite.week?.tokens ?? null }),
+  );
+  check(
+    '周/月汇总都带着窗口起点（前端要写出「从哪天算起」）',
+    typeof usageSite.week?.from === 'number' && typeof usageSite.month?.from === 'number' && usageSite.month.from <= usageSite.week.from,
+    JSON.stringify({ week: usageSite.week?.from, month: usageSite.month?.from }),
+  );
+  check(
+    '每天的金额合计 = 本月汇总的金额（两处算法一致，不是各算各的）',
+    Math.abs(
+      usageDays.reduce((sum, day) => sum + Number(day.cost?.yuan ?? 0), 0) - Number(usageSite.month?.cost?.yuan ?? 0),
+    ) < 1e-6,
+    `${usageDays.reduce((sum, day) => sum + Number(day.cost?.yuan ?? 0), 0)} vs ${usageSite.month?.cost?.yuan}`,
+  );
+
+
   /* ---------- 21b. 金额：真的记下了 token 与钱（在跑过真模型的 keyed 服务器上） ---------- */
   //
   // 为什么挂 keyed 那台：只有它配了 key，前面的第 18 / 23 节在它上面真的调过模型，
@@ -1708,11 +1810,23 @@ try {
   //   (600×2 + 400×0.04 + 200×8) / 1000000 = 0.002816 元
   // —— 期望值能一眼算出来，这条断言才算真的钉住了算术。
   const keyedUsage = await keyedAdmin.call('/api/ai-edit/usage');
-  const kTokens = keyedUsage.data?.today?.tokens ?? {};
-  const kCost = keyedUsage.data?.today?.cost ?? {};
-  const kAll = keyedUsage.data?.allTime ?? {};
+  const kSite = keyedUsage.data?.site?.today ?? {};
+  const kTokens = kSite.tokens ?? {};
+  const kCost = kSite.cost ?? {};
+  const kAll = keyedUsage.data?.site?.allTime ?? {};
   const kPricing = keyedUsage.data?.pricing ?? {};
+  const kMe = keyedUsage.data?.me?.today ?? {};
   check('金额：keyed 服务器上记下了 token 用量', kTokens.total > 0 && kTokens.calls > 0, JSON.stringify(kTokens));
+  check(
+    '金额：「我自己」那一份也能看到金额（不只是管理员的全站账）',
+    Number(kMe.tokens?.calls) > 0 && Number(kMe.cost?.yuan) > 0,
+    JSON.stringify(kMe),
+  );
+  check(
+    '金额：我自己的那份不会比全站那份还多（自己的账是全站账的子集）',
+    Number(kMe.tokens?.total) <= Number(kTokens.total) && Number(kMe.billed ?? 0) <= Number(kSite.billed ?? 0),
+    JSON.stringify({ me: kMe.tokens?.total, site: kTokens.total, meBilled: kMe.billed, siteBilled: kSite.billed }),
+  );
   check('金额：每次调用的用量都记全了（missing 为 0）', kTokens.missing === 0, JSON.stringify(kTokens));
   check(
     '金额：输入 = 命中 + 未命中，且每次调用一行（1000 / 400 / 200 × 次数）',
@@ -1771,10 +1885,12 @@ try {
   );
   check(
     '金额：没配 key 的那台服务器（没调过模型）显示 0，且不谎报 missing',
-    (usage.data?.today?.tokens?.total ?? -1) === 0 &&
-      (usage.data?.today?.cost?.yuan ?? -1) === 0 &&
-      (usage.data?.today?.tokens?.missing ?? -1) === 0,
-    JSON.stringify(usage.data?.today?.tokens ?? null),
+    (usage.data?.site?.today?.tokens?.total ?? -1) === 0 &&
+      (usage.data?.site?.today?.cost?.yuan ?? -1) === 0 &&
+      (usage.data?.site?.today?.tokens?.missing ?? -1) === 0 &&
+      (usage.data?.me?.today?.tokens?.total ?? -1) === 0 &&
+      (usage.data?.me?.today?.cost?.yuan ?? -1) === 0,
+    JSON.stringify({ site: usage.data?.site?.today?.tokens ?? null, me: usage.data?.me?.today?.tokens ?? null }),
   );
 
   /* ---------- 21c. 计价器（src/modules/ai/pricing.js）的纯函数 ---------- */
