@@ -454,6 +454,10 @@ try {
   mock.failWith = null;
   check('上游 JSON 里有字面换行也能解析', askRawNewline.status === 200, `status=${askRawNewline.status} ${JSON.stringify(askRawNewline.error)}`);
   check('解析后答案保住了代码内容', String(askRawNewline.data?.answer ?? '').includes('print(1)'), String(askRawNewline.data?.answer ?? '').slice(0, 80));
+  // 正文里的换行必须留着：代码块、列表、小标题全靠它成段。以前这里被压成一行，
+  // 于是前端拿到的是一坨行内反引号（`` ```cpp int a; ``` ``），用户看不到代码块。
+  const rawAnswer = String(askRawNewline.data?.answer ?? '');
+  check('回答正文保留了换行', rawAnswer.includes('\n```python\n') && rawAnswer.split('\n').length >= 4, JSON.stringify(rawAnswer).slice(0, 120));
 
   console.log('\n▶ 检索与缓存过期');
   const retrieved = mock.calls.map((call) => String(call.body?.messages?.[1]?.content ?? ''));

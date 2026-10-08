@@ -63,12 +63,9 @@ function aiInlineHtml(text) {
 
 const AI_LIST_ITEM = /^\s*(?:[-*•]|\d+[.)])\s+(.*)$/;
 
-/**
- * 模型常把整篇答案写成**一行**：`**1. 小标题** … - 项：… - 项：…`。
- * 结构标记前面的空白换成换行，后面的分块与列表才认得出它们。
- */
-function aiNormalizeAnswerMd(raw) {
-  let text = String(raw ?? '').replace(/\r\n?/g, '\n');
+/** 只给「普通文字」断行：代码块里的 `- ` / `1. ` / `**` 不能被当成结构拆开。 */
+function aiNormalizeProse(raw) {
+  let text = String(raw ?? '');
   // 编号小标题（限定短标题，别把正文里的加粗也断开）
   text = text.replace(/[ \t]+(?=\*\*\s*\d+[.)、]\s{0,2}[^*\n]{0,40}\*\*)/g, '\n');
   // 短加粗 + 冒号的引导句
@@ -76,6 +73,55 @@ function aiNormalizeAnswerMd(raw) {
   // 行内项目符号：整段出现两次以上才当列表，免得「a - b」这种减法被拆开
   if ((text.match(/(?:^|\s)[-*•]\s+\S/g) ?? []).length >= 2) text = text.replace(/[ \t]+(?=[-*•]\s+\S)/g, '\n');
   return text;
+}
+
+/** 认得出的代码语言（用来判断 ``` 后面那个词是语言标记还是代码本身）。 */
+const AI_CODE_LANGS = new Set([
+  'c', 'cc', 'cpp', 'cxx', 'c++', 'h', 'hpp', 'cs', 'csharp', 'java', 'js', 'javascript', 'jsx',
+  'ts', 'typescript', 'tsx', 'python', 'py', 'go', 'golang', 'rust', 'rs', 'rb', 'ruby', 'php',
+  'swift', 'kotlin', 'kt', 'scala', 'sql', 'bash', 'sh', 'shell', 'zsh', 'ps1', 'powershell',
+  'json', 'yaml', 'yml', 'toml', 'ini', 'html', 'xml', 'css', 'scss', 'less', 'vue',
+  'md', 'markdown', 'text', 'txt', 'diff', 'patch', 'make', 'makefile', 'dockerfile',
+  'asm', 'lua', 'r', 'matlab', 'dart', 'perl',
+]);
+
+/**
+ * 把 ``` 代码块摆正。
+ * 模型常把整块挤在一行：``… ```cpp vector<int> a; ``` …``，语言标记和代码之间也没有换行。
+ * 这里把标记提到单独一行、语言和代码分开；只有成对的标记才当代码块（落单的反引号按原文留着）。
+ */
+function aiFencesToLines(raw) {
+  const text = String(raw ?? '').replace(/\r\n?/g, '\n');
+  const parts = text.split('```');
+  if (parts.length < 3 || parts.length % 2 === 0) return aiNormalizeProse(text);
+  return parts
+    .map((part, index) => {
+      if (index % 2 === 0) return aiNormalizeProse(part);
+      const body = part.replace(/^\n+/, '').replace(/\s+$/, '');
+      let lang = '';
+      let code = body;
+      const nl = body.indexOf('\n');
+      if (nl >= 0) {
+        const head = body.slice(0, nl).trim();
+        if (!head) code = body.slice(nl + 1);
+        else if (AI_CODE_LANGS.has(head.toLowerCase())) {
+          lang = head;
+          code = body.slice(nl + 1);
+        }
+      } else {
+        const match = /^([A-Za-z][\w+#-]{0,11})\s+([\s\S]+)$/.exec(body);
+        if (match && AI_CODE_LANGS.has(match[1].toLowerCase())) {
+          lang = match[1];
+          code = match[2];
+        }
+      }
+      return `\n\`\`\`${lang}\n${code.replace(/\s+$/, '')}\n\`\`\`\n`;
+    })
+    .join('');
+}
+
+function aiNormalizeAnswerMd(raw) {
+  return aiFencesToLines(raw);
 }
 
 /** 一段里塞了好几个「1. … 2. …」就拆成有序列表 —— 模型爱这么写。 */
@@ -93,6 +139,18 @@ function aiParagraphBlock(text) {
   return items.length >= 2 ? { type: 'list', ordered: true, items } : { type: 'p', text };
 }
 
+const AI_TABLE_ROW = /^\|.*\|$/;
+const AI_TABLE_SEP = /^\|(?:\s*:?-{2,}:?\s*\|)+$/;
+
+/** `| a | b |` → ['a', 'b']（去掉首尾竖线）。 */
+function aiTableCells(line) {
+  return line
+    .replace(/^\s*\|/, '')
+    .replace(/\|\s*$/, '')
+    .split('|')
+    .map((cell) => cell.trim());
+}
+
 function aiAnswerBlocks(raw) {
   const text = aiNormalizeAnswerMd(raw).trim();
   if (!text) return [];
@@ -100,6 +158,8 @@ function aiAnswerBlocks(raw) {
   let para = [];
   let list = null;
   let fence = null;
+  let fenceLang = '';
+  let table = [];
   const flushPara = () => {
     if (!para.length) return;
     blocks.push(aiParagraphBlock(para.join(' ')));
@@ -109,12 +169,23 @@ function aiAnswerBlocks(raw) {
     if (list) blocks.push(list);
     list = null;
   };
+  const flushTable = () => {
+    if (!table.length) return;
+    const rows = table.map(aiTableCells);
+    const hasHead = table.length >= 2 && AI_TABLE_SEP.test(table[1].replace(/\s+/g, ''));
+    if (hasHead && rows.length >= 2) blocks.push({ type: 'table', header: rows[0], rows: rows.slice(2) });
+    else if (table.length >= 2) blocks.push({ type: 'table', header: null, rows });
+    else if (table.length === 1) blocks.push({ type: 'p', text: table[0] });
+    table = [];
+  };
   const flushAll = () => {
     flushPara();
     flushList();
+    flushTable();
     if (fence) {
-      blocks.push({ type: 'pre', text: fence.join('\n') });
+      blocks.push({ type: 'pre', text: fence.join('\n'), lang: fenceLang });
       fence = null;
+      fenceLang = '';
     }
   };
   for (const line of text.split('\n')) {
@@ -127,11 +198,19 @@ function aiAnswerBlocks(raw) {
     if (/^```/.test(trimmed)) {
       flushPara();
       flushList();
+      flushTable();
       fence = [];
+      fenceLang = trimmed.replace(/^```/, '').trim().split(/\s+/)[0] ?? '';
       continue;
     }
     if (!trimmed) {
       flushAll();
+      continue;
+    }
+    if (AI_TABLE_ROW.test(trimmed)) {
+      flushPara();
+      flushList();
+      table.push(trimmed);
       continue;
     }
     const head = /^(#{1,6})\s+(.*)$/.exec(trimmed);
@@ -156,12 +235,14 @@ function aiAnswerBlocks(raw) {
     if (quote) {
       flushPara();
       flushList();
+      flushTable();
       blocks.push({ type: 'quote', text: quote[1] });
       continue;
     }
     const item = AI_LIST_ITEM.exec(trimmed);
     if (item) {
       flushPara();
+      flushTable();
       const ordered = /^\d/.test(trimmed);
       if (!list || list.ordered !== ordered) {
         flushList();
@@ -171,6 +252,7 @@ function aiAnswerBlocks(raw) {
       continue;
     }
     flushList();
+    flushTable();
     para.push(trimmed);
   }
   flushAll();
@@ -187,7 +269,19 @@ function aiAnswerBodyHtml(raw) {
       }
       if (block.type === 'hr') return '<hr class="ai-rule" />';
       if (block.type === 'quote') return `<blockquote class="ai-quote">${aiInlineHtml(esc(block.text))}</blockquote>`;
-      if (block.type === 'pre') return `<pre class="ai-pre"><code>${esc(block.text)}</code></pre>`;
+      if (block.type === 'pre') {
+        const lang = String(block.lang ?? '').slice(0, 16);
+        return `<div class="ai-pre-wrap">${lang ? `<span class="ai-pre-lang">${esc(lang)}</span>` : ''}<pre class="ai-pre"><code>${esc(block.text)}</code></pre></div>`;
+      }
+      if (block.type === 'table') {
+        const head = block.header
+          ? `<thead><tr>${block.header.map((cell) => `<th>${aiInlineHtml(esc(cell))}</th>`).join('')}</tr></thead>`
+          : '';
+        const rows = block.rows
+          .map((row) => `<tr>${row.map((cell) => `<td>${aiInlineHtml(esc(cell))}</td>`).join('')}</tr>`)
+          .join('');
+        return `<table class="ai-table">${head}<tbody>${rows}</tbody></table>`;
+      }
       if (block.type === 'list') {
         const tag = block.ordered ? 'ol' : 'ul';
         return `<${tag} class="ai-answer-list">${block.items.map((item) => `<li>${aiInlineHtml(esc(item))}</li>`).join('')}</${tag}>`;

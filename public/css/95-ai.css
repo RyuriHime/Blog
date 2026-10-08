@@ -176,6 +176,20 @@
   background: var(--panel);
   color: var(--text-dim);
 }
+.ai-pre-wrap { position: relative; }
+.ai-pre-lang {
+  position: absolute;
+  top: 6px;
+  right: 10px;
+  padding: 0 6px;
+  border-radius: 4px;
+  background: var(--bg-soft);
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 11px;
+  line-height: 18px;
+  pointer-events: none;
+}
 .ai-pre {
   margin: 0 0 10px;
   padding: 10px 12px;
@@ -188,6 +202,21 @@
   font-size: 12.5px;
   line-height: 1.7;
 }
+.ai-pre-lang + .ai-pre { padding-top: 20px; }
+.ai-table {
+  width: 100%;
+  margin: 0 0 10px;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+.ai-table th,
+.ai-table td {
+  padding: 5px 9px;
+  border: 1px solid var(--border-soft);
+  text-align: left;
+  vertical-align: top;
+}
+.ai-table th { background: var(--panel); color: var(--text); font-weight: 600; }
 .ai-rule { margin: 14px 0; border: none; border-top: 1px solid var(--border-soft); }
 .ai-code {
   padding: 1px 5px;

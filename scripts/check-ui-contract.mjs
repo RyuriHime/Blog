@@ -251,6 +251,11 @@ check('检索结果有固定落点（data-ai-hits）', /data-ai-hits/.test(appJs
 check('回答按块渲染（段落 / 小标题 / 列表）', /aiAnswerBodyHtml\(data\.answer\)/.test(appJs) && /aiAnswerBlocks/.test(appJs));
 check('回答里的出处标记能点', /ai-inline-cite/.test(appJs));
 check('回答不再用 <br /> 顶替分段', !/esc\(data\.answer\)\.replace\(\/\\n\/g, '<br \/>'\)/.test(appJs));
+// m11312（用户截图）：模型把 ```cpp 写在一行里、正文换行又被后端压平，代码块就变成
+// 行内反引号。前端现在会把标记摆正、语言单独显示，并保证代码里的 Markdown 不被当结构。
+check('回答支持 ``` 代码块（行内标记会摆正）', /aiFencesToLines/.test(appJs) && /ai-pre-lang/.test(appJs));
+check('代码块里的 Markdown 标记不被当结构', /aiNormalizeProse/.test(appJs) && /AI_CODE_LANGS/.test(appJs));
+check('回答支持 Markdown 表格', /ai-table/.test(appJs) && /AI_TABLE_SEP/.test(appJs));
 check(
   'route() 有请求序号守卫（防切页竞态）',
   /routeSeq \+= 1/.test(appJs) && /throw routeAborted\(\)/.test(appJs) && /if \(seq !== null && seq !== routeSeq\)/.test(appJs),

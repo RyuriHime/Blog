@@ -14,6 +14,29 @@ const clampText = (value, max) =>
     .trim()
     .slice(0, max);
 
+/**
+ * 回答正文的归一化：**换行必须留着**。
+ *
+ * 模型回的是 Markdown，代码块 / 列表 / 小标题全靠换行成段。早先这里也用 clampText
+ * （把连续空白压成一个空格），整篇就变成一行 `` ```cpp … ``` ``，前端再怎么拆也拆不出
+ * <pre>，用户看到的就是一坨行内的反引号。这里只做三件温和的事：CRLF → LF、去掉行尾
+ * 空白、连续空行压成一个（并去掉首尾空行），最后按 max 截断。
+ */
+const answerText = (value, max = 4000) => {
+  const out = [];
+  for (const raw of String(value ?? '').replace(/\r\n?/g, '\n').split('\n')) {
+    const line = raw.replace(/[ \t]+$/, '');
+    if (!line.trim()) {
+      if (!out.length || !out[out.length - 1]) continue; // 开头空行 / 连续空行
+      out.push('');
+      continue;
+    }
+    out.push(line);
+  }
+  while (out.length && !out[out.length - 1]) out.pop();
+  return out.join('\n').slice(0, max).replace(/\s+$/, '');
+};
+
 const asStringArray = (value, max = 8, each = 60) =>
   (Array.isArray(value) ? value : [])
     .map((item) => clampText(typeof item === 'string' ? item : item?.name ?? item?.title, each))
@@ -303,7 +326,7 @@ export function normalizeAnswer(parsed, docs = []) {
     .slice(0, 8);
 
   return {
-    text: clampText(parsed.answer, 4000),
+    text: answerText(parsed.answer, 4000),
     citations,
     notes: asStringArray(parsed.notes, 4, 120),
     confidence: oneOf(parsed.confidence, ['high', 'medium', 'low'], 'medium'),
