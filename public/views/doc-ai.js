@@ -192,9 +192,9 @@ export function docAiHtml(documentId) {
         <label class="btn btn-sm doc-ai-convert-pick">🖼 图片
           <input type="file" accept="image/png,image/jpeg,image/webp,image/gif" multiple hidden data-doc-ai-image>
         </label>
-        <button class="btn btn-sm btn-ghost" type="button" data-doc-ai-convert="insert" disabled>插到光标处</button>
-        <button class="btn btn-sm btn-ghost" type="button" data-doc-ai-convert="append" disabled>追加到末尾</button>
-        <button class="btn btn-sm btn-ghost" type="button" data-doc-ai-convert="replace" disabled>替换选中</button>
+        <button class="btn btn-sm btn-ghost" type="button" data-doc-ai-convert-mode="insert" disabled>插到光标处</button>
+        <button class="btn btn-sm btn-ghost" type="button" data-doc-ai-convert-mode="append" disabled>追加到末尾</button>
+        <button class="btn btn-sm btn-ghost" type="button" data-doc-ai-convert-mode="replace" disabled>替换选中</button>
       </div>
       <div class="doc-hint" data-doc-ai-convert-status></div>
       <pre class="doc-ai-convert-preview" data-doc-ai-convert-preview hidden></pre>
@@ -237,12 +237,15 @@ export function mountDocAi(options = {}) {
   /* 📄 PDF / 文档 → Markdown：就在这个抽屉里，跟着它一起收起、一起缩放    */
   /* ------------------------------------------------------------------ */
 
-  const convertBox = root.querySelector('[data-doc-ai-convert]');
   const fileInput = root.querySelector('[data-doc-ai-file]');
   const imageInput = root.querySelector('[data-doc-ai-image]');
   const convertStatus = root.querySelector('[data-doc-ai-convert-status]');
   const convertPreview = root.querySelector('[data-doc-ai-convert-preview]');
-  const convertButtons = [...root.querySelectorAll('[data-doc-ai-convert]')];
+  // 三个落点按钮：**只认按钮自己那个属性**，不要用「往上找 `[data-doc-ai-convert]`」——
+  // 那个属性整个 `<section>` 都有，于是点这一栏的标题、提示、预览、空白处都会命中，
+  // `mode` 又是 undefined，最后全部按「插到光标处」处理 ⇒ 转换完随便点左栏哪儿，
+  // 结果都被塞进编辑区（线上 552 那篇就是这么被塞了几遍的）。
+  const convertButtons = [...root.querySelectorAll('[data-doc-ai-convert-mode]')];
   let convertedMarkdown = '';
 
   /* ------------------------------------------------------------------ */
@@ -384,12 +387,20 @@ export function mountDocAi(options = {}) {
     void convertImages(imageInput.files);
     imageInput.value = '';
   });
-  convertBox?.addEventListener('click', (event) => {
-    const button = event.target?.closest?.('[data-doc-ai-convert]');
-    if (!button || !convertedMarkdown) return;
-    const mode = button.dataset.docAiConvert;
-    if (insertIntoSource(convertedMarkdown, mode)) convertHint(`已${mode === 'append' ? '追加到末尾' : mode === 'replace' ? '替换选中' : '插入到光标处'} —— 自动保存会跟上`);
-  });
+  // 三个落点按钮的处理器。**必须挂在按钮上、按按钮自己的 `data-doc-ai-convert-mode` 认**：
+  // 挂在整段 `[data-doc-ai-convert]` 上再 `closest` 的话，点这一栏任何地方都会命中它，
+  // 而 `mode` 是 undefined —— 于是「随便点一下左栏就把转换结果插进编辑区」。
+  // 三颗按钮是渲染时就写死在骨架里的，所以这里直接逐颗挂，不必走事件委托。
+  for (const button of convertButtons) {
+    button.addEventListener('click', () => {
+      // 只认这三颗按钮上的合法 mode：写错一个字的按钮宁可不动作，也不按默认档乱插。
+      const mode = button.getAttribute('data-doc-ai-convert-mode');
+      if (!convertedMarkdown || !['insert', 'append', 'replace'].includes(mode)) return;
+      if (insertIntoSource(convertedMarkdown, mode)) {
+        convertHint(`已${mode === 'append' ? '追加到末尾' : mode === 'replace' ? '替换选中' : '插入到光标处'} —— 自动保存会跟上`);
+      }
+    });
+  }
 
   /**
    * 锁 / 解锁编辑区。

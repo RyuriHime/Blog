@@ -1762,6 +1762,31 @@ try {
       '',
     );
     check('前端文档那条不再用 FormData', !docAiSource.includes('new FormData()'), '');
+
+    // 线上 552 那篇踩过的坑：点左栏**任何**地方都会把转换结果插进编辑区。
+    // 病根是「三个落点按钮」与「整段转换面板」用了同一个属性名：
+    // 面板 `<section data-doc-ai-convert>`、按钮 `[data-doc-ai-convert="insert"]`，
+    // 于是 `event.target.closest('[data-doc-ai-convert]')` 从面板里任何一个元素往上找
+    // 都会命中那个 `<section>`，`mode` 是 undefined，最后全按「插到光标处」处理。
+    // 所以钉死：按钮自己带 `data-doc-ai-convert-mode`，处理器只认按钮、且校验 mode 合法。
+    check(
+      '三个落点按钮各自带 data-doc-ai-convert-mode（不与面板的 data-doc-ai-convert 撞名）',
+      (docAiSource.match(/data-doc-ai-convert-mode="/g) ?? []).length === 3 &&
+        !/data-doc-ai-convert="/.test(docAiSource),
+      '',
+    );
+    check(
+      '落点按钮的处理器按按钮自己的 mode 认，且校验 mode 合法',
+      docAiSource.includes("root.querySelectorAll('[data-doc-ai-convert-mode]')") &&
+        docAiSource.includes("button.getAttribute('data-doc-ai-convert-mode')") &&
+        docAiSource.includes("['insert', 'append', 'replace'].includes(mode)"),
+      '',
+    );
+    check(
+      '不再有「往上找 [data-doc-ai-convert] 再当按钮用」那种写法',
+      !/closest\?\.\('\[data-doc-ai-convert\]'\)/.test(docAiSource),
+      '',
+    );
   }
 
   /* ---------- 19. 块类型清单不许漂移（静态哨兵 + 行为级对拍） ---------- */
