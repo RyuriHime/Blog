@@ -62,6 +62,22 @@ export function docAiHtml(documentId) {
       </div>
       <div class="doc-hint" data-doc-ai-status></div>
     </div>
+    <section class="doc-ai-convert" data-doc-ai-convert>
+      <div class="card-head doc-ai-convert-head">
+        <span class="card-title">📄 PDF / 文档 → Markdown</span>
+      </div>
+      <div class="doc-hint">把 PDF / Word / PPT / 文本里的内容抽成 Markdown 源码，公式会被归一成 <code class="doc-code">$…$</code> / <code class="doc-code">$$…$$</code>。这条路<strong>不花 AI、不需要密钥</strong>；图片识别要等 AI 通道。</div>
+      <div class="doc-ai-convert-row">
+        <label class="btn btn-sm doc-ai-convert-pick">选择文件
+          <input type="file" accept=".pdf,.docx,.pptx,.md,.markdown,.txt,application/pdf" multiple hidden data-doc-ai-file>
+        </label>
+        <button class="btn btn-sm btn-ghost" type="button" data-doc-ai-convert="insert" disabled>插到光标处</button>
+        <button class="btn btn-sm btn-ghost" type="button" data-doc-ai-convert="append" disabled>追加到末尾</button>
+        <button class="btn btn-sm btn-ghost" type="button" data-doc-ai-convert="replace" disabled>替换选中</button>
+      </div>
+      <div class="doc-hint" data-doc-ai-convert-status></div>
+      <pre class="doc-ai-convert-preview" data-doc-ai-convert-preview hidden></pre>
+    </section>
     <button class="doc-ai-tab" type="button" data-doc-ai-action="collapse" title="展开 AI 助手">🤖</button>
   </aside>`;
 }
@@ -91,6 +107,84 @@ export function mountDocAi(options = {}) {
   const status = root.querySelector('[data-doc-ai-status]');
   const sendBtn = root.querySelector('[data-doc-ai-action="send"]');
   const reviewBtn = root.querySelector('[data-doc-ai-action="review"]');
+
+  /* ------------------------------------------------------------------ */
+  /* 📄 PDF / 文档 → Markdown：就在这个抽屉里，跟着它一起收起、一起缩放    */
+  /* ------------------------------------------------------------------ */
+
+  const convertBox = root.querySelector('[data-doc-ai-convert]');
+  const fileInput = root.querySelector('[data-doc-ai-file]');
+  const convertStatus = root.querySelector('[data-doc-ai-convert-status]');
+  const convertPreview = root.querySelector('[data-doc-ai-convert-preview]');
+  const convertButtons = [...root.querySelectorAll('[data-doc-ai-convert]')];
+  let convertedMarkdown = '';
+
+  const convertHint = (text) => {
+    if (convertStatus) convertStatus.textContent = text;
+  };
+
+  function insertIntoSource(text, mode) {
+    const area = document.querySelector('[data-doc-source]');
+    if (!area || !text) return false;
+    const value = area.value ?? '';
+    const start = area.selectionStart ?? value.length;
+    const end = area.selectionEnd ?? value.length;
+    let next;
+    let caret;
+    if (mode === 'append') {
+      const gap = value === '' || value.endsWith('\n') ? '' : '\n\n';
+      next = `${value}${gap}${text}`;
+      caret = next.length;
+    } else {
+      next = `${value.slice(0, start)}${text}${value.slice(end)}`;
+      caret = start + text.length;
+    }
+    area.value = next;
+    area.focus();
+    area.setSelectionRange(caret, caret);
+    // 派发 input：自动保存与右侧实时预览都监听它，这里不另接一条线。
+    area.dispatchEvent(new Event('input', { bubbles: true }));
+    return true;
+  }
+
+  async function convertFiles(files) {
+    const list = [...(files ?? [])];
+    if (!list.length) return;
+    const form = new FormData();
+    for (const file of list) form.append('files', file, file.name);
+    convertHint(`正在抽取 ${list.length} 个文件…（不发模型）`);
+    try {
+      // 这里直接 fetch：`api()` 会把 body 一律 JSON.stringify，FormData 走不了那条路。
+      const response = await fetch('/api/note-agent/extract', { method: 'POST', body: form, credentials: 'same-origin' });
+      const payload = await response.json().catch(() => null);
+      if (!response.ok || !payload?.ok) throw new Error(payload?.error?.message || `抽取失败（HTTP ${response.status}）`);
+      const data = payload.data ?? {};
+      convertedMarkdown = String(data.markdown ?? '');
+      const names = (data.items ?? []).map((item) => (item.error ? `${item.name}（${item.error}）` : item.name)).join('、');
+      if (convertPreview) {
+        convertPreview.hidden = convertedMarkdown === '';
+        convertPreview.textContent = convertedMarkdown.slice(0, 4000);
+      }
+      for (const button of convertButtons) button.disabled = convertedMarkdown === '';
+      convertHint(convertedMarkdown ? `抽好了：${names} · ${convertedMarkdown.length} 字符 —— 选一个落点` : `没抽到内容：${names}`);
+    } catch (error) {
+      convertedMarkdown = '';
+      for (const button of convertButtons) button.disabled = true;
+      if (convertPreview) convertPreview.hidden = true;
+      convertHint(`抽取失败：${error?.message ?? '未知错误'}`);
+    }
+  }
+
+  fileInput?.addEventListener('change', () => {
+    void convertFiles(fileInput.files);
+    fileInput.value = '';
+  });
+  convertBox?.addEventListener('click', (event) => {
+    const button = event.target?.closest?.('[data-doc-ai-convert]');
+    if (!button || !convertedMarkdown) return;
+    const mode = button.dataset.docAiConvert;
+    if (insertIntoSource(convertedMarkdown, mode)) convertHint(`已${mode === 'append' ? '追加到末尾' : mode === 'replace' ? '替换选中' : '插入到光标处'} —— 自动保存会跟上`);
+  });
 
   const say = (html) => {
     if (!log) return;

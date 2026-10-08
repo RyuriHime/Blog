@@ -11,7 +11,7 @@
 import { aiConfig, aiSource } from './ai.mjs';
 import { blocksToMarkdown, assignBlockIds } from './blocks.mjs';
 import { analyzeStructure } from './structure.mjs';
-import { extractSession } from './extract/index.mjs';
+import { extractSession, extractMaterial } from './extract/index.mjs';
 import { extractText } from './extract/text.mjs';
 import { generate as defaultGenerate, turn as defaultTurn } from './orchestrator.mjs';
 import { reviewDraft as defaultReview, applyReviewPatch } from './review.mjs';
@@ -485,6 +485,53 @@ export function createHandlers({
         structure,
         sources: sources.map((source) => ({ kind: source.kind, name: source.name, bytes: source.bytes })),
         warnings,
+      });
+    }],
+
+    /**
+     * 只抽取、不调模型：把上传的文件抽成 Markdown 源码（公式归一化过）。
+     *
+     * 给积木编辑器左栏那段「📄 PDF / 文档 → Markdown」用 —— **这条不花钱、不需要 AI 配置**。
+     * 图片不在这里：图片要视觉模型，只能走 `/session` + `/generate` 那条花钱的路。
+     */
+    ['POST', ['extract'], async (ctx) => {
+      requireUser(ctx);
+      const files = Array.isArray(ctx.files) ? ctx.files : [];
+      const items = [];
+      for (const file of files) {
+        try {
+          const material = await extractMaterial(file);
+          // 归一化在这里做一遍：材料进模型前本来也会过这道，抽取结果同样需要
+          // （`\[…\]` / `\begin{equation}` 这类定界符统一成 `$$…$$`）。
+          // `normalizeBlocks` 的返回**不是数组**（实测是个对象），所以三种形状都兜：
+          // 返回数组就用它、返回 `{blocks:[…]}` 就用里面那份、别的就当它原地改过。
+          const blocks = material.blocks ?? [];
+          const normalized = normalizeBlocks(blocks);
+          const list = Array.isArray(normalized)
+            ? normalized
+            : Array.isArray(normalized?.blocks)
+              ? normalized.blocks
+              : blocks;
+          items.push({
+            name: material.name ?? file?.filename ?? '',
+            kind: material.kind,
+            bytes: material.bytes,
+            markdown: blocksToMarkdown(list),
+            warnings: (material.warnings ?? []).length,
+          });
+        } catch (error) {
+          items.push({
+            name: file?.filename ?? '',
+            error: error instanceof Error ? error.message : '这个文件抽不出来',
+          });
+        }
+      }
+      return ok(200, {
+        items,
+        markdown: items
+          .filter((item) => item.markdown)
+          .map((item) => String(item.markdown).trim())
+          .join('\n\n---\n\n'),
       });
     }],
 

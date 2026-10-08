@@ -142,6 +142,47 @@
   color: var(--accent-fg);
 }
 
+/* AI 助手抽屉里的「PDF / 文档 → Markdown」那一段：跟抽屉同宽、一起收起。
+   它在 <aside class="card doc-ai"> 内，所以宽度与展开/收起天然跟着抽屉走。 */
+.doc-ai-convert {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px 14px 14px;
+  border-top: 1px solid var(--border-soft);
+  background: var(--bg-soft);
+}
+
+.doc-ai-convert-head {
+  margin: 0;
+}
+
+.doc-ai-convert-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.doc-ai-convert-pick {
+  cursor: pointer;
+}
+
+.doc-ai-convert-preview {
+  max-height: 220px;
+  overflow: auto;
+  margin: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--border-soft);
+  border-radius: 9px;
+  background: var(--bg);
+  color: var(--text-dim);
+  font-family: var(--font-mono, ui-monospace, Consolas, monospace);
+  font-size: 12.5px;
+  line-height: 1.7;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
 .doc-md-side {
   display: flex;
   flex-direction: column;
