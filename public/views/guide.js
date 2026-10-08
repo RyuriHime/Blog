@@ -158,7 +158,7 @@ const CAPABILITY_ROWS = [
   // 需求 2：个人主页把自己的信息也交给用户（统计数字、标签、置顶、发过的积木贴与动态）。
   // `Sandbox.profile()` 就是 `GET /api/docs/profile/<用户名>/stats` 的那份数据 ——
   // 主页里的「数据统计」块就是这么写的，「发过的文章数」与列表条数永远同源。
-  ['Sandbox.profile()', '看谁的主页就取谁的信息：postCount / repostCount / followerCount / followingCount / pinnedCount / tags / posts'],
+  ['Sandbox.profile()', '看谁的主页就取谁的信息：postCount / replyCount / likeCount / dislikeCount / repostCount / followerCount / followingCount / pinnedCount / tags / posts'],
   ['Sandbox.request(name, payload?)', '上面这些都是它的简写；名字不在允许清单里就失败'],
 ];
 

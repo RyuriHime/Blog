@@ -1582,9 +1582,13 @@ try {
       Array.isArray(listedDocs.json.data.documents),
     JSON.stringify(listedDocs.json).slice(0, 200),
   );
+  // 需求 1/2 之后「人人都有积木主页」：这个接口不再承诺「没有主页就是 found:false」，
+  // 它承诺的是**用 `found` 标记表达有没有**（而不是 404）。所以这里只验标记本身。
+  const profileProbe = await dmA(`/api/docs/profile/${dmAName}`);
   check(
     '积木：/api/docs/profile/:username 用 found 标记而不是 404',
-    (await dmA(`/api/docs/profile/${dmAName}`)).json.data?.found === false,
+    profileProbe.status === 200 && typeof profileProbe.json.data?.found === 'boolean',
+    `${profileProbe.status} ${JSON.stringify(profileProbe.json).slice(0, 200)}`,
   );
   check(
     '积木：/api/docs/notes/lookup 用 found 标记而不是 404',

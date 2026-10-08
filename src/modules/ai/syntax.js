@@ -78,7 +78,7 @@ export const AI_SANDBOX_GUIDE = Object.freeze([
   '`doc-meta`（`Sandbox.doc()` 拿 {id,title,kind,author,updatedAt}）、`doc-blocks`（`Sandbox.blocks()` 拿全部块的 {id,type,props}）、',
   '`viewer`（`Sandbox.viewer()` 拿当前访客）、`state`（`Sandbox.state.get()/set()`，登录后才存得下）、',
   '`blocks.derived`（`Sandbox.render.list/canWrite/put/remove` —— 画「派生块」，不动正文）、`site.read`（读站点信息，兜底实现）、',
-  '`profile`（`Sandbox.profile()` 拿**主页主人**的信息：{id,username,displayName,bio,avatar,role,postCount,repostCount,followerCount,followingCount,pinnedCount,tags,posts}；',
+  '`profile`（`Sandbox.profile()` 拿**主页主人**的信息：{id,username,displayName,bio,avatar,role,postCount,replyCount,likeCount,dislikeCount,repostCount,followerCount,followingCount,pinnedCount,tags,posts}；',
   '等价于 `GET /api/docs/profile/<用户名>/stats`。文档 kind 是 `profile` 时就是「个人主页」：',
   '主页显示「发过的文章数」必须用 `postCount`（它和下面列出来的条数同口径，一个 wiki 站只算一篇），不要自己去数 `Sandbox.blocks()`；',
   '主页保存前要过「块规则」：`app` 块 `props.app = \'个人主页名片\'` 的那一块**必须存在、必须是第一块、不许删**，',

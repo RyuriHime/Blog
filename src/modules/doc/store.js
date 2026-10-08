@@ -58,7 +58,7 @@ import {
 import { applyDocOps, MAX_OPS } from './blocks/ops.js';
 import { escapeHtml, plainInline } from './blocks/text.js';
 import { ANNOUNCE_TEMPLATE, hasTemplate, STATION_TEMPLATE, templateBlocks, templateList, WIKI_TEMPLATE } from './templates.js';
-import { checkProfile, isProfileCard, profileBlockedMessage, profileSeedBlocks, PROFILE_CARD_APP, PROFILE_CARD_HTML } from './profile-rules.js';
+import { checkProfile, isProfileCard, isProfileHostApp, profileBlockedMessage, profileHostHtml, profileSeedBlocks, PROFILE_CARD_APP, PROFILE_CARD_HTML, PROFILE_DATA_APPS, PROFILE_POSTS_APP, PROFILE_PINNED_APP, PROFILE_REPOSTS_APP, PROFILE_STATS_APP, PROFILE_TAGS_APP } from './profile-rules.js';
 import { KIND_LABELS, REASON_LABELS, SCOPE_LABELS, shapeDoc, shapeRevision, shapeSettings } from './shape.js';
 
 /** 一条 op 被拒的原因 → 给人看的话（前端直接显示，不再自己映射一遍）。 */
@@ -818,6 +818,109 @@ export function createDocStore({ db, queries, now = () => Date.now() }) {
     return next;
   }
 
+  /**
+   * 需求 1/2 的第二件事：**其余五块（统计 / 标签 / 置顶 / 积木贴 / 动态）也由宿主渲染**。
+   *
+   * 为什么不能让它们在沙箱里自己画：改造前的个人主页用的是站点自己的 UI
+   *（`.stat-grid` 统计格、`.card` 卡片、`.post-compact` 列表 —— 见 `public/views/user.js`
+   * 与 `public/core/widgets.js`）。沙箱是一个 `srcdoc` iframe，**拿不到站点 CSS**，
+   * 于是同一个块在玻璃房里只能是一块白框 + 一串朴素蓝链。把这几块挪到宿主渲染，
+   * 主页在块化之后长得和改造前一样，差别只是「东西变成了块」。
+   *
+   * 口径与 `Sandbox.profile()` 完全同源（同一批查询），所以块里看到的条数
+   * 永远等于主页列表里的条数（需求 3 的统一口径在主页上也成立）。
+   */
+  function materializeProfileBlocks(blocks, docRow, viewer) {
+    if (String(docRow.kind ?? '') !== 'profile') return blocks;
+    const userId = Number(docRow.user_id);
+    let stats = null;
+    const statsOf = () => {
+      if (!stats) stats = profileStatsOf(userId, viewer);
+      return stats;
+    };
+    return blocks.map((block) => {
+      const app = String(block.props?.app ?? '');
+      if (!isProfileHostApp(app)) return block;
+      const code = String(block.props?.code ?? '');
+      // 占位没被改过才接管；用户自己写的代码原样进沙箱（块是自由的）。
+      if (code.trim() !== profileHostHtml(app)) return block;
+      const html = app === PROFILE_CARD_APP
+        ? profileCardHtml(docRow, viewer)
+        : profileBlockHtml(app, statsOf(), docRow);
+      if (html === null) return block;
+      return { ...block, props: { ...block.props, code: html } };
+    });
+  }
+
+  /**
+   * 五块主食（除了名片）画成什么。类名全部取自改造前的个人主页，
+   * 所以不需要任何新样式 —— 有样式的那几个（`.card` / `.card-head` / `.card-title` /
+   * `.stat-grid` / `.chip-list` / `.chip` / `.post-compact` / `.compact-row`）本来就在。
+   */
+  function profileBlockHtml(app, stats, docRow) {
+    if (!stats) return '';
+    if (app === PROFILE_STATS_APP) {
+      const cell = (label, value) => `<div class="stat"><div class="stat-value">${Math.max(0, Number(value) || 0)}</div><div class="stat-label">${label}</div></div>`;
+      return [
+        '<div class="stat-grid stat-grid-wide">',
+        cell('文章', stats.postCount),
+        cell('回复', stats.replyCount),
+        cell('获赞', stats.likeCount),
+        cell('获踩', stats.dislikeCount),
+        cell('关注者', stats.followerCount),
+        cell('关注中', stats.followingCount),
+        '</div>',
+      ].join('');
+    }
+    if (app === PROFILE_TAGS_APP) {
+      const chips = stats.tags
+        .map(
+          (tag) =>
+            `<span class="chip"><a class="chip-label" href="#/u/${encodeURIComponent(stats.username)}?tag=${encodeURIComponent(tag.name)}">🏷 ${escapeHtml(tag.name)} <span class="chip-count">${Number(tag.postCount) || 0}</span></a></span>`,
+        )
+        .join('');
+      return profileCardSection('🏷 我的标签', stats.tags.length, `<div class="chip-list">${chips}</div>`, '还没有贴过标签：在积木编辑器里给一篇积木贴个标签，这里就会多出一项。');
+    }
+    if (app === PROFILE_PINNED_APP) {
+      const rows = profileCompactRows(stats.posts.filter((post) => post.pinned), true);
+      return profileCardSection('📌 积木贴置顶推荐', rows.count, rows.html, '还没有置顶推荐：在下面每一篇上点「📌 置顶」就会出现在这里。');
+    }
+    if (app === PROFILE_POSTS_APP) {
+      const rows = profileCompactRows(stats.posts, false);
+      return profileCardSection('🧩 发表过的积木贴', rows.count, rows.html, '还没有发过积木贴：去积木广场写一篇吧。');
+    }
+    if (app === PROFILE_REPOSTS_APP) {
+      const rows = profileCompactRows(stats.reposts, false);
+      return profileCardSection('💬 发表过的动态', rows.count, rows.html, '还没有转发过动态。');
+    }
+    return null;
+  }
+
+  /** 一张卡片（改造前主页那种 `.card` + `.card-head` + 列表）。 */
+  function profileCardSection(title, count, body, empty) {
+    const inner = count > 0 ? body : `<div class="hint">${empty}</div>`;
+    return `<section class="card"><div class="card-head"><span class="card-title">${title}（${Math.max(0, Number(count) || 0)}）</span></div>${inner}</section>`;
+  }
+
+  /** 改造前主页的「紧凑」排法（`.post-compact` / `.compact-row`）。 */
+  function profileCompactRows(items, pinned) {
+    const list = Array.isArray(items) ? items : [];
+    const rows = list
+      .map((post) => {
+        // 类名先算成变量再拼进模板：在 class 属性里直接写三元表达式时，那个字符串里的
+        // 引号会被契约测试的静态扫描器当成类名的一部分（见 `scripts/check-ui-contract.mjs`）。
+        const isPinned = pinned || post.pinned;
+        const rowCls = isPinned ? 'compact-row is-pinned' : 'compact-row';
+        return (
+          `<div class="${rowCls}">` +
+          `<a class="compact-title" href="${escapeHtml(post.url ?? `#/post/${post.id}`)}">${isPinned ? '📌 ' : ''}${escapeHtml(post.title || '（无标题）')}</a>` +
+          `<span class="compact-meta">${timeAgoText(post.updatedAt)}</span></div>`
+        );
+      })
+      .join('');
+    return { count: list.length, html: `<div class="post-compact">${rows}</div>` };
+  }
+
   /** 短时间的「加入于」文案（服务端这一份不引前端模块，8 个档位够主页用）。 */
   function timeAgoText(at) {
     if (!at) return '很久以前';
@@ -976,9 +1079,9 @@ export function createDocStore({ db, queries, now = () => Date.now() }) {
     // 脚本产出的派生块**接在真块之后**：真块序列一个字节都不动，派生层是叠加物（§4.4）。
     const derived = derivedRows(docRow.id, viewer);
     const living = derived.length ? [...materialized, ...derived] : materialized;
-    // 需求 2：名片块在**渲染时**才被换成真正的卡片（头像 / 昵称 / 签名 / 关注 / 私信 / 拉黑）。
-    // 注意顺序：`blocks`（给编辑器和 API 的那一份）里始终是占位 —— 见 `materializeProfileCard`。
-    const forRender = materializeProfileCard(living, docRow, viewer);
+    // 需求 2：主页那六块在**渲染时**才被换成真正的 UI（名片卡 / 统计格 / 标签 / 置顶 / 帖子 / 动态）。
+    // 注意顺序：`blocks`（给编辑器和 API 的那一份）里始终是占位 —— 见 `materializeProfileBlocks`。
+    const forRender = materializeProfileBlocks(living, docRow, viewer);
     // `sandboxDisabled` 要交给渲染层：沙箱块据此**连 iframe 都不建**（§6.4）。
     const rendered = renderBlocks(forRender, renderOptions(docRow, viewer, living));
     const abilities = abilitiesOf(docRow, viewer);
@@ -1354,8 +1457,30 @@ export function createDocStore({ db, queries, now = () => Date.now() }) {
   }
 
   /** 个人主页用：按用户名找 profile 文档（§8.2）。没有 / 看不见 → null。 */
+  /**
+   * 按用户名取个人主页。**读不到就当场把这一份变成积木主页**（见 `upgradeProfileDocument` /
+   * `createProfileDocument`）：改造前的老主页在库里没有文档，靠这条路按需补齐，
+   * 于是每个人的 `#/u/:name` 都是「以积木帖子为底层」的那一版。
+   */
   function getProfileDocument({ username = '', viewer = null } = {}) {
-    const row = queries.profileDocumentByUsername(String(username ?? '').trim());
+    const name = String(username ?? '').trim();
+    let row = queries.profileDocumentByUsername(name);
+    if (!row) {
+      const user = db.prepare('SELECT id, username, display_name FROM users WHERE username = ?').get(name);
+      if (!user) return null;
+      try {
+        row = createProfileDocument(user);
+      } catch (error) {
+        console.warn(`[doc] 给 ${name} 建积木主页失败：${error?.message ?? error}`);
+        return null;
+      }
+    } else if (canView(row, viewer)) {
+      try {
+        if (upgradeProfileDocument(Number(row.id), Number(row.user_id))) row = mustExist(Number(row.id));
+      } catch (error) {
+        console.warn(`[doc] 把 ${name} 的主页变积木失败：${error?.message ?? error}`);
+      }
+    }
     if (!row || !canView(row, viewer)) return null;
     return present(row, viewer);
   }
@@ -2373,6 +2498,11 @@ export function createDocStore({ db, queries, now = () => Date.now() }) {
   }
 
   /** `profile` 能力与 `GET /api/docs/profile/:username/stats` 共用的那份数据。 */
+  /** 某张表在不在。个人主页要读 `replies` / `reactions` / `reposts`，它们都不在本模块名下。 */
+  function hasTable(name) {
+    return Boolean(db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?").get(name));
+  }
+
   function profileStatsOf(userId, viewer) {
     const gated = profileVisibleSql(viewer);
     const row = db
@@ -2385,6 +2515,21 @@ export function createDocStore({ db, queries, now = () => Date.now() }) {
       )
       .get(userId);
     if (!row) return null;
+    // 「回复 / 获赞 / 获踩」和改造前的个人主页统计格用的是同一批数字（`src/store.js` 的 userProfile 同款）。
+    const replyCount = hasTable('replies')
+      ? Number(db.prepare('SELECT COUNT(*) AS count FROM replies WHERE user_id = ? AND deleted = 0').get(userId)?.count ?? 0)
+      : 0;
+    const reactions = hasTable('reactions')
+      ? db
+          .prepare(
+            `SELECT
+               (SELECT COUNT(*) FROM reactions rx JOIN posts p2 ON p2.id = rx.post_id
+                 WHERE p2.user_id = ? AND p2.deleted = 0 AND rx.kind = 'like') AS likes,
+               (SELECT COUNT(*) FROM reactions rx JOIN posts p2 ON p2.id = rx.post_id
+                 WHERE p2.user_id = ? AND p2.deleted = 0 AND rx.kind = 'dislike') AS dislikes`,
+          )
+          .get(userId, userId)
+      : null;
     const posts = profileListOf(userId, gated, { limit: 20, pinned: false });
     const reposts = profileRepostsOf(userId, 20);
     const tags = db
@@ -2402,6 +2547,9 @@ export function createDocStore({ db, queries, now = () => Date.now() }) {
       role: row.role,
       createdAt: Number(row.created_at ?? 0),
       postCount: Number(row.post_count ?? 0),
+      replyCount,
+      likeCount: Number(reactions?.likes ?? 0),
+      dislikeCount: Number(reactions?.dislikes ?? 0),
       repostCount: reposts.length,
       followerCount: Number(row.follower_count ?? 0),
       followingCount: Number(row.following_count ?? 0),
@@ -2451,14 +2599,25 @@ export function createDocStore({ db, queries, now = () => Date.now() }) {
     }));
   }
 
-  /** 主页列出的动态（转发）。`reposts` 表不在本模块名下，所以只出 id 与时间。 */
+  /** 主页列出的动态（转发）。`reposts` 表不在本模块名下，所以只出 id、标题与时间。 */
   function profileRepostsOf(userId, limit) {
-    const table = db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'reposts'").get();
-    if (!table) return [];
+    if (!hasTable('reposts')) return [];
     const rows = db
-      .prepare(`SELECT post_id, created_at FROM reposts WHERE user_id = ? ORDER BY created_at DESC LIMIT ${Math.min(Math.max(limit, 1), 50)}`)
+      .prepare(
+        `SELECT r.post_id, r.created_at, p.title AS post_title, d.title AS doc_title
+         FROM reposts r
+         LEFT JOIN posts p ON p.id = r.post_id
+         LEFT JOIN documents d ON d.anchor_post_id = r.post_id
+         WHERE r.user_id = ? ORDER BY r.created_at DESC LIMIT ${Math.min(Math.max(limit, 1), 50)}`,
+      )
       .all(userId);
-    return rows.map((row) => ({ id: Number(row.post_id), updatedAt: Number(row.created_at ?? 0), url: `#/post/${Number(row.post_id)}` }));
+    return rows.map((row) => ({
+      id: Number(row.post_id),
+      title: plainInline(String(row.doc_title ?? row.post_title ?? '')) || '（无标题）',
+      updatedAt: Number(row.created_at ?? 0),
+      pinned: false,
+      url: `#/post/${Number(row.post_id)}`,
+    }));
   }
 
   /** `GET /api/docs/profile/:username/stats` 的出口（需求 2 的「个人信息 API」）。 */
@@ -2699,6 +2858,70 @@ export function createDocStore({ db, queries, now = () => Date.now() }) {
 
   /** 站务公告原来挂在哪个板块上（`src/core/open-db-support.js` 的种子数据）。 */
   const ANNOUNCE_BOARD_SLUG = 'meta';
+
+  /**
+   * 上一版主页种子产出的块（统计写成沙箱脚本、标签 / 置顶 / 帖子 / 动态是 `list` 来源块、
+   * 外加四个小标题）。它们长什么样只有我那版种子会这样拼，所以迁移时能放心换掉。
+   */
+  const OLD_PROFILE_HEADINGS = ['我的标签', '积木贴置顶推荐', '发表过的积木贴', '发表过的动态'];
+  function isOldProfileSeedBlock(block) {
+    const type = String(block?.type ?? '');
+    const props = block?.props ?? {};
+    if (type === 'list' && String(props.source?.kind ?? '').startsWith('profile-')) return true;
+    if (type === 'app' && String(props.app ?? '') === PROFILE_STATS_APP) return true;
+    if (type === 'heading') {
+      const text = String(props.text ?? '').trim();
+      return OLD_PROFILE_HEADINGS.some((label) => text.includes(label));
+    }
+    return false;
+  }
+
+  /**
+   * 需求 1/2：个人主页一律变成积木页 —— **读到谁的主页就把谁的那份变成积木**（幂等）。
+   *
+   * 为什么是「读到才做」而不是「启动时全库扫一遍」：建文档要建影子行，建影子行会惰性创建
+   * 「积木」板块（`anchor.js` 的 `ensureAnchorBoard`），而「系统板块只在真的建了文档时才出现」
+   * 是骨架的硬纪律（`scripts/doc-smoke.mjs` 开头就写着，`check-golden` 的 `/api/site` 也认它）。
+   * 启动时给所有人补主页 = 空库里凭空多出一个板块。所以走 `#/u/:name` 那条路时按需做，
+   * 和「打开一页 wiki：有就返回，没有就当场建」同一个套路。
+   *
+   * 三种情况：
+   *   1. 还没有主页文档 → 按种子建一份（名片 / 数据统计 / 我的标签 / 置顶推荐 /
+   *      发表过的积木贴 / 发表过的动态）。
+   *   2. 主页是上一版种子建的（统计块还是沙箱脚本、标签列表是 `list` 来源块）→ 换成新六块。
+   *      只在这些块**全部**是我那版种子产出的东西时才重排，绝不碰用户自己写的块。
+   *   3. 主页有自己的内容（比如站长那篇 paragraph / quote / app 时钟）→ 原样留着，
+   *      只在缺名片时补名片、缺那五块数据块时补它们 —— 一个字都不删。
+   */
+  function profileSeedList() {
+    return profileSeedBlocks().map((block) => ({ type: block.type, version: block.version ?? 1, props: block.props }));
+  }
+
+  /** 第 2、3 种情况：把一篇已有的主页文档补成积木主页。已经是了就不动，返回要不要写。 */
+  function upgradeProfileDocument(documentId, userId) {
+    const blocks = readBlocks(documentId);
+    // 已经有新的数据块了 → 这一篇已经是积木主页，不动。
+    if (blocks.some((block) => PROFILE_DATA_APPS.includes(String(block.props?.app ?? '')))) return false;
+    const seed = profileSeedList();
+    const card = blocks.find((block) => isProfileCard(block));
+    const rest = blocks.filter((block) => String(block.block_id) !== String(card?.block_id ?? ''));
+    // 只有「整篇都是我上一版种子拼出来的」才整篇换掉；不然用户自己写的块一律留着。
+    const keep = rest.every(isOldProfileSeedBlock) ? [] : rest.map((block) => ({ type: block.type, version: block.version ?? 1, props: block.props }));
+    const at = now();
+    const list = [...seed.slice(0, 1), ...keep, ...seed.slice(1)].map((block, index) => ({ ...block, block_id: `b${index + 1}` }));
+    writeBlocks(documentId, list, at);
+    snapshot(documentId, 'import', userId, at);
+    syncDocumentAnchor(mustExist(documentId), at);
+    return true;
+  }
+
+  /** 第 1 种情况：还没有主页文档就按种子建一份（走 `createDocument`，影子行与板块都由它按规矩建）。 */
+  function createProfileDocument(user) {
+    const userId = Number(user.id);
+    const label = String(user.display_name ?? user.username ?? '').trim() || `用户 ${userId}`;
+    const made = createDocument({ viewer: { id: userId, role: 'user' }, kind: 'profile', title: `${label} 的主页`, reason: 'import' });
+    return mustExist(Number(made?.doc?.id));
+  }
 
   /**
    * 给「还没有积木的活帖」各补一篇积木（幂等：补过一次下次就查不到了）。

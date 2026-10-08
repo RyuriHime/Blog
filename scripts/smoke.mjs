@@ -868,6 +868,20 @@ try {
       homeBlocks[0]?.props?.code === '<div class="profile-head-slot" data-profile-card></div>',
       JSON.stringify(homeBlocks[0]?.props?.code),
     );
+    // 需求 2：种子那六块**全部由宿主渲染**（都存占位）—— 它们画的是站点自己的 UI
+    //（统计格 / 卡片 / 紧凑列表），进沙箱 iframe 就只剩白框 + 蓝链。
+    const hostApps = homeBlocks.slice(0, 6).map((row) => row.props?.app);
+    check(
+      '种子六块依次是 名片 / 数据统计 / 我的标签 / 置顶推荐 / 积木贴 / 动态',
+      JSON.stringify(hostApps) ===
+        JSON.stringify(['个人主页名片', '数据统计', '我的标签', '积木贴置顶推荐', '发表过的积木贴', '发表过的动态']),
+      JSON.stringify(hostApps),
+    );
+    check(
+      '除名片外的五块存的也是宿主占位',
+      homeBlocks.slice(1, 6).every((row) => /data-profile-(stats|tags|pinned|posts|reposts)/.test(String(row.props?.code ?? ''))),
+      JSON.stringify(homeBlocks.slice(1, 6).map((row) => row.props?.code)),
+    );
     const cardId = homeBlocks[0]?.blockId;
     if (cardId) {
       check('删掉名片块被拒绝', (await alice.call(`/api/docs/${profileDocId}/blocks/${cardId}`, { method: 'DELETE' })).status >= 400);

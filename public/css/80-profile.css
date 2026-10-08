@@ -94,49 +94,33 @@
 }
 
 /* 主页渲染出来的名片与统计（种子块里的 `app` 块画的就是这两个类名）。 */
-/* 名片块里存的占位（host 渲染前 / 拿不到用户时退化成它，见 `PROFILE_CARD_HTML`）。 */
+/* 六块里存的是占位（宿主渲染前 / 拿不到用户时退化成它，见 `profile-rules.js` 的 `PROFILE_*_HTML`）。 */
 .profile-head-slot {
   min-height: 72px;
 }
 
-.pf-card {
-  display: flex;
-  align-items: center;
-  gap: 14px;
-  padding: 4px 0 10px;
+.profile-stats-slot {
+  min-height: 76px;
 }
 
-.pf-card h2 {
-  margin: 0 0 4px;
-  font-size: 20px;
+.profile-tags-slot,
+.profile-pinned-slot,
+.profile-posts-slot,
+.profile-reposts-slot {
+  min-height: 48px;
 }
 
-.pf-card p {
-  margin: 0;
-  color: var(--text-dim);
-}
-
-.pf-stats {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 18px;
-  padding: 8px 0;
-}
-
-.pf-stat {
+/* 块化的个人主页：六块一张张卡片竖着排（与改造前的个人主页同一个排法）。
+   外面那层 `card doc-panel` 在这条路径上不画，所以这里只要一个纵向间距。 */
+.profile-doc {
   display: flex;
   flex-direction: column;
-  min-width: 64px;
+  gap: 16px;
 }
 
-.pf-stat b {
-  font-size: 18px;
+/* 统计那一排是 `stat-grid`（改造前主页用的就是它），这里只补一个「块内不要再撑开」的收尾。 */
+.profile-doc .stat-grid {
+  margin: 0;
 }
-
-.pf-stat span {
-  font-size: 12px;
-  color: var(--muted);
-}
-
 
 /* @hand-written */

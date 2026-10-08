@@ -20,6 +20,18 @@ export const MAX_PROFILE_TEXT = 20000;
 
 /** 「主页名片」块的识别标记：`app` 块的 `props.app` 就叫这个名字。 */
 export const PROFILE_CARD_APP = '个人主页名片';
+/** 主页 seed 出来的另外五块（它们画的也是站点自己的 UI，见服务端那份的说明）。 */
+export const PROFILE_STATS_APP = '数据统计';
+export const PROFILE_TAGS_APP = '我的标签';
+export const PROFILE_PINNED_APP = '积木贴置顶推荐';
+export const PROFILE_POSTS_APP = '发表过的积木贴';
+export const PROFILE_REPOSTS_APP = '发表过的动态';
+
+/** 宿主渲染的六块。 */
+export const PROFILE_HOST_APPS = [PROFILE_CARD_APP, PROFILE_STATS_APP, PROFILE_TAGS_APP, PROFILE_PINNED_APP, PROFILE_POSTS_APP, PROFILE_REPOSTS_APP];
+
+/** 除名片之外的五块：有它们才说明主页是 seed 出来的，页面上那排硬编码统计该让位。 */
+export const PROFILE_DATA_APPS = PROFILE_HOST_APPS.filter((app) => app !== PROFILE_CARD_APP);
 
 /**
  * 名片块的内容**由宿主（页面）渲染**，用户改不了 —— 这就是「不允许编辑」。

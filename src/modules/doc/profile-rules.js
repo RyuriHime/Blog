@@ -22,96 +22,88 @@ export const MAX_PROFILE_TEXT = 20000;
 
 /** 「主页名片」块的识别标记：`app` 块的 `props.app` 就叫这个名字。 */
 export const PROFILE_CARD_APP = '个人主页名片';
+/** 「数据统计」块（发过的文章 / 动态 / 关注者 / 关注中）。 */
+export const PROFILE_STATS_APP = '数据统计';
+/** 「我的标签」块。 */
+export const PROFILE_TAGS_APP = '我的标签';
+/** 「积木贴置顶推荐」块。 */
+export const PROFILE_PINNED_APP = '积木贴置顶推荐';
+/** 「发表过的积木贴」块。 */
+export const PROFILE_POSTS_APP = '发表过的积木贴';
+/** 「发表过的动态」块。 */
+export const PROFILE_REPOSTS_APP = '发表过的动态';
 
 /**
- * 名片块的内容**由宿主（页面）渲染**，用户改不了 —— 这就是「不允许编辑」。
+ * 主页块的内容**由宿主（页面）渲染**，用户改不了 —— 这就是「不允许编辑」。
  *
  * 为什么做成占位而不是让沙箱脚本自己画：头像 / 昵称 / 签名 / 关注 / 私信 / 拉黑
  * 这些按钮的动作早就由页面（`public/views/user.js` + 事件总线）实现了，沙箱里
  * 重写一遍等于把关注 / 拉黑逻辑抄第二遍，还拿不到「我关注他了吗 / 我拉黑他了吗」
  * 这些**看客相对**的状态。所以块里只留一个占位标记，主页渲染时把它换成真正的卡片。
+ *
+ * 其余五块同理：它们画的是**站点自己的 UI**（`.stat-grid` 统计格、`.card` 卡片、
+ * `.post-compact` 列表 —— 与改造前 `public/views/user.js` / `public/core/widgets.js`
+ * 用的是同一批类名），进沙箱 iframe 就拿不到站点样式，会变成一块白框 + 一堆蓝链。
  */
 export const PROFILE_CARD_HTML = '<div class="profile-head-slot" data-profile-card></div>';
+export const PROFILE_STATS_HTML = '<div class="profile-stats-slot" data-profile-stats></div>';
+export const PROFILE_TAGS_HTML = '<div class="profile-tags-slot" data-profile-tags></div>';
+export const PROFILE_PINNED_HTML = '<div class="profile-pinned-slot" data-profile-pinned></div>';
+export const PROFILE_POSTS_HTML = '<div class="profile-posts-slot" data-profile-posts></div>';
+export const PROFILE_REPOSTS_HTML = '<div class="profile-reposts-slot" data-profile-reposts></div>';
+
+/** `props.app` → 它该被换成哪段占位（宿主渲染的六块）。 */
+export const PROFILE_HOST_BLOCKS = [
+  { app: PROFILE_CARD_APP, html: PROFILE_CARD_HTML },
+  { app: PROFILE_STATS_APP, html: PROFILE_STATS_HTML },
+  { app: PROFILE_TAGS_APP, html: PROFILE_TAGS_HTML },
+  { app: PROFILE_PINNED_APP, html: PROFILE_PINNED_HTML },
+  { app: PROFILE_POSTS_APP, html: PROFILE_POSTS_HTML },
+  { app: PROFILE_REPOSTS_APP, html: PROFILE_REPOSTS_HTML },
+];
+
+/** 这六块的 `app` 名字（前端判断「主页是不是已经块化了」用）。 */
+export const PROFILE_HOST_APPS = PROFILE_HOST_BLOCKS.map((item) => item.app);
+
+/** 除名片之外的五块（有它们才说明主页是 seed 出来的，硬编码那一排统计该让位）。 */
+export const PROFILE_DATA_APPS = PROFILE_HOST_APPS.filter((app) => app !== PROFILE_CARD_APP);
+
+/** 这个 `app` 名字是不是「宿主渲染的主页块」。 */
+export function isProfileHostApp(app) {
+  return PROFILE_HOST_APPS.includes(String(app ?? ''));
+}
+
+/** `app` 名字 → 它对应的占位 HTML（不认识就回空串）。 */
+export function profileHostHtml(app) {
+  const found = PROFILE_HOST_BLOCKS.find((item) => item.app === String(app ?? ''));
+  return found ? found.html : '';
+}
+
+/** 块里存的 `code` 是不是我们自己的占位（只有这样才替换，用户改过的内容一律不动）。 */
+export function isProfileHostPlaceholder(code) {
+  return PROFILE_HOST_BLOCKS.some((item) => item.html === String(code ?? '').trim());
+}
 
 /**
  * 主页的初始块（新建个人主页文档时 seed）。
  *
- * 为什么统计 / 标签 / 置顶 / 帖子 / 动态都用 `app` 块而不是普通文本块：
- * 需求 2 要求「与个人信息相关的 API 提供给用户」，这些块就是**示范调用**——
- * 它们在渲染时用 `Sandbox.profile()` 现取实时数据，所以「发过的帖子数」永远等于
- * 列表里真正能看到的条数（需求 3 的统一口径在主页上也成立）。
- * 用户想改成静态文字，直接编辑块内容即可 —— 块是自由的，只有名片块锁着。
+ * 六块，全部是 `app` 块，全部由宿主渲染 —— 画出来的东西和改造前的个人主页**一模一样**
+ * （头像卡 / 统计格 / 标签 / 置顶推荐 / 积木贴列表 / 动态列表），差别只是它们现在是块：
+ * 能删、能移、能再来一块，只有名片块锁着。
+ *
+ * 需求 2 要的「与个人信息相关的 API 提供给用户」也没有丢：`Sandbox.profile()` 仍然是
+ * 这六块背后的那份数据（等价 `GET /api/docs/profile/<用户名>/stats`），用户完全可以把
+ * 某一块改成自己的沙箱代码来调用它 —— 占位一旦被改写，宿主就不再接管那一块。
  */
 export function profileSeedBlocks() {
-  const statRow = (label, key) => `<div class="pf-stat"><b id="${key}">—</b><span>${label}</span></div>`;
+  const host = (app, html) => ({ type: 'app', props: { app, config: {}, code: html } });
   return [
-    {
-      // 第一块：名片。**锁**（见本文件顶部第 3 条）：内容由宿主渲染，见 `PROFILE_CARD_HTML`。
-      type: 'app',
-      props: {
-        app: PROFILE_CARD_APP,
-        config: {},
-        code: PROFILE_CARD_HTML,
-      },
-    },
-    {
-      type: 'app',
-      props: {
-        app: '数据统计',
-        config: {},
-        code: [
-          '<div class="pf-stats">',
-          `  ${statRow('发过的文章', 'pf-posts')}`,
-          `  ${statRow('发过的动态', 'pf-reposts')}`,
-          `  ${statRow('关注者', 'pf-followers')}`,
-          `  ${statRow('关注中', 'pf-following')}`,
-          '</div>',
-          '<script>',
-          '  (async () => {',
-          '    // 个人信息 API：`Sandbox.profile()` 就是 GET /api/profile/:username 的那份数据。',
-          '    const me = await Sandbox.profile();',
-          "    document.getElementById('pf-posts').textContent = me.postCount;",
-          "    document.getElementById('pf-reposts').textContent = me.repostCount;",
-          "    document.getElementById('pf-followers').textContent = me.followerCount;",
-          "    document.getElementById('pf-following').textContent = me.followingCount;",
-          '    Sandbox.resize();',
-          '  })();',
-          '</script>',
-        ].join('\n'),
-      },
-    },
-    {
-      type: 'heading',
-      props: { text: '🏷 我的标签', level: 2 },
-    },
-    {
-      type: 'list',
-      props: { text: '', source: { kind: 'profile-tags', limit: 20 } },
-    },
-    {
-      type: 'heading',
-      props: { text: '📌 积木贴置顶推荐', level: 2 },
-    },
-    {
-      type: 'list',
-      props: { text: '', source: { kind: 'profile-pinned', limit: 3 } },
-    },
-    {
-      type: 'heading',
-      props: { text: '🧩 发表过的积木贴', level: 2 },
-    },
-    {
-      type: 'list',
-      props: { text: '', source: { kind: 'profile-posts', limit: 20 } },
-    },
-    {
-      type: 'heading',
-      props: { text: '💬 发表过的动态', level: 2 },
-    },
-    {
-      type: 'list',
-      props: { text: '', source: { kind: 'profile-reposts', limit: 20 } },
-    },
+    host(PROFILE_CARD_APP, PROFILE_CARD_HTML),
+    host(PROFILE_STATS_APP, PROFILE_STATS_HTML),
+    host(PROFILE_TAGS_APP, PROFILE_TAGS_HTML),
+    host(PROFILE_PINNED_APP, PROFILE_PINNED_HTML),
+    host(PROFILE_POSTS_APP, PROFILE_POSTS_HTML),
+    host(PROFILE_REPOSTS_APP, PROFILE_REPOSTS_HTML),
   ];
 }
 

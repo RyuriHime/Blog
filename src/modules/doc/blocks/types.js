@@ -20,7 +20,7 @@
 // `toHtml` 是**服务端**渲染（唯一的安全边界：所有文本都已经转义）。
 import { BLOCK_TYPE_PATTERN, MAX_APP_CODE, MAX_SCRIPT_CODE } from '../schema.js';
 import { sandboxInner } from '../sandbox.js';
-import { PROFILE_CARD_APP } from '../profile-rules.js';
+import { isProfileHostApp } from '../profile-rules.js';
 // `prose` 用站内那套 markdown 渲染器画（它没有任何 import，不会与 registry 打环）。
 import { renderInline, renderMarkdown } from '../../../markdown.js';
 import {
@@ -360,13 +360,15 @@ export const BUILTIN_TYPES = [
     },
     toMarkdown: (props) => structuredMarkdown('app', props),
     toPlain: (props) => props.app || '小应用',
-    // 需求 2 的例外：个人主页那张名片**不是用户代码**，是宿主渲染的页面结构
-    //（头像 / 昵称 / 签名 / 关注 / 私信 / 拉黑）。它必须长在页面里，不能进玻璃房 ——
-    // 沙箱的 `default-src 'none'` 挡掉了所有网络，关注按钮在 iframe 里既拿不到状态也点不动。
+    // 需求 2 的例外：个人主页那六块**不是用户代码**，是宿主渲染的页面结构
+    //（名片 / 统计 / 标签 / 置顶推荐 / 积木贴列表 / 动态列表）。它们必须长在页面里，
+    // 不能进玻璃房 —— 沙箱的 `default-src 'none'` 挡掉了所有网络，关注按钮在 iframe 里
+    // 既拿不到状态也点不动；更关键的是 iframe 拿不到站点 CSS，那几块会变成一块白框
+    // 加一串朴素蓝链（改造前的个人主页用的是 `.stat-grid` / `.card` / `.post-compact`）。
     // 这里直接吐 `shell('app', …)` 的 HTML，与别的块一样是**转义过**的内容（见 store 的
-    // `profileCardHtml()`，每个用户字段都过了 `escapeHtml`）。
+    // `profileCardHtml()` / `profileBlockHtml()`，每个用户字段都过了 `escapeHtml`）。
     toHtml: (props, block, options) => {
-      if (props.app === PROFILE_CARD_APP) return shell('app', block, String(props.code ?? ''));
+      if (isProfileHostApp(props.app)) return shell('app', block, String(props.code ?? ''));
       return shell('app', block, sandboxInner(props, block, options));
     },
   },

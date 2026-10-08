@@ -48,11 +48,15 @@ async function viewUser(username, query) {
   // 服务端已经把它渲染进 `profileDocHtml` 里（块里存的是占位，渲染时换成真卡片）。
   // 它出现的时候，页面上那份硬编码的旧头像卡就必须让位，否则会看到两张。
   const hasProfileHead = hasProfileDoc && profileDocHtml.includes('data-profile-card');
-  // 统计那 6 格在**有积木主页时挪到正文下面**：主页的第一块就是名片（头像 / 昵称 / 签名 /
-  // 关注 / 私信 / 拉黑），它必须出现在页面最上面 —— 统计再抢在最前，头像和签名就被挤下去了。
-  // 只有还没块化的老主页（没有 seed 出来的 `profile-*` 块）才需要这一排兜底统计，
-  // 块化的主页里统计是「数据统计」块自己的事（需求 2）。
-  const profileSeeded = hasProfileDoc && (Array.isArray(profileDoc.blocks) ? profileDoc.blocks : []).some((block) => String(block.props?.source?.kind ?? '').startsWith('profile-'));
+  // 统计那一排在**有积木主页时整排让位**：主页的统计是「数据统计」块自己的事（需求 2），
+  // 它画的是同一批数字。只有块化的主页把那一块删干净了，才需要这一排兜底。
+  const profileSeeded =
+    hasProfileDoc &&
+    (Array.isArray(profileDoc.blocks) ? profileDoc.blocks : []).some(
+      (block) =>
+        ProfileRules.PROFILE_DATA_APPS.includes(String(block.props?.app ?? '')) ||
+        String(block.props?.source?.kind ?? '').startsWith('profile-'),
+    );
   // 编辑器保存前的判定与主页共用同一份规则（`public/core/profile-rules.js` 是服务端
   // `src/modules/doc/profile-rules.js` 的同源副本），所以这里算出来的结论和服务端 400 一致。
   const profileCheck = isOwner ? ProfileRules.checkProfile({ blocks: profileDoc?.blocks ?? null, hasDoc: hasProfileDoc }) : null;
@@ -183,9 +187,12 @@ async function viewUser(username, query) {
         isOwner
           ? `<div class="profile-actions">
                ${
+                 // 「🧩 把主页变成积木」那个按钮删掉了：服务端启动时会把每个人的主页都补成
+                 // 积木页（`store.migrateProfileDocs()`），所以不再有「还没积木化」的主页；
+                 // 留下的入口只有「翻新我的主页」——进积木编辑器改自己那几块。
                  hasProfileDoc
                    ? `<a class="btn btn-sm" href="#/doc/${profileDoc.doc.id}/edit?mode=blocks" title="个人主页还是一篇积木文档：块可以自由增删改，只有「${ProfileRules.PROFILE_CARD_APP}」块锁着">✏️ 翻新我的主页</a>`
-                   : `<button class="btn btn-sm" data-action="profile-create" title="把主页翻新成一篇积木文档：头像 / 昵称 / 统计数据 / 标签 / 置顶推荐 / 发过的积木贴与动态都是块">🧩 把主页变成积木</button>`
+                   : ''
                }
              </div>`
           : ''
@@ -195,7 +202,7 @@ async function viewUser(username, query) {
     ${hasProfileDoc ? '' : statsHtml}
 
     ${
-      isOwner
+      isOwner && !profileSeeded
         ? `<section class="card">
              <div class="card-head"><span class="card-title">🏷 我的标签</span></div>
              <div class="hint">标签不再是需要你单独维护的「分类」：它长在你的积木上 —— 到
@@ -209,7 +216,12 @@ async function viewUser(username, query) {
 
     ${
       hasProfileDoc
-        ? `<section class="card doc-panel"><div class="doc-body">${profileDocHtml}</div></section>`
+        ? // 块化（seed 过）的主页：六块自己就是一张张卡片（名片 / 统计 / 标签 / 置顶 / 积木贴 / 动态），
+          // 与改造前的个人主页排法一致，所以外面那层 `card doc-panel` 要让开，不然会卡片套卡片。
+          // 老主页（只有名片块 + 普通文本块）照旧包一层卡片，看去还是原来那一版。
+          profileSeeded
+          ? `<div class="doc-body profile-doc">${profileDocHtml}</div>`
+          : `<section class="card doc-panel"><div class="doc-body">${profileDocHtml}</div></section>`
         : `<section class="card" style="padding:0">
       <div class="card-head chips-head">
         <div class="chips">${chips}</div>

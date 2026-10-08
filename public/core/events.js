@@ -172,15 +172,9 @@ document.addEventListener('click', async (event) => {
         break;
       }
       case 'profile-create': {
-        // 需求 1/2：把「还没有积木主页」的老主页翻新成一篇 kind='profile' 的积木文档。
-        // 初始块（名片 / 统计 / 标签 / 置顶推荐 / 发表过的积木贴与动态）由服务端 seed，
-        // 这里建完直接跳进积木编辑器 —— 主页从此就是这篇文档。
-        if (!Session.requireLogin('登录后可以翻新自己的主页')) break;
-        if (!confirm('把个人主页翻新成积木页面？\n\n头像 / 昵称 / 签名 / 统计数据 / 标签 / 置顶推荐 / 你发过的积木贴与动态都会变成积木块，可以自由增删改；只有「个人主页名片」那一块锁着。')) break;
-        const created = await withButtonBusy(actionNode, () => api('/api/docs', { method: 'POST', body: { kind: 'profile', title: '我的主页' } }));
-        const newDocId = created?.doc?.id ?? created?.blocks?.[0]?.documentId;
-        if (newDocId) location.hash = `#/doc/${newDocId}/edit?mode=blocks`;
-        else await refreshProfile();
+        // 这个入口（「🧩 把主页变成积木」按钮）已经删掉了 —— 服务端启动时会
+        // `store.migrateProfileDocs()` 把每个人的主页都补成积木页，不会有「还没积木化」的主页。
+        // 分支留着只是为了老页面缓存里那个按钮不至于报「未知动作」。
         break;
       }
       case 'profile-layout': {
