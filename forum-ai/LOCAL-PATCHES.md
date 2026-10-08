@@ -317,6 +317,52 @@ AI 接口没有返回内容（finish_reason=length，提示 8840 / 生成 3000 t
 
 ---
 
+## K. wiki 页正文进语料（乙类）
+
+**现象**：线上论坛 42 篇真帖 + 522 个 wiki 页影子帖 = 564 篇语料，但 `/api/ai/site` 的 `corpus.chars` 只有 192,568（平均 341 字/篇）。于是「问全站」问 wiki 里的东西（例如「博弈论」）答不出来，`#/ai` 的「搜标题」也搜不到 —— 等于 522 篇 wiki 对 AI 只留了个标题。
+
+**原因**：wiki 页的正文在 `doc_settings.source_text`，而它的影子帖 `posts.content` 只存了**页面前 400 字的纯文本**
+（宿主 `src/modules/doc/store.js` 的 `syncDocumentAnchor()` 写的是 `blocksToPlainText(liveBlocks, 400)`）。
+包内语料源 `createForumDocumentSource()` 读的正是 `posts.content`，所以 AI 只看到每页开头那 400 字。
+
+**我们的修法**（宿主的影子帖不动；包内语料源优先用整页正文）：
+
+| 位置 | 改动 |
+|---|---|
+| `src/mount.mjs` | 新增 `pickPageText(db)`：探测 `documents JOIN doc_settings`（`template = 'page'`、`anchor_post_id > 0`，有 `deleted` / `scope` 就再排除掉删除与非公开的），返回 `(limit) => Map<影子帖 id, { text, updatedAt }>`；`text` 是 `source_text` 截到 `limit`，`updatedAt` 取文档与 `doc_settings` 里较新的那个；探测不到表就回 `null`（老库/别的宿主照旧） |
+| `src/mount.mjs` | `createForumDocumentSource()` 拼每一篇时：**页面正文比影子帖摘要长就用页面正文**（短或为空就保持原样，零回归）；`updatedAt` 取两者较大值 —— 改了页这一篇的逐篇指纹就变，旧解读自然回「待整理」（J 节的判据） |
+
+**同步改过的作者文件**：`selftest-mount.mjs` 新增「▶ wiki 页正文进语料」7 项（整页正文替换摘要、页面自己的修改时间进 `updatedAt`、
+页正文更短时保留摘要、普通帖一字不变、影子帖不存在的页不会凭空多出一篇、宿主没有积木表时语料照旧）；
+`README.md` 的「语料从哪来」同步成「wiki 页用整页正文」。
+
+---
+
+## L. 问答的输出预算写死 1200（甲类）
+
+**现象**：线上 `#/ai`「问全站」对宽问题**一律 502**，前端显示「服务器开小差了，请稍后再试」；同一个框问「Markdown 是什么」能成，
+问「博弈论」就失败。实测：成功的全站问答 `completion = 992` tokens —— **已经贴着 1200 的墙**；失败例 5.4 秒返回 `ai_empty_response`
+（上游 200、正文为空、`finish_reason=length`），不是网络抖动。
+
+**原因**：`src/ai.mjs` 的 `answerQuestion()` 把 `maxTokens` 写死成 **1200**（别的调用都走 `aiConfig()` 的 `AI_MAX_TOKENS`，默认 2000）。
+全站问答要吐一段结构化 JSON（答案 + 引用 + 备注 + 置信度），宽问题还没写完正文预算就烧光了 —— 与 I / I2 节同源。
+
+**我们的修法**（同一思路：截断说明「问得太多 / 预算太小」，重试没用）：
+
+| 位置 | 改动 |
+|---|---|
+| `src/ai.mjs` | 问答预算改成 `askMaxTokens(env)`：读 `AI_ASK_MAX_TOKENS`，默认 3000。**故意不列进 `aiStatus().envKeys`** —— `/api/site` 的 ai 形状被宿主 `check-golden` 冻着 |
+| `src/ai.mjs` | 被截断（`isTruncated`）且材料不止一篇时：**材料砍半 + 预算加倍**（上限 8000）重问一次；再被截断就抛 `ai_answer_truncated`（文案是给用户看的：把问题问得具体一点，或选中某一篇再问） |
+| `src/routes.mjs` | `AI_ERROR_STATUS` 加 `ai_answer_truncated: 503` |
+| 宿主 `public/core/errors.js` | `ai_*` 的失败文案**原样透出**：原来 5xx 一律换成「服务器开小差了，请稍后再试」，把「AI 还没配置」「这次的资料太多…」这些照着能做的事都糊掉了 |
+
+**同步改过的作者文件**：`selftest.mjs` 新增「▶ 问答预算与截断自适应」9 项（默认预算 3000、`AI_ASK_MAX_TOKENS` 生效、
+`envKeys` 里没有它、截断后砍半重问且预算加倍、重问的材料更短、两次都截断时抛 `ai_answer_truncated`、单篇不重问）；
+`scripts/smoke-ai.mjs` 新增 6 项（问答请求 `max_tokens = 3000`、截断后重问一次且预算是 6000、材料更短、两次都截断时 503 `ai_answer_truncated`、
+提示里告诉用户怎么办）；`README.md` 问答一节补预算与自适应。
+
+---
+
 ## 附：作者包的其它小问题（不影响功能，仅记录）
 
 1. `forum-ai/src/mount.mjs` 顶部的用法注释写的是 `mountForumAi({ db, resolveUser, baseDir: ROOT, aiDir: join(ROOT,'forum-ai') })`，但**实际函数签名没有 `baseDir` / `aiDir` 这两个参数**（注释与实现不一致）。
@@ -332,12 +378,12 @@ AI 接口没有返回内容（finish_reason=length，提示 8840 / 生成 3000 t
 
 | 测试 | 期望 |
 |---|---|
-| `node forum-ai/selftest-mount.mjs` | 通过 35 项，失败 0 项 |
-| `node forum-ai/selftest.mjs` | 通过 160 项，失败 0 项 |
-| `node scripts/smoke-ai.mjs` | 通过 70 项，失败 0 项 |
+| `node forum-ai/selftest-mount.mjs` | 通过 42 项，失败 0 项 |
+| `node forum-ai/selftest.mjs` | 通过 169 项，失败 0 项 |
+| `node scripts/smoke-ai.mjs` | 通过 76 项，失败 0 项 |
 | `node scripts/smoke.mjs` | 通过 237 项，失败 0 项 |
 | `node scripts/check-golden.mjs` | 通过 88 项，差异 0 项（对外行为与改造前一致） |
-| `node scripts/check-ui-contract.mjs` | 通过 318 项（下限 317），问题 0 项 |
+| `node scripts/check-ui-contract.mjs` | 通过 319 项（下限 317），问题 0 项 |
 | `node scripts/check-encoding.mjs` | 已检查 210 个文件（下限 205），中文片段断言 84 条 |
 
-合计 **907 项**（2026-10 复跑实测；数量随轮次增删会变，以各脚本自己打印的下限为准）。另外 `node scripts/check-encoding.mjs` 在 Linux 上会报 `ENOENT ... start.cmd` —— 它硬编码要检查 `start.cmd`（Windows 专用文件、故意不上传），**这个失败是预期的，不是问题**。
+合计 **931 项**（2026-10 复跑实测；数量随轮次增删会变，以各脚本自己打印的下限为准）。另外 `node scripts/check-encoding.mjs` 在 Linux 上会报 `ENOENT ... start.cmd` —— 它硬编码要检查 `start.cmd`（Windows 专用文件、故意不上传），**这个失败是预期的，不是问题**。

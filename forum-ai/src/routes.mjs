@@ -30,6 +30,7 @@ export const AI_ERROR_STATUS = {
   ai_bad_response: 502,
   ai_empty_response: 502,
   ai_bad_json: 502,
+  ai_answer_truncated: 503,
 };
 
 export const ok = (data, headers) => ({ status: 200, body: { ok: true, data }, headers });

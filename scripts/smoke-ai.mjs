@@ -37,7 +37,7 @@ function check(name, condition, detail = '') {
 /* 假的 OpenAI 兼容服务                                                */
 /* ------------------------------------------------------------------ */
 
-const mock = { calls: [], mode: 'analyze', failWith: null };
+const mock = { calls: [], mode: 'analyze', failWith: null, maxPromptChars: 0 };
 
 function mockReply(messages) {
   const system = String(messages?.[0]?.content ?? '');
@@ -110,6 +110,19 @@ const mockServer = http.createServer((req, res) => {
       /* 忽略 */
     }
     mock.calls.push({ headers: req.headers, body: parsed });
+    // 模拟「输出预算被烧光」：上游 200，但 finish_reason=length 且正文为空。
+    const userChars = String(parsed?.messages?.[1]?.content ?? '').length;
+    if (mock.maxPromptChars > 0 && userChars > mock.maxPromptChars) {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(
+        JSON.stringify({
+          model: parsed?.model ?? 'mock-model',
+          choices: [{ message: { role: 'assistant', content: '' }, finish_reason: 'length' }],
+          usage: { prompt_tokens: 123, completion_tokens: 45 },
+        }),
+      );
+      return;
+    }
     const content = mockReply(parsed?.messages);
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(
@@ -366,6 +379,31 @@ try {
   check('过短问题被拒绝（400）', tooShort.status === 400, `status=${tooShort.status}`);
   const tooLong = await member2.call('/api/ai/ask', { method: 'POST', body: { question: 'x'.repeat(501) } });
   check('过长问题被拒绝（400）', tooLong.status === 400, `status=${tooLong.status}`);
+
+  // 线上「问答永远 502」的根因：以前把 maxTokens 写死 1200，宽问题被截断成空正文。
+  const askCall = mock.calls.find((call) => String(call.body?.messages?.[1]?.content ?? '').includes('Markdown 写作有什么技巧'));
+  check('问答的输出预算不再是写死的 1200', askCall?.body?.max_tokens === 3000, String(askCall?.body?.max_tokens));
+
+  // 材料一多就被截断：服务端自己砍半、把预算加倍再问一次（而不是把 502 甩给用户）。
+  const askPromptChars = String(askCall?.body?.messages?.[1]?.content ?? '').length;
+  mock.maxPromptChars = Math.max(1, Math.floor(askPromptChars * 0.7));
+  const beforeRetry = mock.calls.length;
+  const askRetry = await member2.call('/api/ai/ask', { method: 'POST', body: { question: 'Markdown 写作有什么技巧？' } });
+  check('截断后砍半材料重问，最终返回 200', askRetry.status === 200, `status=${askRetry.status} ${JSON.stringify(askRetry.error)}`);
+  const retryCalls = mock.calls.slice(beforeRetry);
+  check('重问时把预算加倍到 6000', retryCalls.length === 2 && retryCalls[1].body.max_tokens === 6000, retryCalls.map((call) => call.body?.max_tokens).join(','));
+  check(
+    '重问的材料确实更短',
+    String(retryCalls[1]?.body?.messages?.[1]?.content ?? '').length < String(retryCalls[0]?.body?.messages?.[1]?.content ?? '').length,
+    `${String(retryCalls[0]?.body?.messages?.[1]?.content ?? '').length} → ${String(retryCalls[1]?.body?.messages?.[1]?.content ?? '').length}`,
+  );
+
+  // 砍半还是截断：给一句用户能照着做的话，而不是让前端显示「服务器开小差了」。
+  mock.maxPromptChars = 1;
+  const askTruncated = await member2.call('/api/ai/ask', { method: 'POST', body: { question: 'Markdown 写作有什么技巧？' } });
+  check('两次都截断时返回 503 ai_answer_truncated', askTruncated.status === 503 && askTruncated.error?.code === 'ai_answer_truncated', `status=${askTruncated.status} ${JSON.stringify(askTruncated.error)}`);
+  check('截断提示告诉用户怎么办', String(askTruncated.error?.message ?? '').includes('问得具体一点'), String(askTruncated.error?.message));
+  mock.maxPromptChars = 0;
 
   console.log('\n▶ 检索与缓存过期');
   const retrieved = mock.calls.map((call) => String(call.body?.messages?.[1]?.content ?? ''));
