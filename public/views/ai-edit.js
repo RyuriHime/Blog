@@ -1419,9 +1419,13 @@ async function aeLoad() {
       aeState.configError = error.message;
     }
   }
+  // 用量跟文档列表并行取，但**必须等它落地再画第一次**：面板没有自己的重画时机，
+  // 之前不 await 的结果是首次渲染时 usage 还是 null，aeUsageHtml() 直接返回空串，
+  // 整块「AI 用量」永远不出现（真机复现过，check-frontend 当时没有断言所以没红）。
+  const usageTask = aeLoadUsage();
   await aeLoadDocuments(); // 先拿文档列表，才能把上次选中的文档重新选中
   if (token !== loadToken) return;
-  aeLoadUsage();
+  await usageTask;
   if (aeState.documentId) await aeLoadBlocks(aeState.documentId);
   else aeRender();
 }
