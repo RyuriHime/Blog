@@ -249,6 +249,27 @@ export function createAiStore({ db, documentSource, tablePrefix = DEFAULT_PREFIX
       return fingerprintOf(api.corpusDocuments({ withContent: true, withReplies: true }));
     },
 
+    /*
+     * LOCAL PATCH (see LOCAL-PATCHES.md): 每篇自己的指纹。
+     *
+     * 上游把**整站语料指纹**写进每一篇解读（`{ contentHash: store.corpusHash() }`），
+     * 于是任何一篇帖子或一条回复动过，全站所有旧解读都算「内容已变」——
+     * 「待整理」永远等于全站总数，页面上的黄色提示也一直亮着。
+     * 这里按篇算指纹（同一篇的正文 / 自己的回复 / 更新时间），只给「这一篇自己变了」
+     * 用；「整理全站」那份报告仍然是整站粒度，继续用 corpusHash()。
+     */
+    documentHashes(ids = null) {
+      const hashes = new Map();
+      for (const doc of api.corpusDocuments({ withContent: true, withReplies: true, ids })) {
+        hashes.set(String(doc.id), fingerprintOf([doc]));
+      }
+      return hashes;
+    },
+
+    documentHash(documentId) {
+      return api.documentHashes([documentId]).get(String(documentId)) ?? '';
+    },
+
     /* ---------------- 单篇解读缓存 ---------------- */
 
     reviewOf(documentId) {
@@ -299,14 +320,15 @@ export function createAiStore({ db, documentSource, tablePrefix = DEFAULT_PREFIX
     },
 
     /**
-     * 待整理的文档：解读失败 → 没解读过 → 内容已变化。
+     * 待整理的文档：解读失败 → 没解读过 → 内容已变化（**这一篇自己**变了，见 documentHashes）。
      *
      * 失败必须排在最前面：批量接口一次只取 `limit` 条（默认 10），大站动辄几百篇「没解读过」，
      * 排在它们后面的失败篇目**永远轮不到重试** —— 页面上那句「解读失败」就再也消不掉了。
      * 「内容已变化」留在最后是有意的：它已经有解读可看，先把没解读过的补上更划算。
      */
     pendingDocuments({ limit = 10 } = {}) {
-      const hash = api.corpusHash();
+      // LOCAL PATCH (see LOCAL-PATCHES.md): 逐篇指纹，不是整站指纹（见 documentHashes）。
+      const hashes = api.documentHashes();
       const reviews = new Map(
         statements.reviewsByIds.all().map((row) => [String(row.document_id), row]),
       );
@@ -317,7 +339,9 @@ export function createAiStore({ db, documentSource, tablePrefix = DEFAULT_PREFIX
         const review = reviews.get(String(row.document_id));
         if (!review) never.push(row.document_id);
         else if (review.status !== 'done') failed.push(row.document_id);
-        else if (review.content_hash && review.content_hash !== hash) stale.push(row.document_id);
+        else if (review.content_hash && review.content_hash !== hashes.get(String(row.document_id))) {
+          stale.push(row.document_id);
+        }
       }
       return [...failed, ...never, ...stale].slice(0, Math.max(1, limit));
     },
