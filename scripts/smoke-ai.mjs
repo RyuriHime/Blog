@@ -37,7 +37,7 @@ function check(name, condition, detail = '') {
 /* 假的 OpenAI 兼容服务                                                */
 /* ------------------------------------------------------------------ */
 
-const mock = { calls: [], mode: 'analyze', failWith: null, maxPromptChars: 0 };
+const mock = { calls: [], mode: 'analyze', failWith: null, maxPromptChars: 0, truncateOnce: false };
 
 function mockReply(messages) {
   const system = String(messages?.[0]?.content ?? '');
@@ -112,7 +112,9 @@ const mockServer = http.createServer((req, res) => {
     mock.calls.push({ headers: req.headers, body: parsed });
     // 模拟「输出预算被烧光」：上游 200，但 finish_reason=length 且正文为空。
     const userChars = String(parsed?.messages?.[1]?.content ?? '').length;
-    if (mock.maxPromptChars > 0 && userChars > mock.maxPromptChars) {
+    const truncated = mock.truncateOnce || (mock.maxPromptChars > 0 && userChars > mock.maxPromptChars);
+    if (mock.truncateOnce) mock.truncateOnce = false;
+    if (truncated) {
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(
         JSON.stringify({
@@ -386,7 +388,8 @@ try {
   const askSite = await member2.call('/api/ai/ask', { method: 'POST', body: { question: 'Markdown 写作有什么技巧？' } });
   check('全站问答返回 200', askSite.status === 200, `status=${askSite.status} ${JSON.stringify(askSite.error)}`);
   check('全站问答 scope=site 并统计纳入篇数', askSite.data?.scope === 'site' && askSite.data.included >= 1, JSON.stringify(askSite.data));
-  check('全站问答材料含多篇帖子', askSite.data.included >= 4, `included=${askSite.data.included}`);
+  check('全站问答材料含多篇帖子', askSite.data.included >= 3, `included=${askSite.data.included}`);
+  check('全站问答选材有上限（不再把全库塞进材料）', askSite.data.included <= 6, `included=${askSite.data.included}`);
 
   const tooShort = await member2.call('/api/ai/ask', { method: 'POST', body: { question: 'x' } });
   check('过短问题被拒绝（400）', tooShort.status === 400, `status=${tooShort.status}`);
@@ -396,18 +399,19 @@ try {
   // 线上「问答永远 502」的根因：以前把 maxTokens 写死 1200，宽问题被截断成空正文。
   const askCall = mock.calls.find((call) => String(call.body?.messages?.[1]?.content ?? '').includes('Markdown 写作有什么技巧'));
   check('问答的输出预算不再是写死的 1200', askCall?.body?.max_tokens === 3000, String(askCall?.body?.max_tokens));
+  const askPromptChars = String(askCall?.body?.messages?.[1]?.content ?? '').length;
+  check('全站问答的材料压在 12000 字以内', askPromptChars <= 12000 + 3000, String(askPromptChars));
 
   // 回答挤成一大段（线上实测 1540 字、0 个换行）读不动：提示词必须明确要结构。
   const askSystem = String(askCall?.body?.messages?.[0]?.content ?? '');
   check('问答提示词要求分段与小标题', askSystem.includes('answer 的排版') && askSystem.includes('小节标题单独占一行'), askSystem.includes('answer 的排版') ? '已要求' : '没要求');
   check('问答提示词要求要点写成 - 列表', askSystem.includes('"- " 开头的列表'), '');
 
-  // 材料一多就被截断：服务端自己砍半、把预算加倍再问一次（而不是把 502 甩给用户）。
-  const askPromptChars = String(askCall?.body?.messages?.[1]?.content ?? '').length;
-  mock.maxPromptChars = Math.max(1, Math.floor(askPromptChars * 0.7));
+  // 上游截断（预算被烧光）：服务端自己砍半材料、把预算加倍再问一次，而不是把 502 甩给用户。
+  mock.truncateOnce = true;
   const beforeRetry = mock.calls.length;
   const askRetry = await member2.call('/api/ai/ask', { method: 'POST', body: { question: 'Markdown 写作有什么技巧？' } });
-  check('截断后砍半材料重问，最终返回 200', askRetry.status === 200, `status=${askRetry.status} ${JSON.stringify(askRetry.error)}`);
+  check('上游截断一次后，服务端自己砍半重问，最终返回 200', askRetry.status === 200, `status=${askRetry.status} ${JSON.stringify(askRetry.error)}`);
   const retryCalls = mock.calls.slice(beforeRetry);
   check('重问时把预算加倍到 6000', retryCalls.length === 2 && retryCalls[1].body.max_tokens === 6000, retryCalls.map((call) => call.body?.max_tokens).join(','));
   check(

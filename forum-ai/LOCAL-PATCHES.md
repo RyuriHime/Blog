@@ -420,6 +420,41 @@ AI 接口没有返回内容（finish_reason=length，提示 8840 / 生成 3000 t
 
 ---
 
+## O. 全站问答乱选材：正文偶发命中压过标题，材料太肥把答案预算烧光（甲类）
+
+**现象**：「问全站」问宽一点的问题（线上实测「想学习dfs，然后实现成代码」）经常等 8 秒以上，还会直接回红条
+「这次的资料太多，模型没能在预算内答完。把问题问得具体一点（或选中某一篇再问）会好很多。」（`ai_answer_truncated`，503）。
+实测那一次 **8220ms、只选了 3 篇、`truncated=true`**。用户原话：「怎么回事，而且很慢，可以优化一下吗，没必要全部检索，优先标题和小标题」。
+
+**原因**（三处叠加）：
+
+- `rankDocuments()` 的权重里**没有「小标题」这个概念**（标题 12 / 标签 8 / 摘要 6 / 分类 5 / 正文 3 / 回复 2），
+  一篇正文里偶然提到「dfs」的长词条能压过真正讲 DFS 的篇目；
+- `selectForQuestion()` 既按分数取，也按**整篇正文长度**估算体量（`charBudget = 24000`）——
+  wiki 词条动辄上万字，于是**第一篇就吃掉大半预算**，线上只挑到 3 篇就走不动了；
+- `buildMaterial()` 的 `clampText(content, contentPerDoc)` 一律**从头截**正文：命中段落在 3000 字之后时，
+  喂给模型的材料里根本没有讲那件事的部分，它只能拿开头那段硬答，答案于是又长又散，还容易把输出预算烧光。
+
+**我们的修法**（选材优先标题与小标题，材料变瘦、命中段进材料）：
+
+| 位置 | 改动 |
+|---|---|
+| `src/ai.mjs` | 新增 `questionTerms(question)`：英文/数字串与连续汉字段按 2 字以上切词（「想学习dfs，然后实现成代码」→ `想学习` / `dfs` / `然后实现成代码`），3 字以上的汉字段再切 2 字片段，低权重参与打分 |
+| `src/ai.mjs` | 新增 `extractHeadings(text)`：认得 `#`~`######` 标题与「整行只有一句加粗」的小标题（`**小节标题**`） |
+| `src/ai.mjs` | `rankDocuments()` 权重改成**标题 20 / 小标题 9** / 标签 8 / 摘要 6 / 分类 5 / 正文 2 / 回复 1（半截词另算），并返回 `{doc, score, titleHit, headingHit, bodyHit}` 供调用方分层 |
+| `src/ai.mjs` | `selectForQuestion()` 默认值改成 `charBudget = 11000`、`maxDocuments = 6`、`maxWeak = 2`、`contentPerDoc = 1600`：**先收标题/小标题命中的强命中**，有强命中时纯正文命中最多再补 2 篇；体量按 `min(正文长度, contentPerDoc)` 估，长词条不再一票吃光预算 |
+| `src/ai.mjs` | `answerQuestion()`：全站问答的材料上限 `24000 → 12000`、每篇 `3000 → 1600`（单篇问答仍是 16000 / 整篇喂），并把 `questionTerms()` 当 `focus` 交给材料装配 |
+| `src/material.mjs` | 新增 `excerptAroundFocus(content, focus, max)`：正文**从命中处往前后截**（前面留 240 字、两端补 `…`；`lead` 会夹到窗口的三分之一以内，免得命中词落在片段之外），命中词本来就在开头时行为不变；新增 `focusHeadings()`，把命中的小标题列成一行 `相关小节：A / B` 附在材料里 |
+| `src/prompts.mjs` | `ASK_SYSTEM` 补一条：**answer 控制在 800 字以内**（给「够用的结论 + 关键细节」，不是复述材料）—— 既压截断，也省时间 |
+
+**同步改过的作者文件**：`selftest.mjs` +14 项（正文从命中处截、片段带省略号、`相关小节：`、不给 focus 行为不变、
+标题命中 > 小标题命中 > 纯正文命中、有强命中时弱命中只补 `maxWeak` 篇、长文档不再一票吃光预算、`extractHeadings`
+认 `#` 与整行加粗、分词含英文词与汉字段、全站问答材料压在 12000 字以内等）；`scripts/smoke-ai.mjs` 改成材料体积断言 +
+选材上限断言，并把「上游截断一次 → 服务端砍半重问」的模拟从「按字数阈值卡」换成假服务的一次性开关 `truncateOnce`
+（小语料库里材料本来就不到一千字，阈值卡法已经卡不出「第一次失败、第二次成功」）。
+
+---
+
 ## 附：作者包的其它小问题（不影响功能，仅记录）
 
 1. `forum-ai/src/mount.mjs` 顶部的用法注释写的是 `mountForumAi({ db, resolveUser, baseDir: ROOT, aiDir: join(ROOT,'forum-ai') })`，但**实际函数签名没有 `baseDir` / `aiDir` 这两个参数**（注释与实现不一致）。
@@ -436,11 +471,11 @@ AI 接口没有返回内容（finish_reason=length，提示 8840 / 生成 3000 t
 | 测试 | 期望 |
 |---|---|
 | `node forum-ai/selftest-mount.mjs` | 通过 49 项，失败 0 项 |
-| `node forum-ai/selftest.mjs` | 通过 177 项，失败 0 项 |
-| `node scripts/smoke-ai.mjs` | 通过 84 项，失败 0 项 |
+| `node forum-ai/selftest.mjs` | 通过 190 项，失败 0 项 |
+| `node scripts/smoke-ai.mjs` | 通过 86 项，失败 0 项 |
 | `node scripts/smoke.mjs` | 通过 237 项，失败 0 项 |
 | `node scripts/check-golden.mjs` | 通过 88 项，差异 0 项（对外行为与改造前一致） |
 | `node scripts/check-ui-contract.mjs` | 通过 325 项（下限 317），问题 0 项 |
 | `node scripts/check-encoding.mjs` | 已检查 210 个文件（下限 205），中文片段断言 84 条 |
 
-合计 **960 项**（2026-10 复跑实测；数量随轮次增删会变，以各脚本自己打印的下限为准）。另外 `node scripts/check-encoding.mjs` 在 Linux 上会报 `ENOENT ... start.cmd` —— 它硬编码要检查 `start.cmd`（Windows 专用文件、故意不上传），**这个失败是预期的，不是问题**。
+合计 **975 项**（2026-10 复跑实测；数量随轮次增删会变，以各脚本自己打印的下限为准）。另外 `node scripts/check-encoding.mjs` 在 Linux 上会报 `ENOENT ... start.cmd` —— 它硬编码要检查 `start.cmd`（Windows 专用文件、故意不上传），**这个失败是预期的，不是问题**。

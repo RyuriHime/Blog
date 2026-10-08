@@ -24,6 +24,8 @@ export {
   answerQuestion,
   rankDocuments,
   selectForQuestion,
+  questionTerms,
+  extractHeadings,
   rawOutputHead,
   isTruncated,
 } from './ai.mjs';
@@ -53,7 +55,7 @@ export {
   normalizeAnswer,
 } from './parse.mjs';
 
-export { buildIndexLines, buildMaterial, buildContext, clampText, splitByBudget } from './material.mjs';
+export { buildIndexLines, buildMaterial, buildContext, clampText, splitByBudget, excerptAroundFocus, focusHeadings } from './material.mjs';
 
 export { createAiStore } from './store-sqlite.mjs';
 
