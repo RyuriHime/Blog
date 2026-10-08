@@ -100,7 +100,14 @@ async function route() {
     //   `#/start` 留成别名（用户菜单、老链接还在用），直接渲染同一页、不再 replace —— 免得来回跳。
     if (!first) return await Start.viewStart();
     if (first === 'start') return await Start.viewStart();
-    if (first === 'feed') return await Timeline.viewTimeline(query);
+    // `#/feed/<id>`：单条动态独立成页。存在的理由是「转发出去之后找不回原动态」——
+    //   转发卡片的引用块原本是个死块，而回复通知是按「被回复卡片的作者」发的，
+    //   于是别人在转发底下聊我的动态，我一条通知都收不到。点得进去，讨论才回得到源动态。
+    //   必须排在 `feed` 前面判，否则 `second` 永远轮不到。
+    if (first === 'feed') {
+      if (second) return await Timeline.viewFeedItem(Number(second));
+      return await Timeline.viewTimeline(query);
+    }
     // 站务公告的**全部**列表（`#/announcements`）。首页那块只显示最近 5 条，
     // 想看全的就点它标题右边的「查看全部」。
     if (first === 'announcements') return await Start.viewAnnouncements(query);

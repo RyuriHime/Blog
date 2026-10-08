@@ -1171,6 +1171,23 @@ globalThis.fetch = async (url, options = {}) => {
         dislikeCount: after === 'dislike' ? 1 : 0,
       };
     }
+  } else if (method === 'GET' && /^\/api\/feed\/\d+$/.test(bare)) {
+    /*
+     * 单条动态（`#/feed/<id>`）。
+     *
+     * 夹具里没有这条路 —— `capture-fixtures.mjs` 采的是列表接口。所以拿列表夹具里的
+     * 那几条顶上：**id 对得上就用它，对不上用第一条**。这样测试既能用真 id 走通，
+     * 也能随便给个 id 验「看不到时页面说什么」。
+     */
+    const feedId = Number(bare.split('/')[3]);
+    const listFixture = pickFixture('/api/feed?filter=all&page=1');
+    const items = Array.isArray(listFixture?.items) ? listFixture.items : [];
+    const found = items.find((entry) => Number(entry.id) === feedId) ?? items[0];
+    data = found ? { item: found } : undefined;
+    if (found && Number(found.id) !== feedId) {
+      // 报错文案里要说清楚「这条其实不存在」，否则测试里 `#/feed/999` 会意外渲染成功
+      unknownPaths.add(`${bare}（夹具里没有，退回第一条 ${found.id}）`);
+    }
   } else if (method === 'GET' && /^\/api\/feed\/\d+\/replies$/.test(bare)) {
     // 回复列表是**按需拉**的：`/api/feed` 列表接口只给 `replyCount` 这个数字，
     // 谁也没展开的时候一条回复都不该去拉。见下面「动态回复」那段交互测试。
@@ -1362,6 +1379,12 @@ const CASES = [
   ['动态流', 'timeline.js', 'viewTimeline', [new Map()]],
   ['动态·我关注的', 'timeline.js', 'viewTimeline', [new URLSearchParams({ filter: 'following' })]],
   ['动态·搜索', 'timeline.js', 'viewTimeline', [new URLSearchParams({ q: '采样' })]],
+  // 单条动态 `#/feed/<id>`：转发卡片的引用块点进来就是这一页。
+  // 它存在的理由是「转发出去之后找不回原动态」—— 回复通知按「被回复卡片的作者」发，
+  // 看不到源动态就等于别人在转发底下聊我的动态，我一条通知都收不到。
+  ['单条动态', 'timeline.js', 'viewFeedItem', [1]],
+  // 地址栏里手写个乱七八糟的 id（`#/feed/0`、`#/feed/abc`）也不该炸：直接送回动态流。
+  ['单条动态·坏 id', 'timeline.js', 'viewFeedItem', [0]],
   // 「关注列表」= 我关注了谁的**名单**（头像 + 一键取关），跟上面那条「动态·我关注的」
   // （关注**流**：只看 TA 们发的帖子）不是一回事。地址 `#/following`，别再被改道去动态流。
   ['关注列表', 'feed.js', 'viewFollowing', []],
@@ -2006,6 +2029,57 @@ if (!state.theme) problems.push('state.theme 没被初始化');
   target.ref = savedRef;
   await timeline.viewTimeline(new Map());
   console.log(`  ${problems.length ? '❌' : '✅'} 交互：转发出来的卡片写「转发了帖子」、纯引用写「引用了帖子」`);
+}
+
+/* ---- 交互：转发的引用卡点得回原动态 ----
+ *
+ * 为什么单独测：这张卡片以前是个死块（`<div>`），于是别人在转发底下回复时，
+ * 通知按「被回复卡片的作者」发给了**转发的人**，原作者一条都收不到、回复数也不涨 ——
+ * 用户的原话是「转发出来后，是不是没有办法找到转发的源动态给源动态评论啊」。
+ * 修法是给原动态一个地址（`#/feed/<id>`）并把卡片变成链接。
+ * 所以这里钉两件事：卡片必须带 href，且那一页真的渲染得出来（有「← 回动态流」和卡片本体）。
+ */
+{
+  const timeline = await view('timeline.js');
+  const FEED_KEY = '/api/feed?filter=all&page=1';
+  const target = pickFixture(FEED_KEY).items[0];
+  const savedRefFeed = target.refFeed;
+  const originalId = 4242;
+
+  target.refFeed = {
+    id: originalId,
+    content: '原动态的正文',
+    contentHtml: '<p>原动态的正文</p>',
+    deleted: false,
+    createdAt: Date.now(),
+    author: { id: 2, username: 'frontend-user', displayName: '前端测试', avatar: null, role: 'member' },
+  };
+  await timeline.viewTimeline(new Map());
+  const refHref = (String(registered('[data-feed-list]').innerHTML).match(/<a class="feed-ref feed-ref-feed" href="([^"]*)"/) ?? [])[1] ?? '';
+  if (refHref !== `#/feed/${originalId}`) {
+    problems.push(`转发的引用卡指向 ${JSON.stringify(refHref || '（根本没有链接）')} —— 该指向 #/feed/${originalId}，不然用户找不回原动态去评论`);
+  }
+
+  // 原动态被删：卡片要留着（转发语不能凭空消失），但也别假装能点
+  target.refFeed.deleted = true;
+  await timeline.viewTimeline(new Map());
+  const deadHtml = String(registered('[data-feed-list]').innerHTML);
+  if (/<a class="feed-ref feed-ref-feed"/.test(deadHtml)) {
+    problems.push('原动态已经删了，引用卡却还是个链接 —— 点进去只有一条「这条动态不在了」');
+  }
+  if (!deadHtml.includes('原动态已删除')) {
+    problems.push('原动态被删之后卡片上没写「原动态已删除」 —— 转发语还在，读者会以为正文丢了');
+  }
+
+  target.refFeed = savedRefFeed;
+  // 那一页本身：`viewFeedItem` 该把卡片画出来，并给一条回得去的路
+  await timeline.viewFeedItem(Number(target.id));
+  const pageHtml = String(app.innerHTML);
+  if (!pageHtml.includes('feed-back')) {
+    problems.push('单条动态那页没有「← 回动态流」—— 用户进来就出不去了');
+  }
+  await timeline.viewTimeline(new Map());
+  console.log(`  ${problems.length ? '❌' : '✅'} 交互：转发的引用卡带着 #/feed/<原动态 id>，原动态删了就变回死块`);
 }
 
 /* ---- 交互：动态流的筛选标签和翻页都留在动态流里 ----

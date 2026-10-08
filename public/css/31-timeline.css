@@ -476,11 +476,31 @@ body.feed-fullscreen {
 /* ---------------- 转发 ---------------- */
 
 /*
- * 「🔁 转发了动态」的引用卡片。跟上面的 `.feed-ref`（引用了帖子）共用底子，
- * 但**它不是链接**（动态没有详情页），所以鼠标移上去不该有「能点」的反馈。
+ * 「🔁 转发了动态」的引用卡片。跟上面的 `.feed-ref`（引用了帖子）共用底子。
+ * **它现在是链接**（原动态被删时还是死块）—— 点它去 `#/feed/<原动态 id>`，
+ * 这样评论才落得到源动态上、原作者才收得到通知。
+ * 悬停高亮由 `.feed-ref:hover` 那条统一给，这里只兜住「原动态已删除」那种没有 href 的死块。
  */
-.feed-ref-feed:hover {
+.feed-ref-feed:not([href]):hover {
   border-color: var(--border);
+}
+
+/* ---------------- 单条动态页（#/feed/<id>） ---------------- */
+
+.feed-standalone {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.feed-back {
+  align-self: flex-start;
+  font-size: 13.5px;
+  color: var(--text-dim);
+}
+
+.feed-back:hover {
+  color: var(--accent-fg);
 }
 
 .feed-ref-body {

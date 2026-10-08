@@ -386,6 +386,7 @@ forum/
 | --- | --- |
 | `#/` | **起始页**（m05506 起就是网站的默认落点，**不论登录与否**）：左边站务公告，右边三块入口（动态 / 积木广场 / 团队） |
 | `#/feed` | 动态流：全部 / 我关注的 / 我的，`?filter=following`、`?filter=mine`、`?q=关键词`、`?page=`。**以前这是 `#/`，m05506 与起始页对调了地址**（老书签请改用这里） |
+| `#/feed/:id` | **单条动态**：「← 回动态流」加一张完整卡片。转发卡片的引用块点进来就是这一页 —— 回复通知是按「被回复卡片的作者」发的，看不到源动态就等于别人在转发底下聊你的动态、你一条通知都收不到 |
 | `#/start` | 起始页的老地址，保留成别名（进的是同一页，不会断链） |
 | `#/announcements` | **站务公告**（`?page=`）：全部公告，从新到旧、每页 20 条，读的是 `GET /api/docs?template=announce&sort=created`。公告**已经不是帖子**（`meta` 板块的老公告启动时由 `store.migrateLegacyPosts()` 一次性搬成了这类积木）：只有站长 / 管理员写得动，也**不进积木广场**（普通用户在广场里看不到它们），但首页与这一页人人可见；staff 在起始页和这一页都多一颗「＋ 写公告」。起始页那块**只放最近 5 条**，右下角「查看全部」点到这儿。`#/board/meta` 也直接落到这一页 |
 | `#/board/tech` | 板块页（`general` / `tech` / `qa` / `share` / `meta`） |
@@ -819,15 +820,15 @@ team_messages(id, team_id, user_id, content, deleted, created_at)
 node scripts/check-golden.mjs      # ★ 行为金标准：88 条请求的状态码 + 响应结构，一条都不能变
 node scripts/check-skeleton.mjs    # ★ 骨架自检：模块能不能独立拆掉、薄入口有没有变胖
 node scripts/check-markdown.mjs    # ★ 正文渲染回归：72 项（站内链接 / 带括号 URL / 表格 / 嵌套列表 / 转义 / 危险协议 / 行内 HTML 白名单 / 列表里的块公式 / 兜底拷贝同步）
-node scripts/check-frontend.mjs    # ★ 前端渲染冒烟：41 个页面全部渲染一遍 + 关注列表 / 主页关注名单卡（自己视角排文章前面、别人视角仍在最底下）/ 团队的文件柜/群聊/成员名单/团队号/公告/加入申请与审核/隐藏开关/设置与申请改右侧抽屉/帖子预览与详情回复（「💬 回复」按钮、编辑权只归作者）/ 动态回复 / 动态转发（点开才画框、发得出当前原文、计数跟着走、转不了的画静态计数）/ 积木页转发（转得出、发完留在原地、撤销得掉、互动条跟着重画）/ 转发出来的卡片写「转发了帖子」而纯引用写「引用了帖子」/ 公告页翻页带页码而首页那块只要 5 条 / AI 编辑台的用量面板（自己那份三行 + 全站的今日/本周/本月与「本月每天」那张表 —— 「首次渲染就得在场」，用法接口故意晚一个宏任务回来盯着它）/ 交互 + 裸调用未定义名字的静态扫描
+node scripts/check-frontend.mjs    # ★ 前端渲染冒烟：43 个页面全部渲染一遍 + 关注列表 / 主页关注名单卡（自己视角排文章前面、别人视角仍在最底下）/ 团队的文件柜/群聊/成员名单/团队号/公告/加入申请与审核/隐藏开关/设置与申请改右侧抽屉/帖子预览与详情回复（「💬 回复」按钮、编辑权只归作者）/ 动态回复 / 动态转发（点开才画框、发得出当前原文、计数跟着走、转不了的画静态计数）/ 积木页转发（转得出、发完留在原地、撤销得掉、互动条跟着重画）/ 转发出来的卡片写「转发了帖子」而纯引用写「引用了帖子」/ 转发的引用卡带着 `#/feed/<原动态 id>`（原动态删了就变回死块，不再假装能点）/ 公告页翻页带页码而首页那块只要 5 条 / AI 编辑台的用量面板（自己那份三行 + 全站的今日/本周/本月与「本月每天」那张表 —— 「首次渲染就得在场」，用法接口故意晚一个宏任务回来盯着它）/ 交互 + 裸调用未定义名字的静态扫描
 node scripts/smoke.mjs             # 后端端到端：237 项（临时独立库+端口，跑完自动清理）
 node scripts/smoke-ai.mjs          # AI 接口端到端：65 项
 node scripts/ai-smoke.mjs          # AI 接口端到端（更细的一套：校验 / 限流 / 额度 / 审查 / 模板与提示词漂移哨兵 / 能力目录只列接上了线的能力 / 用量面板分层 / 跨日界的计数口径哨兵）：478 项
 node scripts/feed-smoke.mjs        # 动态流端到端：191 项（含动态回复、动态转发、帖子转发也发到动态、「仅团队」的可见范围）
-node scripts/doc-smoke.mjs         # 积木（可编程帖子）端到端：635 项（含阅读页的回复区与转发区）
+node scripts/doc-smoke.mjs         # 积木（可编程帖子）端到端：694 项（含阅读页的回复区与转发区）
 node scripts/team-smoke.mjs        # 团队端到端：306 项（可见范围 / 越权 / 版本冲突 / 编辑权只归作者 / 文件柜 / 群聊 / 团队号 / 公告通知 / Markdown 与公式 / 帖子回复 / 加入申请与审核 / 隐藏团队 / 老库升级与坏库自愈）
 node scripts/check-ui-contract.mjs # 前端契约：CSS 类名 + API 字段 + 主题/头像/角色/私信/团队号/公告/剪贴板/公式/关注列表（已关注按钮）/详情与回复/申请与隐藏结构/编辑权与侧边抽屉/表重建与自愈/币已下线/本地偏好键读写一致（通过项数不下降哨兵：317）
-node scripts/ui-smoke.mjs          # 首页外壳轻量化 + 右侧栏抽屉 + 起始页与动态流地址 + 站务公告列表页（m05506 契约）：80 项
+node scripts/ui-smoke.mjs          # 首页外壳轻量化 + 右侧栏抽屉 + 起始页与动态流地址 + 站务公告列表页 + 单条动态 #/feed/<id>（m05506 契约）：81 项
 node scripts/check-encoding.mjs    # 源码编码体检：BOM / 乱码 / 关键中文内容
 node scripts/check-notes-ui.mjs    # 笔记 UI
 node scripts/notes-smoke.mjs       # 笔记接口
@@ -846,9 +847,9 @@ node scripts/capture-fixtures.mjs  # 重采前端冒烟用的假数据（改了�
 
 ```
 check-encoding 209 文件 / 84 断言 · check-skeleton 47 项 · check-golden 88 项 0 差异
-check-markdown 72 · check-frontend 41 个页面 + 34 个模块静态扫描 · smoke 237 · smoke-ai 65
-ai-smoke 478 · feed-smoke 191 · doc-smoke 690 · team-smoke 306
-check-ui-contract 318 · check-notes-ui 33 · notes-smoke 44 · ui-smoke 80
+check-markdown 72 · check-frontend 43 个页面 + 34 个模块静态扫描 · smoke 237 · smoke-ai 65
+ai-smoke 478 · feed-smoke 191 · doc-smoke 694 · team-smoke 306
+check-ui-contract 318 · check-notes-ui 33 · notes-smoke 44 · ui-smoke 81
 ```
 
 > 知识网络图（`knowledge-pack/` + `#/graph` + `/api/knowledge/*`）已在 2026-10 整条链路删除：

@@ -93,6 +93,13 @@ const composerState = {
 const itemCache = new Map();
 let feedFilter = 'all';
 let feedQuery = '';
+/**
+ * 现在这一页是「单条动态」（`#/feed/<id>`）还是整条动态流？
+ *
+ * 只影响一件事：在这条动态被删掉之后往哪儿去。动态流里删一条就地把卡片摘掉，
+ * 但在单条那一页上，摘掉卡片只会剩一张空页 —— 该把人送回动态流。
+ */
+let standalone = false;
 
 // ── 图片处理 ────────────────────────────────────────────────────────────
 
@@ -334,22 +341,31 @@ function feedItemHtml(item) {
     : '';
 
   /*
-   * 被转发的原动态。和 `ref`（引用了帖子）长得像，但**不是链接** ——
-   * 动态没有自己的详情页，点进去无处可去。原动态被删了就只留一句话：
-   * 转发语是转发的人当时说的话，不该跟着原动态一起消失。
+   * 被转发的原动态。和 `ref`（引用了帖子）长得像，也是**链接** ——
+   * 点它去 `#/feed/<原动态 id>`，那里有那张卡的完整形态（回复框、赞踩、转发都在）。
+   *
+   * 为什么必须能点：转发卡片底下回复，通知是按「被回复的那条卡片的作者」发的
+   * （`src/modules/feed/routes.js` 里是 `row.user_id`）—— 也就是说，别人在我的转发
+   * 底下聊起来，**原作者一条通知都收不到、回复数也不涨**。留一个死块等于把讨论
+   * 永久困在转发者的卡片上，跟原作者无关。点得进去，讨论才回得到源动态。
+   *
+   * 原动态被删了就还是死块：转发语是转发的人当时说的话，不该跟着原动态一起消失，
+   * 但这时候确实无处可去，画成链接只会点出一个 404。
    */
+  const refFeedAuthor = esc(
+    item.refFeed?.author?.displayName || item.refFeed?.author?.username || '（作者已注销）',
+  );
   const refFeed = item.refFeed
-    ? `<div class="feed-ref feed-ref-feed">
-         <span class="feed-ref-label">🔁 转发了动态</span>
-         ${
-           item.refFeed.deleted
-             ? '<span class="feed-ref-title">原动态已删除</span>'
-             : `<span class="feed-ref-author">${esc(
-                 item.refFeed.author?.displayName || item.refFeed.author?.username || '（作者已注销）',
-               )}</span>
-                <div class="feed-ref-body md">${item.refFeed.contentHtml}</div>`
-         }
-       </div>`
+    ? item.refFeed.deleted
+      ? `<div class="feed-ref feed-ref-feed">
+           <span class="feed-ref-label">🔁 转发了动态</span>
+           <span class="feed-ref-title">原动态已删除</span>
+         </div>`
+      : `<a class="feed-ref feed-ref-feed" href="#/feed/${item.refFeed.id}" title="去看原动态、在原动态下面回复">
+           <span class="feed-ref-label">🔁 转发了动态</span>
+           <span class="feed-ref-author">${refFeedAuthor}</span>
+           <div class="feed-ref-body md">${item.refFeed.contentHtml}</div>
+         </a>`
     : '';
 
   /*
@@ -490,6 +506,7 @@ function filterTabsHtml() {
  * 先画骨架再取数，是为了让「刷新」不闪白屏；同时把 composer 的状态保住。
  */
 async function viewTimeline(query = new Map()) {
+  standalone = false;
   feedFilter = query.get('filter') || 'all';
   feedQuery = (query.get('q') || '').trim();
   const page = Math.max(1, Number(query.get('page') || 1));
@@ -527,6 +544,63 @@ async function viewTimeline(query = new Map()) {
   }
 
   // 公式渲染必须在 innerHTML 之后 —— renderMathInElement 只处理**已经在 DOM 里**的节点
+  ntRenderMath(list);
+}
+
+/**
+ * 单条动态独立成页（`#/feed/<id>`）。
+ *
+ * 存在的唯一理由是「转发出去之后找不回原动态」：以前转发卡片是个死块，而回复的通知
+ * 是按「被回复的那条卡片的作者」发的（`src/modules/feed/routes.js` 里是 `row.user_id`）——
+ * 于是别人在转发底下聊我的动态，**我一条通知都收不到、回复数也不涨**。点得进这一页，
+ * 讨论才回得到源动态上。
+ *
+ * 页面本身很简单：一条「← 回动态流」加一张完整的卡片。回复框 / 赞踩 / 转发全在
+ * `feedItemHtml` 里，所以这里一个字都不用另写 —— 复用同一个渲染函数还有个好处：
+ * 这条动态在流里长什么样，在这一页就长什么样，两边不会慢慢跑偏。
+ */
+async function viewFeedItem(id) {
+  // 地址栏里手写的 `#/feed/abc` 之类：不报错，直接把人送回动态流
+  if (!Number.isSafeInteger(id) || id <= 0) {
+    navigate('#/feed');
+    return;
+  }
+  standalone = true;
+
+  ui.app.innerHTML = `
+    <div class="feed-standalone">
+      <a class="feed-back" href="#/feed">← 回动态流</a>
+      <div class="feed-stream" data-feed-list>${loadingCardsHtml()}</div>
+    </div>`;
+
+  let data;
+  try {
+    data = await api(`/api/feed/${id}`);
+  } catch (error) {
+    if (error?.aborted) return; // 页面已经切走了
+    const host = $('[data-feed-list]');
+    const text = apiErrorText(error);
+    // 服务端刻意不区分「没有这条」和「你没权限看」，否则 404/403 的差别本身
+    // 就成了可见范围的探测信道 —— 所以这里也照着它的话说，不自己猜。
+    if (host) {
+      host.innerHTML = `<div class="card">${emptyHtml('🧭', text || '这条动态不在了', '可能已经被作者删掉，或者本来就没给你看')}</div>`;
+    }
+    return;
+  }
+
+  const list = $('[data-feed-list]');
+  if (!list) return; // 期间用户又点了别处
+  const item = data?.item;
+  if (!item) {
+    list.innerHTML = `<div class="card">${emptyHtml('🧭', '这条动态不在了', '可能已经被作者删掉')}</div>`;
+    return;
+  }
+
+  itemCache.set(item.id, item);
+  list.innerHTML = feedItemHtml(item);
+  // 委托是绑在 `#app` 上的，换页不会掉；但这一页没走 `renderShell()`，
+  // 第一次进来时可能还没绑过，补一次（内部有 `bound` 短路）。
+  bindTimelineOnce();
   ntRenderMath(list);
 }
 
@@ -1135,6 +1209,11 @@ async function removeItem(id) {
   await api(`/api/feed/${id}`, { method: 'DELETE' });
   toast('已删除', 'success');
   itemCache.delete(id);
+  // 在单条那一页上，摘掉卡片只会剩一张空页（`feedListEmptyHtml()` 说的还是动态流的话）
+  if (standalone) {
+    navigate('#/feed');
+    return;
+  }
   $(`[data-feed-item="${id}"]`)?.remove();
   // 删光了就换成空状态，否则页面上会剩一块什么都不显示的空白
   const list = $('[data-feed-list]');
@@ -1152,4 +1231,5 @@ function openLightbox(src) {
 }
 
 export { viewTimeline };
+export { viewFeedItem };
 export { parsePostId };

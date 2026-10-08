@@ -230,7 +230,15 @@ check(
 );
 check(
   '动态流搬到 #/feed（查询串也跟着走）',
-  /first === 'feed'[\s\S]{0,40}?Timeline\.viewTimeline\(query\)/.test(routerJs),
+  // 中间那段现在多了「有 second 就进单条动态」的分支，所以窗口放宽到 400 字符 ——
+  // 钉的是「`first === 'feed'` 之后确实会走到 `viewTimeline(query)`」，不是中间有几个字。
+  /first === 'feed'[\s\S]{0,400}?Timeline\.viewTimeline\(query\)/.test(routerJs),
+);
+// 转发卡片的引用块以前是死块，别人在转发底下回复时通知发给了转发的人、原作者收不到。
+// 给原动态一个地址是那条链路的解药，所以单独钉住它。
+check(
+  '单条动态有自己的地址 #/feed/<id>（转发卡片点得回原动态去评论）',
+  /first === 'feed'[\s\S]{0,200}?Timeline\.viewFeedItem\(Number\(second\)\)/.test(routerJs),
 );
 check(
   '三块入口分别指向 动态 #/feed · 积木广场 #/docs · 团队 #/teams',
