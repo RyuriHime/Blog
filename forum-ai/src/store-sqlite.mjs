@@ -117,8 +117,22 @@ export function createAiStore({ db, documentSource, tablePrefix = DEFAULT_PREFIX
     deleteReview: db.prepare(`DELETE FROM ${P}document_reviews WHERE document_id = ?`),
     // LOCAL PATCH (see LOCAL-PATCHES.md): 旧库补齐逐篇指纹时用（见 backfillDocumentHashes）。
     setReviewHash: db.prepare(`UPDATE ${P}document_reviews SET content_hash = ? WHERE document_id = ?`),
-    countDone: db.prepare(`SELECT COUNT(*) AS count FROM ${P}document_reviews WHERE status = 'done'`),
-    countFailed: db.prepare(`SELECT COUNT(*) AS count FROM ${P}document_reviews WHERE status <> 'done'`),
+    // LOCAL PATCH (see LOCAL-PATCHES.md 的 P 节): 计数只算**还在语料里的**篇目。
+    // `syncCorpus()` 会把已消失的文档从索引里删掉，但解读行还留着（那是缓存，删了就白花钱），
+    // 直接 COUNT(*) 就会出现「已解读 573 > 语料 567」这种自相矛盾的页头。
+    countDone: db.prepare(`
+      SELECT COUNT(*) AS count FROM ${P}document_reviews r
+      JOIN ${P}corpus_index i ON i.document_id = r.document_id
+      WHERE r.status = 'done'`),
+    countFailed: db.prepare(`
+      SELECT COUNT(*) AS count FROM ${P}document_reviews r
+      JOIN ${P}corpus_index i ON i.document_id = r.document_id
+      WHERE r.status <> 'done'`),
+    // 不在语料里的旧解读（诊断用：既不进页头，也不该被当成「失败」）。
+    countOrphanReviews: db.prepare(`
+      SELECT COUNT(*) AS count FROM ${P}document_reviews r
+      LEFT JOIN ${P}corpus_index i ON i.document_id = r.document_id
+      WHERE i.document_id IS NULL`),
     clearReviews: db.prepare(`DELETE FROM ${P}document_reviews`),
     insertReport: db.prepare(`
       INSERT INTO ${P}corpus_reports
@@ -432,9 +446,12 @@ export function createAiStore({ db, documentSource, tablePrefix = DEFAULT_PREFIX
     },
 
     reviewStats() {
+      // LOCAL PATCH (see LOCAL-PATCHES.md 的 P 节): analyzed / failed 只数还在语料里的篇目，
+      // 不在语料里的旧解读单独用 orphans 报到，页头不会再出现「已解读 > 语料」。
       return {
         analyzed: Number(statements.countDone.get().count),
         failed: Number(statements.countFailed.get().count),
+        orphans: Number(statements.countOrphanReviews.get().count),
         documents: api.corpusStats().documents,
       };
     },

@@ -799,6 +799,46 @@ try {
     check('只有真动过的那篇留在待整理', legacyStore.pendingDocuments({ limit: 10 }).join(',') === 'L2');
   }
 
+  // LOCAL PATCH (see LOCAL-PATCHES.md 的 P 节): 语料里已经消失的文档，它的旧解读不该再算进「已解读」，
+  // 否则页头会出现「已解读 573 > 语料 567」这种自相矛盾的数字。
+  {
+    let orphanDocs = [
+      { id: 'O1', title: '在册一', content: '正文一', createdAt: 1000, updatedAt: 1000, replies: [] },
+      { id: 'O2', title: '在册二', content: '正文二', createdAt: 2000, updatedAt: 2000, replies: [] },
+    ];
+    const orphanStore = createAiStore({
+      db: new DatabaseSync(':memory:'),
+      documentSource: () => orphanDocs,
+      tablePrefix: 'ai_',
+    });
+    orphanStore.syncCorpus();
+    orphanStore.saveReview(
+      { documentId: 'O1', status: 'done', category: 'a', summary: 's', model: 'm' },
+      { contentHash: orphanStore.documentHash('O1') },
+    );
+    orphanStore.saveReview(
+      { documentId: 'O2', status: 'failed', error: '不是合法 JSON' },
+      { contentHash: orphanStore.documentHash('O2') },
+    );
+    const bothStats = orphanStore.reviewStats();
+    check(
+      '两篇都在语料里时，已解读与失败各算一篇',
+      bothStats.analyzed === 1 && bothStats.failed === 1 && bothStats.orphans === 0 && bothStats.documents === 2,
+      JSON.stringify(bothStats),
+    );
+
+    orphanDocs = [orphanDocs[0]];
+    orphanStore.syncCorpus();
+    const orphanStats = orphanStore.reviewStats();
+    check(
+      '语料里删掉的篇目不再算进「已解读 / 失败」',
+      orphanStats.analyzed === 1 && orphanStats.failed === 0 && orphanStats.documents === 1,
+      JSON.stringify(orphanStats),
+    );
+    check('删掉的旧解读单独用 orphans 报到（不删缓存，也不冒充失败）', orphanStats.orphans === 1, JSON.stringify(orphanStats));
+    check('已解读永远不会超过语料篇数', orphanStats.analyzed <= orphanStats.documents, JSON.stringify(orphanStats));
+  }
+
   check('reportIsStale 对空报告返回 true', store.reportIsStale() === true);
 
   const savedReport = store.saveReport(
