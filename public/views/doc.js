@@ -1382,6 +1382,11 @@ function mdToolbarHtml() {
       ${tool('script', 'x²', '上标 ^{}')}
       ${tool('subscript', 'x₂', '下标 _{}')}
     </span>
+    <span class="doc-md-tool-group doc-md-tool-right">
+      <button class="doc-md-tool${docState.previewOff ? ' is-off' : ''}" type="button" data-doc-action="preview-toggle"
+        aria-pressed="${docState.previewOff ? 'false' : 'true'}"
+        title="收起 / 展开右边的实时预览（收起后编辑区吃满整宽）">👁 预览</button>
+    </span>
   </div>`;
 }
 
@@ -1487,6 +1492,9 @@ function mountSourceTools() {
   const editor = docState.editor;
   const textarea = $('[data-doc-source]');
   if (!editor || !textarea) return;
+  // 预览开关的状态在挂载时贴回来：源码模式每存一次都会整块重画，
+  // 光靠点按钮时切一次类名，重画之后就丢了。
+  $('.doc-md-wrap')?.classList.toggle('is-preview-off', Boolean(docState.previewOff));
   const box = $('[data-doc-preview] .md');
   const status = $('[data-doc-src-status]');
 
@@ -2764,6 +2772,15 @@ async function onAppClick(event) {
     return;
   }
   if (action === 'md') return applyMdTool(node.dataset.docMd);
+  if (action === 'preview-toggle') {
+    // 右边那块实时预览的开关（按钮在源码模式工具条的最右边）。
+    // 状态记在 docState 上：源码模式每存一次都会整块重画，类名得能重新贴回去。
+    docState.previewOff = !docState.previewOff;
+    node.classList.toggle('is-off', docState.previewOff);
+    node.setAttribute('aria-pressed', docState.previewOff ? 'false' : 'true');
+    $('.doc-md-wrap')?.classList.toggle('is-preview-off', docState.previewOff);
+    return undefined;
+  }
   if (action === 'block-save') return withBusy(() => saveBlock(blockId));
   if (action === 'source-save') return withBusy(() => saveBlockSource(blockId));
   if (action === 'wiki-open') return withBusy(() => openWikiPage(node.dataset.wikiName));
