@@ -853,6 +853,51 @@ export function createDocStore({ db, queries, now = () => Date.now() }) {
   }
 
   /**
+   * 重排站务公告（只有站长和管理员调得动）。
+   *
+   * 入参是**完整的期望顺序** —— `ids` 从头到尾就是希望看到的先后，不是「把 A 挪到 B 前面」。
+   * 为什么不做「挪一下」：全部 `sort_order` 都还是 0 的时候，「相邻两行换一下」这个动作
+   * 根本表达不出来，两个 0 谁前谁后由创建时间兜底，改完还是老样子。所以一次重排就把
+   * 整份编号重写一遍：第一篇 `N*10`，最后一篇 `10`。留 10 的步长是为了以后插一篇
+   * 不必把所有人重编号。
+   *
+   * **不在 `ids` 里的公告一律不动。** 但如果它的 `sort_order` 还是 0，它就会落到所有
+   * 排过序的后面 —— 这正是想要的默认：新写的公告沉底，想让它上首页就手动往上挪。
+   *
+   * 只认 `template=announce`：这个接口不该被拿来给别人的积木排序。
+   */
+  function reorderAnnouncements({ viewer, ids = [] } = {}) {
+    if (!isStaff(viewer)) throw new HttpError(403, 'owner_only', '只有站长和管理员能调公告顺序');
+
+    const list = [];
+    for (const value of Array.isArray(ids) ? ids : []) {
+      const id = Number(value);
+      if (!Number.isInteger(id) || id <= 0) throw new HttpError(400, 'bad_ids', '公告编号得是正整数');
+      if (list.includes(id)) throw new HttpError(400, 'bad_ids', '同一篇公告出现了两次');
+      list.push(id);
+    }
+    if (!list.length) throw new HttpError(400, 'bad_ids', '没给要排的公告');
+
+    for (const id of list) {
+      const row = mustExist(id);
+      if (String(row.template ?? '') !== ANNOUNCE_TEMPLATE) {
+        throw new HttpError(400, 'not_announce', '只能排站务公告');
+      }
+    }
+
+    const at = now();
+    // 没变的那几篇不写：省下 `doc_settings.updated_at` 的无谓跳动，
+    // 也让「只往上挪了一格」这种常见操作只落两次写。
+    const before = queries.sortOrdersOf(list);
+    list.forEach((id, index) => {
+      const next = (list.length - index) * 10;
+      if (before.get(id) === next) return;
+      queries.setSortOrder({ documentId: id, sortOrder: next, now: at });
+    });
+    return { order: list };
+  }
+
+  /**
    * 用过的标签 + 篇数（广场的标签云、编辑器的候选项）。
    *
    * 门槛是「至少有一篇看得见的文档在用」：标签没有独立的生命周期，
@@ -2263,6 +2308,7 @@ export function createDocStore({ db, queries, now = () => Date.now() }) {
 
   return {
     listDocuments,
+    reorderAnnouncements,
     getDocument,
     createDocument,
     updateDocument,

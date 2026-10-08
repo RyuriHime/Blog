@@ -359,7 +359,10 @@ CREATE INDEX IF NOT EXISTS idx_doc_app_state_doc ON doc_app_state (document_id, 
 --   app_mode           inline（正常流里一枚小标）/ fullpage（铺满视口的整屏应用）
 --   station_id         属于哪个 wiki 站（0 = 不属于任何站，于是它照旧是一条独立帖子）
 --   parent_id          站在树上的父页（0 = 直接挂在站下）
---   sort_order         同一个父页下的排序
+--   sort_order         手动顺序。两个用处：wiki 站里同一个父页下的排序；
+--                      以及**站务公告**的先后（首页那块只放前 5 条，靠它决定是哪 5 条）。
+--                      两边共用一列不冲突 —— 公告不属于任何站（station_id 就是 0）。
+--                      0 = 从没排过，退回创建时间倒序，所以「没动过」看到的就是老行为。
 --   icon               树上的图标（一个短字符串，不是表情图片）
 --   source_text        作者最后一次输入的**源码原文，逐字节**（§3.4）。
 --                      解析器是有损的（表格分隔行会被剥、嵌套列表被吞、看不懂的退回段落），

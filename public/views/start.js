@@ -46,6 +46,8 @@ const PREVIEW_COUNT = 3;
 const FETCH_PER_PAGE = 5;
 /** 公告**列表页**每页几条。接口那边 limit 的上限是 50，20 条一页翻起来正好。 */
 const ANNOUNCE_PER_PAGE = 20;
+/** 调顺序时要一次拿全，用接口允许的上限。 */
+const ANNOUNCE_MAX = 50;
 
 /**
  * 读页码。口径跟服务端 `pageParam`（`src/core/http.js`）一致：
@@ -72,9 +74,18 @@ function canWriteAnnounce() {
   return Boolean(state.me && Fmt.isStaffUser(state.me));
 }
 
-/** 公告列表接口：一条公告 = 一篇 `template=announce` 的积木，从新到旧。 */
+/**
+ * 公告列表接口。一条公告 = 一篇 `template=announce` 的积木。
+ *
+ * `sort=order` 是**站长排过的手动顺序**（见后端 `queries.listDocuments` 的 `sort === 'order'`）：
+ * 排过的在前、大的更靠前，没排过的一律是 0、退回创建时间倒序。所以「一次都没调过顺序」时
+ * 看到的就是从新到旧的老行为，动过一次之后整份顺序才变成显式的。
+ *
+ * 首页那块与 `#/announcements` 用的是同一个顺序 —— 首页只取前 5 条，
+ * 于是「在公告页把某篇挪进前 5」就等于「让它上首页」。
+ */
 function announceApi(limit, page) {
-  return `/api/docs?template=${ANNOUNCE_TEMPLATE}&sort=created&limit=${limit}&page=${page}`;
+  return `/api/docs?template=${ANNOUNCE_TEMPLATE}&sort=order&limit=${limit}&page=${page}`;
 }
 
 /**
@@ -104,10 +115,21 @@ function announceItemHtml(doc) {
  * 列表页的一行。比首页那版多一行「可见范围」—— 公告本该都是公开的，
  * 万一有人把它设成了别的范围（改范围是站长的自由），这里要看得见，
  * 否则「为什么别人看不到我这条公告」会变成一个查不出来问题。
+ *
+ * `reorder` 为真时（= staff 且整份都在一页里）右边多两颗箭头 ——
+ * **首页那 5 条就是这份顺序的前 5 条**，所以往上挪就是在争首页的位置。
  */
-function announceRowHtml(doc) {
+function announceRowHtml(doc, index, total, reorder) {
   const author = doc.author?.displayName ?? doc.author?.username ?? '';
   const meta = [author, Fmt.timeAgo(doc.createdAt), doc.scopeLabel ?? ''].filter(Boolean).join(' · ');
+  const tools = reorder
+    ? `<span class="announce-tools">
+        <button class="announce-move" type="button" data-announce-move="up" data-announce-id="${doc.id}"
+          title="往上挪一格" aria-label="往上挪一格"${index === 0 ? ' disabled' : ''}>↑</button>
+        <button class="announce-move" type="button" data-announce-move="down" data-announce-id="${doc.id}"
+          title="往下挪一格" aria-label="往下挪一格"${index === total - 1 ? ' disabled' : ''}>↓</button>
+      </span>`
+    : '';
   return `<li class="announce-row">
     <a class="announce-link" href="#/doc/${encodeURIComponent(doc.id)}">
       <span class="announce-row-head">
@@ -115,6 +137,7 @@ function announceRowHtml(doc) {
       </span>
       <span class="announce-row-meta">${esc(meta)}</span>
     </a>
+    ${tools}
   </li>`;
 }
 
@@ -129,6 +152,61 @@ function mountAnnounceButton() {
   if (!button) return;
   button.addEventListener('click', () => {
     newAnnounceAndEdit().catch((error) => toast(error?.message ?? '建公告失败', 'error'));
+  });
+}
+
+/**
+ * 能不能调顺序。
+ *
+ * 两个条件：是 staff，而且**整份公告都装得下这一页**。后者不是偷懒 ——
+ * `sort_order` 是全局一列，翻到第 2 页再点箭头，「把这几篇提到最前」的意思就错了。
+ * 公告本来就只有个位数，分页那天的正确做法是给每行加个序号输入框，
+ * 而不是让箭头在跨页时悄悄做错事。
+ */
+function canReorderAnnounce(total, limit) {
+  return canWriteAnnounce() && total > 1 && total <= limit;
+}
+
+/** 挪动期间锁一下：连点两下不该发两份「整份顺序」。 */
+let announceMoving = false;
+
+/**
+ * 把一条公告往上（`delta = -1`）或往下（`delta = 1`）挪一格。
+ *
+ * **整份顺序重新取一遍**，不用屏幕上这一页的：`sort_order` 是全局一列，
+ * 只把当前页那几个编号写进去等于把它们一律提到最前面 —— 翻到第 2 页点一下就会出事。
+ * 宁可多一次 GET，也要拿到完整的一份再换位。
+ */
+async function moveAnnounce(id, delta) {
+  if (announceMoving) return;
+  announceMoving = true;
+  try {
+    const data = await api(`/api/docs?template=${ANNOUNCE_TEMPLATE}&sort=order&limit=${ANNOUNCE_MAX}&page=1`);
+    const ids = (data.documents ?? []).map((doc) => Number(doc.id));
+    const from = ids.indexOf(Number(id));
+    const to = from + delta;
+    if (from < 0 || to < 0 || to >= ids.length) return; // 到头了（按钮本该是灰的）
+    [ids[from], ids[to]] = [ids[to], ids[from]];
+    await api('/api/docs/meta/announce-order', { method: 'PUT', body: { ids } });
+    // 顺序变了，重画当前页 —— 否则用户对着旧列表发呆，会以为没生效。
+    await viewAnnouncements(new URLSearchParams(String(location.hash).split('?')[1] ?? ''));
+  } finally {
+    announceMoving = false;
+  }
+}
+
+/** 接上那两颗箭头。用委托：行是整批渲染的，而且整页随时会被重画。 */
+function mountAnnounceControls() {
+  const list = ui.app.querySelector('.announce-list');
+  if (!list) return;
+  list.addEventListener('click', (event) => {
+    const button = event.target?.closest?.('[data-announce-move]');
+    if (!button || button.disabled) return;
+    event.preventDefault();
+    const delta = button.dataset.announceMove === 'up' ? -1 : 1;
+    moveAnnounce(Number(button.dataset.announceId), delta).catch((error) =>
+      toast(error?.message ?? '调顺序失败', 'error'),
+    );
   });
 }
 
@@ -154,8 +232,9 @@ async function viewAnnouncements(query) {
   const total = Number(data.total) || 0;
   const limit = Math.max(1, Number(data.limit) || ANNOUNCE_PER_PAGE);
   const totalPages = Math.max(1, Math.ceil(total / limit));
+  const reorder = canReorderAnnounce(total, limit);
   const listHtml = items.length
-    ? `<ul class="announce-list">${items.map(announceRowHtml).join('')}</ul>`
+    ? `<ul class="announce-list">${items.map((doc, index) => announceRowHtml(doc, index, items.length, reorder)).join('')}</ul>`
     : emptyHtml(
         '📢',
         page > 1
@@ -166,6 +245,14 @@ async function viewAnnouncements(query) {
   const pagerHtml = paginationHtml(page, totalPages, (target) =>
     target === 1 ? '#/announcements' : `#/announcements?page=${target}`,
   );
+  // 「从新到旧」只在没排过顺序时成立，所以这句话得跟着 `sort_order` 的状态走 ——
+  // 而「排没排过」前端看不出来（全是 0 与排过之后再看都是同一份列表），
+  // 所以干脆两句话分开说：默认这句描述的是**没动过**时的样子。
+  const hint = reorder
+    ? `用右边的 ↑ ↓ 调先后 —— <strong>前 5 条就是首页显示的那 5 条</strong>。共 ${Fmt.fmtNum(total)} 条。`
+    : `站长发的公告都在这儿，从新到旧。共 ${Fmt.fmtNum(total)} 条${
+        totalPages > 1 ? `，第 ${page} / ${totalPages} 页` : ''
+      }。`;
 
   ui.app.innerHTML = `
     <div class="start-page">
@@ -175,9 +262,7 @@ async function viewAnnouncements(query) {
           <span class="spacer"></span>
           ${newAnnounceButtonHtml()}
         </div>
-        <p class="hint">站长发的公告都在这儿，从新到旧。共 ${Fmt.fmtNum(total)} 条${
-          totalPages > 1 ? `，第 ${page} / ${totalPages} 页` : ''
-        }。</p>
+        <p class="hint">${hint}</p>
       </div>
       <section class="card announce-page">
         ${listHtml}
@@ -185,6 +270,7 @@ async function viewAnnouncements(query) {
       </section>
     </div>`;
   mountAnnounceButton();
+  mountAnnounceControls();
 }
 
 /**

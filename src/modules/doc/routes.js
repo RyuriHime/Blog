@@ -113,6 +113,21 @@ export function registerDocRoutes(ctx, { store }) {
     ok(reqCtx.res, store.importDocument({ viewer: user, payload: reqCtx.body.payload ?? reqCtx.body, scope: reqCtx.body.scope }));
   });
 
+  /**
+   * 重排站务公告（body 是 `{ ids: [...] }`，从头到尾就是期望的先后）。
+   *
+   * 为什么一次收整份顺序、而不是「把某一篇挪到某一篇前面」：见
+   * `store.reorderAnnouncements` 的注释 —— 所有 `sort_order` 都还是 0 的时候，
+   * 「换一下相邻两行」这个动作根本表达不出来，改完还是老样子。
+   *
+   * 权限不在这一层判：`store.reorderAnnouncements` 里有 `isStaff` 的硬门槛，
+   * 而且它还会逐篇核对 `template === 'announce'` —— 别让人拿这个接口去排别人的积木。
+   */
+  add('PUT', '/api/docs/meta/announce-order', async (reqCtx) => {
+    const user = write(reqCtx, 'announce-order');
+    ok(reqCtx.res, store.reorderAnnouncements({ viewer: user, ids: reqCtx.body.ids }));
+  });
+
   /* ---------------- 脚本模板（开发者功能：把自己写的脚本存成模板） ---------------- */
 
   // 一律走三段式 `/api/docs/meta/*`：两段式的固定路径会被下面的 `/api/docs/:id` 抢走。

@@ -205,8 +205,19 @@ export function createDocQueries(db) {
         params.push(...visible.params);
       }
       const where = conditions.join(' AND ');
+      // `sort=order` 是**站务公告**那条路：排过序的（`sort_order != 0`）排在前面、大的更靠前，
+      // 没排过的一律是 0，退回创建时间倒序 —— 于是「一次都没调过顺序」看到的就是老行为，
+      // 站长动过一次之后整份顺序才变成显式的（见 `store.reorderAnnouncements`）。
+      // 用关联子查询而不是 JOIN `doc_settings`：`DOC_SOURCE` 有六处自带 FROM，
+      // 加一个 JOIN 会牵连一片只想要 `documents` 的查询。
       const order =
-        sort === 'created' ? 'd.created_at DESC' : sort === 'title' ? 'd.title ASC, d.id DESC' : 'd.updated_at DESC, d.id DESC';
+        sort === 'order'
+          ? 'COALESCE((SELECT ds.sort_order FROM doc_settings ds WHERE ds.document_id = d.id), 0) DESC, d.created_at DESC'
+          : sort === 'created'
+            ? 'd.created_at DESC'
+            : sort === 'title'
+              ? 'd.title ASC, d.id DESC'
+              : 'd.updated_at DESC, d.id DESC';
       const size = Math.min(Math.max(Number(limit) || 20, 1), 50);
       const offset = (Math.max(Number(page) || 1, 1) - 1) * size;
 
@@ -696,6 +707,35 @@ export function createDocQueries(db) {
          ON CONFLICT (document_id) DO UPDATE SET station_id = excluded.station_id, parent_id = excluded.parent_id, sort_order = excluded.sort_order, updated_at = excluded.updated_at`,
         [documentId, stationId, parentId, sortOrder, now],
       );
+    },
+
+    /**
+     * 只动一篇的 `sort_order`（站务公告的手动顺序，见 `store.reorderAnnouncements`）。
+     *
+     * 为什么不复用上面的 `upsertSettings`：那个函数一次写全部八列，调用方得先把现有值
+     * 读出来再原样写回 —— 中间任何一次并发编辑都会被默默覆盖掉。排顺序只碰一列。
+     *
+     * 行不存在时直接插一行（其余列全靠 DDL 默认值），所以「第一次给某篇排顺序」
+     * 不需要先建 settings 行。
+     */
+    setSortOrder({ documentId, sortOrder, now }) {
+      run(
+        `INSERT INTO doc_settings (document_id, sort_order, updated_at) VALUES (?, ?, ?)
+         ON CONFLICT (document_id) DO UPDATE SET sort_order = excluded.sort_order, updated_at = excluded.updated_at`,
+        [documentId, Math.trunc(Number(sortOrder) || 0), now],
+      );
+    },
+
+    /** 一批文档各自的 `sort_order`（一次查完，别在循环里一篇篇查）。 */
+    sortOrdersOf(ids = []) {
+      const list = ids.map((value) => Number(value)).filter((id) => Number.isInteger(id) && id > 0);
+      if (!list.length) return new Map();
+      const holes = list.map(() => '?').join(', ');
+      const rows = all(
+        `SELECT document_id, sort_order FROM doc_settings WHERE document_id IN (${holes})`,
+        list,
+      );
+      return new Map(rows.map((row) => [Number(row.document_id), Number(row.sort_order) || 0]));
     },
 
     /* ---------- Wiki 站与站内页面（第二轮） ---------- */

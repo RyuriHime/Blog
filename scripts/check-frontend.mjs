@@ -3331,7 +3331,34 @@ if (!state.theme) problems.push('state.theme 没被初始化');
   else if (!/\bpage=2\b/.test(allAnnounce.url)) {
     problems.push(`公告页第 2 页取的是 ${allAnnounce.url} —— 页码没带上，翻页会一直停在第 1 页`);
   }
-  console.log('  ✅ 交互：公告页翻页带着页码去取，首页那块只肯要 5 条');
+  // 站长排的手动顺序必须真的传到这两页 —— 首页与公告页读的是同一个顺序，
+  // 少了 `sort=order` 就退回「谁最后建的谁在前」，站长在公告页挪半天等于白挪。
+  for (const [label, req] of [['首页', homeAnnounce], ['公告页', allAnnounce]]) {
+    if (req && !/\bsort=order\b/.test(req.url)) {
+      problems.push(`${label}取公告时写的是 ${req.url} —— 少了 sort=order，站长排的顺序到不了这一页`);
+    }
+  }
+
+  // 调顺序那套控件的几个关键字符串。假 DOM 里拿不到列表数据（夹具没有 `sort=order`
+  // 那条 `/api/docs?`），箭头根本不会画出来，所以这一层只能盯源码里有没有那几块。
+  const startSource = readFileSync(join(ROOT, 'public', 'views', 'start.js'), 'utf8');
+  const reorderBits = [
+    ['data-announce-move="up"', '往上挪的箭头'],
+    ['data-announce-move="down"', '往下挪的箭头'],
+    ["api('/api/docs/meta/announce-order', { method: 'PUT'", '保存顺序的接口'],
+    ['const ANNOUNCE_MAX = 50;', '调顺序时「一次拿全」用的上限'],
+  ];
+  for (const [needle, why] of reorderBits) {
+    if (!startSource.includes(needle)) {
+      problems.push(`start.js 里找不到${why}（${needle}）—— 公告调顺序那套控件缺了一块`);
+    }
+  }
+  // 首页仍然只肯要 5 条这件事在源码里也得钉一道（上面那条走的是请求，这条走的是常量）。
+  if (!/const ANNOUNCE_COUNT = 5;/.test(startSource)) {
+    problems.push('ANNOUNCE_COUNT 不再是 5 了 —— 「主页只显示 5 个」是用户明确提的要求');
+  }
+
+  console.log('  ✅ 交互：公告页翻页带着页码去取，首页那块只肯要 5 条，两页都跟着站长排的顺序');
 }
 
 /*

@@ -396,7 +396,7 @@ forum/
 | `#/feed` | 动态流：全部 / 我关注的 / 我的，`?filter=following`、`?filter=mine`、`?q=关键词`、`?page=`。**以前这是 `#/`，m05506 与起始页对调了地址**（老书签请改用这里） |
 | `#/feed/:id` | **单条动态**：「← 回动态流」加一张完整卡片。转发卡片的引用块点进来就是这一页 —— 回复通知是按「被回复卡片的作者」发的，看不到源动态就等于别人在转发底下聊你的动态、你一条通知都收不到 |
 | `#/start` | 起始页的老地址，保留成别名（进的是同一页，不会断链） |
-| `#/announcements` | **站务公告**（`?page=`）：全部公告，从新到旧、每页 20 条，读的是 `GET /api/docs?template=announce&sort=created`。公告**已经不是帖子**（`meta` 板块的老公告启动时由 `store.migrateLegacyPosts()` 一次性搬成了这类积木）：只有站长 / 管理员写得动，也**不进积木广场**（普通用户在广场里看不到它们），但首页与这一页人人可见；staff 在起始页和这一页都多一颗「＋ 写公告」。起始页那块**只放最近 5 条**，右下角「查看全部」点到这儿。`#/board/meta` 也直接落到这一页 |
+| `#/announcements` | **站务公告**（`?page=`）：全部公告、每页 20 条，读的是 `GET /api/docs?template=announce&sort=order`。**顺序由站长手动决定**：staff 在每一行右边看到 `↑ ↓`，点一下就把整份顺序发回 `PUT /api/docs/meta/announce-order` —— **首页那 5 条就是这一页的前 5 条**，所以「想让哪 5 篇上首页」= 在这一页把它们挪进前 5。没排过的公告 `sort_order` 是 0，退回创建时间倒序（一次都没调过顺序时看到的就是老行为）。箭头只在**整份装得下一页**时才画（`canReorderAnnounce`）—— `sort_order` 是全局一列，翻到第 2 页再挪的话「把这几篇提到最前」的意思就错了。公告**已经不是帖子**（`meta` 板块的老公告启动时由 `store.migrateLegacyPosts()` 一次性搬成了这类积木）：只有站长 / 管理员写得动，也**不进积木广场**（普通用户在广场里看不到它们），但首页与这一页人人可见；staff 在起始页和这一页都多一颗「＋ 写公告」。起始页那块**只放最近 5 条**，右下角「查看全部」点到这儿。`#/board/meta` 也直接落到这一页 |
 | `#/board/tech` | 板块页（`general` / `tech` / `qa` / `share` / `meta`） |
 | `#/post/:id` | **（已下线，一切指向它的链接都改道）** 老的帖子详情页：路由还认，但**不再渲染帖子** —— `public/views/post.js` 的 `viewPost(id)` 拿 `GET /api/docs/by-anchor/:id` 反查这篇帖子是哪篇积木的影子行，查到就 `location.replace('#/doc/<docId>')`（老收藏、动态流、通知、搜索结果、站外链接全落在这一句上，所以没有哪条路还能真打开一张帖子页）；反查不到（真被删了）显示一张「这篇帖子没有对应的积木」的卡片。**代码没删**：`replyHtml` / `reactionBarHtml` / `repostSectionHtml` 这三样仍被积木阅读页复用，只是那两个通往帖子的「编辑帖子 / 删除帖子」按钮在积木页里不画（`{ docMode: true }`） |
 | `#/new` | **（已下线）** 老的发帖地址：`toast` 一句「帖子功能已经下线，写作请到积木广场」然后落到 `#/docs`。写作入口只剩积木广场那颗「＋ 新建一篇」，`public/core/session.js` 用户菜单里的「✏️ 发布新帖」已经删掉 |
@@ -566,6 +566,7 @@ DB_FILE=/opt/app/data/forum.db node scripts/seed-oiwiki.mjs --user RyuriHime   #
 | GET | `/api/docs/meta/block-types` | 块类型清单（内置 15 种 ∪ 库里注册的），含声明式 schema | 公开 |
 | POST | `/api/docs/meta/block-types` | 注册自定义块类型（名字 `^[a-z][a-z0-9_]{0,31}$`，内置名与重名 409）；`rendererKind:'declarative'` 可带 `renderer:{html:'…{{字段}}…'}`（会剥掉 script/内联事件/`javascript:`），`'sandbox'` 则用 schema 里的 `code` 走玻璃房 | 登录 |
 | POST | `/api/docs/meta/import` | 按 `forum-doc/1` 格式导入一份新文档 | 登录 |
+| PUT | `/api/docs/meta/announce-order` | **站务公告的手动顺序**：body `{ ids: [...] }`，发的是**整份期望顺序**（不是「把 A 挪到 B 前」—— 全部 `sort_order` 还是 0 时相邻换位根本表达不出来）。编号按 `(总数 - 名次) * 10` 下发，步长 10 是为了以后插一篇不用全员重编号；**不在 `ids` 里的一个字节都不动**，所以新公告默认沉底、想上首页就手动挪。它只改 `doc_settings.sort_order` 一列（`queries.setSortOrder`），值没变的会被跳过。**必须三段式**：`/api/docs/:id` 的 `[^/]+` 会把两段式固定路径吃掉 | 站长 / 管理员 |
 | GET | `/api/docs/meta/script-templates` | 我的脚本模板清单：`{ templates, limit, maxName, maxDescription, maxCode }`（模板只自己可见） | 登录 |
 | GET | `/api/docs/meta/tags` | 标签用过的清单 `{ tags: [{ tag, count }], maxTags: 5, maxTagLength: 24 }`（只统计**当前用户看得见**的文档 —— 私有文档的标签不在这里泄露存在性）；编辑器的「标签框上限 + 大家在用」用它 | 公开 |
 | POST | `/api/docs/meta/script-templates` | 存一个脚本模板，body `{ id?, name, description?, code }`；不带 `id` 是新建（重名 409、超过 50 个 400），带 `id` 是覆盖 | 登录（只能改自己的） |
@@ -833,10 +834,10 @@ node scripts/smoke.mjs             # 后端端到端：237 项（临时独立库
 node scripts/smoke-ai.mjs          # AI 接口端到端：93 项（含逐篇过期判定：新增别篇不让老解读过期、改了这一篇自己才标过期；删掉的那篇不再算进已解读（记进 orphans）；问答预算 4000、问答关掉思考模式（只有解读/整理全站开着）与「被截断就缩材料、在提问里要短答案再问、再截断给一句人话」；回答排版要求（分段 / 小标题 / `- ` 列表）与 800 字上限；上游 JSON 里带字面换行也能解析；语料检索（标题 + 正文）与未登录 401；全站问答的选材上限与材料体积）
 node scripts/ai-smoke.mjs          # AI 接口端到端（更细的一套：校验 / 限流 / 额度 / 审查 / 模板与提示词漂移哨兵 / 能力目录只列接上了线的能力 / 用量面板分层 / 三源合并（论坛 AI 与笔记那两本账也进面板、逐篇解读只进全站）/ 跨日界的计数口径哨兵）：486 项
 node scripts/feed-smoke.mjs        # 动态流端到端：191 项（含动态回复、动态转发、帖子转发也发到动态、「仅团队」的可见范围）
-node scripts/doc-smoke.mjs         # 积木（可编程帖子）端到端：694 项（含阅读页的回复区与转发区）
+node scripts/doc-smoke.mjs         # 积木（可编程帖子）端到端：710 项（含阅读页的回复区与转发区，以及站务公告的手动顺序）
 node scripts/team-smoke.mjs        # 团队端到端：306 项（可见范围 / 越权 / 版本冲突 / 编辑权只归作者 / 文件柜 / 群聊 / 团队号 / 公告通知 / Markdown 与公式 / 帖子回复 / 加入申请与审核 / 隐藏团队 / 老库升级与坏库自愈）
 node scripts/check-ui-contract.mjs # 前端契约：CSS 类名 + API 字段 + 主题/头像/角色/私信/团队号/公告/剪贴板/公式/关注列表（已关注按钮）/详情与回复/申请与隐藏结构/编辑权与侧边抽屉/表重建与自愈/币已下线/本地偏好键读写一致（通过项数不下降哨兵：317）
-node scripts/ui-smoke.mjs          # 首页外壳轻量化 + 右侧栏抽屉 + 起始页与动态流地址 + 站务公告列表页 + 单条动态 #/feed/<id>（m05506 契约）+ 编辑区与积木块字段框的 Tab 缩进 + 登录失败的文案（401 不等于「登录过期」）：96 项
+node scripts/ui-smoke.mjs          # 首页外壳轻量化 + 右侧栏抽屉 + 起始页与动态流地址 + 站务公告列表页 + 单条动态 #/feed/<id>（m05506 契约）+ 编辑区与积木块字段框的 Tab 缩进 + 登录失败的文案（401 不等于「登录过期」）+ 站务公告的手动调顺序：102 项
 node scripts/check-encoding.mjs    # 源码编码体检：BOM / 乱码 / 关键中文内容
 node scripts/check-notes-ui.mjs    # 笔记 UI
 node scripts/notes-smoke.mjs       # 笔记接口
@@ -856,8 +857,8 @@ node scripts/capture-fixtures.mjs  # 重采前端冒烟用的假数据（改了�
 ```
 check-encoding 211 文件 / 84 断言 · check-skeleton 47 项 · check-golden 88 项 0 差异
 check-markdown 72 · check-frontend 43 个页面 + 34 个模块静态扫描 · smoke 237 · smoke-ai 93
-ai-smoke 518 · feed-smoke 191 · doc-smoke 694 · team-smoke 306
-check-ui-contract 325 · check-notes-ui 33 · notes-smoke 44 · ui-smoke 96
+ai-smoke 518 · feed-smoke 191 · doc-smoke 710 · team-smoke 306
+check-ui-contract 325 · check-notes-ui 33 · notes-smoke 44 · ui-smoke 102
 ```
 
 > 知识网络图（`knowledge-pack/` + `#/graph` + `/api/knowledge/*`）已在 2026-10 整条链路删除：

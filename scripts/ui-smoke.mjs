@@ -215,8 +215,8 @@ check(
   'router.js 里没有 #/announcements 分支',
 );
 check(
-  '公告页复用现成接口（/api/docs?template=announce&sort=created&limit&page），没为新页面加后端',
-  /\/api\/docs\?template=\$\{ANNOUNCE_TEMPLATE\}&sort=created&limit=\$\{limit\}&page=\$\{page\}/.test(startJs)
+  '公告页复用现成接口（/api/docs?template=announce&sort=order&limit&page），没为新页面加后端',
+  /\/api\/docs\?template=\$\{ANNOUNCE_TEMPLATE\}&sort=order&limit=\$\{limit\}&page=\$\{page\}/.test(startJs)
     && /const ANNOUNCE_TEMPLATE = 'announce'/.test(startJs)
     && !/\/api\/announce/.test(startJs),
   '公告页没走 /api/docs?template=announce（已有的积木接口），或者偷偷加了 /api/announce 这种专用后端',
@@ -382,6 +382,43 @@ console.log('\n▶ 登录失败的文案');
     '真有会话时仍然算过期（跳登录页 + 弹提示那条路没被删掉）',
     /if \(!hadSession\)[\s\S]{0,400}?toast\('登录状态已失效，请重新登录'/.test(errorsJs),
     'errors.js 里会话过期该做的跳转/提示不见了',
+  );
+}
+
+/* 三·8、站务公告：站长能调先后，前 5 条就是首页那 5 条                 */
+console.log('\n▶ 站务公告的调顺序');
+{
+  const startJs = read('views/start.js');
+  const startCss = read('css/25-start.css');
+  check(
+    '公告两页都按站长排的顺序取（sort=order，不是「谁最后建的谁在前」）',
+    /template=\$\{ANNOUNCE_TEMPLATE\}&sort=order/.test(startJs),
+    'views/start.js 的 announceApi 没写 sort=order —— 站长在公告页挪了顺序，首页看不到',
+  );
+  check(
+    '首页仍然只要 5 条（用户明确要求，这条不许放松）',
+    /const ANNOUNCE_COUNT = 5;/.test(startJs) && /announceApi\(FETCH_PER_PAGE/.test(startJs),
+    'views/start.js 的 ANNOUNCE_COUNT 不再是 5，或者首页没按 5 条去取',
+  );
+  check(
+    '只有整份装得下一页时才给箭头（sort_order 是全局一列，翻到第 2 页再挪是错的）',
+    /function canReorderAnnounce\(total, limit\)[\s\S]{0,200}?total <= limit/.test(startJs),
+    'views/start.js 没有 canReorderAnnounce 的「一页装得下」判断',
+  );
+  check(
+    '挪一格发的是整份顺序（全 0 的时候「相邻换位」根本表达不出来）',
+    /limit=\$\{ANNOUNCE_MAX\}&page=1[\s\S]{0,500}?api\('\/api\/docs\/meta\/announce-order', \{ method: 'PUT'/.test(startJs),
+    'views/start.js 的 moveAnnounce 没有「整份重新取 + 整份发回去」',
+  );
+  check(
+    '箭头走事件委托（列表随时重画，一个个挂必然漏）',
+    /closest\?\.\('\[data-announce-move\]'\)/.test(startJs),
+    'views/start.js 的 mountAnnounceControls 没走事件委托',
+  );
+  check(
+    '箭头与工具条都有样式（不然 check-ui-contract 会红）',
+    /\.announce-move\s*\{/.test(startCss) && /\.announce-tools\s*\{/.test(startCss),
+    'css/25-start.css 里缺 .announce-move / .announce-tools',
   );
 }
 

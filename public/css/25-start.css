@@ -107,11 +107,20 @@
   flex-direction: column;
 }
 
+.announce-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
 .announce-row + .announce-row {
   border-top: 1px solid var(--border-soft);
 }
 
 .announce-link {
+  /* 撑满整行：箭头在右边，链接得把剩下的宽度全吃掉，点起来才不像小块。 */
+  flex: 1;
+  min-width: 0;
   display: flex;
   flex-direction: column;
   gap: 5px;
@@ -123,6 +132,37 @@
 .announce-link:hover {
   background: var(--panel-2);
   text-decoration: none;
+}
+
+/* 调顺序的两颗箭头。只有站长和管理员看得到（见 start.js 的 canReorderAnnounce）。 */
+.announce-tools {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding-right: 10px;
+}
+
+.announce-move {
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--text-dim);
+  font-size: 13px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.announce-move:hover:not(:disabled) {
+  border-color: var(--accent);
+  color: var(--accent-fg);
+}
+
+.announce-move:disabled {
+  opacity: 0.35;
+  cursor: default;
 }
 
 .announce-row-head {

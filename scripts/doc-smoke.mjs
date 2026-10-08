@@ -3390,6 +3390,112 @@ try {
     );
   }
 
+  /* ================= 14 站务公告的手动顺序（哪 5 条上首页就在这一层） =================
+   *
+   * 首页那块读的是 `/api/docs?template=announce&sort=order&limit=5` —— 也就是说
+   * 「哪 5 条上首页」完全由 `doc_settings.sort_order` 决定。这一节钉住四件事：
+   * 默认（没排过）还是创建时间倒序、排过之后顺序真的变、首页跟着变、以及不该动它的人动不了。
+   */
+  {
+    // 14.1 先建三篇公告
+    const made = [];
+    for (const title of ['顺序测试 甲', '顺序测试 乙', '顺序测试 丙']) {
+      const r = await staff.call('/api/docs', {
+        method: 'POST',
+        body: { title, kind: 'post', scope: 'public', template: 'announce' },
+      });
+      check(`14.1 staff 建得出公告「${title}」`, r.status === 200 && Number(r.data?.doc?.id) > 0, `${r.status} ${JSON.stringify(r.error)}`);
+      made.push(Number(r.data?.doc?.id));
+    }
+
+    const orderIds = async (limit = 50) => {
+      const r = await staff.call(`/api/docs?template=announce&sort=order&limit=${limit}&page=1`);
+      return (r.data?.documents ?? []).map((doc) => Number(doc.id));
+    };
+
+    // 14.2 一次都没排过时，`sort=order` 必须退回创建时间倒序（= 老行为）
+    const ids = await orderIds();
+    check(
+      '14.2 没排过时 sort=order 退回创建时间倒序（丙 在 甲 前面）',
+      ids.indexOf(made[2]) > -1 && ids.indexOf(made[2]) < ids.indexOf(made[0]),
+      ids.join(','),
+    );
+
+    // 14.3 staff 把顺序反过来
+    const reversed = [...ids].reverse();
+    const put = await staff.call('/api/docs/meta/announce-order', { method: 'PUT', body: { ids: reversed } });
+    check('14.3 staff 调得动顺序', put.status === 200, `${put.status} ${JSON.stringify(put.error)}`);
+    const afterIds = await orderIds();
+    check('14.3 顺序真的反过来了', JSON.stringify(afterIds) === JSON.stringify(reversed), afterIds.join(','));
+
+    // 14.4 首页那 5 条读的就是同一份顺序的前 5 条
+    const homeIds = await orderIds(5);
+    check(
+      '14.4 首页拿到的正是新顺序的前 5 条',
+      JSON.stringify(homeIds) === JSON.stringify(reversed.slice(0, 5)),
+      homeIds.join(','),
+    );
+
+    // 14.5 权限：公告只有站长和管理员排得动
+    const asMember = await author.call('/api/docs/meta/announce-order', { method: 'PUT', body: { ids } });
+    check(
+      '14.5 普通用户排不动（403 owner_only）',
+      asMember.status === 403 && asMember.error?.code === 'owner_only',
+      `${asMember.status} ${asMember.error?.code}`,
+    );
+    const asAnon = await anon.call('/api/docs/meta/announce-order', { method: 'PUT', body: { ids } });
+    check('14.5 没登录排不动（401）', asAnon.status === 401, `${asAnon.status}`);
+
+    // 14.6 参数校验：三种坏输入各回一个 400，不能 500
+    const badId = await staff.call('/api/docs/meta/announce-order', { method: 'PUT', body: { ids: [0] } });
+    check('14.6 编号不是正整数 → 400 bad_ids', badId.status === 400 && badId.error?.code === 'bad_ids', `${badId.status} ${badId.error?.code}`);
+    const dup = await staff.call('/api/docs/meta/announce-order', { method: 'PUT', body: { ids: [made[0], made[0]] } });
+    check('14.6 同一篇出现两次 → 400 bad_ids', dup.status === 400 && dup.error?.code === 'bad_ids', `${dup.status} ${dup.error?.code}`);
+    const none = await staff.call('/api/docs/meta/announce-order', { method: 'PUT', body: { ids: [] } });
+    check('14.6 一篇都不给 → 400 bad_ids', none.status === 400 && none.error?.code === 'bad_ids', `${none.status} ${none.error?.code}`);
+
+    // 14.7 这个接口不该被拿去排别人的积木
+    const other = await author.call('/api/docs', { method: 'POST', body: { title: '不是公告的一篇', kind: 'post', scope: 'public' } });
+    const otherId = Number(other.data?.doc?.id);
+    const notAnnounce = await staff.call('/api/docs/meta/announce-order', { method: 'PUT', body: { ids: [otherId] } });
+    check(
+      '14.7 拿普通积木来排 → 400 not_announce',
+      notAnnounce.status === 400 && notAnnounce.error?.code === 'not_announce',
+      `${notAnnounce.status} ${notAnnounce.error?.code}`,
+    );
+    await author.call(`/api/docs/${otherId}`, { method: 'DELETE' });
+
+    // 14.8 只给一部分：名单里的按给的先后拿到新号，**不在名单里的一个字节都不动**。
+    //
+    // 注意别把这条写成「只给一篇它就会排到最前」—— 不成立。编号是「这份名单里的第几名」，
+    // 一篇的名单只会给它 10 号，而别人原来的号没有被清掉，可能本来就比 10 大。
+    // 「想让它上首页」的正确做法是把整份顺序一起发过来（前端就是这么做的，见 `moveAnnounce`）。
+    const listed = [made[1], made[0]];
+    const partial = await staff.call('/api/docs/meta/announce-order', { method: 'PUT', body: { ids: listed } });
+    check('14.8 只给一部分也收（不在名单里的不动）', partial.status === 200, `${partial.status} ${JSON.stringify(partial.error)}`);
+    const partialIds = await orderIds();
+    const keepOut = (list) => list.filter((id) => !listed.includes(id));
+    check(
+      '14.8 名单里的按给的先后排好，其余保持原来的相对顺序',
+      partialIds.indexOf(listed[0]) < partialIds.indexOf(listed[1]) &&
+        partialIds.length === afterIds.length &&
+        JSON.stringify(keepOut(partialIds)) === JSON.stringify(keepOut(afterIds)),
+      partialIds.join(','),
+    );
+    // 14.9 把整份顺序发过来时，「我想让谁在前 5」就完全说了算 —— 这才是首页要的语义
+    const whole = [made[0], made[1], made[2], ...afterIds.filter((id) => !made.includes(id))];
+    const putWhole = await staff.call('/api/docs/meta/announce-order', { method: 'PUT', body: { ids: whole } });
+    const wholeIds = await orderIds(5);
+    check(
+      '14.9 发整份顺序时，前 5 条就是发过去的前 5 条（首页显示的就是它们）',
+      putWhole.status === 200 && JSON.stringify(wholeIds) === JSON.stringify(whole.slice(0, 5)),
+      `${putWhole.status} ${wholeIds.join(',')}`,
+    );
+
+    // 收尾：把这三篇删掉，别让后面的用例看到多余的公告
+    for (const id of made) await staff.call(`/api/docs/${id}`, { method: 'DELETE' });
+  }
+
   await finish(failures.length ? 1 : 0);
 } catch (error) {
   console.log('❌ 测试脚本自己抛了异常：');
