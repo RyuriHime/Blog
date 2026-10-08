@@ -237,6 +237,10 @@ check('统一的错误出口 toastError 存在', /function toastError\(/.test(ap
 check('不再有裸的 toast(error.message)（统一走 toastError）', !/toast\(error\.message/.test(appJs));
 check('不再有裸的 fail(error.message)（统一走 apiErrorText）', !/fail\(error\.message/.test(appJs));
 check(
+  'AI 的失败文案原样透出（别被 5xx 那句「服务器开小差了」顶掉）',
+  /code\.startsWith\('ai_'\)/.test(appJs),
+);
+check(
   'route() 有请求序号守卫（防切页竞态）',
   /routeSeq \+= 1/.test(appJs) && /throw routeAborted\(\)/.test(appJs) && /if \(seq !== null && seq !== routeSeq\)/.test(appJs),
 );

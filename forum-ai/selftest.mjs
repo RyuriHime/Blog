@@ -33,6 +33,7 @@ import {
   toResponse,
   rawOutputHead,
   isTruncated,
+  AI_ERROR_STATUS,
 } from './src/index.mjs';
 
 let passed = 0;
@@ -329,6 +330,57 @@ try {
   const asked = await answerQuestion('分页怎么优化？', DOCS.slice(0, 1), { scope: 'document', chatOptions: { env } });
   check('问答返回答案与引用', asked.answer.text.length > 0 && asked.answer.citations.length === 1, JSON.stringify(asked.answer.citations));
   check('问答保留备注与置信度', asked.answer.notes.length === 1 && asked.answer.confidence === 'high');
+
+  /* ---------------- 问答的输出预算与截断自适应（LOCAL PATCH L） ---------------- */
+  console.log('\n▶ 问答预算与截断自适应');
+  mock.calls.length = 0;
+  await answerQuestion('分页怎么优化？', DOCS.slice(0, 2), { scope: 'corpus', chatOptions: { env } });
+  check('问答默认输出预算放宽到 3000（上游写死 1200，宽问题必被截断）', mock.calls.at(-1)?.body?.max_tokens === 3000, String(mock.calls.at(-1)?.body?.max_tokens));
+  mock.calls.length = 0;
+  await answerQuestion('分页怎么优化？', DOCS.slice(0, 2), { scope: 'corpus', chatOptions: { env: { ...env, AI_ASK_MAX_TOKENS: '5000' } } });
+  check('预算可以用 AI_ASK_MAX_TOKENS 覆盖', mock.calls.at(-1)?.body?.max_tokens === 5000, String(mock.calls.at(-1)?.body?.max_tokens));
+  check('新变量没有混进 /api/site 的 ai 形状里', !aiStatus(env).envKeys.includes('AI_ASK_MAX_TOKENS'), JSON.stringify(aiStatus(env).envKeys));
+
+  // 材料一多就被截断：6 篇长文档 > 6000 字（截断），砍半后 < 6000 字（答得完）
+  const bigAskDocs = Array.from({ length: 6 }, (_, index) => ({
+    id: `ask-${index + 1}`,
+    title: `长文档 ${index + 1}`,
+    content: `正文哨兵${index + 1} `.repeat(200),
+    board: '技术',
+    createdAt: Date.now(),
+    updatedAt: Date.now(),
+  }));
+  mock.calls.length = 0;
+  mock.truncateOverChars = 6000;
+  const retried = await answerQuestion('这些文档讲什么？', bigAskDocs, { scope: 'corpus', chatOptions: { env } });
+  check('被截断时自动少喂一半再问一次', mock.calls.length === 2 && retried.answer.text.length > 0, `calls=${mock.calls.length}`);
+  check('第二次问的预算翻倍（封顶 8000）', mock.calls.at(-1)?.body?.max_tokens === 6000, String(mock.calls.at(-1)?.body?.max_tokens));
+  check(
+    '第二次的材料确实变短了',
+    String(mock.calls.at(-1)?.body?.messages?.at(-1)?.content ?? '').length < String(mock.calls[0]?.body?.messages?.at(-1)?.content ?? '').length,
+    `${String(mock.calls[0]?.body?.messages?.at(-1)?.content ?? '').length} → ${String(mock.calls.at(-1)?.body?.messages?.at(-1)?.content ?? '').length}`,
+  );
+
+  mock.calls.length = 0;
+  mock.truncateOverChars = 200; // 砍半后仍然超预算：两次都答不完
+  let truncatedAskError = null;
+  try {
+    await answerQuestion('这些文档讲什么？', bigAskDocs, { scope: 'corpus', chatOptions: { env } });
+  } catch (error) {
+    truncatedAskError = error;
+  }
+  check('两次都答不完 → ai_answer_truncated（不再假装是「服务器开小差」）', truncatedAskError?.code === 'ai_answer_truncated' && mock.calls.length === 2, `${truncatedAskError?.code}/calls=${mock.calls.length}`);
+  check('这个错误码被宿主映射成 503', AI_ERROR_STATUS.ai_answer_truncated === 503, String(AI_ERROR_STATUS.ai_answer_truncated));
+
+  mock.calls.length = 0;
+  let singleTruncatedError = null;
+  try {
+    await answerQuestion('这篇讲什么？', [bigAskDocs[0]], { scope: 'document', chatOptions: { env } });
+  } catch (error) {
+    singleTruncatedError = error;
+  }
+  check('只有一篇材料时不重复问（砍半没意义，照原样抛错）', singleTruncatedError?.code === 'ai_empty_response' && mock.calls.length === 1, `${singleTruncatedError?.code}/calls=${mock.calls.length}`);
+  mock.truncateOverChars = 0;
 
   /* ---------------- 上游抖动：空响应与重试 ---------------- */
   console.log('\n▶ 上游抖动与重试');

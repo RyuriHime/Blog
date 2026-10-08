@@ -534,6 +534,25 @@ export async function reviewCorpus(docs, options = {}) {
 }
 
 /**
+ * 问答的输出预算（LOCAL PATCH，见 LOCAL-PATCHES.md 的 L 节）。
+ *
+ * 上游把问答的 `maxTokens` 写死成 1200：全站问答（14 篇材料、要带引用的 JSON）实测
+ * 输出 992 就已经贴到上限，问题一宽就撞 `finish_reason=length` —— 上游对这种情况
+ * 明确不重试（见 `isTruncated`），于是返回空正文 → `ai_empty_response` → 前端
+ * 只看到「服务器开小差了」。这里把预算放宽，并允许 `AI_ASK_MAX_TOKENS` 覆盖。
+ *
+ * 注意：**不要**把这个变量名加进 `aiStatus()` 的 `envKeys`（`/api/site` 的 `ai`
+ * 形状被 `scripts/check-golden.mjs` 冻着）。
+ */
+const ASK_MAX_TOKENS_DEFAULT = 3000;
+
+/** 问答预算：环境变量优先，非法值退回默认。 */
+function askMaxTokens(env) {
+  const value = Number(env?.AI_ASK_MAX_TOKENS);
+  return Number.isFinite(value) && value >= 200 ? Math.floor(value) : ASK_MAX_TOKENS_DEFAULT;
+}
+
+/**
  * 基于材料的问答。
  * @param {string} question
  * @param {Array<object>} docs 本次允许使用的材料
@@ -541,19 +560,43 @@ export async function reviewCorpus(docs, options = {}) {
  */
 export async function answerQuestion(question, docs, options = {}) {
   const { scope = 'corpus', charLimit, chatOptions = {} } = options;
-  const material = buildMaterial(docs, {
-    charLimit: charLimit ?? (scope === 'document' ? 16000 : 24000),
-    withReplies: true,
-    withContent: true,
-  });
-  const { parsed, model, usage } = await chatJson(
-    [
-      { role: 'system', content: ASK_SYSTEM },
-      { role: 'user', content: renderAskUser({ scope, material: material.text, question: clampText(question, 500) }) },
-    ],
-    { temperature: 0.3, maxTokens: 1200, badJsonMessage: 'AI 返回的问答结果不是合法 JSON', ...chatOptions },
-  );
+  const limit = charLimit ?? (scope === 'document' ? 16000 : 24000);
+  const budget = askMaxTokens(chatOptions.env);
 
+  const ask = (list, cap, maxTokens) => {
+    const material = buildMaterial(list, { charLimit: cap, withReplies: true, withContent: true });
+    return chatJson(
+      [
+        { role: 'system', content: ASK_SYSTEM },
+        { role: 'user', content: renderAskUser({ scope, material: material.text, question: clampText(question, 500) }) },
+      ],
+      { temperature: 0.3, maxTokens, badJsonMessage: 'AI 返回的问答结果不是合法 JSON', ...chatOptions },
+    ).then((result) => ({ ...result, material }));
+  };
+
+  let attempt;
+  try {
+    attempt = await ask(docs, limit, budget);
+  } catch (error) {
+    // 预算被烧光时上游不重试，但**材料少一半往往就答得完**：少喂几篇、预算翻倍再问一次。
+    if (!isTruncated(error) || docs.length < 2) throw error;
+    const half = docs.slice(0, Math.max(1, Math.ceil(docs.length / 2)));
+    try {
+      attempt = await ask(half, Math.max(4000, Math.floor(limit / 2)), Math.min(budget * 2, 8000));
+    } catch (retryError) {
+      // 两次都答不完：给一句用户看得懂的失败原因（前端对 `ai_*` 码会原样展示这句话）。
+      if (isTruncated(retryError)) {
+        throw new AiError(
+          'ai_answer_truncated',
+          '这次的资料太多，模型没能在预算内答完。把问题问得具体一点（或选中某一篇再问）会好很多。',
+          retryError.details ?? error.details ?? {},
+        );
+      }
+      throw retryError;
+    }
+  }
+
+  const { parsed, model, usage, material } = attempt;
   const answer = normalizeAnswer(parsed, docs);
   return { answer, model, usage, truncated: material.truncated, included: material.included };
 }

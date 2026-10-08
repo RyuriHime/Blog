@@ -37,6 +37,10 @@ function apiErrorText(error) {
   }
   if (status === 429 || code === 'rate_limited') return '操作太频繁了，歇一会儿再试';
   if (status === 403) return error?.message || '没有权限执行这个操作';
+  // AI 那边（`ai_*`）的文案本来就是写给用户看的：「AI 还没配置」「这次的资料太多，
+  // 模型没能在预算内答完」都比一句「服务器开小差了」有用，所以别让下面那条 5xx 的
+  // 通用文案把它盖掉（后端 `AI_ERROR_STATUS` 把这些码映射成 5xx/504）。
+  if (typeof code === 'string' && code.startsWith('ai_') && error?.message) return error.message;
   if (status >= 500) return '服务器开小差了，请稍后再试';
   return error?.message || '操作失败';
 }
