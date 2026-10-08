@@ -43,6 +43,7 @@ import {
   AI_FENCE_GUIDE,
 } from './syntax.js';
 import { repairBlock, repairBlockList, repairMarkdown, describeRepairs } from './programs.js';
+import { registerExtractRoutes } from './extract.js';
 import {
   AI_PRICE_CURRENCY,
   AI_PRICE_UNIT,
@@ -163,13 +164,13 @@ function usedToday(db, userId, capability, at) {
 }
 
 /** 只看授权在不在、过没过期，不看配额（回滚用：撤销不该被额度挡住）。 */
-function requireCapability(db, userId, capability) {
+function requireCapability(db, userId, capability, detail = null) {
   const grant = readGrant(db, userId, capability);
   ensure(
     isGrantActive(grant, Date.now()),
     403,
     'forbidden',
-    `未授权能力「${capability}」，请先在 /api/ai-edit/grants 授权`,
+    detail ?? `未授权能力「${capability}」，请先在 /api/ai-edit/grants 授权`,
   );
   return grant;
 }
@@ -177,10 +178,14 @@ function requireCapability(db, userId, capability) {
 /**
  * 服务端强制：没有有效授权就 403，超出每日配额就 429 `ai_rate_limited`。
  * 前端藏不藏按钮跟这里无关 —— 这道门在服务端（FR-CAP-01/03/04/07）。
+ *
+ * `forbiddenDetail` 只改那句 403 的人话（代号仍是 `forbidden`）：
+ * 目录里多了一项能力之后，「未授权能力 extract_image」这种话用户看不懂，
+ * 得说成「没有『图片识别（走视觉模型）』这项能力授权」。缺省不变，既有调用点逐字照旧。
  */
-function guardCapability(db, userId, capability) {
+function guardCapability(db, userId, capability, forbiddenDetail = null) {
   const at = Date.now();
-  const grant = requireCapability(db, userId, capability);
+  const grant = requireCapability(db, userId, capability, forbiddenDetail);
   const quota = Number(grant.daily_quota ?? 0);
   if (quota > 0) {
     const used = usedToday(db, userId, capability, at);
@@ -1034,10 +1039,16 @@ function documentSystemPrompt() {
  * 和「超时」写日志，被 401/403/429/500 拒绝的那几条什么都不记，审计就是缺的。
  * 抽成一个函数也是为了让下一个接口不可能漏掉这几行。被拒的分支**没有** token 可记：
  * 上游没生成内容，也就没有用量。
+ *
+ * `userContent` 是**可选**的第二形状：给了就用它当 `user` 的 content（多模态要数组，
+ * 例如 `[{ type:'image_url', image_url:{ url } }, { type:'text', text }]`，见 `extract.js`
+ * 的图片识别）；不给就还是 `userText` 那个纯字符串，既有四个调用点逐字不变。
+ * **只加这一个形参、不另开一条发模型的路径**：记账（`recordTokenUsage`）、
+ * blocked 日志、三类错误码全在这个函数里，第二条路径迟早漏掉其中一行。
  */
 async function callModel(
   db,
-  { userId, capability, action, targetId, targetType = 'document_block', system, userText },
+  { userId, capability, action, targetId, targetType = 'document_block', system, userText, userContent = null },
 ) {
   // 没配 key 的 503 在这里；路由在 `rateLimit` 之前已经先问过一次（同一个函数），
   // 那次之后 key 不会凭空出现，所以这里通常只是兜底。
@@ -1069,7 +1080,9 @@ async function callModel(
         temperature: 0.2,
         messages: [
           { role: 'system', content: system },
-          { role: 'user', content: userText },
+          // 数组优先：多模态的 content 本来就该是数组，纯文本时 `userContent` 是 null，
+          // 这里发出的仍然是 `userText` 那个字符串（既有接口的请求体一个字节都没变）。
+          { role: 'user', content: Array.isArray(userContent) ? userContent : userText },
         ],
       }),
       signal: controller.signal,
@@ -2343,4 +2356,17 @@ export function registerAiRoutes(ctx) {
     );
     return ctx.http.ok(reqCtx.res, { canceled: true, id });
   });
+
+  // ── 17. 左栏那两条转换：文档 / PDF → Markdown、图片 → Markdown（视觉）─────
+  //
+  // 它们原先挂在 `note-agent/src/routes.mjs`（`/api/note-agent/extract` 与
+  // `/api/note-agent/extract-image`），但**部署脚本只替换 `src/` `public/` `scripts/`**，
+  // `note-agent/` 整个包不在范围内 —— 界面上线了、接口在线上是 404 `notes_not_found`。
+  // 所以接口本体搬进 `./extract.js`（抽取器仍然 import note-agent 那份，不抄第二份），
+  // 在这里注册。两条**都不落盘、不产生可回滚的改动**：
+  //   · `/extract`        —— 不调模型、不花钱（连 op 日志都不写）；
+  //   · `/extract-image`  —— 走视觉模型，计费（`action: 'extract'` 已进 `AI_QUOTA_ACTIONS`）。
+  // 这也是本项目里**唯一**一处把 `user` 的 content 发成数组（多模态）的地方：
+  // 为此给 `callModel` 加了一个可选形参 `userContent`，没有另开发模型的路径。
+  registerExtractRoutes(ctx, { routes, db, viewer, callModel, guardCapability, guardSiteBudget, rateLimit, logOp });
 }

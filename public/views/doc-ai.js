@@ -21,7 +21,13 @@
 // 后端是 `/api/ai-edit/*`（`src/modules/ai/routes.js`）：
 //   POST /draft-range  scope=document  { documentId, markdown, instruction } → 整篇草稿
 //   POST /review       { documentId, markdown }                             → 只出意见
+//   POST /extract      { files:  [{ name, dataUrl }] }                      → 文档/PDF → Markdown（不花模型）
+//   POST /extract-image{ images: [{ dataUrl }] }                            → 图片 → Markdown（视觉模型）
 // 落盘不由这里做（`ai-edit` 页面才管落盘与回滚），这里只把文本写回编辑区。
+//
+// ⚠️ 那两条转换以前打的是 `/api/note-agent/extract*`：接口在 `note-agent/` 包里，
+// 而部署只替换 `src/` `public/` `scripts/`，所以线上一直是 404。接口已搬进
+// `src/modules/ai/extract.js`（抽取器仍是 import 来的那一份），别改回去。
 
 import { esc } from '../core/dom.js';
 import { api } from '../core/api.js';
@@ -317,12 +323,18 @@ export function mountDocAi(options = {}) {
   async function convertFiles(files) {
     const list = [...(files ?? [])];
     if (!list.length) return;
-    const form = new FormData();
-    for (const file of list) form.append('files', file, file.name);
     convertHint(`正在抽取 ${list.length} 个文件…（不发模型）`);
     try {
-      // 这里直接 fetch：`api()` 会把 body 一律 JSON.stringify，FormData 走不了那条路。
-      const response = await fetch('/api/note-agent/extract', { method: 'POST', body: form, credentials: 'same-origin' });
+      // 文档那条也走 JSON + data URL（和图片、头像、团队文件柜同一个约定）：
+      // 宿主路由层不支持 multipart，而 data URL 只是多 33% 的编码膨胀，
+      // 请求体上限由服务端逐路由放宽（见 src/modules/ai/extract.js）。
+      const payloadFiles = await Promise.all(list.map(readAsDataUrl));
+      const response = await fetch('/api/ai-edit/extract', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ files: payloadFiles }),
+        credentials: 'same-origin',
+      });
       const payload = await response.json().catch(() => null);
       if (!response.ok || !payload?.ok) throw new Error(payload?.error?.message || `抽取失败（HTTP ${response.status}）`);
       const data = payload.data ?? {};
@@ -333,22 +345,24 @@ export function mountDocAi(options = {}) {
     }
   }
 
+  // 文档与图片两条都从这里读文件（文档那条以前用 FormData 直接塞文件对象，
+  // 现在服务端统一收 JSON + data URL，见文件头的接口清单）。
   const readAsDataUrl = (file) =>
     new Promise((resolve, reject) => {
       const reader = new FileReader();
-      reader.onerror = () => reject(new Error('图片读取失败'));
+      reader.onerror = () => reject(new Error(`「${file?.name ?? '文件'}」读取失败`));
       reader.onload = () => resolve({ name: file.name, dataUrl: String(reader.result ?? '') });
       reader.readAsDataURL(file);
     });
 
-  /** 图片 → Markdown：走视觉模型（`/api/note-agent/extract-image`），需要站点配好 AI。 */
+  /** 图片 → Markdown：走视觉模型（`/api/ai-edit/extract-image`），需要站点配好 AI。 */
   async function convertImages(files) {
     const list = [...(files ?? [])];
     if (!list.length) return;
     convertHint(`正在看图（${list.length} 张）…（这一步会花模型）`);
     try {
       const images = await Promise.all(list.map(readAsDataUrl));
-      const response = await fetch('/api/note-agent/extract-image', {
+      const response = await fetch('/api/ai-edit/extract-image', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ images }),

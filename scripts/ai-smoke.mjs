@@ -103,9 +103,12 @@ const BUDGET_LIMIT = 2;
  * 有五项（read_post / read_site / network / site_tools / publish）**从来没有调用点** ——
  * 授权、配额、收回全都点得动，却什么也拦不住。所以这里当哨兵：谁要是手滑往目录里加一项
  * 而又没接线，第 3 节就红。
+ *
+ * `extract` / `extract_image` 是「左栏那两条转换」搬进宿主时加的（调用点在
+ * `src/modules/ai/extract.js`，见第 18.6 节）。加一项就得在这里加一项 —— 这份清单
+ * 与目录**长度必须相等**，它就是靠这个把「目录里多出一项没人接线」钉住的。
  */
-const WIRED_CAPABILITIES = ['edit_content'];
-
+const WIRED_CAPABILITIES = ['edit_content', 'extract', 'extract_image'];
 /** 整个测试反复用的两块：P2 的块形状就是 `{ type, props }`。 */
 const BLOCK_BEFORE = { type: 'paragraph', props: { text: '旧文案' } };
 const BLOCK_AFTER = { type: 'poll', props: { question: '选哪个？', options: ['A', 'B'] } };
@@ -375,7 +378,11 @@ try {
   const capsAfter = await admin.call('/api/ai-edit/capabilities');
   const editCap = capsAfter.data.capabilities.find((item) => item.key === 'edit_content');
   check('授权状态在能力目录里可见（FR-CAP-09）', editCap?.granted === true, JSON.stringify(editCap));
-  check('目录里只有这一项能力，没有别的开关可授权', capsAfter.data.capabilities.length === 1);
+  check(
+    '目录里只有接上了线的那几项，没有别的开关可授权',
+    capsAfter.data.capabilities.length === WIRED_CAPABILITIES.length,
+    JSON.stringify(capsAfter.data.capabilities.map((item) => item.key)),
+  );
 
   /* ---------- 7. 预览与落盘（FR-CAP-06：没确认不落盘） ---------- */
   const previewBody = {
@@ -902,6 +909,8 @@ try {
   // `{"type":"vote","props":{}}` 这种自造类型，落盘时才会炸，所以必须在这里挡住。
   let modelMode = 'ok';
   let lastRequestBody = null;
+  /** 假模型收到的请求（按顺序记 URL）：第 18.6 节用它证明「不花模型的那条真没发请求」。 */
+  const modelRequests = [];
   let lastAuth = '';
 
   /**
@@ -952,6 +961,9 @@ try {
   }
 
   const stub = createServer((req, res) => {
+    // 收到几次请求（第 18.6 节的「文档抽取不调模型」靠它取证：不是看返回体，
+    // 而是看假模型**到底有没有被打扰过**）。
+    modelRequests.push(req.url);
     let raw = '';
     req.on('data', (chunk) => {
       raw += chunk;
@@ -987,6 +999,14 @@ try {
       if (modelMode === 'ratelimited') return send(429, { error: { message: 'slow down' } });
       if (modelMode === 'upstream') return send(500, { error: { message: 'boom' } });
       if (modelMode === 'badjson') return send(200, { choices: [{ message: { content: '这不是 JSON' } }] });
+      // ── 第 18.6 节（图片 → Markdown）：视觉模型那条 ─────────────────────
+      //
+      // 故意套一层 ``` 围栏：真模型老这么干，服务端必须剥掉（剥不干净的话，
+      // 编辑区里会多出三行反引号）。这一段同时也是「请求里到底有没有 image_url」的取证点
+      // —— 断言读的是 `lastRequestBody`，不是我们自己的返回体。
+      if (modelMode === 'vision') {
+        return send(200, { choices: [{ message: { content: '```\n$E=mc^2$\n```' } }] });
+      }
       // 合法的 JSON，但块类型是模型自造的 `vote`（合法 type 里没有它）。
       if (modelMode === 'unknownType') {
         return send(200, { choices: [{ message: { content: '{"type":"vote","props":{}}' } }] });
@@ -1458,6 +1478,291 @@ try {
   );
   check('坏形状也留下了 blocked 审计', reviewBlocked?.status === 'blocked', JSON.stringify(reviewBlocked ?? null));
   modelMode = 'ok';
+
+  /* ---------- 18.6 左栏那两条转换：文档 / PDF → Markdown、图片 → Markdown ---------- */
+  //
+  // 接口原先挂在 `note-agent/`（`/api/note-agent/extract*`），但**部署只替换
+  // `src/` `public/` `scripts/`**，那个包不在范围内 ⇒ 线上实测 404 `notes_not_found`，
+  // 而界面照样上线（PR #37 的接口那一半就是这么废掉的）。所以这一节先钉住
+  // 「新前缀能用」，再钉住两条路各自的形状与账：
+  //   · `/extract`        —— 不调模型（假模型一次都不许收到请求）、不写 op 日志、不吃额度；
+  //   · `/extract-image`  —— 必须真的把 `image_url` 发出去，并且**记一条 applied 审计**
+  //     （不记的话：用户能在配额之外无限刷一个按 token 计费的接口）。
+  //
+  // 用的是新的 `extract` / `extract_image` 两项能力，所以下面每一条都先验 403 再授权 ——
+  // 目录里加了一项能力而没有任何 403 的用例，等于那项能力可能谁都能用。
+  {
+    // 造一个**真 PDF**（带文字层）：这是「真 PDF 抽得出文字」那条验收项的最小复现。
+    const pdfBody = [
+      'BT',
+      '/F1 12 Tf',
+      '72 720 Td',
+      '(P5 extract check) Tj',
+      'ET',
+    ].join('\n');
+    const pdfObjects = [
+      '<< /Type /Catalog /Pages 2 0 R >>',
+      '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
+      '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>',
+      `<< /Length ${Buffer.byteLength(pdfBody, 'latin1')} >>\nstream\n${pdfBody}\nendstream`,
+      '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>',
+    ];
+    let pdf = '%PDF-1.4\n';
+    const offsets = [];
+    for (const [index, object] of pdfObjects.entries()) {
+      offsets.push(pdf.length);
+      pdf += `${index + 1} 0 obj\n${object}\nendobj\n`;
+    }
+    const xref = pdf.length;
+    pdf += `xref\n0 ${pdfObjects.length + 1}\n0000000000 65535 f \n`;
+    for (const offset of offsets) pdf += `${String(offset).padStart(10, '0')} 00000 n \n`;
+    pdf += `trailer\n<< /Size ${pdfObjects.length + 1} /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF\n`;
+    const pdfDataUrl = `data:application/pdf;base64,${Buffer.from(pdf, 'latin1').toString('base64')}`;
+    const pngDataUrl =
+      'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8AAAwAB/AGtE0eKAAAAAElFTkSuQmCC';
+
+    // 未登录 → 401（两条都是）。
+    const anonExtract = await createClient(KEYED_BASE).call('/api/ai-edit/extract', {
+      method: 'POST',
+      body: { files: [{ name: 'a.pdf', dataUrl: pdfDataUrl }] },
+    });
+    check('未登录不能抽取文档 → 401', anonExtract.status === 401, `实际 ${anonExtract.status}`);
+    const anonVision = await createClient(KEYED_BASE).call('/api/ai-edit/extract-image', {
+      method: 'POST',
+      body: { images: [{ dataUrl: pngDataUrl }] },
+    });
+    check('未登录不能识别图片 → 401', anonVision.status === 401, `实际 ${anonVision.status}`);
+
+    // 没开能力 → 403（服务端拦，不是前端藏按钮）。
+    const noGrantExtract = await keyedReviewer.call('/api/ai-edit/extract', {
+      method: 'POST',
+      body: { files: [{ name: 'a.pdf', dataUrl: pdfDataUrl }] },
+    });
+    check(
+      '没开 extract 能力就抽取文档 → 403',
+      noGrantExtract.status === 403,
+      `${noGrantExtract.status} ${JSON.stringify(noGrantExtract.error ?? null)}`,
+    );
+    check(
+      '403 的人话点出被拒的是哪一项能力（不能写死「修改内容」）',
+      String(noGrantExtract.error?.message ?? '').includes('文档转换'),
+      String(noGrantExtract.error?.message ?? ''),
+    );
+    const noGrantVision = await keyedReviewer.call('/api/ai-edit/extract-image', {
+      method: 'POST',
+      body: { images: [{ dataUrl: pngDataUrl }] },
+    });
+    check('没开 extract_image 能力就识别图片 → 403', noGrantVision.status === 403, `${noGrantVision.status}`);
+
+    // 授权：低风险的 `extract` 不带 confirm 也得能开（服务端不为非高风险能力要 confirm）。
+    const grantExtract = await keyedReviewer.call('/api/ai-edit/grants', {
+      method: 'POST',
+      body: { capability: 'extract' },
+    });
+    check(
+      '低风险的 extract 不带 confirm 也授得下来',
+      grantExtract.status === 200 && grantExtract.data?.granted === true,
+      `${grantExtract.status} ${JSON.stringify(grantExtract.error ?? null)}`,
+    );
+    const grantVision = await keyedReviewer.call('/api/ai-edit/grants', {
+      method: 'POST',
+      body: { capability: 'extract_image' },
+    });
+    check('中风险的 extract_image 也授得下来', grantVision.status === 200, `${grantVision.status}`);
+
+    // 文档那条：真 PDF → 文字。
+    const beforeFree = await editContentUsed(keyedReviewer);
+    const modelCallsBefore = modelRequests.length;
+    const extracted = await keyedReviewer.call('/api/ai-edit/extract', {
+      method: 'POST',
+      body: { files: [{ name: 'formula.pdf', dataUrl: pdfDataUrl }] },
+    });
+    check(
+      '真 PDF（带文字层）能抽出文字',
+      extracted.status === 200 && String(extracted.data?.markdown ?? '').includes('P5 extract check'),
+      `${extracted.status} ${JSON.stringify(extracted.data ?? extracted.error ?? null).slice(0, 200)}`,
+    );
+    check(
+      '返回形状与 note-agent 那版一致（items + markdown）',
+      Array.isArray(extracted.data?.items) &&
+        extracted.data.items[0]?.kind === 'pdf' &&
+        typeof extracted.data.items[0]?.bytes === 'number',
+      JSON.stringify(extracted.data?.items ?? null),
+    );
+    check(
+      '文档抽取**不调模型**（假模型一次都没收到请求）',
+      modelRequests.length === modelCallsBefore,
+      `${modelRequests.length - modelCallsBefore}`,
+    );
+
+    // 公式定界符归一：`\[…\]` / `\(…\)` 只能从**文本**材料进来（PDF 字面串里的 `\(`
+    // 是转义括号，解析器把它还原成 `(` —— 见 note-agent 的 test-extract-office）。
+    // 走的是与 PDF 完全相同的那两行（`normalizeBlocks` → `blocksToMarkdown`）。
+    const formulaSource = 'inline \\(a+b\\) and display \\[x^2+y^2\\] here';
+    const formulaDoc = await keyedReviewer.call('/api/ai-edit/extract', {
+      method: 'POST',
+      body: {
+        files: [
+          {
+            name: 'formula.md',
+            dataUrl: `data:text/markdown;base64,${Buffer.from(formulaSource, 'utf8').toString('base64')}`,
+          },
+        ],
+      },
+    });
+    const formulaMarkdown = String(formulaDoc.data?.markdown ?? '');
+    check('`\\(a+b\\)` → `$a+b$`', formulaMarkdown.includes('$a+b$'), formulaMarkdown);
+    check(
+      '`\\[x^2+y^2\\]` → `$$…$$`',
+      formulaMarkdown.includes('x^2+y^2') && formulaMarkdown.includes('$$'),
+      formulaMarkdown,
+    );
+
+    // 那条不花模型的接口**不记账**：不占额度、日志里也不该多出一行 ——
+    // 它要是记了，用户的图片识别额度会被「抽个 PDF」这种免费操作吃掉。
+    const afterFree = await editContentUsed(keyedReviewer);
+    check('文档抽取不吃 edit_content 的额度', afterFree === beforeFree, `${beforeFree} → ${afterFree}`);
+
+    // 参数与限额的门。
+    const noFiles = await keyedReviewer.call('/api/ai-edit/extract', { method: 'POST', body: {} });
+    check('files 不是非空数组 → 400', noFiles.status === 400, `实际 ${noFiles.status}`);
+    const tooMany = await keyedReviewer.call('/api/ai-edit/extract', {
+      method: 'POST',
+      body: {
+        files: Array.from({ length: 11 }, (_v, index) => ({ name: `f${index}.pdf`, dataUrl: pdfDataUrl })),
+      },
+    });
+    check('一次超过 10 个文件 → 400（不是等到抽一半才发现）', tooMany.status === 400, `实际 ${tooMany.status}`);
+    const badDataUrl = await keyedReviewer.call('/api/ai-edit/extract', {
+      method: 'POST',
+      body: { files: [{ name: 'a.pdf', dataUrl: 'not-a-data-url' }] },
+    });
+    check('dataUrl 形状不对 → 400', badDataUrl.status === 400, `实际 ${badDataUrl.status}`);
+    const oversize = await keyedReviewer.call('/api/ai-edit/extract', {
+      method: 'POST',
+      body: {
+        files: [
+          {
+            name: 'huge.pdf',
+            dataUrl: `data:application/pdf;base64,${Buffer.alloc(4 * 1024 * 1024 + 1024, 0x41).toString('base64')}`,
+          },
+        ],
+      },
+    });
+    check('单文件超过 4MB → 400（base64 那 33% 由逐路由 bodyLimit 兜住）', oversize.status === 400, `实际 ${oversize.status}`);
+
+    // 抽不出来的那一个**不拖垮整批**：坏文件单独报错，好的那份照常给。
+    const mixed = await keyedReviewer.call('/api/ai-edit/extract', {
+      method: 'POST',
+      body: {
+        files: [
+          { name: 'good.pdf', dataUrl: pdfDataUrl },
+          { name: 'bad.exe', dataUrl: `data:application/octet-stream;base64,${Buffer.from('MZ-not-a-doc').toString('base64')}` },
+        ],
+      },
+    });
+    check(
+      '单源失败不中断整批：好的抽出来、坏的单条报错',
+      mixed.status === 200 &&
+        String(mixed.data?.markdown ?? '').includes('P5 extract check') &&
+        typeof mixed.data?.items?.[1]?.error === 'string',
+      JSON.stringify(mixed.data?.items ?? mixed.error ?? null).slice(0, 240),
+    );
+
+    // 图片那条：必须真的把视觉附件发给模型。
+    const badImage = await keyedReviewer.call('/api/ai-edit/extract-image', {
+      method: 'POST',
+      body: { images: [{ dataUrl: 'data:application/pdf;base64,AAAA' }] },
+    });
+    check('非图片进图片接口 → 400', badImage.status === 400, `实际 ${badImage.status}`);
+    const tooManyImages = await keyedReviewer.call('/api/ai-edit/extract-image', {
+      method: 'POST',
+      body: { images: Array.from({ length: 7 }, () => ({ dataUrl: pngDataUrl })) },
+    });
+    check('一次超过 6 张图片 → 400', tooManyImages.status === 400, `实际 ${tooManyImages.status}`);
+
+    modelMode = 'vision';
+    const vision = await keyedReviewer.call('/api/ai-edit/extract-image', {
+      method: 'POST',
+      body: { images: [{ dataUrl: pngDataUrl }] },
+    });
+    check(
+      '图片识别成功',
+      vision.status === 200,
+      `${vision.status} ${JSON.stringify(vision.error ?? null)}`,
+    );
+    check(
+      '视觉结果里的 ``` 围栏被剥掉了',
+      String(vision.data?.markdown ?? '') === '$E=mc^2$',
+      JSON.stringify(vision.data?.markdown ?? null),
+    );
+    const visionContent = lastRequestBody?.messages?.[1]?.content;
+    check(
+      '发出去的 user content 是数组（多模态，不是纯文本）',
+      Array.isArray(visionContent),
+      JSON.stringify(visionContent)?.slice(0, 120),
+    );
+    check(
+      '数组里**确实有 image_url** 视觉附件，且就是那张图',
+      Array.isArray(visionContent) &&
+        visionContent.some(
+          (part) => part?.type === 'image_url' && String(part.image_url?.url ?? '').startsWith('data:image/png;base64,'),
+        ),
+      JSON.stringify(visionContent)?.slice(0, 240),
+    );
+    check(
+      '文本部分也还在（模型得知道要它干什么）',
+      Array.isArray(visionContent) && visionContent.some((part) => part?.type === 'text' && String(part.text ?? '').length > 0),
+      JSON.stringify(visionContent)?.slice(0, 240),
+    );
+    check(
+      'system 提示词要求只输出 Markdown 源码',
+      String(lastRequestBody?.messages?.[0]?.content ?? '').includes('Markdown'),
+      String(lastRequestBody?.messages?.[0]?.content ?? '').slice(0, 80),
+    );
+    modelMode = 'ok';
+
+    // 账：成功也要留一行 applied 审计。不记的话，一个按 token 计费的接口
+    // 可以在配额之外被无限刷 —— 用户的 usedToday 与全站预算都看不见它。
+    const visionOps = (await keyedReviewer.call('/api/ai-edit/ops?limit=50')).data?.ops ?? [];
+    const visionOp = visionOps.find((row) => row.action === 'extract' && row.targetType === 'ai_extract');
+    check(
+      '图片识别留了一条 applied 审计（action=extract）',
+      visionOp?.status === 'applied' && visionOp?.capability === 'extract_image',
+      JSON.stringify(visionOp ?? null),
+    );
+    const capsForQuota = (await keyedReviewer.call('/api/ai-edit/capabilities')).data?.capabilities ?? [];
+    check(
+      '这次调用计进了 extract_image 的当日用量',
+      Number(capsForQuota.find((item) => item.key === 'extract_image')?.usedToday ?? 0) >= 1,
+      JSON.stringify(capsForQuota.map((item) => [item.key, item.usedToday])),
+    );
+
+    // 前端那条链：URL 已经改成新的前缀，且文档那条不再用 FormData
+    //（路由层不支持 multipart，服务端那条路会直接 400）。
+    const docAiSource = readFileSync(join(ROOT, 'public', 'views', 'doc-ai.js'), 'utf8');
+    check(
+      '前端文档转换打的是 /api/ai-edit/extract',
+      docAiSource.includes("fetch('/api/ai-edit/extract'"),
+      '',
+    );
+    check(
+      '前端图片转换打的是 /api/ai-edit/extract-image',
+      docAiSource.includes("fetch('/api/ai-edit/extract-image'"),
+      '',
+    );
+    check(
+      '前端不再打那个永远 404 的 /api/note-agent/extract*',
+      // 只看**真的发请求**的那几行：文件头的注释里点名了那个旧前缀（说明为什么搬走），
+      // 把它也算进来的话，这条哨兵就变成「注释里不许提旧路径」了。
+      !docAiSource
+        .split('\n')
+        .filter((line) => /fetch\(/.test(line))
+        .some((line) => line.includes('/api/note-agent/extract')),
+      '',
+    );
+    check('前端文档那条不再用 FormData', !docAiSource.includes('new FormData()'), '');
+  }
 
   /* ---------- 19. 块类型清单不许漂移（静态哨兵 + 行为级对拍） ---------- */
   //
