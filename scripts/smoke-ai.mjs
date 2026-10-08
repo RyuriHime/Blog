@@ -397,6 +397,11 @@ try {
   const askCall = mock.calls.find((call) => String(call.body?.messages?.[1]?.content ?? '').includes('Markdown 写作有什么技巧'));
   check('问答的输出预算不再是写死的 1200', askCall?.body?.max_tokens === 3000, String(askCall?.body?.max_tokens));
 
+  // 回答挤成一大段（线上实测 1540 字、0 个换行）读不动：提示词必须明确要结构。
+  const askSystem = String(askCall?.body?.messages?.[0]?.content ?? '');
+  check('问答提示词要求分段与小标题', askSystem.includes('answer 的排版') && askSystem.includes('小节标题单独占一行'), askSystem.includes('answer 的排版') ? '已要求' : '没要求');
+  check('问答提示词要求要点写成 - 列表', askSystem.includes('"- " 开头的列表'), '');
+
   // 材料一多就被截断：服务端自己砍半、把预算加倍再问一次（而不是把 502 甩给用户）。
   const askPromptChars = String(askCall?.body?.messages?.[1]?.content ?? '').length;
   mock.maxPromptChars = Math.max(1, Math.floor(askPromptChars * 0.7));

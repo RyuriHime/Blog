@@ -392,6 +392,34 @@ AI 接口没有返回内容（finish_reason=length，提示 8840 / 生成 3000 t
 
 ---
 
+## N. 问答的回答挤成一大段：提示词没要结构，宿主也只把换行换成 `<br />`（甲类 + 乙类）
+
+**现象**：线上「问全站」的回答读不动。实测「博弈论」那一次：`answer` **1540 字、换行 0 个** ——
+`**1. 博弈论是什么** … - 合作/非合作博弈：… - 对称/非对称博弈：… [#365]` 全部挤在同一行里；
+宿主再 `esc()` 一遍、只把 `\n` 换成 `<br />`，于是 `**` 标记、列表符号、引用编号都原样露在正文里。
+用户原话：「格式能好看一点吗，可读性强一点」。
+
+**原因**（两头都有）：
+
+- **甲类**：`src/prompts.mjs` 的 `ASK_SYSTEM` 只写了「中文回答，条理清晰」，从没要求分段 / 小标题 / 列表 ——
+  模型于是把整篇答案写成一个 JSON 字符串，一个换行都没有；
+- **乙类**：宿主 `public/views/ai.js` 的 `aiAnswerHtml()` 只有 `${esc(data.answer).replace(/\n/g, '<br />')}`，
+  既没有 Markdown 渲染，也没有排版样式。
+
+**我们的修法**：
+
+| 位置 | 改动 |
+|---|---|
+| `src/prompts.mjs` | `ASK_SYSTEM` 增加「answer 的排版」5 条：先用一两句给结论再展开；小节标题**单独占一行**（`**小节标题**`，需要时带序号）；并列要点写成 `- ` 一条一行；段落之间空一行（JSON 里就是 `\n\n`）；不用表格、非必要不用代码块；`[#编号]` 紧跟对应那句话 |
+| 宿主 `public/views/ai.js` | 新增 `aiNormalizeAnswerMd()` / `aiAnswerBlocks()` / `aiAnswerBodyHtml()` / `aiInlineHtml()` / `aiCiteChips()`：先还原「模型把结构全写在一行里」（编号小标题、短加粗+冒号、行内 `- ` 要点前面断开 —— 整段出现两次以上 `- ` 才当列表，免得 `a - b` 这种减法被拆），再按块渲染段落 / 小标题 / 有序无序列表 / 引用 / 代码 / 分隔线；行内渲染 `**粗体**`、`` `代码` ``、Markdown 链接，并把 `[#37]`、`[#37, #42]` 变成可点的出处小标 |
+| 宿主 `public/views/ai.js` | 回答卡片顶部多一行「你的问题」（用后端本来就返回的 `data.question`） |
+| 宿主 `public/css/95-ai.css` | `.ai-answer-q` / `.ai-p` / `.ai-h2~4` / `.ai-answer-list` / `.ai-quote` / `.ai-pre` / `.ai-rule` / `.ai-code` / `.ai-link` / `.ai-inline-cite` 一整套；正文 `max-width: 78ch`、行高 1.9 |
+
+**同步改过的作者文件**：`scripts/smoke-ai.mjs` 加 2 项（问答提示词里真的有「answer 的排版」「小节标题单独占一行」「`- ` 开头的列表」）；
+宿主 `scripts/check-ui-contract.mjs` 加 3 项（回答走 `aiAnswerBodyHtml`、出处标 `ai-inline-cite`、不再用 `<br />` 顶替分段）。
+
+---
+
 ## 附：作者包的其它小问题（不影响功能，仅记录）
 
 1. `forum-ai/src/mount.mjs` 顶部的用法注释写的是 `mountForumAi({ db, resolveUser, baseDir: ROOT, aiDir: join(ROOT,'forum-ai') })`，但**实际函数签名没有 `baseDir` / `aiDir` 这两个参数**（注释与实现不一致）。
@@ -408,11 +436,11 @@ AI 接口没有返回内容（finish_reason=length，提示 8840 / 生成 3000 t
 | 测试 | 期望 |
 |---|---|
 | `node forum-ai/selftest-mount.mjs` | 通过 49 项，失败 0 项 |
-| `node forum-ai/selftest.mjs` | 通过 176 项，失败 0 项 |
-| `node scripts/smoke-ai.mjs` | 通过 82 项，失败 0 项 |
+| `node forum-ai/selftest.mjs` | 通过 177 项，失败 0 项 |
+| `node scripts/smoke-ai.mjs` | 通过 84 项，失败 0 项 |
 | `node scripts/smoke.mjs` | 通过 237 项，失败 0 项 |
 | `node scripts/check-golden.mjs` | 通过 88 项，差异 0 项（对外行为与改造前一致） |
-| `node scripts/check-ui-contract.mjs` | 通过 322 项（下限 317），问题 0 项 |
+| `node scripts/check-ui-contract.mjs` | 通过 325 项（下限 317），问题 0 项 |
 | `node scripts/check-encoding.mjs` | 已检查 210 个文件（下限 205），中文片段断言 84 条 |
 
-合计 **954 项**（2026-10 复跑实测；数量随轮次增删会变，以各脚本自己打印的下限为准）。另外 `node scripts/check-encoding.mjs` 在 Linux 上会报 `ENOENT ... start.cmd` —— 它硬编码要检查 `start.cmd`（Windows 专用文件、故意不上传），**这个失败是预期的，不是问题**。
+合计 **960 项**（2026-10 复跑实测；数量随轮次增删会变，以各脚本自己打印的下限为准）。另外 `node scripts/check-encoding.mjs` 在 Linux 上会报 `ENOENT ... start.cmd` —— 它硬编码要检查 `start.cmd`（Windows 专用文件、故意不上传），**这个失败是预期的，不是问题**。

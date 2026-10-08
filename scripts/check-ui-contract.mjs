@@ -246,6 +246,11 @@ check(
 check('语料检索真的打到服务端', /\/api\/ai\/search\?q=/.test(appJs));
 check('检索输入有防抖与最短长度', /aiSearchTimer/.test(appJs) && /AI_SEARCH_MIN/.test(appJs));
 check('检索结果有固定落点（data-ai-hits）', /data-ai-hits/.test(appJs));
+// m09717：回答原来整段 esc 完只把换行换成 <br />，`**粗体**`、`[#37]`、`1. ` 全糊在一起。
+// 现在走 aiAnswerBodyHtml（块级渲染）+ ai-inline-cite（出处能点），别再退回一行到底。
+check('回答按块渲染（段落 / 小标题 / 列表）', /aiAnswerBodyHtml\(data\.answer\)/.test(appJs) && /aiAnswerBlocks/.test(appJs));
+check('回答里的出处标记能点', /ai-inline-cite/.test(appJs));
+check('回答不再用 <br /> 顶替分段', !/esc\(data\.answer\)\.replace\(\/\\n\/g, '<br \/>'\)/.test(appJs));
 check(
   'route() 有请求序号守卫（防切页竞态）',
   /routeSeq \+= 1/.test(appJs) && /throw routeAborted\(\)/.test(appJs) && /if \(seq !== null && seq !== routeSeq\)/.test(appJs),

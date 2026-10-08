@@ -36,6 +36,167 @@ function aiAskFormHtml(context) {
     </form>
     <div class="ai-answer-host" data-ai-answer hidden></div>`;
 }
+/* ------------------------------------------------------------------ */
+/* 回答的排版：模型回的是 Markdown，之前整段 esc 完只把换行换成 <br />，*/
+/* 于是 `**粗体**`、`[#37]`、`1. ` 全都原样堆在一起，读不动。          */
+/* 这里做一个小而安全的子集渲染（全部基于 esc 之后的文本，不注入 HTML）。*/
+
+/** `[#37]`、`[#37, #42]` → 能点的出处标记。 */
+function aiCiteChips(text) {
+  return text.replace(/\[#(\d+(?:\s*[、,，]\s*#?\d+)*)\]/g, (whole, ids) => {
+    const list = String(ids)
+      .split(/\s*[、,，]\s*/)
+      .map((id) => id.replace('#', '').trim())
+      .filter(Boolean);
+    if (!list.length) return whole;
+    return list.map((id) => `<a class="ai-inline-cite" href="#/post/${id}" title="跳到第 ${id} 篇">#${id}</a>`).join('');
+  });
+}
+
+/** 行内：行内代码、Markdown 链接、粗体、出处标记。调用前必须先 esc。 */
+function aiInlineHtml(text) {
+  return aiCiteChips(String(text ?? ''))
+    .replace(/`([^`\n]+)`/g, '<code class="ai-code">$1</code>')
+    .replace(/\[([^\]\n]+)\]\((#[^)\s]+|https?:\/\/[^)\s]+)\)/g, '<a class="ai-link" href="$2">$1</a>')
+    .replace(/\*\*([^*\n]+)\*\*/g, '<strong>$1</strong>');
+}
+
+const AI_LIST_ITEM = /^\s*(?:[-*•]|\d+[.)])\s+(.*)$/;
+
+/**
+ * 模型常把整篇答案写成**一行**：`**1. 小标题** … - 项：… - 项：…`。
+ * 结构标记前面的空白换成换行，后面的分块与列表才认得出它们。
+ */
+function aiNormalizeAnswerMd(raw) {
+  let text = String(raw ?? '').replace(/\r\n?/g, '\n');
+  // 编号小标题（限定短标题，别把正文里的加粗也断开）
+  text = text.replace(/[ \t]+(?=\*\*\s*\d+[.)、]\s{0,2}[^*\n]{0,40}\*\*)/g, '\n');
+  // 短加粗 + 冒号的引导句
+  text = text.replace(/[ \t]+(?=\*\*[^*\n]{2,20}\*\*\s*[：:])/g, '\n');
+  // 行内项目符号：整段出现两次以上才当列表，免得「a - b」这种减法被拆开
+  if ((text.match(/(?:^|\s)[-*•]\s+\S/g) ?? []).length >= 2) text = text.replace(/[ \t]+(?=[-*•]\s+\S)/g, '\n');
+  return text;
+}
+
+/** 一段里塞了好几个「1. … 2. …」就拆成有序列表 —— 模型爱这么写。 */
+function aiParagraphBlock(text) {
+  const marks = text.match(/(?:^|\s)\d+[.)]\s/g) ?? [];
+  if (marks.length < 2) return { type: 'p', text };
+  const parts = text
+    .split(/(?=\s\d+[.)]\s)/)
+    .map((part) => part.trim())
+    .filter(Boolean);
+  if (parts.length < 2) return { type: 'p', text };
+  const items = parts
+    .map((part) => part.replace(/^\d+[.)]\s*/, '').trim())
+    .filter(Boolean);
+  return items.length >= 2 ? { type: 'list', ordered: true, items } : { type: 'p', text };
+}
+
+function aiAnswerBlocks(raw) {
+  const text = aiNormalizeAnswerMd(raw).trim();
+  if (!text) return [];
+  const blocks = [];
+  let para = [];
+  let list = null;
+  let fence = null;
+  const flushPara = () => {
+    if (!para.length) return;
+    blocks.push(aiParagraphBlock(para.join(' ')));
+    para = [];
+  };
+  const flushList = () => {
+    if (list) blocks.push(list);
+    list = null;
+  };
+  const flushAll = () => {
+    flushPara();
+    flushList();
+    if (fence) {
+      blocks.push({ type: 'pre', text: fence.join('\n') });
+      fence = null;
+    }
+  };
+  for (const line of text.split('\n')) {
+    const trimmed = line.trim();
+    if (fence) {
+      if (/^```/.test(trimmed)) flushAll();
+      else fence.push(line);
+      continue;
+    }
+    if (/^```/.test(trimmed)) {
+      flushPara();
+      flushList();
+      fence = [];
+      continue;
+    }
+    if (!trimmed) {
+      flushAll();
+      continue;
+    }
+    const head = /^(#{1,6})\s+(.*)$/.exec(trimmed);
+    if (head) {
+      flushAll();
+      blocks.push({ type: 'h', level: head[1].length, text: head[2] });
+      continue;
+    }
+    // 整行就是加粗的短句 → 当成小标题（模型爱用 **1. xxx** 分节）
+    const boldHead = /^\*\*([^*\n]{1,60})\*\*\s*$/.exec(trimmed);
+    if (boldHead) {
+      flushAll();
+      blocks.push({ type: 'h', level: 3, text: boldHead[1] });
+      continue;
+    }
+    if (/^(?:-{3,}|\*{3,})$/.test(trimmed)) {
+      flushAll();
+      blocks.push({ type: 'hr' });
+      continue;
+    }
+    const quote = /^>\s?(.*)$/.exec(trimmed);
+    if (quote) {
+      flushPara();
+      flushList();
+      blocks.push({ type: 'quote', text: quote[1] });
+      continue;
+    }
+    const item = AI_LIST_ITEM.exec(trimmed);
+    if (item) {
+      flushPara();
+      const ordered = /^\d/.test(trimmed);
+      if (!list || list.ordered !== ordered) {
+        flushList();
+        list = { type: 'list', ordered, items: [] };
+      }
+      list.items.push(item[1]);
+      continue;
+    }
+    flushList();
+    para.push(trimmed);
+  }
+  flushAll();
+  return blocks;
+}
+
+/** 把回答渲染成有层次的块：段落 / 小标题 / 列表 / 引用 / 代码 / 分隔线。 */
+function aiAnswerBodyHtml(raw) {
+  return aiAnswerBlocks(raw)
+    .map((block) => {
+      if (block.type === 'h') {
+        const level = Math.min(block.level + 1, 4);
+        return `<div class="ai-h ai-h${level}">${aiInlineHtml(esc(block.text))}</div>`;
+      }
+      if (block.type === 'hr') return '<hr class="ai-rule" />';
+      if (block.type === 'quote') return `<blockquote class="ai-quote">${aiInlineHtml(esc(block.text))}</blockquote>`;
+      if (block.type === 'pre') return `<pre class="ai-pre"><code>${esc(block.text)}</code></pre>`;
+      if (block.type === 'list') {
+        const tag = block.ordered ? 'ol' : 'ul';
+        return `<${tag} class="ai-answer-list">${block.items.map((item) => `<li>${aiInlineHtml(esc(item))}</li>`).join('')}</${tag}>`;
+      }
+      return `<p class="ai-p">${aiInlineHtml(esc(block.text))}</p>`;
+    })
+    .join('');
+}
+
 function aiAnswerHtml(data) {
   const citations = (data.citations ?? [])
     .map((item) => {
@@ -58,7 +219,8 @@ function aiAnswerHtml(data) {
         ${data.model ? aiChip(data.model, 'soft') : ''}
         ${data.truncated ? aiChip('材料已截断', 'warn') : ''}
       </div>
-      <div class="ai-answer-text">${esc(data.answer).replace(/\n/g, '<br />')}</div>
+      ${data.question ? `<div class="ai-answer-q">${esc(data.question)}</div>` : ''}
+      <div class="ai-answer-text">${aiAnswerBodyHtml(data.answer)}</div>
       ${
         citations
           ? `<div class="ai-cites"><div class="ai-sub">引用出处</div>${citations}</div>`

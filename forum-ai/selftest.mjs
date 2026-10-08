@@ -35,6 +35,7 @@ import {
   isTruncated,
   AI_ERROR_STATUS,
 } from './src/index.mjs';
+import { ASK_SYSTEM } from './src/prompts.mjs';
 
 let passed = 0;
 const failures = [];
@@ -340,6 +341,12 @@ try {
   await answerQuestion('分页怎么优化？', DOCS.slice(0, 2), { scope: 'corpus', chatOptions: { env: { ...env, AI_ASK_MAX_TOKENS: '5000' } } });
   check('预算可以用 AI_ASK_MAX_TOKENS 覆盖', mock.calls.at(-1)?.body?.max_tokens === 5000, String(mock.calls.at(-1)?.body?.max_tokens));
   check('新变量没有混进 /api/site 的 ai 形状里', !aiStatus(env).envKeys.includes('AI_ASK_MAX_TOKENS'), JSON.stringify(aiStatus(env).envKeys));
+  // 提示词从没要求过结构：线上实测一次 1540 字的回答里换行是 0 个，模型把整篇答案摊成一行。
+  check(
+    '提示词要求 answer 自带结构（分段 / 小标题单独一行 / - 列表）',
+    ASK_SYSTEM.includes('answer 的排版') && ASK_SYSTEM.includes('小节标题单独占一行') && ASK_SYSTEM.includes('"- " 开头的列表'),
+    '',
+  );
 
   // 材料一多就被截断：6 篇长文档 > 6000 字（截断），砍半后 < 6000 字（答得完）
   const bigAskDocs = Array.from({ length: 6 }, (_, index) => ({
