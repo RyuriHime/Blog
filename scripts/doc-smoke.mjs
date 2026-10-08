@@ -3103,6 +3103,287 @@ try {
     );
   }
 
+  /* ---------------- 13. 草稿箱与发布（第五轮） ----------------
+   *
+   * 这一节的规矩：每一条「别人看不见」都必须**换另一个账号**发请求验证。
+   * 角色：author（作者）、mate（关注者）、other（陌生人）、staff（站长）、anon（未登录）。
+   */
+  {
+    const readSource = (relative) => {
+      const full = join(ROOT, ...relative.split('/'));
+      return existsSync(full) ? readFileSync(full, 'utf8') : '';
+    };
+    const domJs = readSource('public/core/dom.js');
+    const sessionJs = readSource('public/core/session.js');
+    const docViewJs = readSource('public/views/doc.js');
+    const docCss = readSource('public/css/41-doc.css');
+
+    const createDraft = async (title) => {
+      const res = await author.call('/api/docs', {
+        method: 'POST',
+        body: { title, kind: 'post', scope: 'public', template: 'blank', draft: true },
+      });
+      return { res, id: Number(res.data?.doc?.id ?? 0) };
+    };
+    const countIn = (list, id) => (list?.documents ?? []).some((doc) => Number(doc.id) === Number(id));
+    // `scalar()` 回的是**整行**（doc-smoke.mjs:111 就是 `db.prepare(sql).get()`），不是标量。
+    // 取第一列要自己拆 —— 顺便把 null-prototype 的行对象变成普通值。
+    const cell = (sql, ...params) => Object.values(scalar(sql, ...params) ?? {})[0];
+
+    // 13.1 编辑器「新建」那条路：先放进草稿箱。
+    const draftA = await createDraft('13.1 还没发布的草稿');
+    check(
+      '13.1 新建草稿：200 且拿到 id',
+      draftA.res.status === 200 && draftA.id > 0,
+      `status=${draftA.res.status} body=${JSON.stringify(draftA.res.body).slice(0, 200)}`,
+    );
+    check(
+      '13.1 新建草稿的形状：draft=true / published=false',
+      draftA.res.data?.doc?.draft === true && draftA.res.data?.doc?.published === false,
+      JSON.stringify(draftA.res.data?.doc ?? {}).slice(0, 240),
+    );
+    check('13.1 草稿行落库且 published=0', cell('SELECT published FROM doc_drafts WHERE document_id = ?', draftA.id) === 0, '');
+
+    // 13.2 老 API 不破：不带 draft 的 POST 照旧**直接发布**（第 1-12 章全建在这条行为上）。
+    const liveDoc = await author.call('/api/docs', {
+      method: 'POST',
+      body: { title: '13.2 直接发布的文档', kind: 'post', scope: 'public', template: 'blank' },
+    });
+    const liveId = Number(liveDoc.data?.doc?.id ?? 0);
+    check(
+      '13.2 不带 draft 的 POST 照旧直接发布（draft=false / published=true）',
+      liveDoc.status === 200 && liveDoc.data?.doc?.draft === false && liveDoc.data?.doc?.published === true,
+      JSON.stringify(liveDoc.data?.doc ?? {}).slice(0, 240),
+    );
+    check(
+      '13.2 直接发布的文档没有草稿行',
+      (cell('SELECT COUNT(*) AS n FROM doc_drafts WHERE document_id = ?', liveId) ?? 0) === 0,
+      '',
+    );
+    check('13.2 直接发布的文档读者照旧看得见', (await anon.call(`/api/docs/${liveId}`)).status === 200, '');
+
+    // 13.3 没发布过的东西：只有作者自己的草稿箱里看得见。
+    // 未登录 → 401（既有约定：可见性判负时登不登录决定 401/404，本身不泄露存在性）；
+    // 登录了但不是作者 → 404（越权一律 404，staff 也不放行）。
+    check('13.3 未登录读未发布的草稿 → 401', (await anon.call(`/api/docs/${draftA.id}`)).status === 401, '');
+    check('13.3 关注者读未发布的草稿 → 404', (await mate.call(`/api/docs/${draftA.id}`)).status === 404, '');
+    check('13.3 陌生人读未发布的草稿 → 404', (await other.call(`/api/docs/${draftA.id}`)).status === 404, '');
+    check('13.3 站长读别人的未发布草稿 → 404（staff 也不放行）', (await staff.call(`/api/docs/${draftA.id}`)).status === 404, '');
+    const draftOwner = await author.call(`/api/docs/${draftA.id}`);
+    check(
+      '13.3 作者自己读得到，并且 canEdit',
+      draftOwner.status === 200 && draftOwner.data?.abilities?.canEdit === true,
+      `status=${draftOwner.status}`,
+    );
+    check(
+      '13.3 别人改不动它（PUT markdown → 404）',
+      (await other.call(`/api/docs/${draftA.id}/markdown`, { method: 'PUT', body: { markdown: '# 我改的' } })).status === 404,
+      '',
+    );
+    check(
+      '13.3 别人发布不了它（POST publish → 404）',
+      (await other.call(`/api/docs/${draftA.id}/publish`, { method: 'POST' })).status === 404,
+      '',
+    );
+    check(
+      '13.3 站长也发布不了别人的未发布草稿 → 404',
+      (await staff.call(`/api/docs/${draftA.id}/publish`, { method: 'POST' })).status === 404,
+      '',
+    );
+
+    // 13.4 影子行：没发布的草稿必须藏起来，否则公开档的影子行会带着 hidden=0 漏进动态流 / 板块列表。
+    const draftAnchor = Number((await author.call(`/api/docs/${draftA.id}/anchor`)).data?.post?.id ?? 0);
+    check(
+      '13.4 未发布草稿的影子行 hidden=1',
+      draftAnchor > 0 && cell('SELECT hidden FROM posts WHERE id = ?', draftAnchor) === 1,
+      `anchor=${draftAnchor} hidden=${cell('SELECT hidden FROM posts WHERE id = ?', draftAnchor)}`,
+    );
+
+    // 13.5 草稿箱列表：只看得到自己的。
+    const myDrafts = await author.call('/api/docs?drafts=1');
+    check(
+      '13.5 ?drafts=1 列得出自己的草稿',
+      myDrafts.status === 200 && countIn(myDrafts.data, draftA.id),
+      `status=${myDrafts.status} body=${JSON.stringify(myDrafts.body).slice(0, 200)}`,
+    );
+    check('13.5 ?drafts=1 不列没有草稿的文档', !countIn(myDrafts.data, liveId), '');
+    const otherDrafts = await other.call('/api/docs?drafts=1');
+    check(
+      '13.5 别人的草稿箱是空的',
+      otherDrafts.status === 200 && (otherDrafts.data?.documents ?? []).length === 0,
+      `total=${otherDrafts.data?.total}`,
+    );
+    const anonDrafts = await anon.call('/api/docs?drafts=1');
+    check(
+      '13.5 未登录看草稿箱：空列表，不 500',
+      anonDrafts.status === 200 && (anonDrafts.data?.documents ?? []).length === 0,
+      `status=${anonDrafts.status}`,
+    );
+    check(
+      '13.5 我自己的普通列表里也没有没发布的草稿（它住在草稿箱里）',
+      !countIn((await author.call('/api/docs?mine=1')).data, draftA.id),
+      '',
+    );
+    check('13.5 积木广场里没有没发布的草稿', !countIn((await anon.call('/api/docs')).data, draftA.id), '');
+
+    // 13.6 发布：只有作者点得动；点完外人才看得见。
+    const published = await author.call(`/api/docs/${draftA.id}/publish`, { method: 'POST' });
+    check(
+      '13.6 发布成功：200 且 draft 归位',
+      published.status === 200 && published.data?.doc?.draft === false && published.data?.doc?.published === true,
+      `status=${published.status} body=${JSON.stringify(published.body).slice(0, 240)}`,
+    );
+    check(
+      '13.6 发布之后草稿行没了（document_blocks 重新就是线上内容）',
+      (cell('SELECT COUNT(*) AS n FROM doc_drafts WHERE document_id = ?', draftA.id) ?? 0) === 0,
+      '',
+    );
+    check(
+      '13.6 发布写出了线上版快照',
+      (cell('SELECT COUNT(*) AS n FROM doc_published_blocks WHERE document_id = ?', draftA.id) ?? 0) > 0,
+      '',
+    );
+    check('13.6 发布之后影子行放出来了（public → hidden=0）', cell('SELECT hidden FROM posts WHERE id = ?', draftAnchor) === 0, '');
+    check('13.6 发布之后陌生人看得见', (await anon.call(`/api/docs/${draftA.id}`)).status === 200, '');
+    check('13.6 发布之后广场里也在', countIn((await anon.call('/api/docs')).data, draftA.id), '');
+    check(
+      '13.6 重复发布是无害的（不再造草稿行）',
+      (await author.call(`/api/docs/${draftA.id}/publish`, { method: 'POST' })).status === 200 &&
+        (cell('SELECT COUNT(*) AS n FROM doc_drafts WHERE document_id = ?', draftA.id) ?? 0) === 0,
+      '',
+    );
+
+    // 13.7 已经发布过的再改：编辑器在**第一次写正文之前**自己调一次 `POST /api/docs/:id/draft`
+    // （public/views/doc.js 的 saveAll 里那句 `if (!doc.draft && willWriteBody)`），
+    // 之后读者看**发布出去的那一份**，作者看工作副本。
+    const enteredDraft = await author.call(`/api/docs/${draftA.id}/draft`, { method: 'POST' });
+    check(
+      '13.7 进草稿箱：200 且形状变成「有未发布的改动」（draft=true / published=true）',
+      enteredDraft.status === 200 && enteredDraft.data?.doc?.draft === true && enteredDraft.data?.doc?.published === true,
+      `status=${enteredDraft.status} body=${JSON.stringify(enteredDraft.body).slice(0, 200)}`,
+    );
+    const edited = await author.call(`/api/docs/${draftA.id}/markdown`, {
+      method: 'PUT',
+      body: { markdown: '# 改过的标题\n\n这是还没发布的新正文。' },
+    });
+    check('13.7 改已发布的文档：200', edited.status === 200, `status=${edited.status} body=${JSON.stringify(edited.body).slice(0, 200)}`);
+    check('13.7 改动进了草稿行（published=1）', cell('SELECT published FROM doc_drafts WHERE document_id = ?', draftA.id) === 1, '');
+    const readerView = await anon.call(`/api/docs/${draftA.id}`);
+    check(
+      '13.7 读者仍然看旧版（新正文一个字都没漏）',
+      readerView.status === 200 && !String(readerView.data?.html ?? '').includes('还没发布的新正文'),
+      `status=${readerView.status}`,
+    );
+    check('13.7 读者看到的是发布时那一份', String(readerView.data?.html ?? '').includes('写点什么'), '');
+    const ownerView = await author.call(`/api/docs/${draftA.id}`);
+    check(
+      '13.7 作者看得到工作副本（自己的改动）',
+      ownerView.status === 200 && String(ownerView.data?.html ?? '').includes('还没发布的新正文'),
+      `status=${ownerView.status}`,
+    );
+    check(
+      '13.7 作者看到的形状标着「有未发布的改动」',
+      ownerView.data?.doc?.draft === true && ownerView.data?.doc?.published === true,
+      JSON.stringify(ownerView.data?.doc ?? {}).slice(0, 200),
+    );
+    check('13.7 发布过又有改动的文档照旧在广场上（对外那一份还活着）', countIn((await anon.call('/api/docs')).data, draftA.id), '');
+    check(
+      '13.7 影子行不剧透草稿（摘要还是线上那一份）',
+      !String(cell('SELECT content FROM posts WHERE id = ?', draftAnchor) ?? '').includes('还没发布的新正文'),
+      '',
+    );
+
+    // 13.8 再发布一次：读者跟上。
+    check('13.8 再发布一次：200', (await author.call(`/api/docs/${draftA.id}/publish`, { method: 'POST' })).status === 200, '');
+    check(
+      '13.8 发布之后读者看到新正文',
+      String((await anon.call(`/api/docs/${draftA.id}`)).data?.html ?? '').includes('还没发布的新正文'),
+      '',
+    );
+
+    // 13.9 老库 / 老 API 兼容：**没走草稿箱建的**文档（第 1-12 章全是这种）用 API 直接写正文，
+    // 行为必须和以前一模一样（写下去就对外生效）——「只进草稿箱」是编辑器那条路的事，
+    // 入口是显式的 `POST /api/docs/:id/draft`。
+    const liveBefore = cell('SELECT COUNT(*) AS n FROM document_blocks WHERE document_id = ?', liveId) ?? 0;
+    const addedBlock = await author.call(`/api/docs/${liveId}/blocks`, {
+      method: 'POST',
+      body: { type: 'paragraph', props: { text: '老文档新加的段落' } },
+    });
+    check('13.9 往老文档里加块：200', addedBlock.status === 200, `status=${addedBlock.status}`);
+    check(
+      '13.9 老文档不因为一次 API 写正文就进草稿箱（第 1-12 章全建在这条行为上）',
+      (cell('SELECT COUNT(*) AS n FROM doc_drafts WHERE document_id = ?', liveId) ?? 0) === 0,
+      '',
+    );
+    check(
+      '13.9 读者立刻看得到新块（老 API 语义没变）',
+      String((await anon.call(`/api/docs/${liveId}`)).data?.html ?? '').includes('老文档新加的段落'),
+      '',
+    );
+
+    // 13.9b 编辑器那条路：先登记进草稿箱，再写，读者就该停在上一次发布的那一份。
+    const liveEntered = await author.call(`/api/docs/${liveId}/draft`, { method: 'POST' });
+    check(
+      '13.9b POST /draft 把此刻的正文留底成线上那一份（条数 = 写之前 + 1）',
+      liveEntered.status === 200 &&
+        (cell('SELECT COUNT(*) AS n FROM doc_published_blocks WHERE document_id = ?', liveId) ?? 0) === liveBefore + 1,
+      `before=${liveBefore} snapshot=${cell('SELECT COUNT(*) AS n FROM doc_published_blocks WHERE document_id = ?', liveId)}`,
+    );
+    const addedDraftBlock = await author.call(`/api/docs/${liveId}/blocks`, {
+      method: 'POST',
+      body: { type: 'paragraph', props: { text: '草稿里才有的段落' } },
+    });
+    check('13.9b 进草稿箱之后再写：200', addedDraftBlock.status === 200, `status=${addedDraftBlock.status}`);
+    check(
+      '13.9b 读者看不到草稿里的块，作者看得到',
+      !String((await anon.call(`/api/docs/${liveId}`)).data?.html ?? '').includes('草稿里才有的段落') &&
+        String((await author.call(`/api/docs/${liveId}`)).data?.html ?? '').includes('草稿里才有的段落'),
+      '',
+    );
+
+    // 13.10 两张新伴随表（老库上是纯加法，不需要回填）。
+    check(
+      '13.10 两张新表建出来了（doc_drafts / doc_published_blocks）',
+      tableSql('doc_drafts').includes('published') && tableSql('doc_published_blocks').includes('props_json'),
+      '',
+    );
+
+    // 13.11 编辑器与广场的界面契约。
+    check('13.11 编辑器有「发布」按钮', docViewJs.includes('data-doc-action="publish"'), '');
+    check('13.11 新建走草稿箱（POST 带 draft: true）', /draft:\s*true/.test(docViewJs), '');
+    check(
+      '13.11 广场有「草稿箱」入口（?drafts=1 走同一条列表）',
+      docViewJs.includes("params.set('drafts', '1')") &&
+        docViewJs.includes('href="#/docs?drafts=1"') &&
+        docViewJs.includes('docState.listQuery'),
+      '',
+    );
+    check('13.11 卡片上标得出「草稿」', docViewJs.includes('doc-badge-draft') && docCss.includes('.doc-badge-draft'), '');
+    check('13.11 阅读页给作者一条草稿提示', docViewJs.includes('doc-draft-note') && docCss.includes('.doc-draft-note'), '');
+    check(
+      '13.11 编辑器保存正文之前先登记进草稿箱（POST …/draft）',
+      /\/api\/docs\/\$\{editor\.id\}\/draft/.test(docViewJs),
+      '',
+    );
+    check(
+      '13.11 草稿箱按钮在广场那一排动作里（登录用户才画）',
+      docViewJs.includes("data-doc-action=\"new\"") && docViewJs.includes('📥 草稿箱'),
+      '',
+    );
+
+    // 13.12 进积木的链接一律新开标签页并聚焦（全站一处收口，不逐处写 target）。
+    check(
+      '13.12 dom.js 有 openTab（新开 + 聚焦）',
+      domJs.includes('function openTab(') && domJs.includes('export { openTab };') && domJs.includes('.focus()'),
+      '',
+    );
+    check(
+      '13.12 session.js 全局拦截进积木的链接',
+      sessionJs.includes('openTab') && sessionJs.includes("startsWith('#/doc/')"),
+      '',
+    );
+  }
+
   await finish(failures.length ? 1 : 0);
 } catch (error) {
   console.log('❌ 测试脚本自己抛了异常：');

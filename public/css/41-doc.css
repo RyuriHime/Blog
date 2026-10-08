@@ -374,6 +374,26 @@
   color: var(--muted);
 }
 
+/*
+ * 「草稿」徽章与草稿提示：草稿是**还没对外存在**的东西，用 `--warn` 跟「范围」那种
+ * 中性信息区别开 —— 否则作者扫一眼分不清自己看到的是不是别人看到的那一份。
+ */
+.doc-badge-draft {
+  border-color: var(--warn);
+  background: transparent;
+  color: var(--warn);
+}
+
+.doc-draft-note {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+  justify-content: space-between;
+  border-color: var(--warn);
+  color: var(--text-dim);
+}
+
 /* ── 阅读页：正文与块 ──────────────────────────────────────────────────── */
 
 /*

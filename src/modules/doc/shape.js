@@ -95,6 +95,10 @@ export function shapeDoc(row, tags = []) {
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     edited: Number(row.updated_at) > Number(row.created_at),
+    // 草稿状态：`draft` = 有未发布的改动（作者手上有东西），`published` = 对外那一份存在过。
+    // 没有草稿行（老库、刚发布完）→ draft:false / published:true，也就是「线上就是正文」。
+    draft: Boolean(row.draft_document_id),
+    published: row.draft_document_id ? Boolean(row.draft_published) : true,
   };
 }
 
@@ -116,6 +120,8 @@ export function shapeDocSummary(row, tags = []) {
     createdAt: doc.createdAt,
     updatedAt: doc.updatedAt,
     edited: doc.edited,
+    draft: doc.draft,
+    published: doc.published,
   };
 }
 

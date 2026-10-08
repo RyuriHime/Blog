@@ -163,6 +163,12 @@ function tagChipsHtml(tags) {
     .join('');
 }
 
+/** 「草稿」徽章：有草稿行 = 工作副本与对外那一份分家了；`published=false` = 从来没发布过。 */
+function draftBadgeHtml(doc) {
+  if (!doc?.draft) return '';
+  return `<span class="doc-badge doc-badge-draft">${doc.published ? '有未发布的改动' : '草稿'}</span>`;
+}
+
 function docCardHtml(doc) {
   const author = doc.author ?? {};
   const tags = tagChipsHtml(doc.tags);
@@ -172,6 +178,7 @@ function docCardHtml(doc) {
     <div class="doc-badges">
       <span class="doc-badge doc-badge-kind">${esc(doc.kindLabel ?? '')}</span>
       <span class="doc-badge doc-badge-scope">${esc(doc.scopeLabel ?? '')}</span>
+      ${draftBadgeHtml(doc)}
     </div>
     <div class="doc-card-meta">${esc(author.displayName ?? author.username ?? '')} · ${esc(Fmt.timeAgo(doc.updatedAt))}</div>
   </a>
@@ -190,9 +197,9 @@ function docCardHtml(doc) {
 async function newDocAndEdit() {
   const created = await api('/api/docs', {
     method: 'POST',
-    body: { title: '未命名', kind: 'post', scope: 'public', template: '' },
+    body: { title: '未命名', kind: 'post', scope: 'public', template: '', draft: true },
   });
-  toast('建好了，开始写吧');
+  toast('建好了，先放在草稿箱：点「发布」别人才看得到');
   return navigate(`/doc/${created.doc.id}/edit`);
 }
 
@@ -208,6 +215,7 @@ async function viewDocs(query = new URLSearchParams()) {
   docState.listQuery = new URLSearchParams(query);
   const kind = query.get('kind') ?? '';
   const mine = query.get('mine') === '1';
+  const drafts = query.get('drafts') === '1';
   const q = query.get('q') ?? '';
   const tag = query.get('tag') ?? '';
   // 挂在 wiki 站里的页默认不列（一个导进来的 OI Wiki 就 519 页，会把别人的积木淹掉）：
@@ -217,6 +225,7 @@ async function viewDocs(query = new URLSearchParams()) {
   const params = new URLSearchParams();
   if (kind) params.set('kind', kind);
   if (mine) params.set('mine', '1');
+  if (drafts) params.set('drafts', '1');
   if (q) params.set('q', q);
   if (tag) params.set('tag', tag);
   if (wiki) params.set('wiki', wiki);
@@ -234,8 +243,8 @@ async function viewDocs(query = new URLSearchParams()) {
   ui.app.innerHTML = `
     <div class="card doc-panel">
       <div class="card-head">
-        <span class="card-title">🧩 积木广场</span>
-        <span class="hint">${Fmt.fmtNum(data.total ?? documents.length)} 篇${wiki ? '' : '（不含 wiki 站里的页）'}</span>
+        <span class="card-title">${drafts ? '📥 草稿箱' : '🧩 积木广场'}</span>
+        <span class="hint">${Fmt.fmtNum(data.total ?? documents.length)} 篇${drafts ? '（没发布的改动只有你自己看得见）' : wiki ? '' : '（不含 wiki 站里的页）'}</span>
       </div>
       ${
         tag
@@ -254,6 +263,7 @@ async function viewDocs(query = new URLSearchParams()) {
       </form>
       <div class="doc-actions">
         ${state.me ? '<button class="btn btn-sm" type="button" data-doc-action="new">＋ 新建一篇</button>' : '<a class="btn btn-sm" href="#/login">登录后可以新建</a>'}
+        ${state.me ? `<a class="btn btn-sm${drafts ? ' btn-primary' : ''}" href="#/docs?drafts=1">📥 草稿箱</a>` : ''}
         <a class="btn btn-sm" href="#/wiki">⧉ Wiki 站</a>
         <a class="btn btn-sm btn-ghost" href="${toggleHref}">${wiki === 'all' ? '不列站里的页' : '连站里的页一起列'}</a>
         <a class="btn btn-sm btn-ghost" href="#/dev">🛠 开发者功能</a>
@@ -263,7 +273,9 @@ async function viewDocs(query = new URLSearchParams()) {
     ${
       documents.length
         ? `<div class="${layout === 'list' ? 'doc-list' : 'doc-grid'}">${documents.map(docCardHtml).join('')}</div>`
-        : `<div class="card">${emptyHtml('🧩', '还没有积木', '换一个筛选条件，或者新建一篇')}</div>`
+        : drafts
+          ? `<div class="card">${emptyHtml('📥', '草稿箱是空的', '编辑器里按「保存」的改动会落在草稿箱，按「发布」别人才看得到')}</div>`
+          : `<div class="card">${emptyHtml('🧩', '还没有积木', '换一个筛选条件，或者新建一篇')}</div>`
     }`;
 
   ensureDelegate();
@@ -1095,6 +1107,24 @@ async function votePoll(node) {
   }
 }
 
+/**
+ * 作者自己的「草稿」提示条。
+ *
+ * 只给能编辑的人看：读者拿到的一直是线上那一份（`readBlocksFor` 按身份分流），
+ * 对他们没什么可提示的。作者则必须知道**自己现在看的是工作副本** ——
+ * 否则他会以为「我改了、广场上也还挂着，那别人应该看到了」。
+ */
+function draftNoteHtml(doc, abilities) {
+  if (!doc?.draft || !abilities?.canEdit) return '';
+  const text = doc.published
+    ? '你有还没发布的改动：下面是你自己的草稿，别人看到的还是上一次发布的那一版。'
+    : '这篇还没发布过，现在只有你自己看得到。';
+  return `<div class="card doc-draft-note">
+    <span>📥 ${esc(text)}</span>
+    <a class="btn btn-sm" href="#/doc/${esc(doc.id)}/edit">去编辑器发布</a>
+  </div>`;
+}
+
 function renderDoc(data) {
   const doc = data.doc ?? {};
   const author = doc.author ?? {};
@@ -1121,6 +1151,7 @@ function renderDoc(data) {
         </div>
         <div class="doc-actions">${docActionsHtml(doc, abilities)}</div>
       </header>
+      ${draftNoteHtml(doc, abilities)}
       ${warnings.length ? warningsHtml(warnings) : ''}
       <div class="doc-body">${data.html ?? ''}</div>
       ${interactHtml(doc, abilities)}
@@ -2000,6 +2031,7 @@ function renderEditor() {
       </div>
       <div class="doc-actions">
         <button class="btn btn-sm btn-primary" type="button" data-doc-action="save-all">保存</button>
+        <button class="btn btn-sm" type="button" data-doc-action="publish">🚀 发布</button>
         ${autoSaveStatusHtml()}
       </div>
       <div class="doc-tabs">
@@ -2133,6 +2165,22 @@ async function saveAll(options = {}) {
       method: 'PUT',
       body: { allowScriptWrite: scriptWrite },
     });
+  }
+
+  // 1.5) 这一页的正文要进草稿箱了：**第一次真写正文之前**登记一次。
+  //      登记之后，下面的块 / Markdown 改动只落在工作副本（草稿）上，别人看到的还是上一次
+  //      发布出去的那一份 ——「保存 / 自动保存只进草稿箱，点发布才生效」全靠这一句。
+  //      新建时就是草稿的（`doc.draft`）不用再登记；只改标题 / 标签 / 可见范围也不必
+  //      —— 那些元信息按约定是立刻生效的，不进草稿。
+  const willWriteBody = dirty.queued.length > 0 || (draft && draft.text !== draft.baseline);
+  if (!doc.draft && willWriteBody) {
+    const entered = await api(`/api/docs/${editor.id}/draft`, { method: 'POST' });
+    // 登记完就地**记住**这件事：`doc` 是打开编辑器那一刻的快照，而 `editor.data` 只在属性
+    // 改动时才被服务端响应刷新，所以不记住的话每次自动保存都会再登记一遍（白发一条请求，
+    // 而且「自动保存只发该发的那一条」是明确承诺过的）。
+    if (editor.data?.doc) {
+      editor.data.doc = { ...editor.data.doc, draft: true, published: Boolean(entered?.doc?.published ?? true) };
+    }
   }
 
   // 2) 正文。
@@ -2497,9 +2545,10 @@ async function newDocFromScriptTemplate(item) {
       scope: 'public',
       template: '',
       blocks: [block],
+      draft: true,
     },
   });
-  toast(`用「${item.name}」建好了一篇（${html ? '小应用' : '脚本'}块）`);
+  toast(`用「${item.name}」建好了一篇草稿（${html ? '小应用' : '脚本'}块），点「发布」别人才看得到`);
   navigate(`/doc/${created.doc.id}/edit`);
 }
 
@@ -2757,6 +2806,23 @@ async function onAppClick(event) {
       if (result?.skipped) return; // 取消 / 有块没填完：原因 `saveAll()` 已经说了，别把灯拨成「已保存」
       autoSave.last = Date.now();
       paintAutoSaveStatus(`已保存 · ${clockText(autoSave.last)}`, 'ok');
+    });
+  }
+  if (action === 'publish') {
+    // 先把手上的活儿**落到草稿**，再发布 —— 否则「打完字直接点发布」只会发出上一次的草稿，
+    // 而作者以为刚写的也一起出去了。安静地存：提示留给这一发统一说，存不下就别说发布成功。
+    cancelAutoSave();
+    return withBusy(async () => {
+      const saved = await saveAll({ quiet: true });
+      if (saved.skipped) {
+        toast(saved.skipped, 'error');
+        return;
+      }
+      const published = await api(`/api/docs/${currentId}/publish`, { method: 'POST' });
+      absorb(published);
+      autoSave.last = Date.now();
+      paintAutoSaveStatus(`已发布 · ${clockText(autoSave.last)}`, 'ok');
+      toast('发布出去了，别人现在看到的就是这一版', 'success');
     });
   }
   if (action === 'md-reload') return withBusy(loadMarkdown);

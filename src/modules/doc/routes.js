@@ -254,6 +254,8 @@ export function registerDocRoutes(ctx, { store }) {
       // `?template=announce` 是首页/公告页读站务公告的那条路（见 store.listDocuments）。
       template: reqCtx.query.get('template') ?? '',
       mine: reqCtx.query.get('mine') === '1',
+      // `?drafts=1` 是积木广场的「📥 草稿箱」：只看我自己有草稿的（别人的一行都不给）。
+      drafts: reqCtx.query.get('drafts') === '1',
       q: reqCtx.query.get('q') ?? '',
       page: intOrNull(reqCtx.query.get('page')) ?? 1,
       limit: intOrNull(reqCtx.query.get('limit')) ?? 20,
@@ -272,6 +274,9 @@ export function registerDocRoutes(ctx, { store }) {
       template: reqCtx.body.template,
       tags: reqCtx.body.tags,
       blocks: reqCtx.body.blocks,
+      // 只有编辑器「新建」那条路传它：新建先放进草稿箱，点了「发布」才对外存在。
+      // 不传就是老行为（直接发布）—— 老客户端与老用例一个字都不用改。
+      draft: reqCtx.body.draft === true,
     }));
   });
 
@@ -293,6 +298,32 @@ export function registerDocRoutes(ctx, { store }) {
       template: reqCtx.body.template,
       tags: reqCtx.body.tags,
     }));
+  });
+
+  /**
+   * 进草稿箱：编辑器在**第一次写正文之前**调一次。
+   *
+   * 为什么要单独一条：正文的写接口（块 / Markdown / ops / 套模板）是「写下去就生效」的老行为，
+   * 第 1-12 章的端到端断言全建在它上面，不能因为「有草稿箱了」就整体变成草稿。所以「这篇现在
+   * 只进草稿箱」是一件**显式**的事 —— 编辑器开头调一次这条，之后的保存才只动工作副本。
+   * 跑完读者的那份就是调用那一刻的正文（`doc_published_blocks` 留底），直到点「发布」。
+   * 幂等：已经在草稿箱里的（新建时就带 `draft: true` 的）再调只是推一下时间戳。
+   */
+  add('POST', '/api/docs/:id/draft', async (reqCtx) => {
+    const user = write(reqCtx, 'edit');
+    ok(reqCtx.res, store.enterDraft({ id: readId(reqCtx), viewer: user }));
+  });
+
+  /**
+   * 发布：把编辑器里的工作副本（草稿）变成对外那一份。
+   *
+   * 为什么是三段式字面量路径：`/api/docs/:id` 的 `[^/]+` 会吃掉一切两段式的东西
+   * （文件头那条纪律），所以辅助接口一律再加一段 —— 和 `/api/docs/:id/anchor` 同一个写法。
+   * 正文的保存（块 / Markdown）一律**不发布**，只有这一条会。
+   */
+  add('POST', '/api/docs/:id/publish', async (reqCtx) => {
+    const user = write(reqCtx, 'edit');
+    ok(reqCtx.res, store.publishDocument({ id: readId(reqCtx), viewer: user }));
   });
 
   /**

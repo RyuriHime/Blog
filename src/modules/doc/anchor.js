@@ -60,15 +60,21 @@ export function anchorHidden(scope) {
  */
 export const STATION_PAGE_HIDDEN = 1;
 
-/** 建一条影子行，返回它的 posts.id。 */
-export function createAnchor(db, { userId, title, content, scope, now }) {
+/**
+ * 建一条影子行，返回它的 posts.id。
+ *
+ * `hidden` 传 `null`（默认）= 按 scope 自动算；传 `1` = 强制藏起来 ——
+ * 「从没发布过的草稿」要它：那篇的 scope 通常就是 `public`，不藏的话
+ * `anchorHidden('public')` 会给 0，一条还没发布的草稿的影子行就漏进动态流和板块列表了。
+ */
+export function createAnchor(db, { userId, title, content, scope, now, hidden = null }) {
   const boardId = ensureAnchorBoard(db);
   const result = db
     .prepare(
       `INSERT INTO posts (board_id, user_id, title, content, views, pinned, locked, deleted, hidden, created_at, updated_at)
        VALUES (?, ?, ?, ?, 0, 0, 0, 0, ?, ?, ?)`,
     )
-    .run(boardId, userId, title, content, anchorHidden(scope), now, now);
+    .run(boardId, userId, title, content, hidden === null || hidden === undefined ? anchorHidden(scope) : (hidden ? 1 : 0), now, now);
   return Number(result.lastInsertRowid);
 }
 

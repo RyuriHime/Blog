@@ -121,6 +121,29 @@ function selectText(node) {
   return true;
 }
 
+/**
+ * 在新标签页里打开一个站内地址，并把**焦点**交给新标签页，返回是否真的开了。
+ *
+ * 为什么不用 `<a target="_blank">`：那样必须配 `rel="noopener"`（否则新页面能改回
+ * `window.opener.location`，是经典的劫持面），而规范规定带 `noopener` 时
+ * `window.open` 返回 `null` —— 拿不到句柄就没法 `focus()`，可「焦点要落到新标签页上」
+ * 正是需求的一部分。所以自己开：先拿句柄，再手动切断 `opener`，最后聚焦。
+ *
+ * 被浏览器拦掉弹窗时返回 false，调用方就不要 `preventDefault()`，
+ * 让这次点击退回家常行为（否则用户点了会毫无反应）。
+ */
+function openTab(href) {
+  const opened = window.open(href, '_blank');
+  if (!opened) return false;
+  try {
+    opened.opener = null;
+    opened.focus();
+  } catch {
+    /* 跨域句柄跳转后可能写不动；能开的已经开了，聚焦失败不该影响这次点击 */
+  }
+  return true;
+}
+
 // ── 导出 ──────────────────────────────────────────────────────────────
 export { ui };
 export { $ };
@@ -131,5 +154,6 @@ export { loadingHtml };
 export { toast };
 export { copyText };
 export { selectText };
+export { openTab };
 
 /* @hand-written */

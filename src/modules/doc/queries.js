@@ -20,12 +20,16 @@ function bind(sql, params) {
   return [sql, params];
 }
 
-/** 文档的取列清单（带作者信息 —— 列表和详情必须同一份形状）。 */
+/** 文档的取列清单（带作者信息 + 草稿状态 —— 列表和详情必须同一份形状）。 */
 const DOC_COLUMNS = `d.id, d.user_id, d.kind, d.title, d.scope, d.template, d.anchor_post_id,
   d.sandbox_disabled, d.deleted, d.created_at, d.updated_at,
+  (SELECT dr.published FROM doc_drafts dr WHERE dr.document_id = d.id) AS draft_published,
+  (SELECT dr.document_id FROM doc_drafts dr WHERE dr.document_id = d.id) AS draft_document_id,
   u.username, u.display_name, u.avatar, u.role`;
 
-const DOC_SOURCE = 'FROM documents d JOIN users u ON u.id = d.user_id';
+// 草稿状态用关联子查询而不是 JOIN：`DOC_COLUMNS` 有几处自带 FROM（noteDocument、站内页树），
+// 那些地方没有 `dr` 别名，写成 JOIN 会让它们全炸。子查询只依赖 `d.id`，到哪儿都对。
+const DOC_SOURCE = `FROM documents d JOIN users u ON u.id = d.user_id`;
 
 const BLOCK_COLUMNS = 'document_id, block_id, type, type_version, position, props_json, created_at, updated_at';
 
@@ -124,7 +128,7 @@ export function createDocQueries(db) {
      * 列表。`visible` 由 visibility.js 给出（null = staff，不加范围条件）。
      * `viewerId` 只用于 `mine=1`。
      */
-    listDocuments({ viewerId = null, visible = null, kind = '', scope = '', tag = '', wiki = '', template = '', mine = false, q = '', page = 1, limit = 20, sort = 'updated' } = {}) {
+    listDocuments({ viewerId = null, visible = null, kind = '', scope = '', tag = '', wiki = '', template = '', mine = false, drafts = false, q = '', page = 1, limit = 20, sort = 'updated' } = {}) {
       const conditions = ['d.deleted = 0'];
       const params = [];
       if (kind && DOC_KINDS.includes(kind)) {
@@ -163,6 +167,17 @@ export function createDocQueries(db) {
         if (!viewerId) return { rows: [], total: 0 };
         conditions.push('d.user_id = ?');
         params.push(viewerId);
+      }
+      // 草稿箱（`?drafts=1`，积木广场的「📥 草稿箱」按钮走这条）。
+      // 只看**我自己**有草稿行的那些 —— 别人的草稿一行都不给看（连存在都不暴露）。
+      // 默认反过来：「从没发布过」的草稿不进任何列表，**连作者自己的普通列表也不进**
+      // （它住在草稿箱里）；「发布过、又有新改动」的照旧出现 —— 对外那一份还活着。
+      if (drafts) {
+        if (!viewerId) return { rows: [], total: 0 };
+        conditions.push('d.user_id = ? AND EXISTS (SELECT 1 FROM doc_drafts dd WHERE dd.document_id = d.id)');
+        params.push(viewerId);
+      } else {
+        conditions.push('NOT EXISTS (SELECT 1 FROM doc_drafts dd WHERE dd.document_id = d.id AND dd.published = 0)');
       }
       if (q) {
         conditions.push('d.title LIKE ?');
@@ -220,6 +235,59 @@ export function createDocQueries(db) {
 
     softDeleteDocument(id, now) {
       run('UPDATE documents SET deleted = 1, updated_at = ? WHERE id = ?', [now, id]);
+    },
+
+    /* ---------------- 草稿箱 ---------------- */
+
+    /** 草稿行；没有就是「这篇没有草稿」（`document_blocks` 直接是线上内容）。 */
+    draftOf(documentId) {
+      return get('SELECT document_id, published, created_at, updated_at FROM doc_drafts WHERE document_id = ?', [documentId]) ?? null;
+    },
+
+    /**
+     * 进草稿箱。**已有行就什么都不做** —— `published` 是「这篇对外存在过没有」的既成事实，
+     * 不能被一次插入覆盖（覆盖了就会把已发布文档的线上版弄丢）。
+     */
+    enterDraftBox({ documentId, published = 1, now }) {
+      run(
+        `INSERT INTO doc_drafts (document_id, published, created_at, updated_at) VALUES (?, ?, ?, ?)
+         ON CONFLICT(document_id) DO NOTHING`,
+        [documentId, published ? 1 : 0, now, now],
+      );
+    },
+
+    /** 草稿又改了：只动时间戳（草稿箱按它倒序排）。回改了没有。 */
+    touchDraft({ documentId, now }) {
+      return Number(run('UPDATE doc_drafts SET updated_at = ? WHERE document_id = ?', [now, documentId]).changes ?? 0);
+    },
+
+    clearDraft(documentId) {
+      run('DELETE FROM doc_drafts WHERE document_id = ?', [documentId]);
+    },
+
+    /** 线上版正文（发布那一刻的快照；没有草稿行时没人读它）。 */
+    publishedBlocksOf(documentId) {
+      return all(`SELECT ${BLOCK_COLUMNS} FROM doc_published_blocks WHERE document_id = ? ORDER BY position ASC, id ASC`, [documentId]);
+    },
+
+    /**
+     * 把当前 `document_blocks` 整份拷成线上版。
+     *
+     * 两个调用方共用：**发布**（拷改完的那份给读者）与 **beginDraft**（拷改之前的那份留底）。
+     * 先删后插：块可能被删过，留着旧行会让读者看到作者已经拿掉的东西。
+     */
+    copyPublishedBlocks({ documentId, now }) {
+      run('DELETE FROM doc_published_blocks WHERE document_id = ?', [documentId]);
+      run(
+        `INSERT INTO doc_published_blocks (document_id, block_id, type, type_version, position, props_json, created_at, updated_at)
+         SELECT document_id, block_id, type, type_version, position, props_json, created_at, ?
+           FROM document_blocks WHERE document_id = ? ORDER BY position ASC, id ASC`,
+        [now, documentId],
+      );
+    },
+
+    deletePublishedBlocks(documentId) {
+      run('DELETE FROM doc_published_blocks WHERE document_id = ?', [documentId]);
     },
 
     /* ---------------- 块 ---------------- */

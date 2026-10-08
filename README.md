@@ -400,7 +400,7 @@ forum/
 | `#/search?q=关键词` | 全文搜索（标题 + 正文），落在动态流上（等价于 `#/feed?q=…`） |
 | `#/login`、`#/register` | 登录 / 注册 |
 | `#/admin` | 管理后台（仅管理员） |
-| `#/docs` | 积木广场：可编程帖子 / 笔记 / 主页文档的列表，支持 `?kind=` `?scope=` `?mine=1` `?q=` `?tag=标签`（点卡片上的标签就是跳到这儿）；两种排法 `▦ 网格` / `☰ 列表`（从上往下列下来），选择记在本地偏好 `forum:docsLayout` 里 |
+| `#/docs` | 积木广场：可编程帖子 / 笔记 / 主页文档的列表，支持 `?kind=` `?scope=` `?mine=1` `?q=` `?tag=标签`（点卡片上的标签就是跳到这儿）`?drafts=1`（**草稿箱**：只有自己有草稿的那些，卡片上带「草稿」徽章）；两种排法 `▦ 网格` / `☰ 列表`（从上往下列下来），选择记在本地偏好 `forum:docsLayout` 里 |
 | `#/doc/:id` | 积木阅读页：块渲染结果、降级警告、修订记录、导出/导入、顶部挂着**标签**（点一下看同标签的积木），底下是**互动条**（点赞 / 踩 / 收藏 / 转发 / 关注作者 + AI 解读）—— 它挂在文档的锚点帖上，走 `GET /api/docs/:id/anchor`，不再需要跳到帖子页 |
 | `#/doc/:id/edit` | 积木编辑器：逐块编辑、上下移动、Markdown 双向、`ops` 增量改动、套模板、回滚、沙箱开关、标签（跟着同一个「保存」一起存）；**Markdown / 源码模式左侧挂着一个 AI 抽屉**（`public/views/doc-ai.js`）—— 对着它说一句话，右边这段正文就跟着改（整理格式、学术审查、加个积木块、写积木脚本），走的是 `/api/ai-edit/*` 同一套，结果只写回编辑区，落盘还是那颗「保存」 |
 | `#/doc/:id/blocks` | 同一个编辑器的高级入口（默认落在积木模式）：块列表 + 当前块的 props 表单 |
@@ -528,10 +528,12 @@ DB_FILE=/opt/app/data/forum.db node scripts/seed-oiwiki.mjs --user RyuriHime   #
 | POST | `/api/messages/:username` | 发私信（互关不限量 / 单向每天 1 条） | 登录 |
 | POST | `/api/admin/users/:id/role` | 任命 / 收回管理员（`role: 'admin'\|'member'`） | **仅站长** |
 | POST | `/api/admin/users/:id/ban` | 封禁 / 解封（立即踢掉该用户全部会话；不能封禁站长） | 站长/管理员 |
-| GET | `/api/docs` | 积木文档列表，支持 `kind` `scope` `mine=1` `q` `tag`（按标签筛，大小写不敏感）`template`（点名 `template=announce` 就是首页 / 公告页读站务公告那条路）`page` `limit` `sort` | 公开（按可见范围过滤；**不点名 `template` 时对非 staff 隐藏 `announce`**，所以公告不会混进积木广场） |
-| POST | `/api/docs` | 新建积木文档，body `{ title, kind, scope, template, tags }`（标签最多 5 个、每个 24 字）；`kind='profile'` 一个用户至多一份 | 登录 |
+| GET | `/api/docs` | 积木文档列表，支持 `kind` `scope` `mine=1` `drafts=1`（草稿箱：只列**我自己**有草稿的那些）`q` `tag`（按标签筛，大小写不敏感）`template`（点名 `template=announce` 就是首页 / 公告页读站务公告那条路）`page` `limit` `sort` | 公开（按可见范围过滤；**不点名 `template` 时对非 staff 隐藏 `announce`**，所以公告不会混进积木广场） |
+| POST | `/api/docs` | 新建积木文档，body `{ title, kind, scope, template, tags, blocks, draft }`（标签最多 5 个、每个 24 字）；`kind='profile'` 一个用户至多一份；`draft: true` = 建出来先落在**草稿箱**（读者看不到，点「发布」才对外），不传就是建好即发布（与以前一致） | 登录 |
 | GET | `/api/docs/:id` | 文档详情：`{ doc, blocks, html, warnings, abilities }`（`doc.tags` 是字符串数组） | 按 scope |
 | PUT | `/api/docs/:id` | 改标题 / 可见范围 / 模板名 / 标签（`tags` 不传 = 不动，传 `[]` = 清空） | 作者/管理员 |
+| POST | `/api/docs/:id/draft` | **进草稿箱**：把此刻的正文留底成对外那一份，之后的正文保存只动工作副本（读者看不到），直到发布。编辑器在**第一次写正文之前**调一次；幂等 | 作者/管理员 |
+| POST | `/api/docs/:id/publish` | **发布**：把工作副本（草稿）拷成对外那一份，清掉草稿行并同步影子行；没有草稿行时是幂等的空操作 | 作者/管理员 |
 | DELETE | `/api/docs/:id` | 软删除文档并同步影子行 | 作者/管理员 |
 | POST | `/api/docs/:id/blocks` | 新增一块，body `{ type, props, after\|before\|position }` | 作者/管理员 |
 | PUT | `/api/docs/:id/blocks/:blockId` | 改一块的 props | 作者/管理员 |

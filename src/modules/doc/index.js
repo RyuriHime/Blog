@@ -1,6 +1,7 @@
 // 可编程帖子（P2）—— 学术笔记升级成「有序积木块」的文档。
 //
-// 归属：文档本身、文档的块、文档的修订、块类型注册表、沙箱能力审计、笔记对照表。
+// 归属：文档本身、文档的块、文档的修订、块类型注册表、沙箱能力审计、笔记对照表、
+// 草稿行与「上一次发布的那一份块」（见 `./schema.js` 里 doc_drafts / doc_published_blocks 的注释）。
 // 不拥有：posts / reactions（那是 core 的表，可编程帖子只是**另一种帖子形态**）。
 //
 // ── 为什么表在 import 期登记，而不是在 install(ctx) 里 ──
@@ -19,14 +20,14 @@ import { createVisibility, detectTeams } from './visibility.js';
 import { WIKI_TEMPLATE } from './templates.js';
 import { autoImportOiwiki } from './oiwiki-autoseed.js';
 
-// 副作用：登记本模块的十四张表（必须在开库之前，见文件头注释）。
+// 副作用：登记本模块的十六张表（必须在开库之前，见文件头注释）。
 schemas.addScript(DOC_SCHEMA, 'doc');
 
 export default {
   name: 'doc',
   /** 新前缀。写完在这里登记路由，不要往 /api/posts 上加东西。 */
   apiPrefix: '/api/docs',
-  /** 本模块**拥有**的表。十四张都是新增表，v1 的表一张都不动。 */
+  /** 本模块**拥有**的表。十六张都是新增表，v1 的表一张都不动。 */
   owns: [
     'documents',
     'document_blocks',
@@ -42,6 +43,8 @@ export default {
     'doc_site_state',
     'doc_script_templates',
     'doc_tags',
+    'doc_drafts',
+    'doc_published_blocks',
   ],
   /**
    * 会读、但不拥有的表。

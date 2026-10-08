@@ -1,6 +1,6 @@
 // 会话与站点数据：登录态、未读数、消息未读。
 // 这些数据在多个视图里被读，所以读回来一律写进 core/state.js 的 state 对象。
-import { $, esc, toast, ui } from './dom.js';
+import { $, esc, openTab, toast, ui } from './dom.js';
 import { api } from './api.js';
 import { toastError } from './errors.js';
 import { state } from './state.js';
@@ -359,6 +359,33 @@ async function refreshUnread() {
 }
 
 /* ------------------------------------------------------------------ */
+/* 进积木 = 新标签页                                                    */
+/** 进积木的地址：阅读页、编辑器，以及会 redirect 到积木的旧帖子地址（#/post/、#/edit/）。 */
+function isDocEntryHref(href) {
+  return href.startsWith('#/doc/') || href.startsWith('#/post/') || href.startsWith('#/edit/');
+}
+
+/**
+ * 全站统一：点进积木走**新标签页**，并且把焦点交给新标签页。
+ *
+ * 为什么在 window 上收口、而不是给每个入口写 `target="_blank"`：积木的链接散在
+ * 广场卡片、动态流、个人主页、搜索、站务公告、AI 页、wiki 导航…… 逐处加迟早漏一个。
+ * 路由是 hashchange、不拦 `<a>` 的点击，所以这里拦得住，也不会和 Router 打架。
+ *
+ * 让开的几种情况：中键 / 修饰键（用户自己想新窗口或后台打开）、已经处理过的点击、
+ * 自己写了 target 的链接（那是别的意图，比如沙箱 iframe）。
+ */
+function onDocEntryClick(event) {
+  if (event.defaultPrevented || event.button !== 0) return;
+  if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+  const anchor = event.target?.closest?.('a[href]');
+  if (!anchor || (anchor.target && anchor.target !== '_self')) return;
+  const href = anchor.getAttribute('href') ?? '';
+  if (!isDocEntryHref(href)) return;
+  if (openTab(href)) event.preventDefault();
+}
+
+/* ------------------------------------------------------------------ */
 /* 帖子列表组件                                                        */
 async function bootstrap() {
   // 首屏再套用一次本地主题（index.html 里的内联脚本已经先设过，避免闪烁），
@@ -378,6 +405,7 @@ async function bootstrap() {
   await loadSession();
   renderSidebar();
   window.addEventListener('hashchange', Router.route);
+  window.addEventListener('click', onDocEntryClick);
   await Router.route();
   setInterval(refreshUnread, 60000);
 }

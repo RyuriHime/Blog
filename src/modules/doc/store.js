@@ -40,7 +40,7 @@ import {
 } from './schema.js';
 import { createAnchor, syncAnchor, STATION_PAGE_HIDDEN } from './anchor.js';
 import { blockFromRow } from './queries.js';
-import { createVisibility, detectTeams, visibilityConditions } from './visibility.js';
+import { createVisibility, detectTeams, isPrivateDraft, visibilityConditions } from './visibility.js';
 import {
   blocksToMarkdown,
   blocksToPlainText,
@@ -165,8 +165,72 @@ export function createDocStore({ db, queries, now = () => Date.now() }) {
     return row;
   }
 
+  /**
+   * 「要动**正文**了」的入口：`mustEdit` + 把草稿行的时间戳推一下。
+   *
+   * **它不负责进草稿箱**。「保存 / 自动保存只进草稿箱」这件事只对**作者在编辑器里**成立；
+   * 而 API 层面的写正文（`PUT …/markdown`、块增删改、`ops`、套模板、回滚）在草稿箱出现之前
+   * 就是「立刻生效」，第 1-12 章的端到端断言全建在那条行为上 —— 所以这里只做一件事：
+   * 这篇**已经在草稿箱里**就把 `updated_at` 推一下，没有草稿行就什么都不做，写下去就是线上内容。
+   *
+   * 进草稿箱是**显式**动作，只有一个入口：`enterDraft`（`POST /api/docs/:id/draft`，编辑器
+   * 在第一次写正文之前跑一次）。
+   */
+  function mustEditBody(id, viewer) {
+    const row = mustEdit(id, viewer);
+    if (queries.draftOf(row.id)) queries.touchDraft({ documentId: row.id, now: now() });
+    return row;
+  }
+
+  /**
+   * 显式进草稿箱（`POST /api/docs/:id/draft`）。
+   *
+   * 编辑器在**第一次写正文之前**调一次。跑完这篇就变成「草稿行 + 线上快照」的形态：
+   * 之后的保存只动工作副本，读者看到的还是留底的那一份，直到点「发布」。已经在草稿箱里的
+   * 再调一次是无害的（`beginDraft` 只推时间戳）。
+   */
+  function enterDraft({ id, viewer } = {}) {
+    const row = mustEdit(id, viewer);
+    beginDraft(row.id, now());
+    return present(mustExist(row.id), viewer);
+  }
+
+  /**
+   * 进草稿箱。
+   *
+   * 只有一条规则：`doc_drafts` 里**已经有行**就什么都不做（线上版早就留过了）。
+   * 没有行 = 这篇目前是「线上内容就是 `document_blocks`」（老库、刚发布完、或者建的时候
+   * 就没走草稿箱），所以要**先把此刻的正文拷进 `doc_published_blocks` 留底**，再允许改工作副本。
+   *
+   * 顺序不能反：必须在写之前跑。放在写之后（比如挂在 `snapshot` 上）就把作者刚改完的
+   * 那一版当成线上版了 —— 等于第一次改动会直接发布出去。
+   */
+  function beginDraft(documentId, at) {
+    if (queries.draftOf(documentId)) {
+      queries.touchDraft({ documentId, now: at });
+      return;
+    }
+    queries.copyPublishedBlocks({ documentId, now: at });
+    queries.enterDraftBox({ documentId, published: 1, now: at });
+  }
+
   function readBlocks(documentId) {
     return queries.blocksOf(documentId).map(blockFromRow);
+  }
+
+  /**
+   * 读者该看哪一份正文。
+   *
+   * - 有草稿行 + **已经发布过** + 看客改不动它 → 读线上快照（`doc_published_blocks`）；
+   * - 其余（包括没草稿行的老库、以及作者/staff 自己）→ 读工作副本 `document_blocks`。
+   *
+   * 「从没发布过的草稿」到不了这里：`canView` 已经不让人读它了。
+   */
+  function readBlocksFor(docRow, viewer) {
+    if (docRow.draft_document_id && docRow.draft_published && !canEdit(docRow, viewer)) {
+      return queries.publishedBlocksOf(docRow.id).map(blockFromRow);
+    }
+    return readBlocks(docRow.id);
   }
 
   /** `doc_settings` 的原始行（没有就是 null —— 读路径绝不顺手造一行）。 */
@@ -220,7 +284,7 @@ export function createDocStore({ db, queries, now = () => Date.now() }) {
    * 产出行删掉。此后它与别的块没有区别 —— 脚本可以再改它，但那是改正文了。
    */
   function adoptDerived({ id, viewer, blockId = '', scope = 'user' } = {}) {
-    const row = mustEdit(id, viewer);
+    const row = mustEditBody(id, viewer);
     const at = now();
     const scopeName = DERIVED_SCOPES.includes(scope) ? scope : 'user';
     const owner = scopeName === 'shared' ? 0 : viewer?.id ?? 0;
@@ -589,11 +653,18 @@ export function createDocStore({ db, queries, now = () => Date.now() }) {
   function syncDocumentAnchor(docRow, at) {
     const anchorId = docRow?.anchor_post_id;
     if (!anchorId) return;
-    const isPublic = docRow.scope === 'public';
-    const excerpt = isPublic ? blocksToPlainText(readBlocks(docRow.id), 400) : '';
-    // wiki 站里的页要把影子行藏起来（§6.1）：页是站里的块，不该在「积木」板块里另立一行。
+    // 有草稿的时候，影子行跟着**线上那一份**走：摘要是给列表页 / 动态流看的，
+    // 不能剧透作者还没发布的东西（工作副本里可能已经把整篇删了一半）。
+    const drafting = Boolean(docRow.draft_document_id);
+    const unpublished = drafting && !docRow.draft_published;
+    const liveBlocks = drafting ? queries.publishedBlocksOf(docRow.id).map(blockFromRow) : readBlocks(docRow.id);
+    const isPublic = docRow.scope === 'public' && !unpublished;
+    const excerpt = isPublic ? blocksToPlainText(liveBlocks, 400) : '';
+    // 从没发布过的草稿把影子行藏起来：它的 scope 通常就是 `public`，不藏就会被
+    // `anchorHidden('public')` 放行，一条还没发布的东西直接漏进动态流和板块列表。
+    // wiki 站里的页同理（§6.1）：页是站里的块，不该在「积木」板块里另立一行。
     // 站本体（`template='station'`）不藏 —— 它本来就是一个正常帖子，正好是「一个帖子一个 wiki」。
-    const hidden = docRow.template === WIKI_TEMPLATE && stationIdOf(docRow.id) !== 0 ? STATION_PAGE_HIDDEN : null;
+    const hidden = unpublished || (docRow.template === WIKI_TEMPLATE && stationIdOf(docRow.id) !== 0) ? STATION_PAGE_HIDDEN : null;
     syncAnchor(db, anchorId, {
       title: isPublic ? docRow.title : '',
       content: excerpt,
@@ -629,7 +700,8 @@ export function createDocStore({ db, queries, now = () => Date.now() }) {
     const settingsRow = readSettings(docRow.id);
     // 注意：这里的 `blocks` 是**没被 materialize 过**的原始块。
     // 源码要的是作者写下的东西，不是「此刻渲染出来的修订列表」。
-    const blocks = readBlocks(docRow.id);
+    // 读哪一份由身份决定（有未发布的改动时，读者只能看见发布出去的那一份）。
+    const blocks = readBlocksFor(docRow, viewer);
     const materialized = materializeSources(blocks, docRow.id);
     // 脚本产出的派生块**接在真块之后**：真块序列一个字节都不动，派生层是叠加物（§4.4）。
     const derived = derivedRows(docRow.id, viewer);
@@ -749,7 +821,7 @@ export function createDocStore({ db, queries, now = () => Date.now() }) {
 
   /* ---------------- 文档 ---------------- */
 
-  function listDocuments({ viewer, kind = '', scope = '', tag = '', wiki = '', template = '', mine = false, q = '', page = 1, limit = 20, sort = 'updated' } = {}) {
+  function listDocuments({ viewer, kind = '', scope = '', tag = '', wiki = '', template = '', mine = false, drafts = false, q = '', page = 1, limit = 20, sort = 'updated' } = {}) {
     const visible = visibilityConditions(viewer, hasTeams);
     const { rows, total } = queries.listDocuments({
       viewerId: viewer?.id ?? null,
@@ -762,6 +834,8 @@ export function createDocStore({ db, queries, now = () => Date.now() }) {
       // 点名要某一类模板：首页/公告页靠 `template=announce` 找站务公告。
       template: String(template ?? ''),
       mine: Boolean(mine),
+      // 草稿箱：只看我自己有草稿的（`#/docs?drafts=1`）。
+      drafts: Boolean(drafts),
       q: String(q ?? ''),
       page,
       limit,
@@ -802,7 +876,7 @@ export function createDocStore({ db, queries, now = () => Date.now() }) {
   }
 
   /** 建一篇文档：正文 + 影子行 + 修订 1，一步不少。 */
-  function createDocument({ viewer, title, kind = 'post', scope = 'public', template = '', tags = null, blocks = null, reason = 'create' } = {}) {
+  function createDocument({ viewer, title, kind = 'post', scope = 'public', template = '', tags = null, blocks = null, reason = 'create', draft = false } = {}) {
     if (!viewer) throw new HttpError(401, 'unauthenticated', '请先登录');
     const cleanTitle = normalizeTitle(title);
     const cleanKind = normalizeKind(kind);
@@ -839,13 +913,18 @@ export function createDocStore({ db, queries, now = () => Date.now() }) {
 
     const at = now();
     const isPublic = cleanScope === 'public';
+    // `draft` 的语义见 schema.js 的 doc_drafts 长注释：**默认直接发布**（老客户端 / 老 API
+    // 语义一个字都不变），只有编辑器新建那条路显式传 `draft: true` 才是「先放草稿箱」。
+    const asDraft = draft === true;
     // 影子行先建：文档行上要存它的 id（锚点反过来不用存文档 id，靠 anchor_post_id 找回来）。
     const anchorPostId = createAnchor(db, {
       userId: viewer.id,
-      title: isPublic ? cleanTitle : '',
-      content: isPublic ? blocksToPlainText(list, 400) : '',
+      title: isPublic && !asDraft ? cleanTitle : '',
+      content: isPublic && !asDraft ? blocksToPlainText(list, 400) : '',
       scope: cleanScope,
       now: at,
+      // 还没发布的东西影子行一律先藏着（`anchorHidden('public')` 会给 0，不藏就漏了）。
+      hidden: asDraft ? STATION_PAGE_HIDDEN : null,
     });
     const id = queries.insertDocument({
       userId: viewer.id,
@@ -856,6 +935,9 @@ export function createDocStore({ db, queries, now = () => Date.now() }) {
       anchorPostId,
       now: at,
     });
+    // published = 0：从没发布过。正文照旧写进 document_blocks（= 工作副本），
+    // 发布那一刻才拷进 doc_published_blocks。
+    if (asDraft) queries.enterDraftBox({ documentId: id, published: 0, now: at });
     writeBlocks(id, list, at);
     if (cleanTags.length) queries.replaceTags({ documentId: id, tags: cleanTags, now: at });
     snapshot(id, reason, viewer.id, at);
@@ -1480,14 +1562,38 @@ export function createDocStore({ db, queries, now = () => Date.now() }) {
     queries.deleteAppStatesOfDocument(row.id);
     // 标签也一样：留着只会让标签云指向一堆看不见的文档。
     queries.deleteTagsOfDocument(row.id);
+    // 草稿两表跟着走：文档都没了，线上版和草稿行都是孤儿。
+    queries.clearDraft(row.id);
+    queries.deletePublishedBlocks(row.id);
     syncDocumentAnchor({ ...row, deleted: 1 }, at);
     return { id: row.id, deleted: true };
+  }
+
+  /**
+   * 发布：把工作副本（= 草稿）拷成线上版，然后撤掉草稿行。
+   *
+   * 撤掉草稿行就是「这篇没有未发布的改动了」——`document_blocks` 重新成为读者看到的那一份
+   * （`readBlocksFor` 只在草稿行还在时才去读快照）。所以发布**不需要**改任何写块路径。
+   *
+   * 用 `mustEdit` 而不是 `mustEditBody`：本来就没有改动、也没草稿行的文档再点一次「发布」
+   * 应该是无害的，不该顺手给它造出一行草稿（那会让它显示成「有未发布的改动」）。
+   */
+  function publishDocument({ id, viewer } = {}) {
+    const row = mustEdit(id, viewer);
+    const at = now();
+    // 没有草稿行 = 这篇对外那一份本来就是 `document_blocks`，没什么要固化的（重复发布也走这里）。
+    if (row.draft_document_id) queries.copyPublishedBlocks({ documentId: row.id, now: at });
+    queries.clearDraft(row.id);
+    const fresh = mustExist(row.id);
+    // 影子行的摘要 / 隐藏状态跟着回到「已经发布」的样子（公开档会在这里从 hidden 里放出来）。
+    syncDocumentAnchor(fresh, at);
+    return present(fresh, viewer);
   }
 
   /* ---------------- 块 ---------------- */
 
   function addBlock({ id, viewer, type, props = {}, after = null, before = null, position = null } = {}) {
-    const row = mustEdit(id, viewer);
+    const row = mustEditBody(id, viewer);
     const typeDef = getBlockType(type);
     if (!typeDef) throw badRequest(`不认识的块类型：${type}`);
     assertBudget(queries.countBlocks(row.id) + 1);
@@ -1510,7 +1616,7 @@ export function createDocStore({ db, queries, now = () => Date.now() }) {
   }
 
   function updateBlock({ id, viewer, blockId, type, props } = {}) {
-    const row = mustEdit(id, viewer);
+    const row = mustEditBody(id, viewer);
     const existing = queries.blockRow(row.id, blockId);
     if (!existing) throw new HttpError(404, 'not_found', `找不到块 ${blockId}`);
     const nextType = type === undefined ? existing.type : String(type);
@@ -1528,7 +1634,7 @@ export function createDocStore({ db, queries, now = () => Date.now() }) {
   }
 
   function deleteBlock({ id, viewer, blockId } = {}) {
-    const row = mustEdit(id, viewer);
+    const row = mustEditBody(id, viewer);
     const existing = queries.blockRow(row.id, blockId);
     if (!existing) throw new HttpError(404, 'not_found', `找不到块 ${blockId}`);
     const at = now();
@@ -1542,7 +1648,7 @@ export function createDocStore({ db, queries, now = () => Date.now() }) {
   }
 
   function moveBlock({ id, viewer, blockId, after = null, before = null, position = null } = {}) {
-    const row = mustEdit(id, viewer);
+    const row = mustEditBody(id, viewer);
     const existing = queries.blockRow(row.id, blockId);
     if (!existing) throw new HttpError(404, 'not_found', `找不到块 ${blockId}`);
     if (after === blockId || before === blockId) throw badRequest('不能把块挪到自己旁边');
@@ -1556,7 +1662,7 @@ export function createDocStore({ db, queries, now = () => Date.now() }) {
 
   /** 拖拽排序：给一份完整的块 id 顺序，一次落库（顺便把 position 重排成整数）。 */
   function reorderBlocks({ id, viewer, order } = {}) {
-    const row = mustEdit(id, viewer);
+    const row = mustEditBody(id, viewer);
     if (!Array.isArray(order) || order.length === 0) throw badRequest('order 必须是非空数组');
     const rows = queries.blocksOf(row.id);
     const known = new Set(rows.map((item) => item.block_id));
@@ -1581,7 +1687,7 @@ export function createDocStore({ db, queries, now = () => Date.now() }) {
   /* ---------------- 批量 op ---------------- */
 
   function runOps({ id, viewer, ops } = {}) {
-    const row = mustEdit(id, viewer);
+    const row = mustEditBody(id, viewer);
     if (!Array.isArray(ops)) throw badRequest('ops 必须是数组');
     if (ops.length > MAX_OPS) throw badRequest(`一次最多 ${MAX_OPS} 条 op`);
     const at = now();
@@ -1615,7 +1721,7 @@ export function createDocStore({ db, queries, now = () => Date.now() }) {
   }
 
   function putMarkdown({ id, viewer, markdown, title, confirm = false } = {}) {
-    const row = mustEdit(id, viewer);
+    const row = mustEditBody(id, viewer);
     const text = typeof markdown === 'string' ? markdown : '';
     if (Buffer.byteLength(text, 'utf8') > MAX_DOC_BODY_BYTES) throw badRequest('正文太大了（上限 256 KB）');
     // 没写 id 的块**不发号**：交给 writeBlocks 按旧序列对齐，块 id 才不会整篇平移。
@@ -1677,7 +1783,7 @@ export function createDocStore({ db, queries, now = () => Date.now() }) {
   /* ---------------- 模板 ---------------- */
 
   function applyTemplate({ id, viewer, key, mode = 'replace' } = {}) {
-    const row = mustEdit(id, viewer);
+    const row = mustEditBody(id, viewer);
     if (!hasTemplate(key)) throw badRequest(`不认识的模板：${key}`);
     if (mode !== 'replace' && mode !== 'append') throw badRequest('mode 只能是 replace 或 append');
     const at = now();
@@ -1754,7 +1860,7 @@ export function createDocStore({ db, queries, now = () => Date.now() }) {
   }
 
   function rollback({ id, viewer, revision } = {}) {
-    const row = mustEdit(id, viewer);
+    const row = mustEditBody(id, viewer);
     const target = queries.revisionByNumber(row.id, Number(revision));
     if (!target) throw new HttpError(404, 'not_found', `找不到修订 r${revision}`);
     let blocks;
@@ -2160,6 +2266,8 @@ export function createDocStore({ db, queries, now = () => Date.now() }) {
     getDocument,
     createDocument,
     updateDocument,
+    enterDraft,
+    publishDocument,
     deleteDocument,
     addBlock,
     updateBlock,

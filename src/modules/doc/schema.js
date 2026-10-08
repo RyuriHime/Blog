@@ -447,6 +447,39 @@ CREATE TABLE IF NOT EXISTS doc_tags (
   PRIMARY KEY (document_id, tag)
 );
 CREATE INDEX IF NOT EXISTS idx_doc_tags_tag ON doc_tags (tag, document_id);
+
+-- 草稿箱（第五轮新增）：一篇文档「还没发布过 / 有没发布的改动」时在这里留一行。
+-- 为什么不给 documents 加一列：表早就建好了，CREATE TABLE IF NOT EXISTS 对已存在的表
+-- 是空操作，加列就得写守卫式迁移（同 doc_tags 的理由）；新伴随表才是纯加法。
+-- 三种状态全靠「这一行在不在」+ doc_published_blocks 表达，**不需要回填**：
+--   没有行            = 没有草稿，document_blocks 就是线上内容（老库与刚发布完的文档天然如此）
+--   有行 published=0  = 从没发布过，只有作者自己的草稿箱里看得见（读者一律 404）
+--   有行 published=1  = 发布过，但工作副本又有改动；读者读 doc_published_blocks
+-- 不变量：published=1 的行，doc_published_blocks 里**一定**已经有一份线上内容 ——
+-- 由 store.js 的 beginDraft 保证（它先拷旧的正文，再让人改工作副本）。
+CREATE TABLE IF NOT EXISTS doc_drafts (
+  document_id INTEGER PRIMARY KEY REFERENCES documents(id),
+  published   INTEGER NOT NULL DEFAULT 0,
+  created_at  INTEGER NOT NULL,
+  updated_at  INTEGER NOT NULL
+);
+
+-- 线上版正文：发布那一刻的 document_blocks 副本。列与 document_blocks **逐列一致**，
+-- 所以 blockFromRow 与同一套取列/排序照原样通用（发布 = 拷一次，不改任何写块路径）。
+-- 删文档时由 store 一并清掉，不留孤儿行。
+CREATE TABLE IF NOT EXISTS doc_published_blocks (
+  id           INTEGER PRIMARY KEY AUTOINCREMENT,
+  document_id  INTEGER NOT NULL REFERENCES documents(id),
+  block_id     TEXT    NOT NULL,
+  type         TEXT    NOT NULL,
+  type_version INTEGER NOT NULL DEFAULT 1,
+  position     REAL    NOT NULL,
+  props_json   TEXT    NOT NULL DEFAULT '{}',
+  created_at   INTEGER NOT NULL,
+  updated_at   INTEGER NOT NULL,
+  UNIQUE (document_id, block_id)
+);
+CREATE INDEX IF NOT EXISTS idx_doc_published_blocks_order ON doc_published_blocks (document_id, position);
 `;
 
 /**

@@ -21,6 +21,20 @@ export function detectTeams(db) {
   );
 }
 
+/**
+ * 「从没发布过的草稿」：`doc_drafts` 里有一行，但 `published = 0`。
+ *
+ * 它不是一个更窄的可见范围，而是**还没对外存在**：只有作者本人的草稿箱里看得见。
+ * staff 也不放行 —— 站长能翻别人的半成品是隐私事故（feed 里那句注释是同一个道理），
+ * 也和「越权一律 404」这条硬约定一致。
+ *
+ * 判据来自 `queries.js` 的 `DOC_COLUMNS`：没有草稿行时 `draft_document_id` 是 null。
+ * 所以老库、以及刚发布完的文档（草稿行已删）天然为假 —— **不需要任何回填**。
+ */
+export function isPrivateDraft(doc) {
+  return Boolean(doc?.draft_document_id) && !doc.draft_published;
+}
+
 export function createVisibility({ db, hasTeams }) {
   const follows = db.prepare('SELECT 1 AS hit FROM follows WHERE follower_id = ? AND followee_id = ? LIMIT 1');
   const sameTeam = hasTeams
@@ -32,6 +46,8 @@ export function createVisibility({ db, hasTeams }) {
   /** 这篇文档对这个人可见吗？`doc` 可以是 null（调用方负责转成 404）。 */
   function canView(doc, viewer) {
     if (!doc || doc.deleted) return false;
+    // 从没发布过的草稿：只有作者本人的草稿箱里看得见（读者一律 404）。
+    if (isPrivateDraft(doc)) return Boolean(viewer) && viewer.id === doc.user_id;
     if (doc.scope === 'public') return true;
     // 非公开：必须先登录。调用方看到 `viewer` 为空时要回 401 而不是 404。
     if (!viewer) return false;
@@ -45,6 +61,8 @@ export function createVisibility({ db, hasTeams }) {
   /** 改 / 删 / 套模板 / 回滚：作者或 staff。 */
   function canEdit(doc, viewer) {
     if (!doc || doc.deleted || !viewer) return false;
+    // 没发布过的草稿连 staff 也不动：见 isPrivateDraft 的注释。
+    if (isPrivateDraft(doc)) return viewer.id === doc.user_id;
     // 站务公告是站方的口子：只有站长和管理员能改。它从「meta 板块的帖子」
     // 迁移过来时作者可能是当年的普通用户，所以这里**不看作者**。
     if (doc.template === ANNOUNCE_TEMPLATE) return isStaff(viewer);
