@@ -39,6 +39,7 @@ import {
   AI_ERROR_STATUS,
 } from './src/index.mjs';
 import { ASK_SYSTEM } from './src/prompts.mjs';
+import { repairJsonControlChars, repairJsonQuotes } from './src/parse.mjs';
 
 let passed = 0;
 const failures = [];
@@ -263,6 +264,15 @@ try {
   check('解析嵌套对象', extractJson('前言 {"a":{"b":[1,2]}} 结尾')?.a?.b?.length === 2);
   check('非法输入返回 null', extractJson('完全不是 JSON') === null);
   check('字符串里的花括号不干扰', extractJson('{"a":"}"}')?.a === '}');
+  check('字符串里的裸换行也能解析', extractJson('{"answer":"第一行\n第二行"}')?.answer === '第一行\n第二行');
+  check('代码块里的多个裸换行也能解析', extractJson('{"answer":"看这段：\n```python\nprint(1)\n```"}')?.answer?.includes('```python') === true);
+  check('字符串里的裸制表符也能解析', extractJson('{"a":"x\ty"}')?.a === 'x\ty');
+  check('已经转义过的换行不受影响', extractJson('{"a":"x\\ny"}')?.a === 'x\ny');
+  check('转义只发生在字符串内部', repairJsonControlChars('{"a":"x\ny"}\n') === '{"a":"x\\ny"}\n', JSON.stringify(repairJsonControlChars('{"a":"x\ny"}\n')));
+  check('字符串里的孤引号也能解析', extractJson('{"answer":"print("hi")"}')?.answer === 'print("hi")');
+  check('孤引号修复不碰正常的字段分隔', extractJson('{"a":"x","b":"y"}')?.b === 'y');
+  check('已转义的引号不受影响', extractJson('{"a":"他说\\"早\\""}')?.a === '他说"早"');
+  check('孤引号修复是最后手段（合法的先走直解析）', repairJsonQuotes('{"a":"x","b":"y"}') === '{"a":"x","b":"y"}', repairJsonQuotes('{"a":"x","b":"y"}'));
 
   const review = normalizeReview({ category: '后端', difficulty: '不存在的难度', summary: 's', tags: ['a', 'b', 'c', 'd', 'e', 'f', 'g'], prereq: [{ name: 'x' }], recommend: [] }, {});
   check('难度枚举非法时回落', review.difficulty === '进阶', review.difficulty);
@@ -649,6 +659,13 @@ try {
   }
   check('模型返回非 JSON → ai_bad_json', badJson?.code === 'ai_bad_json', badJson?.code);
   check('失败时把模型原文挂进 details.rawOutput', badJson?.details?.rawOutput === '抱歉，我无法回答。', badJson?.details?.rawOutput);
+  const hinted = toResponse(new AiError('ai_bad_json', 'AI 返回的问答结果不是合法 JSON', { finishReason: 'stop', usage: { prompt: 5491, completion: 2871 } }));
+  check(
+    '坏 JSON 的响应带上现场（finish_reason 与用量）',
+    hinted.body.error.message.includes('finish_reason=stop') && hinted.body.error.message.includes('5491'),
+    hinted.body.error.message,
+  );
+  check('别的错误不拼现场', toResponse(new AiError('ai_timeout', '超时')).body.error.message === '超时');
   check('rawOutputHead 短的照原样、折成一行', rawOutputHead('a\n\n b ') === 'a b', JSON.stringify(rawOutputHead('a\n\n b ')));
   const rawLong = rawOutputHead('x'.repeat(900));
   check(

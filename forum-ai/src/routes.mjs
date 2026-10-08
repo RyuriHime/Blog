@@ -66,11 +66,17 @@ const errorHint = (error) => {
   return `（finish_reason=${reason || '无'}，提示 ${prompt} / 生成 ${completion} tokens${reasoning}）`;
 };
 
-/** 把任意异常收敛成统一响应。 */
+/**
+ * 把任意异常收敛成统一响应。
+ *
+ * 「不是合法 JSON」和「没有返回内容」这两种失败，光看文案分不出是截断、限流还是提示词太长，
+ * 所以把 `finish_reason` 与用量拼在文案后面（报告失败路径早就在用同一招，见 `errorHint`）。
+ */
 export function toResponse(error) {
   if (error instanceof AiError) {
     const status = AI_ERROR_STATUS[error.code] ?? 502;
-    return fail(status, error.code, error.message);
+    const hint = error.code === 'ai_bad_json' || error.code === 'ai_empty_response' ? errorHint(error) : '';
+    return fail(status, error.code, `${error.message}${hint}`);
   }
   if (error && typeof error.status === 'number' && error.code) {
     return fail(error.status, error.code, error.message);
