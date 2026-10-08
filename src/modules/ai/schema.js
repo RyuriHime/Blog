@@ -24,11 +24,21 @@
  * P3 真正交付的功能面是 AI 编辑台，只有「修改内容」一路。要加回任何一项，请连同它的
  * 服务端调用点一起加；加不了调用点就别加进这份目录。
  *
+ * 后来加回来的两项是「左栏那两条转换」搬进宿主时挂上的（调用点在
+ * `src/modules/ai/extract.js`，原先是 note-agent 的 `/extract` 与 `/extract-image`）：
+ *   · `extract` —— 文档 / PDF → Markdown（**不调模型、不花钱**，所以是低风险）；
+ *   · `extract_image` —— 图片 → Markdown（走视觉模型、按 token 计费，所以是中风险；
+ *     它同时进了 `AI_QUOTA_ACTIONS`，每日配额与全站预算都算得到它）。
+ * 两项**都不是** `AI_HIGH_RISK`：它们不改任何已存在的内容，
+ * 输出只会落到用户自己眼前的编辑区里（落盘仍要作者自己按「插入 / 替换」）。
+ *
  * **默认全部关闭**：`ai_capability_grants` 里没有对应的有效行 = 没有这项能力。
  * 授权不是前端隐藏按钮，服务端每次调用前都要查这张表（FR-CAP-01 / FR-CAP-03）。
  */
 export const AI_CAPABILITIES = Object.freeze([
   { key: 'edit_content', label: '修改内容', risk: 'high' },
+  { key: 'extract', label: '文档转换（不花模型）', risk: 'low' },
+  { key: 'extract_image', label: '图片识别（走视觉模型）', risk: 'medium' },
 ]);
 
 export const AI_CAPABILITY_KEYS = Object.freeze(AI_CAPABILITIES.map((item) => item.key));
@@ -37,19 +47,35 @@ export const AI_CAPABILITY_KEYS = Object.freeze(AI_CAPABILITIES.map((item) => it
 export const AI_HIGH_RISK = Object.freeze(['edit_content']);
 
 /** 审计日志里的动作名。授权/收回也算状态变更，一并留痕。 */
-export const AI_ACTIONS = Object.freeze(['read', 'draft', 'preview', 'apply', 'publish', 'tool', 'grant', 'revoke']);
+export const AI_ACTIONS = Object.freeze([
+  'read',
+  'draft',
+  'preview',
+  'apply',
+  'publish',
+  'tool',
+  // 把文件读成文本交给用户（`src/modules/ai/extract.js` 那两条转换）。它**不改任何内容**，
+  // 所以既不是 `draft` 也不是 `apply` —— 日志里一眼能把它与「改稿」分开。
+  'extract',
+  'grant',
+  'revoke',
+]);
 
 /**
- * 计入每日配额的 action。
+ * 计入每日配额与全站预算的 action。
  *
  * `preview` **不在**这里：预览只是往本地日志写一行，既没落盘也没有模型调用，
  * 不该花掉「今天还能用几次」的额度 —— 否则用户每多看一眼就少一次真正的调用。
  * 授权 / 收回同样不占额度。
  *
+ * `extract` **在**这里，因为它是按 token 计费的一次真调用（图片识别，走视觉模型）；
+ * 而同一个能力下「文档 / PDF → Markdown」那条**根本不写 op 日志**（不调模型、不花钱），
+ * 所以两条转换天然分开计费，不需要再为「免费的那条」发明一个新 action。
+ *
  * 另外 `usedToday` 只数**没失败**的行（`status <> 'blocked'`）：
  * 请求根本没发出去（没配 key）或被上游拒绝时，不该扣用户的额度。
  */
-export const AI_QUOTA_ACTIONS = Object.freeze(['read', 'draft', 'apply', 'publish', 'tool']);
+export const AI_QUOTA_ACTIONS = Object.freeze(['read', 'draft', 'apply', 'publish', 'tool', 'extract']);
 
 /** 失败 / 根本没发出去的调用在日志里的状态，不计配额。 */
 export const AI_BLOCKED_STATUS = 'blocked';
